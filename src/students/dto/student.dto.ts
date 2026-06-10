@@ -1,0 +1,234 @@
+// ============================================================
+// STUDENT DTOs — Student 360
+// Eldermin ERP | NestJS
+// ============================================================
+
+import {
+  IsString, IsEmail, IsOptional, IsEnum, IsBoolean,
+  IsNumber, IsArray, IsDateString, IsMongoId,
+  ValidateNested, Min, Max,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { PartialType } from '@nestjs/mapped-types';
+
+// ── Pagination ────────────────────────────────────────────────
+export class PaginationDto {
+  @IsOptional() @Type(() => Number) page?: number = 1;
+  @IsOptional() @Type(() => Number) @Min(1) @Max(100) limit?: number = 20;
+  @IsOptional() @IsString() search?: string;
+  @IsOptional() @IsString() sortBy?: string = 'createdAt';
+  @IsOptional() @IsEnum(['asc', 'desc']) sortOrder?: 'asc' | 'desc' = 'desc';
+}
+
+// ── Guardian ──────────────────────────────────────────────────
+export class GuardianDto {
+  @IsString() name: string;
+  @IsEnum(['father', 'mother', 'guardian']) relation: string;
+  @IsOptional() @IsString() cnic?: string;
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsString() occupation?: string;
+  @IsOptional() @IsString() employer?: string;
+  @IsOptional() @IsNumber() monthlyIncome?: number;
+  @IsOptional() @IsBoolean() isPrimary?: boolean;
+  @IsOptional() @IsBoolean() isEmergencyContact?: boolean;
+}
+
+// ── Medical ───────────────────────────────────────────────────
+export class MedicalDto {
+  @IsOptional() @IsString() bloodGroup?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) allergies?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) medications?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) conditions?: string[];
+  @IsOptional() @IsString() doctorName?: string;
+  @IsOptional() @IsString() doctorPhone?: string;
+  @IsOptional() @IsString() specialNeedsDetail?: string;
+}
+
+// ── Create Student ────────────────────────────────────────────
+export class CreateStudentDto {
+  // Identity
+  @IsString() firstName: string;
+  @IsString() lastName: string;
+  @IsOptional() @IsString() arabicName?: string;
+  @IsDateString() dateOfBirth: string;
+  @IsEnum(['male', 'female']) gender: string;
+  @IsOptional() @IsString() nationality?: string;
+  @IsOptional() @IsString() religion?: string;
+  @IsOptional() @IsString() bForm?: string;
+  @IsOptional() @IsString() photo?: string;
+
+  // Contact
+  @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsString() city?: string;
+  @IsOptional() @IsString() province?: string;
+
+  // Guardians
+  @IsOptional() @IsArray() @ValidateNested({ each: true })
+  @Type(() => GuardianDto) guardians?: GuardianDto[];
+
+  // Medical
+  @IsOptional() @ValidateNested() @Type(() => MedicalDto) medical?: MedicalDto;
+
+  // Enrollment
+  @IsString() currentGrade: string;
+  @IsOptional() @IsString() currentSection?: string;
+  @IsOptional() @IsString() currentRollNumber?: string;
+  @IsOptional() @IsString() currentAcademicYear?: string;
+  @IsOptional() @IsString() houseGroup?: string;
+  @IsOptional() @IsDateString() admissionDate?: string;
+  @IsOptional() @IsString() admissionNumber?: string;
+  @IsOptional() @IsMongoId() enrollmentId?: string;
+  @IsOptional() @IsMongoId() applicantId?: string;
+  @IsOptional() @IsString() previousSchool?: string;
+
+  // Flags
+  @IsOptional() @IsBoolean() siblingInSchool?: boolean;
+  @IsOptional() @IsBoolean() specialNeeds?: boolean;
+  @IsOptional() @IsBoolean() scholarshipHolder?: boolean;
+  @IsOptional() @IsString() scholarshipDetail?: string;
+  @IsOptional() @IsBoolean() transportRequired?: boolean;
+  @IsOptional() @IsString() transportRoute?: string;
+
+  // Injected
+  schoolSlug?: string;
+  campusId?: string;
+}
+
+export class UpdateStudentDto extends PartialType(CreateStudentDto) {
+  @IsOptional()
+  @IsEnum(['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave'])
+  status?: string;
+
+  @IsOptional() @IsDateString() leftDate?: string;
+  @IsOptional() @IsString() leftReason?: string;
+}
+
+export class StudentQueryDto extends PaginationDto {
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() gender?: string;
+  @IsOptional() @IsString() academicYear?: string;
+  @IsOptional() @IsString() campusId?: string;
+  @IsOptional() @IsBoolean() @Type(() => Boolean) scholarshipHolder?: boolean;
+  @IsOptional() @IsBoolean() @Type(() => Boolean) specialNeeds?: boolean;
+}
+
+// ── Attendance ────────────────────────────────────────────────
+export class MarkAttendanceDto {
+  @IsMongoId() studentId: string;
+  @IsString() studentName: string;
+  @IsString() grade: string;
+  @IsOptional() @IsString() section?: string;
+  @IsDateString() date: string;
+  @IsEnum(['present', 'absent', 'late', 'excused', 'half_day']) status: string;
+  @IsOptional() @IsString() checkInTime?: string;
+  @IsOptional() @IsString() checkOutTime?: string;
+  @IsOptional() @IsString() remarks?: string;
+  schoolSlug?: string;
+  academicYear?: string;
+  markedBy?: string;
+}
+
+export class BulkAttendanceDto {
+  @IsArray() @ValidateNested({ each: true })
+  @Type(() => MarkAttendanceDto)
+  records: MarkAttendanceDto[];
+  schoolSlug?: string;
+  academicYear?: string;
+}
+
+export class AttendanceQueryDto extends PaginationDto {
+  @IsOptional() @IsMongoId() studentId?: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() month?: string; // e.g. "2025-02"
+}
+
+// ── Fee ───────────────────────────────────────────────────────
+export class CreateFeeDto {
+  @IsMongoId() studentId: string;
+  @IsString() studentName: string;
+  @IsString() grade: string;
+  @IsString() month: string;
+  @IsString() academicYear: string;
+  @IsString() feeType: string;
+  @IsNumber() amount: number;
+  @IsOptional() @IsNumber() discount?: number;
+  @IsOptional() @IsDateString() dueDate?: string;
+  schoolSlug?: string;
+}
+
+export class CollectFeeDto {
+  @IsNumber() paidAmount: number;
+  @IsOptional() @IsString() paymentMethod?: string;
+  @IsOptional() @IsString() receiptNumber?: string;
+  @IsOptional() @IsString() collectedBy?: string;
+  @IsOptional() @IsString() remarks?: string;
+}
+
+export class FeeQueryDto extends PaginationDto {
+  @IsOptional() @IsMongoId() studentId?: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() month?: string;
+  @IsOptional() @IsString() status?: string;
+  @IsOptional() @IsString() feeType?: string;
+  @IsOptional() @IsString() academicYear?: string;
+}
+
+// ── Behaviour ─────────────────────────────────────────────────
+export class CreateBehaviourDto {
+  @IsMongoId() studentId: string;
+  @IsString() studentName: string;
+  @IsString() grade: string;
+  @IsOptional() @IsString() section?: string;
+  @IsDateString() date: string;
+  @IsEnum(['positive', 'negative', 'neutral']) type: string;
+  @IsString() category: string;
+  @IsString() description: string;
+  @IsOptional() @IsEnum(['low', 'medium', 'high', 'critical']) severity?: string;
+  @IsOptional() @IsString() actionTaken?: string;
+  @IsOptional() @IsBoolean() parentNotified?: boolean;
+  @IsOptional() @IsDateString() followUpDate?: string;
+  @IsOptional() @IsNumber() points?: number;
+  schoolSlug?: string;
+  academicYear?: string;
+  reportedBy?: string;
+}
+
+export class UpdateBehaviourDto extends PartialType(CreateBehaviourDto) {
+  @IsOptional() @IsBoolean() resolved?: boolean;
+  @IsOptional() @IsString() followUpNote?: string;
+}
+
+export class BehaviourQueryDto extends PaginationDto {
+  @IsOptional() @IsMongoId() studentId?: string;
+  @IsOptional() @IsString() type?: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() severity?: string;
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsBoolean() @Type(() => Boolean) resolved?: boolean;
+}
+
+// ── Assessment Result ─────────────────────────────────────────
+export class CreateAssessmentResultDto {
+  @IsMongoId() studentId: string;
+  @IsString() studentName: string;
+  @IsString() grade: string;
+  @IsOptional() @IsString() section?: string;
+  @IsString() assessmentTitle: string;
+  @IsString() assessmentType: string;
+  @IsDateString() date: string;
+  @IsArray() subjectResults: {
+    subject: string; maxMarks: number; obtainedMarks: number;
+    grade?: string; remarks?: string;
+  }[];
+  @IsOptional() @IsString() remarks?: string;
+  schoolSlug?: string;
+  academicYear?: string;
+}

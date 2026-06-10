@@ -1,0 +1,397 @@
+// ============================================================
+// ORGANIZATION — DTO + SERVICE + CONTROLLER + MODULE
+// Eldermin ERP | NestJS + MongoDB
+// ============================================================
+
+// ── dto/organization.dto.ts ───────────────────────────────────
+import {
+  IsString, IsOptional, IsEnum, IsBoolean, IsNumber,
+  IsArray, IsDateString, IsMongoId, ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import { PartialType } from '@nestjs/mapped-types';
+
+export class UpdateSchoolDto {
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsString() nameUrdu?: string;
+  @IsOptional() @IsString() logo?: string;
+  @IsOptional() @IsString() motto?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsEnum(['school','college','university','madrassa','institute']) type?: string;
+  @IsOptional() @IsEnum(['cambridge','matric','o_levels','a_levels','american','ib','mixed']) curriculum?: string;
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() email?: string;
+  @IsOptional() address?: any;
+  @IsOptional() social?: any;
+  @IsOptional() @IsString() registrationNumber?: string;
+  @IsOptional() @IsString() affiliationBoard?: string;
+  @IsOptional() @IsNumber() establishedYear?: number;
+  @IsOptional() @IsString() currency?: string;
+  @IsOptional() @IsString() timezone?: string;
+  @IsOptional() @IsBoolean() multiCampus?: boolean;
+  @IsOptional() @IsBoolean() hostelEnabled?: boolean;
+  @IsOptional() @IsBoolean() transportEnabled?: boolean;
+  @IsOptional() @IsNumber() termsPerYear?: number;
+}
+
+export class CreateCampusDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() email?: string;
+  @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsString() city?: string;
+  @IsOptional() @IsString() principalName?: string;
+  @IsOptional() @IsMongoId() principalId?: string;
+  @IsOptional() @IsNumber() capacity?: number;
+  schoolSlug?: string;
+}
+
+export class CreateAcademicYearDto {
+  @IsString() name: string;
+  @IsDateString() startDate: string;
+  @IsDateString() endDate: string;
+  @IsOptional() @IsBoolean() isCurrent?: boolean;
+  @IsOptional() terms?: { name: string; startDate: string; endDate: string }[];
+  schoolSlug?: string;
+}
+
+export class CreateGradeDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsNumber() displayOrder?: number;
+  @IsOptional() @IsString() campusId?: string;
+  @IsOptional() sections?: { name: string; capacity?: number; classTeacher?: string }[];
+  schoolSlug?: string;
+}
+
+export class CreateDepartmentDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() head?: string;
+  schoolSlug?: string;
+}
+
+export class CreateDesignationDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() departmentId?: string;
+  @IsOptional() @IsEnum(['teaching','non_teaching','admin','management']) category?: string;
+  schoolSlug?: string;
+}
+
+// ── organization.service.ts ───────────────────────────────────
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { School, SchoolDocument } from './schemas/organization.schema';
+import { Campus, CampusDocument } from './schemas/organization.schema';
+import { AcademicYear, AcademicYearDocument } from './schemas/organization.schema';
+import { Grade, GradeDocument } from './schemas/organization.schema';
+import { Department, DepartmentDocument } from './schemas/organization.schema';
+import { Designation, DesignationDocument } from './schemas/organization.schema';
+
+@Injectable()
+export class OrganizationService {
+  constructor(
+    @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
+    @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
+    @InjectModel(AcademicYear.name) private yearModel: Model<AcademicYearDocument>,
+    @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
+    @InjectModel(Department.name) private deptModel: Model<DepartmentDocument>,
+    @InjectModel(Designation.name) private designModel: Model<DesignationDocument>,
+  ) {}
+
+  // ── School ────────────────────────────────────────────────
+  async getSchool(slug: string) {
+    let school = await this.schoolModel.findOne({ slug });
+    if (!school) {
+      // Create default on first access
+      school = new this.schoolModel({ slug, name: 'Demo School' });
+      await school.save();
+    }
+    return school;
+  }
+
+  async updateSchool(slug: string, dto: UpdateSchoolDto) {
+    return this.schoolModel.findOneAndUpdate(
+      { slug }, { $set: dto }, { new: true, upsert: true },
+    );
+  }
+
+  async getOrganizationOverview(schoolSlug: string) {
+    const [school, campuses, currentYear, grades, departments] = await Promise.all([
+      this.schoolModel.findOne({ slug: schoolSlug }),
+      this.campusModel.countDocuments({ schoolSlug, isActive: true }),
+      this.yearModel.findOne({ schoolSlug, isCurrent: true }),
+      this.gradeModel.countDocuments({ schoolSlug, isActive: true }),
+      this.deptModel.countDocuments({ schoolSlug, isActive: true }),
+    ]);
+    return { school, campuses, currentYear, grades, departments };
+  }
+
+  // ── Campuses ──────────────────────────────────────────────
+  async getCampuses(schoolSlug: string) {
+    return this.campusModel.find({ schoolSlug, isActive: true }).sort({ name: 1 });
+  }
+
+  async createCampus(dto: CreateCampusDto) {
+    const campus = new this.campusModel(dto);
+    return campus.save();
+  }
+
+  async updateCampus(id: string, schoolSlug: string, dto: Partial<CreateCampusDto>) {
+    const campus = await this.campusModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: dto }, { new: true },
+    );
+    if (!campus) throw new NotFoundException('Campus not found');
+    return campus;
+  }
+
+  async deleteCampus(id: string, schoolSlug: string) {
+    await this.campusModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    return { message: 'Campus deactivated' };
+  }
+
+  // ── Academic Years ────────────────────────────────────────
+  async getAcademicYears(schoolSlug: string) {
+    return this.yearModel.find({ schoolSlug }).sort({ startDate: -1 });
+  }
+
+  async createAcademicYear(dto: CreateAcademicYearDto) {
+    if (dto.isCurrent) {
+      await this.yearModel.updateMany({ schoolSlug: dto.schoolSlug }, { $set: { isCurrent: false } });
+    }
+    const year = new this.yearModel({
+      ...dto,
+      startDate: new Date(dto.startDate),
+      endDate: new Date(dto.endDate),
+      terms: (dto.terms || []).map(t => ({
+        ...t, startDate: new Date(t.startDate), endDate: new Date(t.endDate),
+      })),
+    });
+    return year.save();
+  }
+
+  async setCurrentYear(id: string, schoolSlug: string) {
+    await this.yearModel.updateMany({ schoolSlug }, { $set: { isCurrent: false } });
+    return this.yearModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isCurrent: true } }, { new: true });
+  }
+
+  // ── Grades ────────────────────────────────────────────────
+  async getGrades(schoolSlug: string, campusId?: string) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (campusId) filter.campusId = campusId;
+    return this.gradeModel.find(filter).sort({ displayOrder: 1, name: 1 });
+  }
+
+  async createGrade(dto: CreateGradeDto) {
+    const grade = new this.gradeModel(dto);
+    return grade.save();
+  }
+
+  async addSection(gradeId: string, schoolSlug: string, section: any) {
+    return this.gradeModel.findOneAndUpdate(
+      { _id: gradeId, schoolSlug },
+      { $push: { sections: section } },
+      { new: true },
+    );
+  }
+
+  async bulkCreateGrades(schoolSlug: string) {
+    const defaultGrades = [
+      'Pre-Nursery', 'Nursery', 'KG-1', 'KG-2',
+      'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5',
+      'Grade 6', 'Grade 7', 'Grade 8',
+      'Grade 9', 'Grade 10', 'Grade 11', 'Grade 12',
+    ];
+    const ops = defaultGrades.map((name, i) => ({
+      updateOne: {
+        filter: { name, schoolSlug },
+        update: { $setOnInsert: { name, displayOrder: i + 1, schoolSlug, isActive: true, sections: [] } },
+        upsert: true,
+      },
+    }));
+    await this.gradeModel.bulkWrite(ops);
+    return this.gradeModel.find({ schoolSlug }).sort({ displayOrder: 1 });
+  }
+
+  // ── Departments ───────────────────────────────────────────
+  async getDepartments(schoolSlug: string) {
+    return this.deptModel.find({ schoolSlug, isActive: true }).sort({ name: 1 });
+  }
+
+  async createDepartment(dto: CreateDepartmentDto) {
+    const dept = new this.deptModel(dto);
+    return dept.save();
+  }
+
+  async updateDepartment(id: string, schoolSlug: string, dto: Partial<CreateDepartmentDto>) {
+    return this.deptModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── Designations ──────────────────────────────────────────
+  async getDesignations(schoolSlug: string, category?: string) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (category) filter.category = category;
+    return this.designModel.find(filter).sort({ name: 1 });
+  }
+
+  async createDesignation(dto: CreateDesignationDto) {
+    const desig = new this.designModel(dto);
+    return desig.save();
+  }
+}
+
+// ── organization.controller.ts ────────────────────────────────
+import {
+  Controller, Get, Post, Put, Patch, Delete,
+  Body, Param, Query, Request, HttpCode, HttpStatus,
+} from '@nestjs/common';
+
+@Controller('organization')
+export class OrganizationController {
+  constructor(private readonly service: OrganizationService) {}
+
+  private ctx(req: any) {
+    return {
+      schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
+      userName: req?.user?.name || 'Admin',
+    };
+  }
+
+  // School
+  @Get('profile') async getProfile(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getSchool(schoolSlug);
+  }
+
+  @Get('overview') async getOverview(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getOrganizationOverview(schoolSlug);
+  }
+
+  @Put('profile') async updateProfile(@Body() dto: UpdateSchoolDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateSchool(schoolSlug, dto);
+  }
+
+  // Campuses
+  @Get('campuses') async getCampuses(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCampuses(schoolSlug);
+  }
+
+  @Post('campuses') @HttpCode(HttpStatus.CREATED)
+  async createCampus(@Body() dto: CreateCampusDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCampus({ ...dto, schoolSlug });
+  }
+
+  @Put('campuses/:id') async updateCampus(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCampus(id, schoolSlug, dto);
+  }
+
+  @Delete('campuses/:id') async deleteCampus(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteCampus(id, schoolSlug);
+  }
+
+  // Academic Years
+  @Get('academic-years') async getYears(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getAcademicYears(schoolSlug);
+  }
+
+  @Post('academic-years') @HttpCode(HttpStatus.CREATED)
+  async createYear(@Body() dto: CreateAcademicYearDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createAcademicYear({ ...dto, schoolSlug });
+  }
+
+  @Patch('academic-years/:id/set-current')
+  async setCurrentYear(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.setCurrentYear(id, schoolSlug);
+  }
+
+  // Grades
+  @Get('grades') async getGrades(@Request() req: any, @Query('campusId') campusId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGrades(schoolSlug, campusId);
+  }
+
+  @Post('grades') @HttpCode(HttpStatus.CREATED)
+  async createGrade(@Body() dto: CreateGradeDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createGrade({ ...dto, schoolSlug });
+  }
+
+  @Post('grades/seed') async seedGrades(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.bulkCreateGrades(schoolSlug);
+  }
+
+  @Post('grades/:id/sections')
+  async addSection(@Param('id') id: string, @Body() section: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.addSection(id, schoolSlug, section);
+  }
+
+  // Departments
+  @Get('departments') async getDepts(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDepartments(schoolSlug);
+  }
+
+  @Post('departments') @HttpCode(HttpStatus.CREATED)
+  async createDept(@Body() dto: CreateDepartmentDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDepartment({ ...dto, schoolSlug });
+  }
+
+  @Put('departments/:id') async updateDept(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateDepartment(id, schoolSlug, dto);
+  }
+
+  // Designations
+  @Get('designations') async getDesignations(@Request() req: any, @Query('category') cat?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDesignations(schoolSlug, cat);
+  }
+
+  @Post('designations') @HttpCode(HttpStatus.CREATED)
+  async createDesignation(@Body() dto: CreateDesignationDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDesignation({ ...dto, schoolSlug });
+  }
+}
+
+// ── organization.module.ts ────────────────────────────────────
+import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+import {
+  School, SchoolSchema, Campus, CampusSchema,
+  AcademicYear, AcademicYearSchema, Grade, GradeSchema,
+  Department, DepartmentSchema, Designation, DesignationSchema,
+} from './schemas/organization.schema';
+
+@Module({
+  imports: [
+    MongooseModule.forFeature([
+      { name: School.name, schema: SchoolSchema },
+      { name: Campus.name, schema: CampusSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
+      { name: Grade.name, schema: GradeSchema },
+      { name: Department.name, schema: DepartmentSchema },
+      { name: Designation.name, schema: DesignationSchema },
+    ]),
+  ],
+  controllers: [OrganizationController],
+  providers: [OrganizationService],
+  exports: [OrganizationService],
+})
+export class OrganizationModule {}

@@ -1,0 +1,254 @@
+import { Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { HrService } from './hr.service';
+
+@Controller('hr')
+@UseGuards(AuthGuard('jwt'))
+export class HrController {
+  constructor(private readonly hrService: HrService) {}
+
+  // ── Staff ────────────────────────────────────────────────────────────
+
+  @Get('staff')
+  getStaff(@Request() req) { return this.hrService.getStaff(req.user.tenantId); }
+
+  @Post('staff')
+  createStaff(@Request() req, @Body() body: any) { return this.hrService.createStaff(req.user.tenantId, body); }
+
+  @Get('staff/:id')
+  getStaffById(@Request() req, @Param('id') id: string) { return this.hrService.getStaffById(req.user.tenantId, id); }
+
+  @Patch('staff/:id')
+  updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
+
+  @Get('staff/:id/attendance')
+  getStaffAttendanceById() { return []; }
+
+  @Get('staff/:id/leave')
+  getStaffLeave() { return []; }
+
+  @Get('staff/:id/payslips')
+  getStaffPayslips() { return []; }
+
+  @Get('staff/:id/documents')
+  getStaffDocuments() { return []; }
+
+  @Get('staff/:id/notes')
+  getStaffNotes() { return []; }
+
+  // ── Designations ─────────────────────────────────────────────────────
+
+  @Get('designations')
+  getDesignations(@Request() req) { return this.hrService.getDesignations(req.user.tenantId); }
+
+  @Post('designations')
+  createDesignation(@Request() req, @Body() body: any) { return this.hrService.createDesignation(req.user.tenantId, body); }
+
+  // ── Leave Applications (legacy) ───────────────────────────────────────
+
+  @Get('leave/applications')
+  getLeaveApplications(@Request() req) { return this.hrService.getLeaveApplications(req.user.tenantId); }
+
+  @Post('leave/applications')
+  submitLeaveApplication(@Request() req, @Body() body: any) { return this.hrService.submitLeaveApplication(req.user.tenantId, body); }
+
+  // ── Staff Lifecycle ───────────────────────────────────────────────────
+
+  @Get('lifecycle')
+  getLifecycle(@Request() req) { return this.hrService.getLifecycleCandidates(req.user.tenantId); }
+
+  @Get('lifecycle/stats')
+  getLifecycleStats(@Request() req) { return this.hrService.getLifecycleStats(req.user.tenantId); }
+
+  @Get('lifecycle/:id')
+  getLifecycleById(@Request() req, @Param('id') id: string) { return this.hrService.getLifecycleById(req.user.tenantId, id); }
+
+  @Post('lifecycle')
+  createCandidate(@Request() req, @Body() body: any) { return this.hrService.createCandidate(req.user.tenantId, req.user.institutionId, body); }
+
+  @Patch('lifecycle/:id')
+  updateCandidate(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateCandidate(req.user.tenantId, id, body); }
+
+  @Patch('lifecycle/:id/stage')
+  moveToStage(@Request() req, @Param('id') id: string, @Body() body: { stage: string; note: string }) { return this.hrService.moveToStage(req.user.tenantId, id, body.stage, body.note, req.user.userId); }
+
+  @Post('lifecycle/:id/interview')
+  scheduleInterview(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.scheduleInterview(req.user.tenantId, id, body); }
+
+  @Patch('lifecycle/:id/interview/:round/feedback')
+  updateFeedback(@Request() req, @Param('id') id: string, @Param('round') round: string, @Body() body: any) { return this.hrService.updateInterviewFeedback(req.user.tenantId, id, parseInt(round), body); }
+
+  @Post('lifecycle/:id/offer')
+  makeOffer(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.makeOffer(req.user.tenantId, id, body); }
+
+  @Patch('lifecycle/:id/offer/respond')
+  respondToOffer(@Request() req, @Param('id') id: string, @Body() body: { response: string; note: string }) { return this.hrService.respondToOffer(req.user.tenantId, id, body.response, body.note); }
+
+  @Patch('lifecycle/:id/onboarding/:taskIndex')
+  updateOnboardingTask(@Request() req, @Param('id') id: string, @Param('taskIndex') taskIndex: string, @Body() body: { isDone: boolean }) { return this.hrService.updateOnboardingTask(req.user.tenantId, id, parseInt(taskIndex), body.isDone); }
+
+  // ── Recruitment: Job Openings ─────────────────────────────────────────
+
+  @Get('recruitment/stats')
+  getRecruitmentStats(@Request() req) { return this.hrService.getRecruitmentStats(req.user.tenantId); }
+
+  @Get('recruitment/jobs')
+  getJobs(@Request() req, @Query() query: any) { return this.hrService.getJobOpenings(req.user.tenantId, query); }
+
+  @Post('recruitment/jobs')
+  createJob(@Request() req, @Body() body: any) { return this.hrService.createJobOpening(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Get('recruitment/jobs/:id')
+  getJob(@Request() req, @Param('id') id: string) { return this.hrService.getJobOpeningById(req.user.tenantId, id); }
+
+  @Patch('recruitment/jobs/:id')
+  updateJob(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateJobOpening(req.user.tenantId, id, body); }
+
+  // ── Recruitment: Applications ─────────────────────────────────────────
+
+  @Get('recruitment/applications')
+  getApplications(@Request() req, @Query() query: any) { return this.hrService.getApplications(req.user.tenantId, query); }
+
+  @Post('recruitment/applications')
+  createApplication(@Request() req, @Body() body: any) { return this.hrService.createApplication(req.user.tenantId, req.user.institutionId, body.jobId, body); }
+
+  @Get('recruitment/applications/:id')
+  getApplication(@Request() req, @Param('id') id: string) { return this.hrService.getApplicationById(req.user.tenantId, id); }
+
+  @Patch('recruitment/applications/:id/stage')
+  updateAppStage(@Request() req, @Param('id') id: string, @Body() body: { stage: string; note: string }) { return this.hrService.updateApplicationStage(req.user.tenantId, id, body.stage, body.note); }
+
+  // ── Recruitment: Interview Schedule ───────────────────────────────────
+
+  @Get('recruitment/interviews')
+  getInterviews(@Request() req, @Query() query: any) { return this.hrService.getInterviewSchedule(req.user.tenantId, query); }
+
+  @Post('recruitment/interviews')
+  scheduleRecruitmentInterview(@Request() req, @Body() body: any) { return this.hrService.scheduleInterview2(req.user.tenantId, req.user.institutionId, body.applicationId, body, req.user.userId); }
+
+  @Patch('recruitment/interviews/:id/feedback')
+  submitFeedback(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateInterviewFeedback2(req.user.tenantId, id, body); }
+
+  // ── ATTENDANCE ────────────────────────────────────────────────────────
+
+  @Get('attendance/summary')
+  getAttendanceSummary(@Request() req, @Query() q: any) { return this.hrService.getAttendanceSummary(req.user.tenantId, parseInt(q.month), parseInt(q.year)); }
+
+  @Get('attendance')
+  getAttendance(@Request() req, @Query() q: any) { return this.hrService.getStaffAttendance(req.user.tenantId, q); }
+
+  @Post('attendance/bulk')
+  markAttendance(@Request() req, @Body() body: { records: any[] }) { return this.hrService.markStaffAttendance(req.user.tenantId, req.user.institutionId, body.records); }
+
+  // ── LEAVE ─────────────────────────────────────────────────────────────
+
+  @Get('leave/stats')
+  getLeaveStats(@Request() req) { return this.hrService.getLeaveStats(req.user.tenantId); }
+
+  @Get('leave/balance/:staffId')
+  getLeaveBalance(@Request() req, @Param('staffId') sid: string) { return this.hrService.getLeaveBalance(req.user.tenantId, sid); }
+
+  // ── Leave Policies (must be before generic leave/: routes) ────────────
+
+  @Post('leave/policies/seed-defaults')
+  seedLeavePolicies(@Request() req) { return this.hrService.seedLeavePolicies(req.user.tenantId); }
+
+  @Get('leave/policies')
+  getLeavePolicies(@Request() req) { return this.hrService.getLeavePolicies(req.user.tenantId); }
+
+  @Post('leave/policies')
+  createLeavePolicy(@Request() req, @Body() body: any) { return this.hrService.createLeavePolicy(req.user.tenantId, body); }
+
+  @Patch('leave/policies/:id')
+  updateLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateLeavePolicy(req.user.tenantId, id, body); }
+
+  @Post('leave/policies/:id/assign')
+  assignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { staffId: string; academicYearId: string }) { return this.hrService.assignLeavePolicy(req.user.tenantId, id, body.staffId, body.academicYearId); }
+
+  @Post('leave/policies/:id/bulk-assign')
+  bulkAssignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { academicYearId: string }) { return this.hrService.bulkAssignLeavePolicy(req.user.tenantId, id, body.academicYearId); }
+
+  @Get('leave')
+  getLeave(@Request() req, @Query() q: any) { return this.hrService.getLeaveApplications(req.user.tenantId, q); }
+
+  @Post('leave')
+  createLeave(@Request() req, @Body() body: any) { return this.hrService.createLeaveApplication(req.user.tenantId, req.user.institutionId, body); }
+
+  @Patch('leave/:id/status')
+  updateLeaveStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string }) { return this.hrService.updateLeaveStatus(req.user.tenantId, id, body.status, req.user.userId, body.note); }
+
+  // ── PAYROLL ───────────────────────────────────────────────────────────
+
+  @Get('payroll/stats')
+  getPayrollStats(@Request() req) { return this.hrService.getPayrollStats(req.user.tenantId); }
+
+  @Get('payroll/runs')
+  getPayrollRuns(@Request() req) { return this.hrService.getPayrollRuns(req.user.tenantId); }
+
+  @Post('payroll/runs')
+  createPayrollRun(@Request() req, @Body() body: any) { return this.hrService.createPayrollRun(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Patch('payroll/runs/:id/status')
+  updatePayrollStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string }) { return this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId); }
+
+  // ── PAYSLIPS ──────────────────────────────────────────────────────────
+
+  @Get('payslips')
+  getPayslips(@Request() req, @Query() q: any) { return this.hrService.getPayslips(req.user.tenantId, q); }
+
+  @Post('payslips')
+  createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, req.user.institutionId, body); }
+
+  // ── PERFORMANCE ───────────────────────────────────────────────────────
+
+  @Get('performance')
+  getPerformance(@Request() req, @Query() q: any) { return this.hrService.getPerformanceReviews(req.user.tenantId, q); }
+
+  @Post('performance')
+  createPerformance(@Request() req, @Body() body: any) { return this.hrService.createPerformanceReview(req.user.tenantId, req.user.institutionId, body); }
+
+  @Patch('performance/:id')
+  updatePerformance(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updatePerformanceReview(req.user.tenantId, id, body); }
+
+  // ── TRAINING ──────────────────────────────────────────────────────────
+
+  @Get('training')
+  getTrainings(@Request() req) { return this.hrService.getTrainings(req.user.tenantId); }
+
+  @Post('training')
+  createTraining(@Request() req, @Body() body: any) { return this.hrService.createTraining(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Patch('training/:id')
+  updateTraining(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateTraining(req.user.tenantId, id, body); }
+
+  @Post('training/:id/enroll')
+  enrollTraining(@Request() req, @Param('id') id: string, @Body() body: { staffId: string; staffName: string }) { return this.hrService.enrollInTraining(req.user.tenantId, id, body.staffId, body.staffName); }
+
+  // ── CONTRACTS ─────────────────────────────────────────────────────────
+
+  @Get('contracts/stats')
+  getContractStats(@Request() req) { return this.hrService.getContractStats(req.user.tenantId); }
+
+  @Get('contracts')
+  getContracts(@Request() req, @Query() q: any) { return this.hrService.getContracts(req.user.tenantId, q); }
+
+  @Post('contracts')
+  createContract(@Request() req, @Body() body: any) { return this.hrService.createContract(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Patch('contracts/:id')
+  updateContract(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateContract(req.user.tenantId, id, body); }
+
+  // ── EXIT ──────────────────────────────────────────────────────────────
+
+  @Get('exit')
+  getExitRecords(@Request() req) { return this.hrService.getExitRecords(req.user.tenantId); }
+
+  @Post('exit')
+  createExitRecord(@Request() req, @Body() body: any) { return this.hrService.createExitRecord(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Patch('exit/:id')
+  updateExitRecord(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateExitRecord(req.user.tenantId, id, body); }
+
+  @Patch('exit/:id/clearance/:index')
+  updateClearance(@Request() req, @Param('id') id: string, @Param('index') idx: string, @Body() body: { isDone: boolean; clearedBy: string }) { return this.hrService.updateClearanceItem(req.user.tenantId, id, parseInt(idx), body.isDone, body.clearedBy); }
+}

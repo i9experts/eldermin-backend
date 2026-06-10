@@ -1,0 +1,496 @@
+// ============================================================
+// DOCUMENTS & WORKFLOW — SCHEMAS + SERVICE + CONTROLLER + MODULE
+// Eldermin ERP | NestJS + MongoDB
+// ============================================================
+
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Document as MongoDoc, Types } from 'mongoose';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import {
+  Controller, Get, Post, Put, Patch, Delete,
+  Body, Param, Query, Request, HttpCode, HttpStatus,
+} from '@nestjs/common';
+import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
+
+// ============================================================
+// SCHEMA: DOCUMENT
+// ============================================================
+export type DocumentRecordDocument = DocumentRecord & MongoDoc;
+
+@Schema({ timestamps: true, collection: 'documents' })
+export class DocumentRecord {
+  @Prop({ required: true }) title: string;
+  @Prop() description: string;
+  @Prop({
+    enum: ['policy','form','template','letter','certificate','report',
+           'contract','notice','circular','admission_doc','hr_doc','finance_doc','other'],
+    default: 'other',
+  })
+  category: string;
+  @Prop() fileUrl: string;
+  @Prop() fileName: string;
+  @Prop() fileSize: number;
+  @Prop() fileType: string; // pdf, docx, xlsx etc
+  @Prop() version: string; // v1.0, v1.1
+  @Prop() tags: string[];
+  @Prop({
+    enum: ['draft','active','archived','expired'],
+    default: 'draft',
+  })
+  status: string;
+  @Prop() expiryDate: Date;
+  @Prop() effectiveDate: Date;
+  @Prop({
+    enum: ['public','staff_only','admin_only','confidential'],
+    default: 'staff_only',
+  })
+  visibility: string;
+  @Prop({ default: 0 }) downloadCount: number;
+  @Prop({ default: 0 }) viewCount: number;
+  @Prop() uploadedBy: string;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) uploadedById: Types.ObjectId;
+  @Prop() relatedTo: string; // student ID, staff ID etc
+  @Prop() relatedToType: string; // student, staff, vendor
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const DocumentRecordSchema = SchemaFactory.createForClass(DocumentRecord);
+DocumentRecordSchema.index({ schoolSlug: 1, category: 1, status: 1 });
+DocumentRecordSchema.index({ schoolSlug: 1, tags: 1 });
+
+// ============================================================
+// SCHEMA: WORKFLOW TEMPLATE
+// ============================================================
+export type WorkflowTemplateDocument = WorkflowTemplate & MongoDoc;
+
+@Schema({ _id: true })
+class WorkflowStep {
+  @Prop({ required: true }) name: string;
+  @Prop({ required: true }) order: number;
+  @Prop({
+    enum: ['approve','review','acknowledge','sign','upload_doc'],
+    default: 'approve',
+  })
+  action: string;
+  @Prop() assignedRole: string;
+  @Prop() assignedTo: string;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) assignedToId: Types.ObjectId;
+  @Prop({ default: 3 }) dueDays: number;
+  @Prop() instructions: string;
+  @Prop({ default: false }) isOptional: boolean;
+}
+const WorkflowStepSchema = SchemaFactory.createForClass(WorkflowStep);
+
+@Schema({ timestamps: true, collection: 'workflow_templates' })
+export class WorkflowTemplate {
+  @Prop({ required: true }) name: string;
+  @Prop() description: string;
+  @Prop({
+    enum: ['leave','expense','procurement','admission','document','hr_action','custom'],
+    default: 'custom',
+  })
+  type: string;
+  @Prop({ type: [WorkflowStepSchema], default: [] }) steps: WorkflowStep[];
+  @Prop({ default: true }) isActive: boolean;
+  @Prop() createdBy: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const WorkflowTemplateSchema = SchemaFactory.createForClass(WorkflowTemplate);
+
+// ============================================================
+// SCHEMA: WORKFLOW INSTANCE (Running approval flow)
+// ============================================================
+export type WorkflowInstanceDocument = WorkflowInstance & MongoDoc;
+
+@Schema({ _id: true })
+class StepAction {
+  @Prop({ required: true }) stepOrder: number;
+  @Prop({ required: true }) stepName: string;
+  @Prop({
+    enum: ['pending','approved','rejected','skipped'],
+    default: 'pending',
+  })
+  status: string;
+  @Prop() assignedTo: string;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) assignedToId: Types.ObjectId;
+  @Prop() actionBy: string;
+  @Prop() actionAt: Date;
+  @Prop() comments: string;
+  @Prop() dueDate: Date;
+}
+const StepActionSchema = SchemaFactory.createForClass(StepAction);
+
+@Schema({ timestamps: true, collection: 'workflow_instances' })
+export class WorkflowInstance {
+  @Prop({ required: true, unique: true }) instanceNumber: string;
+  @Prop({ type: Types.ObjectId, ref: 'WorkflowTemplate' }) templateId: Types.ObjectId;
+  @Prop({ required: true }) workflowName: string;
+  @Prop({ required: true }) workflowType: string;
+  @Prop() subject: string; // human-readable title
+  @Prop() description: string;
+  @Prop() initiatedBy: string;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) initiatedById: Types.ObjectId;
+  @Prop() relatedTo: string; // related document/record ID
+  @Prop() relatedToType: string; // invoice, leave, procurement etc.
+  @Prop({ type: [StepActionSchema], default: [] }) steps: StepAction[];
+  @Prop() currentStep: number;
+  @Prop({
+    enum: ['pending','in_progress','approved','rejected','cancelled'],
+    default: 'pending',
+  })
+  status: string;
+  @Prop() completedAt: Date;
+  @Prop() cancelledBy: string;
+  @Prop() cancelReason: string;
+  @Prop() priority: string;
+  @Prop() dueDate: Date;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const WorkflowInstanceSchema = SchemaFactory.createForClass(WorkflowInstance);
+WorkflowInstanceSchema.index({ schoolSlug: 1, status: 1 });
+WorkflowInstanceSchema.index({ schoolSlug: 1, workflowType: 1 });
+WorkflowInstanceSchema.index({ 'steps.assignedToId': 1, status: 1 });
+WorkflowInstanceSchema.pre('save', function (next) {
+  if (this.isNew && !this.instanceNumber) {
+    const d = new Date();
+    const rand = Math.floor(1000 + Math.random() * 9000);
+    this.instanceNumber = `WF-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}-${rand}`;
+  }
+  next();
+});
+
+// ============================================================
+// DOCUMENTS SERVICE
+// ============================================================
+const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
+
+@Injectable()
+export class DocumentsService {
+  constructor(
+    @InjectModel(DocumentRecord.name) private docModel: Model<DocumentRecordDocument>,
+    @InjectModel(WorkflowTemplate.name) private templateModel: Model<WorkflowTemplateDocument>,
+    @InjectModel(WorkflowInstance.name) private instanceModel: Model<WorkflowInstanceDocument>,
+  ) {}
+
+  // ── Dashboard ──────────────────────────────────────────
+  async getDashboard(schoolSlug: string) {
+    const [
+      totalDocs, activeDocs, expiringSoon,
+      totalWorkflows, pendingWorkflows, completedWorkflows,
+      byCategory, recentDocs, pendingApprovals,
+    ] = await Promise.all([
+      this.docModel.countDocuments({ schoolSlug }),
+      this.docModel.countDocuments({ schoolSlug, status: 'active' }),
+      this.docModel.countDocuments({
+        schoolSlug, status: 'active',
+        expiryDate: { $lte: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+      }),
+      this.instanceModel.countDocuments({ schoolSlug }),
+      this.instanceModel.countDocuments({ schoolSlug, status: { $in: ['pending','in_progress'] } }),
+      this.instanceModel.countDocuments({ schoolSlug, status: 'approved' }),
+      this.docModel.aggregate([
+        { $match: { schoolSlug } },
+        { $group: { _id: '$category', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
+      this.docModel.find({ schoolSlug }).sort({ createdAt: -1 }).limit(5)
+        .select('title category status createdAt uploadedBy'),
+      this.instanceModel.find({ schoolSlug, status: { $in: ['pending','in_progress'] } })
+        .sort({ createdAt: -1 }).limit(8)
+        .select('instanceNumber workflowName subject status currentStep initiatedBy createdAt'),
+    ]);
+
+    return {
+      stats: { totalDocs, activeDocs, expiringSoon, totalWorkflows, pendingWorkflows, completedWorkflows },
+      byCategory, recentDocs, pendingApprovals,
+    };
+  }
+
+  // ── Documents ──────────────────────────────────────────
+  async getDocuments(schoolSlug: string, query: any) {
+    const { page = 1, limit = 20, category, status, visibility, search } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (category) filter.category = category;
+    if (status) filter.status = status;
+    if (visibility) filter.visibility = visibility;
+    if (search) filter.$or = [
+      { title: { $regex: search, $options: 'i' } },
+      { description: { $regex: search, $options: 'i' } },
+      { tags: { $in: [new RegExp(search, 'i')] } },
+    ];
+    const [data, total] = await Promise.all([
+      this.docModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.docModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  async createDocument(data: any) {
+    const doc = new this.docModel(data);
+    return doc.save();
+  }
+
+  async updateDocument(id: string, schoolSlug: string, data: any) {
+    return this.docModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+  }
+
+  async archiveDocument(id: string, schoolSlug: string) {
+    return this.docModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { status: 'archived' } }, { new: true });
+  }
+
+  async incrementView(id: string, schoolSlug: string) {
+    return this.docModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $inc: { viewCount: 1 } }, { new: true },
+    );
+  }
+
+  // ── Workflow Templates ─────────────────────────────────
+  async getTemplates(schoolSlug: string, type?: string) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (type) filter.type = type;
+    return this.templateModel.find(filter).sort({ name: 1 });
+  }
+
+  async createTemplate(data: any) {
+    const tmpl = new this.templateModel(data);
+    return tmpl.save();
+  }
+
+  async seedDefaultTemplates(schoolSlug: string) {
+    const defaults = [
+      {
+        name: 'Expense Approval',
+        type: 'expense',
+        steps: [
+          { name: 'Department Head Review', order: 1, action: 'approve', assignedRole: 'dept_head', dueDays: 2 },
+          { name: 'Finance Manager Approval', order: 2, action: 'approve', assignedRole: 'finance_manager', dueDays: 3 },
+          { name: 'Principal Final Approval', order: 3, action: 'approve', assignedRole: 'principal', dueDays: 2 },
+        ],
+      },
+      {
+        name: 'Leave Request Approval',
+        type: 'leave',
+        steps: [
+          { name: 'Line Manager Approval', order: 1, action: 'approve', assignedRole: 'line_manager', dueDays: 1 },
+          { name: 'HR Acknowledgement', order: 2, action: 'acknowledge', assignedRole: 'hr_manager', dueDays: 1 },
+        ],
+      },
+      {
+        name: 'Procurement Approval',
+        type: 'procurement',
+        steps: [
+          { name: 'Department Head Approval', order: 1, action: 'approve', assignedRole: 'dept_head', dueDays: 2 },
+          { name: 'Finance Review', order: 2, action: 'review', assignedRole: 'finance_manager', dueDays: 3 },
+          { name: 'Principal Approval', order: 3, action: 'approve', assignedRole: 'principal', dueDays: 3 },
+        ],
+      },
+      {
+        name: 'Admission Decision',
+        type: 'admission',
+        steps: [
+          { name: 'Admission Officer Review', order: 1, action: 'review', assignedRole: 'admission_officer', dueDays: 2 },
+          { name: 'Principal Decision', order: 2, action: 'approve', assignedRole: 'principal', dueDays: 2 },
+        ],
+      },
+    ];
+
+    for (const tmpl of defaults) {
+      await this.templateModel.findOneAndUpdate(
+        { name: tmpl.name, schoolSlug },
+        { $setOnInsert: { ...tmpl, schoolSlug, isActive: true } },
+        { upsert: true, new: true },
+      );
+    }
+    return this.templateModel.find({ schoolSlug });
+  }
+
+  // ── Workflow Instances ─────────────────────────────────
+  async getInstances(schoolSlug: string, query: any) {
+    const { page = 1, limit = 20, status, type, assignedTo } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (status) filter.status = status;
+    if (type) filter.workflowType = type;
+    if (assignedTo) filter['steps.assignedTo'] = assignedTo;
+    const [data, total] = await Promise.all([
+      this.instanceModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.instanceModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  async initiateWorkflow(data: any) {
+    const template = await this.templateModel.findById(data.templateId);
+    if (!template) throw new NotFoundException('Workflow template not found');
+
+    const steps = template.steps.map(s => ({
+      stepOrder: s.order, stepName: s.name,
+      status: 'pending', assignedTo: s.assignedTo,
+      assignedToId: s.assignedToId, action: s.action,
+      dueDate: new Date(Date.now() + s.dueDays * 24 * 60 * 60 * 1000),
+    }));
+
+    const instance = new this.instanceModel({
+      ...data,
+      templateId: template._id,
+      workflowName: template.name,
+      workflowType: template.type,
+      steps,
+      currentStep: 1,
+      status: 'in_progress',
+    });
+    return instance.save();
+  }
+
+  async takeAction(id: string, schoolSlug: string, stepOrder: number, action: 'approve'|'reject', actionBy: string, comments?: string) {
+    const instance = await this.instanceModel.findOne({ _id: id, schoolSlug });
+    if (!instance) throw new NotFoundException('Workflow not found');
+
+    const step = instance.steps.find(s => s.stepOrder === stepOrder);
+    if (!step) throw new NotFoundException('Step not found');
+
+    step.status = action === 'approve' ? 'approved' : 'rejected';
+    step.actionBy = actionBy;
+    step.actionAt = new Date();
+    step.comments = comments || '';
+
+    if (action === 'reject') {
+      instance.status = 'rejected';
+      instance.completedAt = new Date();
+    } else {
+      const nextStep = instance.steps.find(s => s.stepOrder === stepOrder + 1);
+      if (nextStep) {
+        instance.currentStep = nextStep.stepOrder;
+      } else {
+        instance.status = 'approved';
+        instance.completedAt = new Date();
+      }
+    }
+
+    await instance.save();
+    return instance;
+  }
+
+  async cancelWorkflow(id: string, schoolSlug: string, cancelledBy: string, reason: string) {
+    return this.instanceModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: { status: 'cancelled', cancelledBy, cancelReason: reason, completedAt: new Date() } },
+      { new: true },
+    );
+  }
+
+  async getMyPendingApprovals(schoolSlug: string, userName: string) {
+    return this.instanceModel.find({
+      schoolSlug,
+      status: 'in_progress',
+      steps: { $elemMatch: { assignedTo: userName, status: 'pending' } },
+    }).sort({ createdAt: -1 });
+  }
+}
+
+// ============================================================
+// DOCUMENTS CONTROLLER
+// ============================================================
+@Controller('documents')
+export class DocumentsController {
+  constructor(private readonly service: DocumentsService) {}
+
+  private ctx(req: any) {
+    return {
+      schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
+      userName: req?.user?.name || 'Admin',
+    };
+  }
+
+  // Dashboard
+  @Get('dashboard') async getDashboard(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDashboard(schoolSlug);
+  }
+
+  // Documents
+  @Get() async getDocs(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDocuments(schoolSlug, query);
+  }
+  @Post() @HttpCode(HttpStatus.CREATED)
+  async createDoc(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createDocument({ ...dto, schoolSlug, uploadedBy: userName });
+  }
+  @Put(':id') async updateDoc(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateDocument(id, schoolSlug, dto);
+  }
+  @Patch(':id/archive') async archiveDoc(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.archiveDocument(id, schoolSlug);
+  }
+  @Patch(':id/view') async incrementView(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.incrementView(id, schoolSlug);
+  }
+
+  // Workflow Templates
+  @Get('workflow-templates') async getTemplates(@Request() req: any, @Query('type') type?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTemplates(schoolSlug, type);
+  }
+  @Post('workflow-templates') @HttpCode(HttpStatus.CREATED)
+  async createTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createTemplate({ ...dto, schoolSlug, createdBy: userName });
+  }
+  @Post('workflow-templates/seed') async seedTemplates(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedDefaultTemplates(schoolSlug);
+  }
+
+  // Workflow Instances
+  @Get('workflows') async getInstances(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getInstances(schoolSlug, query);
+  }
+  @Get('workflows/my-approvals') async getMyApprovals(@Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.getMyPendingApprovals(schoolSlug, userName);
+  }
+  @Post('workflows') @HttpCode(HttpStatus.CREATED)
+  async initiateWorkflow(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.initiateWorkflow({ ...dto, schoolSlug, initiatedBy: userName });
+  }
+  @Patch('workflows/:id/action')
+  async takeAction(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.takeAction(id, schoolSlug, dto.stepOrder, dto.action, dto.actionBy || userName, dto.comments);
+  }
+  @Patch('workflows/:id/cancel')
+  async cancelWorkflow(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.cancelWorkflow(id, schoolSlug, userName, dto.reason);
+  }
+}
+
+// ============================================================
+// DOCUMENTS MODULE
+// ============================================================
+@Module({
+  imports: [
+    MongooseModule.forFeature([
+      { name: DocumentRecord.name, schema: DocumentRecordSchema },
+      { name: WorkflowTemplate.name, schema: WorkflowTemplateSchema },
+      { name: WorkflowInstance.name, schema: WorkflowInstanceSchema },
+    ]),
+  ],
+  controllers: [DocumentsController],
+  providers: [DocumentsService],
+  exports: [DocumentsService],
+})
+export class DocumentsModule {}
