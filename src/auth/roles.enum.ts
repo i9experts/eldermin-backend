@@ -1,0 +1,15 @@
+export enum UserRole {
+  SUPER_ADMIN = 'super_admin',
+  INSTITUTION_OWNER = 'institution_owner',
+  PRINCIPAL = 'principal',
+  VICE_PRINCIPAL = 'vice_principal',
+  ADMIN = 'admin',
+  ACADEMIC_COORDINATOR = 'academic_coordinator',
+  FINANCE_MANAGER = 'finance_manager',
+  HR_MANAGER = 'hr_manager',
+  TEACHER = 'teacher',
+  LIBRARIAN = 'librarian',
+  PARENT = 'parent',
+  STUDENT = 'student',
+  SUPPORT_STAFF = 'support_staff',
+}

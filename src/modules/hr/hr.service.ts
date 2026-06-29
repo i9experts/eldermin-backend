@@ -39,7 +39,7 @@ export class HrService {
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
   ) {}
 
-  private newTid(t: string) { return new Types.ObjectId(t); }
+  private newTid(t: string) { return t; }
 
   // ── Staff ────────────────────────────────────────────────────────────
 

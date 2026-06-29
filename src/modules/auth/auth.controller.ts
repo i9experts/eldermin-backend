@@ -1,18 +1,21 @@
-import { Controller, Post, Get, Body, Request, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { Controller, Post, Get, Body, Request, HttpCode, HttpStatus } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { IsEmail, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
+import { Public } from '../../auth/decorators';
 
 class LoginDto {
   @IsEmail() email: string;
   @IsString() @MinLength(6) password: string;
-  @IsString() slug: string;
+  @IsOptional()
+  @IsString()
+  slug?: string;
 }
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto) {
@@ -20,11 +23,11 @@ export class AuthController {
   }
 
   @Get('me')
-  @UseGuards(AuthGuard('jwt'))
   getMe(@Request() req) {
     return this.authService.getMe(req.user.userId, req.user.tenantId);
   }
 
+  @Public()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   logout() {

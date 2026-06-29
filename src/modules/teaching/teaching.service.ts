@@ -19,7 +19,7 @@ export class TeachingService {
     @InjectModel(BehaviourNote.name) private behaviourModel: Model<BehaviourNoteDocument>,
   ) {}
 
-  private tid(t: string) { return new Types.ObjectId(t); }
+  private tid(t: string) { return t; }
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 

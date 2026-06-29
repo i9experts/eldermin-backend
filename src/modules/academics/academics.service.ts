@@ -17,7 +17,7 @@ export class AcademicsService {
     @InjectModel(BookIssue.name) private issueModel:      Model<BookIssueDocument>,
   ) {}
 
-  private tid(t: string) { return new Types.ObjectId(t); }
+  private tid(t: string) { return t; }
   private oid(id: string) { return new Types.ObjectId(id); }
 
   // ─── DASHBOARD ────────────────────────────────────────────────────────────────

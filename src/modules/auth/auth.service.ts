@@ -14,45 +14,66 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  async login(email: string, password: string, slug: string) {
-    const tenant = await this.tenantModel.findOne({ slug: slug.toLowerCase() }).lean();
-    if (!tenant) throw new UnauthorizedException('Institution not found');
-    if (tenant.status === 'suspended') throw new ForbiddenException('Account suspended');
+  async login(email: string, password: string, slug?: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const query: any = { email: email.toLowerCase().trim(), isActive: true };
+    if (slug) query.schoolSlug = slug.toLowerCase();
 
-    const user = await this.userModel.findOne({
-      tenantId: tenant._id,
-      email: email.toLowerCase().trim(),
-      isActive: true,
-    }).lean();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const user: any = await this.userModel.findOne(query).lean();
     if (!user) throw new UnauthorizedException('Invalid credentials');
 
-    const valid = await bcrypt.compare(password, user.passwordHash);
+    // Support both passwordHash (new schema) and password (legacy)
+    const hash = user.passwordHash || user.password;
+    if (!hash) throw new UnauthorizedException('Invalid credentials');
+    const valid = await bcrypt.compare(password, hash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
+
+    // Try to resolve tenant — fall back gracefully if none exists yet
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let tenant: any = null;
+    const slugToUse = slug || user.schoolSlug;
+    if (user.tenantId) {
+      tenant = await this.tenantModel.findById(user.tenantId).lean();
+    } else if (slugToUse) {
+      tenant = await this.tenantModel.findOne({ slug: slugToUse }).lean();
+    }
+    if (tenant?.status === 'suspended') throw new ForbiddenException('Account suspended');
+
+    const tenantId = tenant?._id?.toString() || user.tenantId?.toString() || slugToUse || user._id.toString();
 
     await this.userModel.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
 
+    const role = user.primaryRole || user.role;
+    const name = user.name || `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim();
+    const activeModules = tenant?.activeModules || ['organization'];
+
+    const schoolSlug = tenant?.slug || slugToUse || null;
+
     const payload = {
       sub: user._id.toString(),
-      tenantId: tenant._id.toString(),
+      tenantId,
       institutionId: user.institutionId?.toString(),
-      role: user.primaryRole,
-      activeModules: tenant.activeModules || ['organization'],
+      role,
+      name,
+      schoolSlug,
+      activeModules,
     };
 
     return {
       accessToken: this.jwtService.sign(payload),
       user: {
         id: user._id,
-        name: `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim(),
+        name,
         email: user.email,
-        role: user.primaryRole,
+        role,
         avatarUrl: user.profile?.avatarUrl || null,
       },
       institution: {
-        name: tenant.displayName,
-        slug: tenant.slug,
-        plan: tenant.plan,
-        activeModules: tenant.activeModules,
+        name: tenant?.displayName || slugToUse || 'Unknown',
+        slug: tenant?.slug || slugToUse || null,
+        plan: tenant?.plan || null,
+        activeModules,
       },
     };
   }

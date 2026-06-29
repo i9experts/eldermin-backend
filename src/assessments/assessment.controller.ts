@@ -34,40 +34,11 @@ export class AssessmentController {
     return this.service.getDashboard(schoolSlug, ay);
   }
 
-  // ── Assessments ───────────────────────────────────────────────
+  // ── Assessments (static GET routes must precede :id) ──────────
   @Get()
   async findAll(@Request() req: any, @Query() query: AssessmentQueryDto) {
     const { schoolSlug } = this.ctx(req);
     return this.service.findAll(schoolSlug, query);
-  }
-
-  @Get(':id')
-  async findOne(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.findOne(id, schoolSlug);
-  }
-
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateAssessmentDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.create({ ...dto, schoolSlug, createdBy: userName });
-  }
-
-  @Put(':id')
-  async update(@Param('id') id: string, @Body() dto: UpdateAssessmentDto, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.update(id, schoolSlug, dto);
-  }
-
-  @Patch(':id/status')
-  async updateStatus(
-    @Param('id') id: string,
-    @Body('status') status: string,
-    @Request() req: any,
-  ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateStatus(id, schoolSlug, status);
   }
 
   // ── Question Bank ─────────────────────────────────────────────
@@ -85,19 +56,6 @@ export class AssessmentController {
   ) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getQuestionStats(schoolSlug, subject, grade);
-  }
-
-  @Post('questions')
-  @HttpCode(HttpStatus.CREATED)
-  async createQuestion(@Body() dto: CreateQuestionDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.createQuestion({ ...dto, schoolSlug, addedBy: userName });
-  }
-
-  @Delete('questions/:id')
-  async deleteQuestion(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.deleteQuestion(id, schoolSlug);
   }
 
   // ── Mark Entry ────────────────────────────────────────────────
@@ -118,20 +76,7 @@ export class AssessmentController {
     return this.service.getMarkSheetSummary(assessmentId, grade, subject, schoolSlug);
   }
 
-  @Post('marks/bulk')
-  @HttpCode(HttpStatus.CREATED)
-  async bulkEnterMarks(@Body() dto: BulkMarkEntryDto, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
-    return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName });
-  }
-
-  @Patch('marks/verify')
-  async verifyMarks(@Body() dto: VerifyMarksDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.verifyMarks({ ...dto, schoolSlug, verifiedBy: userName });
-  }
-
-  // ── Report Cards ──────────────────────────────────────────────
+  // ── Report Cards (static before :id) ─────────────────────────
   @Get('report-cards')
   async getReportCards(@Request() req: any, @Query() query: ReportCardQueryDto) {
     const { schoolSlug } = this.ctx(req);
@@ -179,5 +124,61 @@ export class AssessmentController {
   ) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getPerformanceAnalytics(schoolSlug, academicYear, grade);
+  }
+
+  // ── Dynamic :id (must come AFTER all static GET routes) ───────
+  @Get(':id')
+  async findOne(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.findOne(id, schoolSlug);
+  }
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  async create(@Body() dto: CreateAssessmentDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.create({ ...dto, schoolSlug, createdBy: userName });
+  }
+
+  @Put(':id')
+  async update(@Param('id') id: string, @Body() dto: UpdateAssessmentDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.update(id, schoolSlug, dto);
+  }
+
+  @Patch(':id/status')
+  async updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: string,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateStatus(id, schoolSlug, status);
+  }
+
+  @Post('questions')
+  @HttpCode(HttpStatus.CREATED)
+  async createQuestion(@Body() dto: CreateQuestionDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createQuestion({ ...dto, schoolSlug, addedBy: userName });
+  }
+
+  @Delete('questions/:id')
+  async deleteQuestion(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteQuestion(id, schoolSlug);
+  }
+
+  @Post('marks/bulk')
+  @HttpCode(HttpStatus.CREATED)
+  async bulkEnterMarks(@Body() dto: BulkMarkEntryDto, @Request() req: any) {
+    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName });
+  }
+
+  @Patch('marks/verify')
+  async verifyMarks(@Body() dto: VerifyMarksDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.verifyMarks({ ...dto, schoolSlug, verifiedBy: userName });
   }
 }

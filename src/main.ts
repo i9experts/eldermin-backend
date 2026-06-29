@@ -1,26 +1,30 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
+
+import { initSentry } from './instrument';
+initSentry();
+
 import { webcrypto } from 'crypto';
 (global as any).crypto = webcrypto;
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { SentryExceptionFilter } from './filters/sentry.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
     origin: [
-      'http://93.127.163.238:5173',
-      'http://93.127.163.238:5174',
-      'http://93.127.163.238:5175',
-      'http://93.127.163.238:3000',
+      'https://eldermin.com',
+      'https://www.eldermin.com',
       'http://localhost:5173',
-      'http://localhost:5174',
-      'http://localhost:5175',
       'http://localhost:3000',
     ],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-school-slug', 'x-academic-year'],
     credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
   app.useGlobalPipes(
@@ -30,6 +34,8 @@ async function bootstrap() {
       forbidNonWhitelisted: false,
     }),
   );
+
+  app.useGlobalFilters(new SentryExceptionFilter());
 
   app.setGlobalPrefix('api/v1');
 
