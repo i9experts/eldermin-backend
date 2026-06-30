@@ -31,6 +31,7 @@ class SocialLinks {
 @Schema({ timestamps: true, collection: 'schools' })
 export class School {
   @Prop({ required: true, unique: true }) slug: string;
+  @Prop({ type: [String], default: ["organization"] }) activeModules: string[];
   @Prop({ required: true }) name: string;
   @Prop() nameUrdu: string;
   @Prop() nameArabic: string;

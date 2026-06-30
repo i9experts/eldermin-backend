@@ -19,6 +19,8 @@ async function bootstrap() {
     origin: [
       'https://eldermin.com',
       'https://www.eldermin.com',
+      'https://app.eldermin.com',
+      'https://api.eldermin.com',
       'http://localhost:5173',
       'http://localhost:3000',
     ],
