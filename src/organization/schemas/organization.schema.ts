@@ -164,6 +164,7 @@ const SectionSchema = SchemaFactory.createForClass(Section);
 export class Grade {
   @Prop({ required: true }) name: string; // Grade 1, Grade 2 etc.
   @Prop() code: string;
+  @Prop() wing: string; // e.g. Montessori, Primary, Secondary, O-Level
   @Prop() displayOrder: number;
   @Prop({ type: [SectionSchema], default: [] }) sections: Section[];
   @Prop() campusId: string;

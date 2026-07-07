@@ -1,7 +1,8 @@
 import {
   Controller, Get, Post, Put, Patch, Delete,
-  Body, Param, Query, Request, HttpCode, HttpStatus, BadRequestException,
+  Body, Param, Query, Request, Res, HttpCode, HttpStatus, BadRequestException,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FinanceService } from './finance.service';
 
 @Controller('finance')
@@ -154,5 +155,70 @@ export class FinanceController {
   @Get('reports/fee-collection') async getFeeCollection(@Request() req: any, @Query('month') month: string) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getFeeCollection(schoolSlug, month);
+  }
+
+  private toCsv(rows: any[]): string {
+    if (!rows || rows.length === 0) return 'No data\n';
+    const flat = rows.map(r => {
+      const out: any = {};
+      for (const k of Object.keys(r)) {
+        const v = (r as any)[k];
+        out[k] = (v !== null && typeof v === 'object') ? JSON.stringify(v) : v;
+      }
+      return out;
+    });
+    const headers = Array.from(new Set(flat.flatMap(r => Object.keys(r))));
+    const escape = (v: any) => {
+      if (v === undefined || v === null) return '';
+      const s = String(v).replace(/"/g, '""');
+      return /[",\n]/.test(s) ? `"${s}"` : s;
+    };
+    const lines = [headers.join(',')];
+    for (const row of flat) lines.push(headers.map(h => escape(row[h])).join(','));
+    return lines.join('\n');
+  }
+
+  @Get('reports/collection')
+  async getCollectionReport(@Request() req: any, @Query() query: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const data = await this.service.getCollectionReport(schoolSlug, {
+      groupBy: query.groupBy || 'summary',
+      from: query.from, to: query.to, month: query.month,
+      grade: query.grade, academicYear: query.academicYear,
+      ...(query.fromSlip ? { fromSlip: query.fromSlip, toSlip: query.toSlip } : {}),
+    } as any);
+
+    if (query.format === 'csv') {
+      const rows = Array.isArray(data) ? data : [data];
+      const csv = this.toCsv(rows);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="collection-${query.groupBy || 'summary'}.csv"`);
+      return res.send(csv);
+    }
+    return res.json(data);
+  }
+
+  @Get('reports/outstanding')
+  async getOutstandingReport(@Request() req: any, @Query() query: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const data = await this.service.getOutstandingReport(schoolSlug, {
+      groupBy: query.groupBy || 'summary',
+      grade: query.grade, academicYear: query.academicYear,
+    });
+
+    if (query.format === 'csv') {
+      const rows = Array.isArray(data) ? data : [data];
+      const csv = this.toCsv(rows);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="outstanding-${query.groupBy || 'summary'}.csv"`);
+      return res.send(csv);
+    }
+    return res.json(data);
+  }
+
+  @Delete('invoices/:id')
+  async deleteInvoice(@Param('id') id: string, @Body('reason') reason: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.softDeleteInvoice(id, schoolSlug, userName, reason);
   }
 }

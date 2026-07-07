@@ -112,10 +112,14 @@ export class Invoice {
   @Prop({ default: 0 }) paidAmount: number;
   @Prop({ default: 0 }) balanceDue: number;
   @Prop({
-    enum: ['draft','sent','paid','partial','overdue','cancelled','waived'],
+    enum: ['draft','sent','paid','partial','overdue','cancelled','waived','hold'],
     default: 'draft',
   })
   status: string;
+  @Prop({ default: false }) isDeleted: boolean;
+  @Prop() deletedAt: Date;
+  @Prop() deletedBy: string;
+  @Prop() deleteReason: string;
   @Prop() dueDate: Date;
   @Prop({ default: 0 }) lateFine: number;
   @Prop() notes: string;

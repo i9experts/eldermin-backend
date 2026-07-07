@@ -41,7 +41,7 @@ export class FinanceService {
       bankBalances,
     ] = await Promise.all([
       this.invoiceModel.aggregate([
-        { $match: base },
+        { $match: { ...base, isDeleted: { $ne: true } } },
         { $group: { _id: null, total: { $sum: '$totalAmount' } } },
       ]),
       this.paymentModel.aggregate([
@@ -49,7 +49,7 @@ export class FinanceService {
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.invoiceModel.aggregate([
-        { $match: { ...base, status: { $in: ['sent','partial','overdue'] } } },
+        { $match: { ...base, status: { $in: ['sent','partial','overdue'] }, isDeleted: { $ne: true } } },
         { $group: { _id: null, total: { $sum: '$balanceDue' } } },
       ]),
       this.paymentModel.aggregate([
@@ -64,13 +64,13 @@ export class FinanceService {
         { $match: { ...base, status: { $in: ['paid', 'approved'] } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
-      this.invoiceModel.countDocuments({ ...base, status: 'overdue' }),
+      this.invoiceModel.countDocuments({ ...base, status: 'overdue', isDeleted: { $ne: true } }),
       this.expenseModel.aggregate([
         { $match: { ...base, status: 'submitted' } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
       ]),
       this.invoiceModel.aggregate([
-        { $match: base },
+        { $match: { ...base, isDeleted: { $ne: true } } },
         { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$totalAmount' } } },
       ]),
       this.paymentModel.find({ schoolSlug }).sort({ paymentDate: -1 }).limit(5)
@@ -179,7 +179,7 @@ export class FinanceService {
   async getInvoices(schoolSlug: string, query: any) {
     const { page = 1, limit = 20, status, grade, month, studentId, academicYear } = query;
     const { skip } = paged(page, limit);
-    const filter: any = { schoolSlug };
+    const filter: any = { schoolSlug, isDeleted: { $ne: true } };
     if (status) filter.status = status;
     if (grade) filter.grade = grade;
     if (month) filter.month = month;
@@ -204,7 +204,7 @@ export class FinanceService {
   }
 
   async recordPayment(invoiceId: string, schoolSlug: string, paymentData: any) {
-    const invoice = await this.invoiceModel.findOne({ _id: invoiceId, schoolSlug });
+    const invoice = await this.invoiceModel.findOne({ _id: invoiceId, schoolSlug, isDeleted: { $ne: true } });
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status === 'paid') throw new BadRequestException('Invoice already paid');
 
@@ -348,20 +348,276 @@ export class FinanceService {
   async getFeeCollection(schoolSlug: string, month: string) {
     const [collected, outstanding, byGrade] = await Promise.all([
       this.invoiceModel.aggregate([
-        { $match: { schoolSlug, month } },
+        { $match: { schoolSlug, month, isDeleted: { $ne: true } } },
         { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$totalAmount' } } },
       ]),
       this.invoiceModel.aggregate([
-        { $match: { schoolSlug, month, status: { $in: ['sent', 'partial', 'overdue'] } } },
+        { $match: { schoolSlug, month, status: { $in: ['sent', 'partial', 'overdue'] }, isDeleted: { $ne: true } } },
         { $group: { _id: null, total: { $sum: '$balanceDue' } } },
       ]),
       this.invoiceModel.aggregate([
-        { $match: { schoolSlug, month } },
+        { $match: { schoolSlug, month, isDeleted: { $ne: true } } },
         { $group: { _id: '$grade', invoiced: { $sum: '$totalAmount' }, collected: { $sum: '$paidAmount' } } },
         { $sort: { _id: 1 } },
       ]),
     ]);
 
     return { collected, outstanding: outstanding[0]?.total || 0, byGrade };
+  }
+
+  // ============================================================
+  // REPORTS — Collection & Outstanding
+  // ============================================================
+
+  async getCollectionReport(schoolSlug: string, params: {
+    groupBy: string; from?: string; to?: string; month?: string;
+    grade?: string; academicYear?: string;
+  }) {
+    const { groupBy, from, to, month, grade, academicYear } = params;
+
+    const paymentMatch: any = { schoolSlug };
+    if (from || to) {
+      paymentMatch.paymentDate = {};
+      if (from) paymentMatch.paymentDate.$gte = new Date(from);
+      if (to) paymentMatch.paymentDate.$lte = new Date(to);
+    }
+
+    const invoiceMatch: any = { schoolSlug, isDeleted: { $ne: true } };
+    if (month) invoiceMatch.month = month;
+    if (grade) invoiceMatch.grade = grade;
+    if (academicYear) invoiceMatch.academicYear = academicYear;
+
+    switch (groupBy) {
+      case 'slip': {
+        return this.paymentModel.find(paymentMatch)
+          .sort({ paymentDate: -1 })
+          .select('receiptNumber studentName invoiceNumber amount paymentMethod paymentDate collectedBy')
+          .lean();
+      }
+
+      case 'slipRange': {
+        const { fromSlip, toSlip } = params as any;
+        const rangeMatch: any = { ...paymentMatch };
+        if (fromSlip && toSlip) {
+          rangeMatch.receiptNumber = { $gte: fromSlip, $lte: toSlip };
+        }
+        return this.paymentModel.find(rangeMatch).sort({ receiptNumber: 1 }).lean();
+      }
+
+      case 'class': {
+        return this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'inv' } },
+          { $unwind: { path: '$inv', preserveNullAndEmptyArrays: true } },
+          { $group: {
+            _id: { $ifNull: ['$inv.grade', 'Unknown'] },
+            totalCollected: { $sum: '$amount' },
+            paymentCount: { $sum: 1 },
+          } },
+          { $sort: { _id: 1 } },
+        ]);
+      }
+
+      case 'month': {
+        return this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $project: {
+            amount: 1,
+            yearMonth: { $dateToString: { format: '%Y-%m', date: '$paymentDate' } },
+          } },
+          { $group: { _id: '$yearMonth', totalCollected: { $sum: '$amount' }, paymentCount: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ]);
+      }
+
+      case 'classMonth': {
+        return this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'inv' } },
+          { $unwind: { path: '$inv', preserveNullAndEmptyArrays: true } },
+          { $project: {
+            amount: 1,
+            grade: { $ifNull: ['$inv.grade', 'Unknown'] },
+            yearMonth: { $dateToString: { format: '%Y-%m', date: '$paymentDate' } },
+          } },
+          { $group: {
+            _id: { grade: '$grade', month: '$yearMonth' },
+            totalCollected: { $sum: '$amount' },
+            paymentCount: { $sum: 1 },
+          } },
+          { $sort: { '_id.grade': 1, '_id.month': 1 } },
+        ]);
+      }
+
+      case 'feeCategory': {
+        return this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'inv' } },
+          { $unwind: { path: '$inv', preserveNullAndEmptyArrays: true } },
+          { $group: {
+            _id: { $ifNull: ['$inv.type', 'other'] },
+            totalCollected: { $sum: '$amount' },
+            paymentCount: { $sum: 1 },
+          } },
+          { $sort: { totalCollected: -1 } },
+        ]);
+      }
+
+      case 'wing': {
+        return this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'inv' } },
+          { $unwind: { path: '$inv', preserveNullAndEmptyArrays: true } },
+          { $lookup: { from: 'grades', let: { g: '$inv.grade', slug: '$schoolSlug' },
+            pipeline: [{ $match: { $expr: { $and: [{ $eq: ['$name', '$$g'] }, { $eq: ['$schoolSlug', '$$slug'] }] } } }],
+            as: 'gradeDoc' } },
+          { $unwind: { path: '$gradeDoc', preserveNullAndEmptyArrays: true } },
+          { $group: {
+            _id: { $ifNull: ['$gradeDoc.wing', 'Unassigned'] },
+            totalCollected: { $sum: '$amount' },
+            paymentCount: { $sum: 1 },
+          } },
+          { $sort: { _id: 1 } },
+        ]);
+      }
+
+      case 'family': {
+        return this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+          { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+          { $project: {
+            amount: 1, studentName: 1,
+            familyKey: { $ifNull: [{ $arrayElemAt: ['$student.guardians.phone', 0] }, 'Unknown Family'] },
+          } },
+          { $group: {
+            _id: '$familyKey',
+            totalCollected: { $sum: '$amount' },
+            paymentCount: { $sum: 1 },
+            students: { $addToSet: '$studentName' },
+          } },
+          { $sort: { totalCollected: -1 } },
+        ]);
+      }
+
+      case 'exemptions': {
+        return this.invoiceModel.find({ ...invoiceMatch, status: 'waived' })
+          .select('invoiceNumber studentName grade totalAmount totalDiscount month')
+          .lean();
+      }
+
+      case 'summary':
+      default: {
+        const [totals, byStatus] = await Promise.all([
+          this.paymentModel.aggregate([
+            { $match: paymentMatch },
+            { $group: { _id: null, totalCollected: { $sum: '$amount' }, paymentCount: { $sum: 1 } } },
+          ]),
+          this.invoiceModel.aggregate([
+            { $match: invoiceMatch },
+            { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$totalAmount' } } },
+          ]),
+        ]);
+        return { totals: totals[0] || { totalCollected: 0, paymentCount: 0 }, byStatus };
+      }
+    }
+  }
+
+  async getOutstandingReport(schoolSlug: string, params: {
+    groupBy: string; grade?: string; academicYear?: string;
+  }) {
+    const { groupBy, grade, academicYear } = params;
+    const match: any = {
+      schoolSlug, isDeleted: { $ne: true },
+      status: { $in: ['sent', 'partial', 'overdue'] },
+      balanceDue: { $gt: 0 },
+    };
+    if (grade) match.grade = grade;
+    if (academicYear) match.academicYear = academicYear;
+
+    switch (groupBy) {
+      case 'class': {
+        return this.invoiceModel.aggregate([
+          { $match: match },
+          { $group: { _id: '$grade', totalOutstanding: { $sum: '$balanceDue' }, invoiceCount: { $sum: 1 } } },
+          { $sort: { totalOutstanding: -1 } },
+        ]);
+      }
+
+      case 'wing': {
+        return this.invoiceModel.aggregate([
+          { $match: match },
+          { $lookup: { from: 'grades', let: { g: '$grade', slug: '$schoolSlug' },
+            pipeline: [{ $match: { $expr: { $and: [{ $eq: ['$name', '$$g'] }, { $eq: ['$schoolSlug', '$$slug'] }] } } }],
+            as: 'gradeDoc' } },
+          { $unwind: { path: '$gradeDoc', preserveNullAndEmptyArrays: true } },
+          { $group: {
+            _id: { $ifNull: ['$gradeDoc.wing', 'Unassigned'] },
+            totalOutstanding: { $sum: '$balanceDue' },
+            invoiceCount: { $sum: 1 },
+          } },
+          { $sort: { _id: 1 } },
+        ]);
+      }
+
+      case 'family':
+      case 'familyHead': {
+        return this.invoiceModel.aggregate([
+          { $match: match },
+          { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+          { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+          { $project: {
+            balanceDue: 1, studentName: 1,
+            familyKey: { $ifNull: [{ $arrayElemAt: ['$student.guardians.phone', 0] }, 'Unknown Family'] },
+            guardianName: { $ifNull: [{ $arrayElemAt: ['$student.guardians.name', 0] }, 'Unknown'] },
+          } },
+          { $group: {
+            _id: '$familyKey',
+            guardianName: { $first: '$guardianName' },
+            totalOutstanding: { $sum: '$balanceDue' },
+            invoiceCount: { $sum: 1 },
+            students: { $addToSet: '$studentName' },
+          } },
+          { $sort: { totalOutstanding: -1 } },
+        ]);
+      }
+
+      case 'hold': {
+        return this.invoiceModel.find({ schoolSlug, status: 'hold', isDeleted: { $ne: true } })
+          .select('invoiceNumber studentName grade totalAmount balanceDue month')
+          .lean();
+      }
+
+      case 'deleted': {
+        return this.invoiceModel.find({ schoolSlug, isDeleted: true })
+          .select('invoiceNumber studentName grade totalAmount deletedAt deletedBy deleteReason')
+          .lean();
+      }
+
+      case 'summary':
+      default: {
+        const [total, byStatus] = await Promise.all([
+          this.invoiceModel.aggregate([
+            { $match: match },
+            { $group: { _id: null, totalOutstanding: { $sum: '$balanceDue' }, invoiceCount: { $sum: 1 } } },
+          ]),
+          this.invoiceModel.aggregate([
+            { $match: { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 } } },
+            { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$balanceDue' } } },
+          ]),
+        ]);
+        return { total: total[0] || { totalOutstanding: 0, invoiceCount: 0 }, byStatus };
+      }
+    }
+  }
+
+  async softDeleteInvoice(id: string, schoolSlug: string, deletedBy: string, reason?: string) {
+    const invoice = await this.invoiceModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: { isDeleted: true, deletedAt: new Date(), deletedBy, deleteReason: reason } },
+      { new: true },
+    );
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    return invoice;
   }
 }
