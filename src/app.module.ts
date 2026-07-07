@@ -20,6 +20,7 @@ import { UploadModule } from './upload/upload.module';
 import { EmailModule } from './email/email.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { PdfModule } from './pdf/pdf.module';
+import { ReportTemplatesModule } from './modules/report-templates/report-templates.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ModulesModule } from './modules/modules.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -49,6 +50,7 @@ import { RolesGuard } from './auth/roles.guard';
     EmailModule,
     ComplianceModule,
     PdfModule,
+    ReportTemplatesModule,
     OnboardingModule,
     ModulesModule,
   ],

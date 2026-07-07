@@ -6,6 +6,7 @@ import { OrganizationService } from './organization.service';
 import {
   UpdateSchoolDto, CreateCampusDto, CreateAcademicYearDto,
   CreateGradeDto, CreateDepartmentDto, CreateDesignationDto,
+  CreateGroupInstitutionDto,
 } from './dto/organization.dto';
 
 @Controller('organization')
@@ -125,5 +126,29 @@ export class OrganizationController {
   async createDesignation(@Body() dto: CreateDesignationDto, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.createDesignation({ ...dto, schoolSlug });
+  }
+
+  // Group Institutions
+  @Get('institutions') async getInstitutions(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGroupInstitutions(schoolSlug);
+  }
+
+  @Post('institutions') @HttpCode(HttpStatus.CREATED)
+  async createInstitution(@Body() dto: CreateGroupInstitutionDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createGroupInstitution({ ...dto, schoolSlug });
+  }
+
+  @Put('institutions/:id')
+  async updateInstitutionRecord(@Param('id') id: string, @Body() dto: Partial<CreateGroupInstitutionDto>, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateGroupInstitution(id, schoolSlug, dto);
+  }
+
+  @Delete('institutions/:id')
+  async archiveInstitutionRecord(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.archiveGroupInstitution(id, schoolSlug);
   }
 }

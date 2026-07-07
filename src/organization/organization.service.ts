@@ -12,7 +12,9 @@ import {
 import {
   UpdateSchoolDto, CreateCampusDto, CreateAcademicYearDto,
   CreateGradeDto, CreateDepartmentDto, CreateDesignationDto,
+  CreateGroupInstitutionDto,
 } from './dto/organization.dto';
+import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -23,6 +25,7 @@ export class OrganizationService {
     @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
     @InjectModel(Department.name) private deptModel: Model<DepartmentDocument>,
     @InjectModel(Designation.name) private designModel: Model<DesignationDocument>,
+    @InjectModel(GroupInstitution.name) private groupInstitutionModel: Model<GroupInstitutionDocument>,
   ) {}
 
   // ── School ────────────────────────────────────────────────
@@ -162,5 +165,52 @@ export class OrganizationService {
   async createDesignation(dto: CreateDesignationDto) {
     const desig = new this.designModel(dto);
     return desig.save();
+  }
+
+  // ── Group Institutions ────────────────────────────────────
+  async getGroupInstitutions(schoolSlug: string) {
+    const institutions = await this.groupInstitutionModel.find({ schoolSlug }).sort({ createdAt: 1 });
+    if (institutions.length > 0) return institutions;
+
+    const school = await this.getSchool(schoolSlug);
+    const seeded = new this.groupInstitutionModel({
+      schoolSlug,
+      name: school.name,
+      registrationNumber: school.registrationNumber,
+      type: school.type,
+      status: school.isActive ? 'Active' : 'Inactive',
+      email: school.email,
+      phone: school.phone,
+      website: school.social?.website,
+      address: {
+        city: school.address?.city,
+        province: school.address?.province,
+        country: school.address?.country,
+        postalCode: school.address?.postalCode,
+      },
+    });
+    await seeded.save();
+    return [seeded];
+  }
+
+  async createGroupInstitution(dto: CreateGroupInstitutionDto) {
+    const institution = new this.groupInstitutionModel(dto);
+    return institution.save();
+  }
+
+  async updateGroupInstitution(id: string, schoolSlug: string, dto: Partial<CreateGroupInstitutionDto>) {
+    const institution = await this.groupInstitutionModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: dto }, { new: true },
+    );
+    if (!institution) throw new NotFoundException('Institution not found');
+    return institution;
+  }
+
+  async archiveGroupInstitution(id: string, schoolSlug: string) {
+    const institution = await this.groupInstitutionModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: { status: 'Inactive' } }, { new: true },
+    );
+    if (!institution) throw new NotFoundException('Institution not found');
+    return institution;
   }
 }

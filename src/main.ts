@@ -5,7 +5,7 @@ import { initSentry } from './instrument';
 initSentry();
 
 import { webcrypto } from 'crypto';
-(global as any).crypto = webcrypto;
+if (!(global as any).crypto) { (global as any).crypto = webcrypto; }
 
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';

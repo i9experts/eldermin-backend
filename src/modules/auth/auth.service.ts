@@ -53,7 +53,7 @@ export class AuthService {
     const payload = {
       sub: user._id.toString(),
       tenantId,
-      institutionId: user.institutionId?.toString(),
+      institutionId: (user.institutionId || tenant?._id || user.tenantId)?.toString(),
       role,
       name,
       schoolSlug,

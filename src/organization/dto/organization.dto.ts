@@ -26,6 +26,7 @@ export class UpdateSchoolDto {
   @IsOptional() @IsBoolean() hostelEnabled?: boolean;
   @IsOptional() @IsBoolean() transportEnabled?: boolean;
   @IsOptional() @IsNumber() termsPerYear?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 export class CreateCampusDto {
@@ -72,5 +73,31 @@ export class CreateDesignationDto {
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() departmentId?: string;
   @IsOptional() @IsEnum(['teaching','non_teaching','admin','management']) category?: string;
+  schoolSlug?: string;
+}
+
+export class CreateGroupInstitutionDto {
+  // Step 1 — Basic Info
+  @IsString() name: string;
+  @IsOptional() @IsString() legalName?: string;
+  @IsOptional() @IsString() registrationNumber?: string;
+  @IsOptional() @IsString() type?: string;
+  @IsOptional() @IsString() ownershipType?: string;
+  @IsOptional() @IsDateString() establishedDate?: string;
+  @IsOptional() @IsEnum(['Active','Pending','Inactive']) status?: string;
+  @IsOptional() @IsString() logoUrl?: string;
+
+  // Step 2 — Location
+  @IsOptional() address?: { country?: string; province?: string; city?: string; postalCode?: string; fullAddress?: string };
+  @IsOptional() @IsString() regionalOffice?: string;
+
+  // Step 3 — Contact
+  @IsOptional() @IsString() email?: string;
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() website?: string;
+  @IsOptional() @IsString() taxNumber?: string;
+  @IsOptional() @IsString() principalName?: string;
+  @IsOptional() @IsString() headEmail?: string;
+
   schoolSlug?: string;
 }

@@ -126,8 +126,7 @@ export class Invoice {
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);
 InvoiceSchema.index({ schoolSlug: 1, studentId: 1, month: -1 });
 InvoiceSchema.index({ schoolSlug: 1, status: 1 });
-InvoiceSchema.index({ invoiceNumber: 1 }, { unique: true });
-InvoiceSchema.pre('save', async function () {
+InvoiceSchema.pre('validate', function () {
   if (this.isNew && !this.invoiceNumber) {
     const year = new Date().getFullYear();
     const rand = Math.floor(10000 + Math.random() * 90000);
@@ -170,8 +169,7 @@ export class Payment {
 export const PaymentSchema = SchemaFactory.createForClass(Payment);
 PaymentSchema.index({ schoolSlug: 1, paymentDate: -1 });
 PaymentSchema.index({ schoolSlug: 1, studentId: 1 });
-PaymentSchema.index({ receiptNumber: 1 }, { unique: true });
-PaymentSchema.pre('save', async function () {
+PaymentSchema.pre('validate', function () {
   if (this.isNew && !this.receiptNumber) {
     const d = new Date();
     const rand = Math.floor(1000 + Math.random() * 9000);
@@ -186,14 +184,15 @@ export type ExpenseDocument = Expense & Document;
 
 @Schema({ timestamps: true, collection: 'expenses' })
 export class Expense {
+  @Prop() expenseNo: string;
   @Prop({ required: true }) title: string;
   @Prop({ required: true }) category: string; // Utilities, Salaries, Maintenance etc.
   @Prop() description: string;
   @Prop({ required: true }) amount: number;
   @Prop({ required: true }) date: Date;
   @Prop({
-    enum: ['pending','approved','paid','rejected'],
-    default: 'pending',
+    enum: ['submitted','approved','paid','rejected'],
+    default: 'submitted',
   })
   status: string;
   @Prop() approvedBy: string;
@@ -202,6 +201,7 @@ export class Expense {
   @Prop() paymentMethod: string;
   @Prop() receiptNumber: string;
   @Prop() vendorName: string;
+  @Prop() paidTo: string;
   @Prop() accountCode: string;
   @Prop() departmentId: string;
   @Prop() campusId: string;
@@ -215,6 +215,13 @@ export const ExpenseSchema = SchemaFactory.createForClass(Expense);
 ExpenseSchema.index({ schoolSlug: 1, date: -1 });
 ExpenseSchema.index({ schoolSlug: 1, category: 1, date: -1 });
 ExpenseSchema.index({ schoolSlug: 1, status: 1 });
+ExpenseSchema.pre('validate', function () {
+  if (this.isNew && !this.expenseNo) {
+    const d = new Date();
+    const rand = Math.floor(1000 + Math.random() * 9000);
+    this.expenseNo = `EXP-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}-${rand}`;
+  }
+});
 
 // ============================================================
 // BUDGET

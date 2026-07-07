@@ -18,6 +18,8 @@ export class LeaveBalance {
   @Prop({ default: 10 }) paternityEntitled: number;
   @Prop({ default: 0 }) paternityUsed: number;
   @Prop({ default: 0 }) unpaidUsed: number;
+  @Prop({ default: 0 }) hajjEntitled: number;
+  @Prop({ default: 0 }) hajjUsed: number;
 }
 export const LeaveBalanceSchema = SchemaFactory.createForClass(LeaveBalance);
 LeaveBalanceSchema.index({ tenantId: 1, staffId: 1, academicYearId: 1 }, { unique: true });

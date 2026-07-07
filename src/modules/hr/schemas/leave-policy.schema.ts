@@ -18,6 +18,7 @@ export class LeavePolicy {
   @Prop({ default: 3 })  emergencyDays: number;
   @Prop({ default: 5 })  studyDays: number;
   @Prop({ default: 0 })  unpaidDays: number;
+  @Prop({ default: 0 })  hajjDays: number;
   @Prop({ default: false }) allowCarryForward: boolean;
   @Prop({ default: 0 })  maxCarryForwardDays: number;
   @Prop({ default: false }) allowEncashment: boolean;

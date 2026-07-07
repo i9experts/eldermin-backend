@@ -11,7 +11,7 @@ export class LeaveApplication {
   @Prop() staffEmployeeId: string;
   @Prop() department: string;
   @Prop() leaveNo: string;
-  @Prop({ enum: ['annual','sick','casual','maternity','paternity','emergency','unpaid','study','other'], required: true }) leaveType: string;
+  @Prop({ enum: ['annual','sick','casual','maternity','paternity','emergency','unpaid','study','hajj','other'], required: true }) leaveType: string;
   @Prop({ required: true }) fromDate: Date;
   @Prop({ required: true }) toDate: Date;
   @Prop({ required: true }) totalDays: number;

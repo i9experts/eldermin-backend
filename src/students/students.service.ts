@@ -556,4 +556,241 @@ export class StudentsService {
 
     return { students, grade, section, academicYear, attendanceStats, feeStats, behaviourStats };
   }
+
+  // ============================================================
+  // BULK IMPORT
+  // ============================================================
+
+  generateImportTemplate(): string {
+    const headers = [
+      'firstName', 'lastName', 'dateOfBirth', 'gender', 'currentGrade',
+      'currentSection', 'currentRollNumber', 'admissionNumber',
+      'personalEmail', 'personalPhone', 'address', 'city', 'province',
+      'guardianName', 'guardianRelation', 'guardianPhone', 'guardianEmail',
+    ];
+    const example = [
+      'Ahmed', 'Khan', '2015-03-12', 'male', 'Grade 5',
+      'A', '12', 'ADM-2026-0001',
+      '', '03001234567', '123 Main Blvd', 'Lahore', 'Punjab',
+      'Muhammad Khan', 'father', '03009876543', 'father@example.com',
+    ];
+    return [headers.join(','), example.join(',')].join('\n');
+  }
+
+  private parseCsv(buffer: Buffer): { headers: string[]; rows: string[][] } {
+    const text = buffer.toString('utf-8');
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) throw new BadRequestException('CSV file has no data rows');
+    const headers = lines[0].split(',').map(h => h.trim());
+    const rows = lines.slice(1).map(l => l.split(',').map(c => c.trim()));
+    return { headers, rows };
+  }
+
+  async previewBulkImport(schoolSlug: string, file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const { headers, rows } = this.parseCsv(file.buffer);
+
+    const col = (name: string) => headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
+    const idx: Record<string, number> = {
+      firstName: col('firstName'), lastName: col('lastName'),
+      dateOfBirth: col('dateOfBirth'), gender: col('gender'),
+      currentGrade: col('currentGrade'), currentSection: col('currentSection'),
+      currentRollNumber: col('currentRollNumber'), admissionNumber: col('admissionNumber'),
+      personalEmail: col('personalEmail'), personalPhone: col('personalPhone'),
+      address: col('address'), city: col('city'), province: col('province'),
+      guardianName: col('guardianName'), guardianRelation: col('guardianRelation'),
+      guardianPhone: col('guardianPhone'), guardianEmail: col('guardianEmail'),
+    };
+
+    const required = ['firstName', 'lastName', 'dateOfBirth', 'gender', 'currentGrade'];
+    for (const r of required) {
+      if (idx[r] === -1) {
+        throw new BadRequestException(`CSV is missing required column: ${r}`);
+      }
+    }
+
+    const existing = await this.studentModel.find({ schoolSlug })
+      .select('admissionNumber firstName lastName dateOfBirth').lean();
+    const byAdmission = new Map(existing.filter((s: any) => s.admissionNumber).map((s: any) => [s.admissionNumber, s]));
+    const byNameDob = new Map(existing.map((s: any) =>
+      [`${(s.firstName || '').toLowerCase()}|${(s.lastName || '').toLowerCase()}|${s.dateOfBirth ? new Date(s.dateOfBirth).toISOString().slice(0,10) : ''}`, s]));
+
+    const preview: any[] = [];
+    const duplicates: any[] = [];
+    let validCount = 0;
+
+    rows.forEach((cols, i) => {
+      const rowNum = i + 2;
+      const errors: string[] = [];
+      const get = (key: string) => idx[key] !== -1 ? cols[idx[key]] : '';
+
+      const firstName = get('firstName');
+      const lastName = get('lastName');
+      const dobRaw = get('dateOfBirth');
+      const gender = get('gender').toLowerCase();
+      const currentGrade = get('currentGrade');
+      const admissionNumber = get('admissionNumber');
+
+      if (!firstName) errors.push("missing required field 'firstName'");
+      if (!lastName) errors.push("missing required field 'lastName'");
+      if (!currentGrade) errors.push("missing required field 'currentGrade'");
+
+      let dateOfBirth: Date | null = null;
+      if (!dobRaw) {
+        errors.push("missing required field 'dateOfBirth'");
+      } else {
+        dateOfBirth = new Date(dobRaw);
+        if (isNaN(dateOfBirth.getTime())) {
+          errors.push(`invalid dateOfBirth '${dobRaw}' — use YYYY-MM-DD`);
+        }
+      }
+
+      if (!gender) {
+        errors.push("missing required field 'gender'");
+      } else if (!['male', 'female'].includes(gender)) {
+        errors.push(`invalid gender '${gender}' — must be 'male' or 'female'`);
+      }
+
+      const email = get('personalEmail');
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errors.push(`invalid email format '${email}'`);
+      }
+
+      let duplicateOf: any = null;
+      if (admissionNumber && byAdmission.has(admissionNumber)) {
+        duplicateOf = byAdmission.get(admissionNumber);
+      } else {
+        const key = `${firstName.toLowerCase()}|${lastName.toLowerCase()}|${dateOfBirth && !isNaN(dateOfBirth.getTime()) ? dateOfBirth.toISOString().slice(0,10) : ''}`;
+        if (byNameDob.has(key)) duplicateOf = byNameDob.get(key);
+      }
+
+      const rowData = {
+        firstName, lastName,
+        dateOfBirth: dateOfBirth && !isNaN(dateOfBirth.getTime()) ? dateOfBirth.toISOString().slice(0,10) : dobRaw,
+        gender, currentGrade,
+        currentSection: get('currentSection'),
+        currentRollNumber: get('currentRollNumber'),
+        admissionNumber,
+        personalEmail: email,
+        personalPhone: get('personalPhone'),
+        address: get('address'),
+        city: get('city'),
+        province: get('province'),
+        guardianName: get('guardianName'),
+        guardianRelation: get('guardianRelation'),
+        guardianPhone: get('guardianPhone'),
+        guardianEmail: get('guardianEmail'),
+      };
+
+      if (errors.length > 0) {
+        preview.push({ row: rowNum, data: rowData, errors });
+        return;
+      }
+      validCount++;
+
+      if (duplicateOf) {
+        duplicates.push({
+          row: rowNum,
+          matchedOn: admissionNumber && byAdmission.has(admissionNumber) ? 'admissionNumber' : 'name+dateOfBirth',
+          existingStudentId: duplicateOf._id,
+        });
+      }
+
+      preview.push({ row: rowNum, data: rowData, errors: [], isDuplicate: !!duplicateOf });
+    });
+
+    return {
+      totalRows: rows.length,
+      validRows: validCount,
+      invalidRows: rows.length - validCount,
+      preview,
+      duplicates,
+    };
+  }
+
+  async commitBulkImport(
+    schoolSlug: string,
+    academicYear: string,
+    rows: any[],
+    duplicateAction: 'skip' | 'update' | 'createAnyway' = 'skip',
+  ) {
+    if (!rows || rows.length === 0) throw new BadRequestException('No rows to import');
+
+    let created = 0, updated = 0, skipped = 0;
+    const failed: any[] = [];
+
+    for (const row of rows) {
+      try {
+        if (row.errors && row.errors.length > 0) { skipped++; continue; }
+
+        let existing: any = null;
+        if (row.data.admissionNumber) {
+          existing = await this.studentModel.findOne({ schoolSlug, admissionNumber: row.data.admissionNumber });
+        }
+        if (!existing) {
+          existing = await this.studentModel.findOne({
+            schoolSlug, firstName: row.data.firstName, lastName: row.data.lastName,
+            dateOfBirth: new Date(row.data.dateOfBirth),
+          });
+        }
+
+        if (existing) {
+          if (duplicateAction === 'skip') { skipped++; continue; }
+          if (duplicateAction === 'update') {
+            await this.studentModel.findByIdAndUpdate(existing._id, {
+              $set: {
+                currentGrade: row.data.currentGrade,
+                currentSection: row.data.currentSection,
+                currentRollNumber: row.data.currentRollNumber,
+                personalEmail: row.data.personalEmail,
+                personalPhone: row.data.personalPhone,
+                address: row.data.address,
+                city: row.data.city,
+                province: row.data.province,
+              },
+            });
+            updated++;
+            continue;
+          }
+        }
+
+        const year = new Date().getFullYear();
+        const random = Math.floor(1000 + Math.random() * 9000);
+        const guardians = row.data.guardianName ? [{
+          name: row.data.guardianName,
+          relation: row.data.guardianRelation || 'guardian',
+          phone: row.data.guardianPhone,
+          email: row.data.guardianEmail,
+          isPrimary: true,
+        }] : [];
+
+        const student = new this.studentModel({
+          studentId: `STU-${year}-${random}`,
+          firstName: row.data.firstName,
+          lastName: row.data.lastName,
+          dateOfBirth: new Date(row.data.dateOfBirth),
+          gender: row.data.gender,
+          currentGrade: row.data.currentGrade,
+          currentSection: row.data.currentSection,
+          currentRollNumber: row.data.currentRollNumber,
+          currentAcademicYear: academicYear,
+          admissionNumber: row.data.admissionNumber,
+          personalEmail: row.data.personalEmail,
+          personalPhone: row.data.personalPhone,
+          address: row.data.address,
+          city: row.data.city,
+          province: row.data.province,
+          guardians,
+          schoolSlug,
+          status: 'active',
+        });
+        await student.save();
+        created++;
+      } catch (err: any) {
+        failed.push({ row: row.row, error: err.message || 'Unknown error' });
+      }
+    }
+
+    return { created, updated, skipped, failed };
+  }
 }

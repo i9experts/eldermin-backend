@@ -1,6 +1,6 @@
 import {
-  Controller, Get, Post, Put, Patch,
-  Body, Param, Query, Request, HttpCode, HttpStatus,
+  Controller, Get, Post, Put, Patch, Delete,
+  Body, Param, Query, Request, HttpCode, HttpStatus, BadRequestException,
 } from '@nestjs/common';
 import { FinanceService } from './finance.service';
 
@@ -36,6 +36,14 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.seedDefaultCOA(schoolSlug);
   }
+  @Patch('coa/:id') async updateCOA(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCOA(id, schoolSlug, dto);
+  }
+  @Delete('coa/:id') async deleteCOA(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteCOA(id, schoolSlug);
+  }
 
   // Fee Structures
   @Get('fee-structures') async getFeeStructures(@Request() req: any, @Query('grade') grade?: string, @Query('year') year?: string) {
@@ -66,6 +74,27 @@ export class FinanceController {
   async recordPayment(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.recordPayment(id, schoolSlug, { ...dto, collectedBy: dto.collectedBy || userName });
+  }
+
+  // Payments
+  @Get('payments') async getPayments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPayments(schoolSlug);
+  }
+  @Post('payments') @HttpCode(HttpStatus.CREATED)
+  async collectFee(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    if (!dto.invoiceId) throw new BadRequestException('invoiceId is required');
+    if (!dto.amount || Number(dto.amount) <= 0) throw new BadRequestException('amount must be greater than 0');
+    return this.service.recordPayment(dto.invoiceId, schoolSlug, {
+      amount: dto.amount,
+      paymentMethod: dto.paymentMethod,
+      paymentDate: dto.paymentDate,
+      transactionId: dto.referenceNumber,
+      chequeNumber: dto.paymentMethod === 'cheque' ? dto.referenceNumber : undefined,
+      notes: dto.remarks,
+      collectedBy: dto.collectedBy || userName,
+    });
   }
 
   // Expenses

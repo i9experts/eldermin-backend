@@ -8,6 +8,8 @@ import {
   Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { StudentsService } from './students.service';
+import { UseInterceptors, UploadedFile, Res } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   CreateStudentDto, UpdateStudentDto, StudentQueryDto,
   MarkAttendanceDto, BulkAttendanceDto, AttendanceQueryDto,
@@ -49,6 +51,39 @@ export class StudentsController {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getStudents(schoolSlug, query);
   }
+
+  // ============================================================
+  // BULK IMPORT
+  // ============================================================
+
+  /** GET /api/v1/students/bulk-import/template */
+  @Get('bulk-import/template')
+  async getBulkImportTemplate(@Res() res: any) {
+    const csv = this.studentsService.generateImportTemplate();
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="student-import-template.csv"');
+    res.send(csv);
+  }
+
+  /** POST /api/v1/students/bulk-import/preview */
+  @Post('bulk-import/preview')
+  @UseInterceptors(FileInterceptor('file'))
+  async previewBulkImport(@UploadedFile() file: Express.Multer.File, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.previewBulkImport(schoolSlug, file);
+  }
+
+  /** POST /api/v1/students/bulk-import/commit */
+  @Post('bulk-import/commit')
+  @HttpCode(HttpStatus.CREATED)
+  async commitBulkImport(
+    @Body() body: { rows: any[]; duplicateAction: 'skip' | 'update' | 'createAnyway' },
+    @Request() req: any,
+  ) {
+    const { schoolSlug, academicYear } = this.ctx(req);
+    return this.studentsService.commitBulkImport(schoolSlug, academicYear, body.rows, body.duplicateAction);
+  }
+
 
   /** GET /api/v1/students/:id */
   @Get(':id')
@@ -254,4 +289,5 @@ export class StudentsController {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getClassReport(schoolSlug, grade, section, academicYear);
   }
+
 }

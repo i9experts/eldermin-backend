@@ -35,7 +35,8 @@ export class FinanceService {
 
     const [
       totalInvoiced, totalCollected, totalOutstanding,
-      collectedThisMonth, expensesThisMonth,
+      collectedThisMonth, expensesThisMonth, totalExpenses,
+      overdueCount, pendingExpenses,
       invoicesByStatus, recentPayments, expenseByCategory,
       bankBalances,
     ] = await Promise.all([
@@ -58,6 +59,15 @@ export class FinanceService {
       this.expenseModel.aggregate([
         { $match: { ...base, date: { $gte: monthStart, $lt: monthEnd }, status: 'paid' } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      this.expenseModel.aggregate([
+        { $match: { ...base, status: { $in: ['paid', 'approved'] } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      this.invoiceModel.countDocuments({ ...base, status: 'overdue' }),
+      this.expenseModel.aggregate([
+        { $match: { ...base, status: 'submitted' } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
       ]),
       this.invoiceModel.aggregate([
         { $match: base },
@@ -82,6 +92,10 @@ export class FinanceService {
         totalOutstanding: totalOutstanding[0]?.total || 0,
         collectedThisMonth: collectedThisMonth[0]?.total || 0,
         expensesThisMonth: expensesThisMonth[0]?.total || 0,
+        totalExpenses: totalExpenses[0]?.total || 0,
+        overdueCount,
+        totalPendingExpenses: pendingExpenses[0]?.total || 0,
+        pendingExpensesCount: pendingExpenses[0]?.count || 0,
       },
       invoicesByStatus,
       recentPayments,
@@ -99,6 +113,18 @@ export class FinanceService {
 
   async createCOA(data: any) {
     const acc = new this.coaModel(data);
+    return acc.save();
+  }
+
+  async updateCOA(id: string, schoolSlug: string, data: any) {
+    return this.coaModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+  }
+
+  async deleteCOA(id: string, schoolSlug: string) {
+    const acc = await this.coaModel.findOne({ _id: id, schoolSlug });
+    if (!acc) throw new NotFoundException('Account not found');
+    if (acc.isSystem) throw new BadRequestException('System accounts cannot be deleted');
+    acc.isActive = false;
     return acc.save();
   }
 
@@ -204,6 +230,10 @@ export class FinanceService {
     return payment;
   }
 
+  async getPayments(schoolSlug: string) {
+    return this.paymentModel.find({ schoolSlug }).sort({ paymentDate: -1 }).limit(100);
+  }
+
   // ── Expenses ─────────────────────────────────────────────
   async getExpenses(schoolSlug: string, query: any) {
     const { page = 1, limit = 20, status, category, academicYear, from, to } = query;
@@ -221,7 +251,13 @@ export class FinanceService {
   }
 
   async createExpense(data: any) {
-    const exp = new this.expenseModel({ ...data, date: new Date(data.date) });
+    const exp = new this.expenseModel({
+      ...data,
+      title: data.title || data.description || 'Expense',
+      date: new Date(data.date || data.expenseDate || Date.now()),
+      paidTo: data.paidTo || data.vendorName,
+      vendorName: data.vendorName || data.paidTo,
+    });
     return exp.save();
   }
 

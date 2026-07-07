@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { UploadModule } from '../../upload/upload.module';
 import { HrController } from './hr.controller';
 import { HrService } from './hr.service';
 import { Staff, StaffSchema } from './schemas/staff.schema';
@@ -18,9 +19,11 @@ import { Training, TrainingSchema } from './schemas/training.schema';
 import { StaffContract, StaffContractSchema } from './schemas/staff-contract.schema';
 import { ExitRecord, ExitRecordSchema } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicySchema } from './schemas/leave-policy.schema';
+import { BiometricConfig, BiometricConfigSchema } from './schemas/biometric-config.schema';
 
 @Module({
   imports: [
+    UploadModule,
     MongooseModule.forFeature([
       { name: Staff.name, schema: StaffSchema },
       { name: Designation.name, schema: DesignationSchema },
@@ -38,6 +41,7 @@ import { LeavePolicy, LeavePolicySchema } from './schemas/leave-policy.schema';
       { name: StaffContract.name, schema: StaffContractSchema },
       { name: ExitRecord.name, schema: ExitRecordSchema },
       { name: LeavePolicy.name, schema: LeavePolicySchema },
+      { name: BiometricConfig.name, schema: BiometricConfigSchema },
     ]),
   ],
   controllers: [HrController],

@@ -6,7 +6,15 @@ export type PdfLogDocument = PdfLog & Document;
 @Schema({ timestamps: true })
 export class PdfLog {
   @Prop({ required: true }) schoolSlug: string;
-  @Prop({ required: true, enum: ['report-card', 'invoice', 'tarbiyah-report', 'admission-letter'] }) type: string;
+  @Prop({
+    required: true,
+    enum: [
+      'report-card', 'invoice', 'tarbiyah-report', 'admission-letter',
+      'fee_receipt', 'payment_voucher', 'journal_voucher', 'expense_voucher',
+      'payslip', 'result_card', 'attendance_sheet', 'custom',
+    ],
+  })
+  type: string;
   @Prop({ required: true }) referenceId: string;
   @Prop() referenceName: string;
   @Prop({ required: true }) generatedBy: string;

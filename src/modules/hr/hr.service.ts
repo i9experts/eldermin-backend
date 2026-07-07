@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as net from 'net';
+import { UploadService } from '../../upload/upload.service';
 import { Staff, StaffDocument } from './schemas/staff.schema';
 import { Designation, DesignationDocument } from './schemas/designation.schema';
 import { LeaveApplication, LeaveApplicationDocument } from './schemas/leave-application.schema';
@@ -17,6 +19,7 @@ import { Training, TrainingDocument } from './schemas/training.schema';
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicyDocument } from './schemas/leave-policy.schema';
+import { BiometricConfig, BiometricConfigDocument } from './schemas/biometric-config.schema';
 
 @Injectable()
 export class HrService {
@@ -37,6 +40,8 @@ export class HrService {
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
+    @InjectModel(BiometricConfig.name) private biometricConfigModel: Model<BiometricConfigDocument>,
+    private readonly uploadService: UploadService,
   ) {}
 
   private newTid(t: string) { return t; }
@@ -53,7 +58,16 @@ export class HrService {
   }
 
   async createStaff(tenantId: string, data: any) {
-    return this.staffModel.create({ ...data, tenantId: this.newTid(tenantId) });
+    let employeeId = data.employeeId;
+    if (!employeeId) {
+      const last = await this.staffModel
+        .findOne({ tenantId: this.newTid(tenantId) })
+        .sort({ employeeId: -1 })
+        .lean();
+      const lastNum = last?.employeeId ? parseInt(last.employeeId.match(/(\d+)$/)?.[1] ?? '0', 10) : 0;
+      employeeId = `EMP-${String(lastNum + 1).padStart(3, '0')}`;
+    }
+    return this.staffModel.create({ ...data, employeeId, tenantId: this.newTid(tenantId) });
   }
 
   async getStaffById(tenantId: string, staffId: string) {
@@ -72,6 +86,48 @@ export class HrService {
       .lean();
     if (!staff) throw new NotFoundException('Staff member not found');
     return staff;
+  }
+
+  async uploadStaffPhoto(tenantId: string, staffId: string, file: Express.Multer.File, schoolSlug: string) {
+    const { url } = await this.uploadService.uploadFile(file, 'staff-avatars', schoolSlug);
+    const staff = await this.staffModel
+      .findOneAndUpdate({ _id: staffId, tenantId: this.newTid(tenantId) }, { $set: { avatarUrl: url } }, { new: true })
+      .lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return { avatarUrl: url };
+  }
+
+  async getStaffDocuments(tenantId: string, staffId: string) {
+    const staff = await this.staffModel
+      .findOne({ _id: staffId, tenantId: this.newTid(tenantId) })
+      .select('documents')
+      .lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff.documents || [];
+  }
+
+  async addStaffDocument(tenantId: string, staffId: string, file: Express.Multer.File, label: string, schoolSlug: string) {
+    const result = await this.uploadService.uploadFile(file, 'staff-documents', schoolSlug);
+    const doc = {
+      label: label || file.originalname,
+      url: result.url,
+      key: result.key,
+      fileName: result.fileName,
+      fileSize: result.fileSize,
+      fileType: result.fileType,
+      verified: false,
+      uploadedAt: new Date(),
+    };
+    const staff = await this.staffModel
+      .findOneAndUpdate(
+        { _id: staffId, tenantId: this.newTid(tenantId) },
+        { $push: { documents: doc } },
+        { new: true },
+      )
+      .select('documents')
+      .lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff.documents;
   }
 
   // ── Designations ─────────────────────────────────────────────────────
@@ -386,7 +442,11 @@ export class HrService {
       const end = new Date(query.year, query.month, 0);
       filter.date = { $gte: start, $lte: end };
     }
-    return this.staffAttendanceModel.find(filter).sort({ date: -1 }).lean();
+    return this.staffAttendanceModel
+      .find(filter)
+      .populate('staffId', 'firstName lastName employeeId designation designationId')
+      .sort({ date: -1 })
+      .lean();
   }
 
   async markStaffAttendance(tenantId: string, institutionId: string, records: any[]) {
@@ -410,6 +470,144 @@ export class HrService {
     ]);
   }
 
+  // ── BIOMETRIC INTEGRATION ────────────────────────────────────────────
+  // ZKTeco devices (common in Pakistan schools) speak a proprietary UDP/TCP
+  // protocol on port 4370. Pulling raw punch logs requires a device SDK
+  // (e.g. node-zklib) which is not yet wired in — syncBiometricAttendance
+  // below only verifies TCP reachability and is a stub for that integration.
+  // CSV import (importAttendanceCsv) is the fully working path for now,
+  // matching the export format of ZKTeco's bundled attendance software.
+
+  async saveBiometricConfig(tenantId: string, data: { deviceIp: string; devicePort?: number; deviceType?: string; autoSyncEnabled?: boolean; autoSyncIntervalMins?: number }) {
+    if (!data.deviceIp) throw new BadRequestException('Device IP is required');
+    return this.biometricConfigModel.findOneAndUpdate(
+      { tenantId: this.newTid(tenantId) },
+      {
+        $set: {
+          deviceIp: data.deviceIp,
+          devicePort: data.devicePort || 4370,
+          deviceType: data.deviceType || 'zkteco',
+          ...(data.autoSyncEnabled !== undefined ? { autoSyncEnabled: data.autoSyncEnabled } : {}),
+          ...(data.autoSyncIntervalMins ? { autoSyncIntervalMins: data.autoSyncIntervalMins } : {}),
+        },
+      },
+      { new: true, upsert: true },
+    ).lean();
+  }
+
+  private testDeviceConnection(ip: string, port: number): Promise<boolean> {
+    return new Promise(resolve => {
+      const socket = new net.Socket();
+      const timer = setTimeout(() => { socket.destroy(); resolve(false); }, 3000);
+      socket.once('connect', () => { clearTimeout(timer); socket.destroy(); resolve(true); });
+      socket.once('error', () => { clearTimeout(timer); socket.destroy(); resolve(false); });
+      socket.connect(port, ip);
+    });
+  }
+
+  async getBiometricStatus(tenantId: string) {
+    const config = await this.biometricConfigModel.findOne({ tenantId: this.newTid(tenantId) }).lean();
+    if (!config) return { configured: false, connected: false, lastSyncAt: null };
+    const connected = await this.testDeviceConnection(config.deviceIp, config.devicePort);
+    if (connected !== config.isConnected) {
+      await this.biometricConfigModel.updateOne({ _id: config._id }, { $set: { isConnected: connected } });
+    }
+    return {
+      configured: true,
+      connected,
+      deviceIp: config.deviceIp,
+      devicePort: config.devicePort,
+      deviceType: config.deviceType,
+      autoSyncEnabled: config.autoSyncEnabled,
+      autoSyncIntervalMins: config.autoSyncIntervalMins,
+      lastSyncAt: config.lastSyncAt || null,
+      lastSyncCount: config.lastSyncCount || 0,
+      lastSyncError: config.lastSyncError || null,
+    };
+  }
+
+  async syncBiometricAttendance(tenantId: string, institutionId: string) {
+    const config = await this.biometricConfigModel.findOne({ tenantId: this.newTid(tenantId) }).lean();
+    if (!config) throw new BadRequestException('Biometric device is not configured yet');
+
+    const reachable = await this.testDeviceConnection(config.deviceIp, config.devicePort);
+    await this.biometricConfigModel.updateOne({ _id: config._id }, { $set: { isConnected: reachable } });
+    if (!reachable) {
+      await this.biometricConfigModel.updateOne(
+        { _id: config._id },
+        { $set: { lastSyncError: `Could not reach device at ${config.deviceIp}:${config.devicePort}` } },
+      );
+      throw new BadRequestException(`Could not reach device at ${config.deviceIp}:${config.devicePort}`);
+    }
+
+    // TODO: integrate a ZKTeco SDK (e.g. node-zklib) here to pull real punch
+    // logs over the socket and translate them into StaffAttendance records
+    // via the same upsert path as markStaffAttendance(). Device is reachable
+    // but no punch data is pulled yet — use CSV import as the working path.
+    await this.biometricConfigModel.updateOne(
+      { _id: config._id },
+      { $set: { lastSyncAt: new Date(), lastSyncCount: 0, lastSyncError: null } },
+    );
+    return {
+      message: 'Device is reachable. Live punch-log sync is not implemented yet — use CSV import for now.',
+      synced: 0,
+      lastSyncAt: new Date(),
+    };
+  }
+
+  async importAttendanceCsv(tenantId: string, institutionId: string, file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    const text = file.buffer.toString('utf-8');
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length < 2) throw new BadRequestException('CSV file has no data rows');
+
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const idCol = headers.findIndex(h => h === 'staffid' || h === 'employeeid');
+    const dateCol = headers.findIndex(h => h === 'date');
+    const checkInCol = headers.findIndex(h => h === 'checkin' || h === 'checkintime');
+    const checkOutCol = headers.findIndex(h => h === 'checkout' || h === 'checkouttime');
+    const statusCol = headers.findIndex(h => h === 'status');
+    if (idCol === -1 || dateCol === -1) {
+      throw new BadRequestException('CSV must include staffId/employeeId and date columns');
+    }
+
+    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId').lean();
+    const employeeIdMap = new Map(staffList.map(s => [s.employeeId, s._id.toString()]));
+
+    const ops: any[] = [];
+    const skipped: number[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim());
+      const rawId = cols[idCol];
+      const staffId = Types.ObjectId.isValid(rawId) ? rawId : employeeIdMap.get(rawId);
+      const date = cols[dateCol];
+      if (!staffId || !date) { skipped.push(i + 1); continue; }
+      ops.push({
+        updateOne: {
+          filter: { tenantId: this.newTid(tenantId), staffId: this.newTid(staffId), date: new Date(date) },
+          update: {
+            $set: {
+              tenantId: this.newTid(tenantId),
+              institutionId: this.newTid(institutionId),
+              staffId: this.newTid(staffId),
+              date: new Date(date),
+              checkInTime: checkInCol !== -1 ? cols[checkInCol] || '' : '',
+              checkOutTime: checkOutCol !== -1 ? cols[checkOutCol] || '' : '',
+              status: statusCol !== -1 ? cols[statusCol] || 'present' : 'present',
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+    if (ops.length) await this.staffAttendanceModel.bulkWrite(ops);
+
+    const config = await this.biometricConfigModel.findOne({ tenantId: this.newTid(tenantId) });
+    if (config) await config.updateOne({ $set: { lastSyncAt: new Date(), lastSyncCount: ops.length } });
+
+    return { message: `Imported ${ops.length} attendance record(s)`, imported: ops.length, skippedRows: skipped };
+  }
+
   // ── LEAVE ─────────────────────────────────────────────────────────────
 
   async createLeaveApplication(tenantId: string, institutionId: string, data: any) {
@@ -425,16 +623,63 @@ export class HrService {
     });
   }
 
+  // Leave types tracked in LeaveBalance (entitled/used pairs); others (emergency, study, other) are untracked.
+  private static readonly BALANCE_LEAVE_TYPES: Record<string, string> = {
+    annual: 'annualUsed', sick: 'sickUsed', casual: 'casualUsed',
+    maternity: 'maternityUsed', paternity: 'paternityUsed',
+    hajj: 'hajjUsed', unpaid: 'unpaidUsed',
+  };
+
   async updateLeaveStatus(tenantId: string, id: string, status: string, approverId: string, note: string) {
-    return this.leaveApplicationModel.findOneAndUpdate(
-      { _id: id, tenantId: this.newTid(tenantId) },
+    const tid = this.newTid(tenantId);
+    const existing = await this.leaveApplicationModel.findOne({ _id: id, tenantId: tid }).lean();
+    if (!existing) throw new NotFoundException('Leave application not found');
+
+    const updated = await this.leaveApplicationModel.findOneAndUpdate(
+      { _id: id, tenantId: tid },
       { $set: { status, approvedBy: this.newTid(approverId), approvedAt: new Date(), approverNote: note } },
       { new: true },
     ).lean();
+
+    const usedField = HrService.BALANCE_LEAVE_TYPES[existing.leaveType];
+    const wasApproved = existing.status === 'approved';
+    const isApproved = status === 'approved';
+    if (usedField && wasApproved !== isApproved) {
+      const delta = isApproved ? existing.totalDays : -existing.totalDays;
+      await this.leaveBalanceModel.updateOne(
+        { tenantId: tid, staffId: existing.staffId },
+        { $inc: { [usedField]: delta } },
+      );
+    }
+
+    return updated;
   }
 
   async getLeaveBalance(tenantId: string, staffId: string) {
     return this.leaveBalanceModel.findOne({ tenantId: this.newTid(tenantId), staffId: this.newTid(staffId) }).lean();
+  }
+
+  async getAllLeaveBalances(tenantId: string) {
+    const tid = this.newTid(tenantId);
+    const [staffList, balances] = await Promise.all([
+      this.staffModel.find({ tenantId: tid, isActive: true }, { firstName: 1, lastName: 1, employeeId: 1, department: 1, designationId: 1 }).populate('designationId', 'name').lean(),
+      this.leaveBalanceModel.find({ tenantId: tid }).lean(),
+    ]);
+    const byStaff = new Map((balances as any[]).map((b: any) => [String(b.staffId), b]));
+    return (staffList as any[]).map((s: any) => {
+      const bal: any = byStaff.get(String(s._id)) || {};
+      return {
+        staffId: s._id, staffName: `${s.firstName} ${s.lastName}`, employeeId: s.employeeId,
+        department: s.department || s.designationId?.name || '—',
+        annual: { entitled: bal.annualEntitled ?? 0, used: bal.annualUsed ?? 0, remaining: (bal.annualEntitled ?? 0) - (bal.annualUsed ?? 0) },
+        sick: { entitled: bal.sickEntitled ?? 0, used: bal.sickUsed ?? 0, remaining: (bal.sickEntitled ?? 0) - (bal.sickUsed ?? 0) },
+        casual: { entitled: bal.casualEntitled ?? 0, used: bal.casualUsed ?? 0, remaining: (bal.casualEntitled ?? 0) - (bal.casualUsed ?? 0) },
+        maternity: { entitled: bal.maternityEntitled ?? 0, used: bal.maternityUsed ?? 0, remaining: (bal.maternityEntitled ?? 0) - (bal.maternityUsed ?? 0) },
+        paternity: { entitled: bal.paternityEntitled ?? 0, used: bal.paternityUsed ?? 0, remaining: (bal.paternityEntitled ?? 0) - (bal.paternityUsed ?? 0) },
+        hajj: { entitled: bal.hajjEntitled ?? 0, used: bal.hajjUsed ?? 0, remaining: (bal.hajjEntitled ?? 0) - (bal.hajjUsed ?? 0) },
+        hasPolicy: byStaff.has(String(s._id)),
+      };
+    });
   }
 
   async getLeaveStats(tenantId: string) {
@@ -671,6 +916,7 @@ export class HrService {
       casualEntitled:   policy.casualDays,
       maternityEntitled: policy.maternityDays,
       paternityEntitled: policy.paternityDays,
+      hajjEntitled:     policy.hajjDays || 0,
     };
     await this.leaveBalanceModel.updateOne(
       { tenantId: this.newTid(tenantId), staffId: this.newTid(staffId) },
@@ -680,7 +926,7 @@ export class HrService {
     return { success: true };
   }
 
-  async bulkAssignLeavePolicy(tenantId: string, policyId: string, _academicYearId: string) {
+  async bulkAssignLeavePolicy(tenantId: string, policyId: string, _academicYearId?: string) {
     const [policy, staffList] = await Promise.all([
       this.leavePolicyModel.findOne({ _id: policyId, tenantId: this.newTid(tenantId) }).lean(),
       this.staffModel.find({ tenantId: this.newTid(tenantId), isActive: true }, { _id: 1 }).lean(),
@@ -692,10 +938,11 @@ export class HrService {
       casualEntitled:   policy.casualDays,
       maternityEntitled: policy.maternityDays,
       paternityEntitled: policy.paternityDays,
+      hajjEntitled:     policy.hajjDays || 0,
     };
     const ops = (staffList as any[]).map((s: any) => ({
       updateOne: {
-        filter: { tenantId: this.newTid(tenantId), staffId: s._id },
+        filter: { tenantId: this.newTid(tenantId), staffId: String(s._id) },
         update: { $set: balanceData, $setOnInsert: { academicYearId: new Types.ObjectId() } },
         upsert: true,
       },
@@ -707,10 +954,10 @@ export class HrService {
   async seedLeavePolicies(tenantId: string) {
     const tid = this.newTid(tenantId);
     const defaults = [
-      { code: 'STD-TEACHER',  name: 'Standard Teacher Policy',    applicableTo: 'permanent', isDefault: true,  annualDays: 21, sickDays: 10, casualDays: 10, maternityDays: 90, paternityDays: 10, emergencyDays: 3, studyDays: 5, unpaidDays: 30 },
-      { code: 'STD-ADMIN',    name: 'Admin & Support Policy',     applicableTo: 'all',       isDefault: false, annualDays: 18, sickDays: 10, casualDays: 7,  maternityDays: 90, paternityDays: 10, emergencyDays: 3, studyDays: 0, unpaidDays: 30 },
-      { code: 'STD-CONTRACT', name: 'Contract Staff Policy',      applicableTo: 'contract',  isDefault: false, annualDays: 14, sickDays: 7,  casualDays: 5,  maternityDays: 90, paternityDays: 5,  emergencyDays: 2, studyDays: 0, unpaidDays: 20 },
-      { code: 'STD-PARTTIME', name: 'Part-Time & Visiting Policy', applicableTo: 'part_time', isDefault: false, annualDays: 7,  sickDays: 5,  casualDays: 3,  maternityDays: 0,  paternityDays: 0,  emergencyDays: 1, studyDays: 0, unpaidDays: 0  },
+      { code: 'STD-TEACHER',  name: 'Standard Teacher Policy',    applicableTo: 'permanent', isDefault: true,  annualDays: 21, sickDays: 10, casualDays: 10, maternityDays: 90, paternityDays: 10, emergencyDays: 3, studyDays: 5, unpaidDays: 30, hajjDays: 15 },
+      { code: 'STD-ADMIN',    name: 'Admin & Support Policy',     applicableTo: 'all',       isDefault: false, annualDays: 18, sickDays: 10, casualDays: 7,  maternityDays: 90, paternityDays: 10, emergencyDays: 3, studyDays: 0, unpaidDays: 30, hajjDays: 15 },
+      { code: 'STD-CONTRACT', name: 'Contract Staff Policy',      applicableTo: 'contract',  isDefault: false, annualDays: 14, sickDays: 7,  casualDays: 5,  maternityDays: 90, paternityDays: 5,  emergencyDays: 2, studyDays: 0, unpaidDays: 20, hajjDays: 0  },
+      { code: 'STD-PARTTIME', name: 'Part-Time & Visiting Policy', applicableTo: 'part_time', isDefault: false, annualDays: 7,  sickDays: 5,  casualDays: 3,  maternityDays: 0,  paternityDays: 0,  emergencyDays: 1, studyDays: 0, unpaidDays: 0,  hajjDays: 0  },
     ];
     const results = await Promise.allSettled(
       defaults.map(d =>

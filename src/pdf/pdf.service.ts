@@ -5,6 +5,138 @@ import * as puppeteer from 'puppeteer';
 import { IsString, IsOptional, IsMongoId } from 'class-validator';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 
+// ── Report Templates: sample data for preview / ad-hoc generation ──────────
+export function sampleDataForType(type: string): Record<string, any> {
+  const common = {
+    documentNumber: 'SAMPLE-0001',
+    date: new Date().toLocaleDateString('en-GB'),
+    academicYear: '2025-26',
+  };
+
+  switch (type) {
+    case 'fee_receipt':
+      return {
+        ...common,
+        receiptNumber: 'RCPT-2026-0001',
+        studentName: 'Ayesha Khan',
+        grade: 'Grade 5',
+        section: 'A',
+        rollNumber: '23',
+        fatherName: 'Muhammad Khan',
+        admissionNo: 'ADM-2023-0456',
+        items: [
+          { description: 'Tuition Fee - July 2026', amount: 8000 },
+          { description: 'Transport Fee', amount: 2000 },
+          { description: 'Exam Fee', amount: 500 },
+        ],
+        totalAmount: 10500,
+        amountInWords: 'Ten Thousand Five Hundred Only',
+        paymentMethod: 'Cash',
+        transactionRef: 'N/A',
+        paymentDate: new Date().toLocaleDateString('en-GB'),
+      };
+    case 'payment_voucher':
+      return {
+        ...common,
+        voucherNumber: 'PV-2026-0001',
+        department: 'Administration',
+        debitAccount: 'Office Supplies Expense',
+        creditAccount: 'Cash in Hand',
+        amount: 15000,
+        narration: 'Purchase of stationery and office supplies for July 2026',
+        preparedBy: 'Accounts Clerk',
+        approvedBy: 'Finance Manager',
+        rows: [
+          { account: 'Office Supplies Expense', debit: 15000, credit: 0 },
+          { account: 'Cash in Hand', debit: 0, credit: 15000 },
+        ],
+      };
+    case 'journal_voucher':
+      return {
+        ...common,
+        voucherNumber: 'JV-2026-0001',
+        narration: 'Adjustment entry for depreciation - July 2026',
+        rows: [
+          { account: 'Depreciation Expense', debit: 5000, credit: 0 },
+          { account: 'Accumulated Depreciation', debit: 0, credit: 5000 },
+        ],
+        preparedBy: 'Accountant',
+        approvedBy: 'Finance Manager',
+      };
+    case 'expense_voucher':
+      return {
+        ...common,
+        voucherNumber: 'EV-2026-0001',
+        category: 'Maintenance',
+        paidTo: 'ABC Hardware Store',
+        amount: 4200,
+        narration: 'Plumbing repair works in main building',
+        preparedBy: 'Admin Officer',
+        approvedBy: 'Principal',
+      };
+    case 'payslip':
+      return {
+        ...common,
+        employeeName: 'Fatima Sheikh',
+        designation: 'Senior Teacher',
+        department: 'Academics',
+        month: 'July 2026',
+        basicSalary: 60000,
+        allowances: 8000,
+        deductions: 3000,
+        netSalary: 65000,
+        items: [
+          { description: 'Basic Salary', amount: 60000 },
+          { description: 'House Rent Allowance', amount: 5000 },
+          { description: 'Medical Allowance', amount: 3000 },
+          { description: 'Tax Deduction', amount: -2000 },
+          { description: 'Provident Fund', amount: -1000 },
+        ],
+      };
+    case 'result_card':
+      return {
+        ...common,
+        studentName: 'Hassan Raza',
+        grade: 'Grade 8',
+        section: 'B',
+        rollNumber: '11',
+        subjects: [
+          { subjectName: 'Mathematics', totalMarks: 100, obtainedMarks: 88 },
+          { subjectName: 'Science', totalMarks: 100, obtainedMarks: 76 },
+          { subjectName: 'English', totalMarks: 100, obtainedMarks: 82 },
+        ],
+      };
+    case 'attendance_sheet':
+      return {
+        ...common,
+        grade: 'Grade 6',
+        section: 'C',
+        month: 'July 2026',
+        items: [
+          { description: 'Total Working Days', amount: 22 },
+          { description: 'Present', amount: 20 },
+          { description: 'Absent', amount: 2 },
+        ],
+      };
+    case 'admission_letter':
+      return {
+        ...common,
+        studentName: 'Zainab Ahmed',
+        grade: 'Grade 1',
+        admissionNo: 'ADM-2026-0099',
+        guardianName: 'Ahmed Raza',
+      };
+    default:
+      return {
+        ...common,
+        title: 'Sample Document',
+        items: [
+          { description: 'Sample Line Item', amount: 1000 },
+        ],
+      };
+  }
+}
+
 export class GenerateReportCardDto {
   @IsMongoId() studentId: string;
   @IsString() academicYear: string;
@@ -280,6 +412,9 @@ export class PdfService {
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel('Assessment') private assessmentModel: Model<any>,
     @InjectModel('Behaviour') private behaviourModel: Model<any>,
+    @InjectModel('ReportTemplate') private reportTemplateModel: Model<any>,
+    @InjectModel('Payment') private paymentModel: Model<any>,
+    @InjectModel('Expense') private expenseModel: Model<any>,
   ) {}
 
   private async htmlToPdf(html: string): Promise<Buffer> {
@@ -299,6 +434,37 @@ export class PdfService {
         format: 'A4',
         printBackground: true,
         margin: { top: '0', right: '0', bottom: '0', left: '0' },
+      });
+      return pdfBuffer as Buffer;
+    } finally {
+      await browser.close();
+    }
+  }
+
+  /**
+   * Variant of htmlToPdf that accepts explicit puppeteer PDF options —
+   * used by template-driven rendering so page size/orientation/margins
+   * configured on a ReportTemplate are respected.
+   */
+  private async htmlToPdfWithOptions(
+    html: string,
+    options: puppeteer.PDFOptions,
+  ): Promise<Buffer> {
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'load' });
+      const pdfBuffer = await page.pdf({
+        printBackground: true,
+        ...options,
       });
       return pdfBuffer as Buffer;
     } finally {
@@ -505,5 +671,536 @@ export class PdfService {
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
+  }
+
+  // ============================================================
+  // REPORT TEMPLATES — configurable letterhead/layout rendering
+  // ============================================================
+
+  /** Minimal hardcoded fallback so rendering never hard-fails for a
+   *  school that hasn't seeded/configured any report templates yet. */
+  private getDefaultTemplateObject(type: string): any {
+    return {
+      _id: null,
+      schoolSlug: '',
+      name: `Default ${type}`,
+      type,
+      isDefault: true,
+      isActive: true,
+      letterhead: {
+        showLogo: true,
+        logoPosition: 'left',
+        logoSize: 'medium',
+        schoolName: { show: true, fontSize: 20, bold: true, color: '#0C447C' },
+        schoolAddress: { show: true, fontSize: 11 },
+        schoolPhone: { show: true },
+        schoolEmail: { show: true },
+        schoolWebsite: { show: false },
+        tagline: { show: false, text: '' },
+        borderStyle: 'single',
+        backgroundColor: '#ffffff',
+        primaryColor: '#0C447C',
+        accentColor: '#EF9F27',
+      },
+      header: {
+        title: { show: true, text: this.titleForType(type), fontSize: 16, alignment: 'center' },
+        subtitle: { show: false, text: '' },
+        showDocumentNumber: true,
+        showDate: true,
+        showAcademicYear: false,
+        customFields: [],
+      },
+      sections: [
+        {
+          id: 'default-table',
+          type: 'table',
+          order: 1,
+          visible: true,
+          config: {},
+        },
+        {
+          id: 'default-signature',
+          type: 'signature_block',
+          order: 2,
+          visible: true,
+          config: {},
+        },
+      ],
+      footer: {
+        showPageNumber: false,
+        showPrintDate: true,
+        leftText: '',
+        centerText: '',
+        rightText: '',
+        showSignatureLines: true,
+        signatureLabels: [],
+        showStampArea: false,
+        borderTop: true,
+      },
+      page: {
+        size: 'A4',
+        orientation: 'portrait',
+        marginTop: 15,
+        marginBottom: 15,
+        marginLeft: 15,
+        marginRight: 15,
+        watermark: { show: false, text: '', opacity: 0.08 },
+      },
+    };
+  }
+
+  private titleForType(type: string): string {
+    const map: Record<string, string> = {
+      fee_receipt: 'Fee Receipt',
+      payment_voucher: 'Payment Voucher',
+      journal_voucher: 'Journal Voucher',
+      expense_voucher: 'Expense Voucher',
+      payslip: 'Payslip',
+      result_card: 'Result Card',
+      attendance_sheet: 'Attendance Sheet',
+      admission_letter: 'Admission Letter',
+      custom: 'Document',
+    };
+    return map[type] || 'Document';
+  }
+
+  private async getTemplateForType(
+    schoolSlug: string,
+    type: string,
+    templateId?: string,
+  ): Promise<any> {
+    if (templateId) {
+      const byId = await this.reportTemplateModel
+        .findOne({ _id: templateId, schoolSlug })
+        .lean();
+      if (byId) return byId;
+    }
+
+    const byDefault = await this.reportTemplateModel
+      .findOne({ schoolSlug, type, isDefault: true, isActive: true })
+      .lean();
+    if (byDefault) return byDefault;
+
+    return this.getDefaultTemplateObject(type);
+  }
+
+  private logoSizePx(size: string): string {
+    switch (size) {
+      case 'small': return '40px';
+      case 'large': return '90px';
+      default: return '64px';
+    }
+  }
+
+  private buildLetterheadHtml(template: any, school: any): string {
+    const lh = template.letterhead || {};
+    const schoolNameCfg = lh.schoolName || {};
+    const addrCfg = lh.schoolAddress || {};
+    const phoneCfg = lh.schoolPhone || {};
+    const emailCfg = lh.schoolEmail || {};
+    const webCfg = lh.schoolWebsite || {};
+    const taglineCfg = lh.tagline || {};
+
+    const primaryColor = lh.primaryColor || '#0C447C';
+    const accentColor = lh.accentColor || '#EF9F27';
+    const bg = lh.backgroundColor || '#ffffff';
+
+    let borderCss = 'none';
+    switch (lh.borderStyle) {
+      case 'single': borderCss = `border-bottom: 2px solid ${primaryColor};`; break;
+      case 'double': borderCss = `border-bottom: 6px double ${primaryColor};`; break;
+      case 'shadow': borderCss = `box-shadow: 0 4px 8px -4px rgba(0,0,0,0.25);`; break;
+      default: borderCss = '';
+    }
+
+    const address = school.address
+      ? [school.address.street, school.address.city, school.address.province, school.address.country]
+          .filter(Boolean).join(', ')
+      : '';
+
+    const logoHtml = lh.showLogo && school.logo
+      ? `<img src="${school.logo}" alt="logo" style="height:${this.logoSizePx(lh.logoSize)}; width:auto; object-fit:contain;" />`
+      : '';
+
+    const textBlock = `
+      <div style="display:flex; flex-direction:column; gap:2px;">
+        ${schoolNameCfg.show !== false ? `<div style="font-size:${schoolNameCfg.fontSize || 20}px; font-weight:${schoolNameCfg.bold !== false ? 700 : 400}; color:${schoolNameCfg.color || primaryColor};">${school.name || ''}</div>` : ''}
+        ${addrCfg.show !== false && address ? `<div style="font-size:${addrCfg.fontSize || 11}px; color:#3D5A7A;">${address}</div>` : ''}
+        <div style="font-size:11px; color:#3D5A7A; display:flex; gap:12px; flex-wrap:wrap;">
+          ${phoneCfg.show !== false && school.phone ? `<span>Tel: ${school.phone}</span>` : ''}
+          ${emailCfg.show !== false && school.email ? `<span>${school.email}</span>` : ''}
+          ${webCfg.show === true && (school.social?.website || school.website) ? `<span>${school.social?.website || school.website}</span>` : ''}
+        </div>
+        ${taglineCfg.show ? `<div style="font-size:10px; font-style:italic; color:${accentColor};">${taglineCfg.text || ''}</div>` : ''}
+      </div>`;
+
+    const justify = lh.logoPosition === 'center' ? 'center' : lh.logoPosition === 'right' ? 'flex-end' : 'flex-start';
+    const logoFirst = lh.logoPosition !== 'right';
+
+    return `
+      <div style="background:${bg}; ${borderCss} padding-bottom:12px; margin-bottom:14px;">
+        <div style="display:flex; align-items:center; justify-content:${lh.logoPosition === 'center' ? 'center' : 'flex-start'}; gap:16px; flex-direction:${lh.logoPosition === 'center' ? 'column' : (logoFirst ? 'row' : 'row-reverse')}; text-align:${lh.logoPosition === 'center' ? 'center' : (lh.logoPosition === 'right' ? 'right' : 'left')};">
+          ${logoHtml}
+          ${textBlock}
+        </div>
+      </div>`;
+  }
+
+  private buildHeaderHtml(template: any, data: any): string {
+    const header = template.header || {};
+    const titleCfg = header.title || {};
+    const subtitleCfg = header.subtitle || {};
+
+    const docNumber = data.documentNumber || data.receiptNumber || data.voucherNumber
+      || data.invoiceNumber || data.admissionNo || '';
+
+    const dateStr = data.date || data.paymentDate || data.expenseDate || new Date().toLocaleDateString('en-GB');
+
+    const customFieldsLeft = (header.customFields || [])
+      .filter((f: any) => f.position !== 'right')
+      .map((f: any) => `<span><strong>${f.label}:</strong> ${data[f.field] ?? ''}</span>`)
+      .join(' &nbsp;&nbsp; ');
+
+    const customFieldsRight = (header.customFields || [])
+      .filter((f: any) => f.position === 'right')
+      .map((f: any) => `<span><strong>${f.label}:</strong> ${data[f.field] ?? ''}</span>`)
+      .join(' &nbsp;&nbsp; ');
+
+    return `
+      <div style="margin-bottom:16px;">
+        ${titleCfg.show !== false ? `<div style="font-size:${titleCfg.fontSize || 16}px; font-weight:700; text-align:${titleCfg.alignment || 'center'}; text-transform:uppercase; letter-spacing:0.5px;">${titleCfg.text || this.titleForType(template.type)}</div>` : ''}
+        ${subtitleCfg.show ? `<div style="font-size:12px; text-align:${titleCfg.alignment || 'center'}; color:#3D5A7A; margin-top:2px;">${subtitleCfg.text || ''}</div>` : ''}
+        <div style="display:flex; justify-content:space-between; margin-top:10px; font-size:12px; color:#0D1F35;">
+          <div>${customFieldsLeft}</div>
+          <div style="display:flex; gap:16px;">
+            ${header.showDocumentNumber !== false && docNumber ? `<span><strong>No:</strong> ${docNumber}</span>` : ''}
+            ${header.showDate !== false ? `<span><strong>Date:</strong> ${dateStr}</span>` : ''}
+            ${header.showAcademicYear && data.academicYear ? `<span><strong>Year:</strong> ${data.academicYear}</span>` : ''}
+            ${customFieldsRight}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  private interpolate(content: string, data: any): string {
+    return (content || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key) => {
+      const val = key.split('.').reduce((acc: any, k: string) => (acc == null ? acc : acc[k]), data);
+      return val != null ? String(val) : '';
+    });
+  }
+
+  private buildSectionHtml(section: any, data: any): string {
+    const config = section.config || {};
+
+    switch (section.type) {
+      case 'table': {
+        const columns = config.columns && config.columns.length
+          ? config.columns
+          : [{ label: 'Description', field: 'description' }, { label: 'Amount', field: 'amount' }];
+        const rows: any[] = config.dataKey ? (data[config.dataKey] || []) : (data.items || []);
+
+        return `
+          <table style="width:100%; border-collapse:collapse; margin-bottom:16px; font-size:13px;">
+            <thead>
+              <tr>
+                ${columns.map((c: any, i: number) => `<th style="background:#1B4F8A; color:#fff; padding:8px 10px; text-align:${i === columns.length - 1 ? 'right' : 'left'}; font-size:11px; text-transform:uppercase;">${c.label}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row: any) => `
+                <tr>
+                  ${columns.map((c: any, i: number) => {
+                    let val = row[c.field];
+                    if (typeof val === 'number') val = val.toLocaleString();
+                    return `<td style="padding:8px 10px; border-bottom:1px solid #EEF4FB; text-align:${i === columns.length - 1 ? 'right' : 'left'};">${val ?? ''}</td>`;
+                  }).join('')}
+                </tr>`).join('')}
+            </tbody>
+          </table>`;
+      }
+
+      case 'key_value': {
+        const fields = config.fields && config.fields.length
+          ? config.fields
+          : Object.keys(data).slice(0, 6).map((k) => ({ label: k, field: k }));
+
+        return `
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px 24px; margin-bottom:16px; font-size:13px;">
+            ${fields.map((f: any) => `
+              <div style="display:flex; justify-content:space-between; border-bottom:1px dotted #DDE8F4; padding-bottom:4px;">
+                <span style="color:#7A9AB8; font-weight:600;">${f.label}</span>
+                <span style="font-weight:600;">${data[f.field] ?? ''}</span>
+              </div>`).join('')}
+          </div>`;
+      }
+
+      case 'text': {
+        const content = this.interpolate(config.content || '', data);
+        return `<div style="font-size:13px; line-height:1.6; margin-bottom:16px;">${content}</div>`;
+      }
+
+      case 'signature_block': {
+        const labels: string[] = (config.labels && config.labels.length) ? config.labels : ['Signature'];
+        return `
+          <div style="display:flex; justify-content:space-between; margin-top:36px; margin-bottom:16px;">
+            ${labels.map((label: string) => `
+              <div style="text-align:center;">
+                <div style="width:140px; border-bottom:1.5px solid #0D1F35; height:32px;"></div>
+                <div style="font-size:11px; color:#3D5A7A; font-weight:600; margin-top:4px;">${label}</div>
+              </div>`).join('')}
+          </div>`;
+      }
+
+      case 'divider': {
+        const accent = config.color || '#EF9F27';
+        return `<hr style="border:none; border-top:2px solid ${accent}; margin:16px 0;" />`;
+      }
+
+      case 'spacer': {
+        const height = config.height || '20px';
+        return `<div style="height:${typeof height === 'number' ? height + 'px' : height};"></div>`;
+      }
+
+      case 'qr_code': {
+        const label = config.label || data.documentNumber || data.receiptNumber || data.voucherNumber || 'REF';
+        return `
+          <div style="display:flex; justify-content:${config.align || 'flex-end'}; margin-bottom:16px;">
+            <div style="width:90px; height:90px; border:1px dashed #7A9AB8; display:flex; align-items:center; justify-content:center; text-align:center; font-size:9px; color:#7A9AB8; padding:4px;">
+              QR<br/>${label}
+            </div>
+          </div>`;
+      }
+
+      default:
+        return '';
+    }
+  }
+
+  private buildFooterHtml(template: any, data: any): string {
+    const footer = template.footer || {};
+    const printDate = new Date().toLocaleDateString('en-GB');
+    const labels: string[] = footer.signatureLabels && footer.signatureLabels.length
+      ? footer.signatureLabels
+      : [];
+
+    return `
+      <div style="margin-top:24px; ${footer.borderTop !== false ? 'border-top:1px solid #DDE8F4; padding-top:10px;' : ''}">
+        ${footer.showSignatureLines && labels.length ? `
+        <div style="display:flex; justify-content:space-between; margin-bottom:16px;">
+          ${labels.map((label: string) => `
+            <div style="text-align:center;">
+              <div style="width:130px; border-bottom:1.5px solid #0D1F35; height:30px;"></div>
+              <div style="font-size:10px; color:#3D5A7A; font-weight:600; margin-top:4px;">${label}</div>
+            </div>`).join('')}
+        </div>` : ''}
+        ${footer.showStampArea ? `
+        <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
+          <div style="width:110px; height:80px; border:1px dashed #7A9AB8; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; color:#7A9AB8;">Official Stamp</div>
+        </div>` : ''}
+        <div style="display:flex; justify-content:space-between; font-size:10px; color:#7A9AB8;">
+          <span>${footer.leftText || ''}</span>
+          <span>${footer.centerText || (footer.showPrintDate !== false ? `Printed on ${printDate}` : '')}</span>
+          <span>${footer.rightText || ''}</span>
+        </div>
+      </div>`;
+  }
+
+  private mapPageSize(size: string): { widthMm: number; heightMm: number } {
+    switch (size) {
+      case 'A5': return { widthMm: 148, heightMm: 210 };
+      case 'Letter': return { widthMm: 216, heightMm: 279 };
+      case 'A4':
+      default: return { widthMm: 210, heightMm: 297 };
+    }
+  }
+
+  private buildPageWrapperCss(template: any): { css: string; widthMm: number; heightMm: number } {
+    const page = template.page || {};
+    let { widthMm, heightMm } = this.mapPageSize(page.size);
+    if (page.orientation === 'landscape') {
+      [widthMm, heightMm] = [heightMm, widthMm];
+    }
+
+    const mt = page.marginTop ?? 15;
+    const mb = page.marginBottom ?? 15;
+    const ml = page.marginLeft ?? 15;
+    const mr = page.marginRight ?? 15;
+
+    const watermark = page.watermark || {};
+    const watermarkHtml = watermark.show
+      ? `<div style="position:fixed; top:50%; left:50%; transform:translate(-50%,-50%) rotate(-35deg); font-size:70px; font-weight:900; color:rgba(0,0,0,${watermark.opacity ?? 0.08}); letter-spacing:4px; white-space:nowrap; pointer-events:none; z-index:0;">${watermark.text || ''}</div>`
+      : '';
+
+    const css = `
+      * { box-sizing: border-box; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; margin:0; padding:0; }
+      .page { width: ${widthMm}mm; min-height: ${heightMm}mm; padding: ${mt}mm ${mr}mm ${mb}mm ${ml}mm; position: relative; }
+      .page-content { position: relative; z-index: 1; }
+    `;
+
+    return { css: `<style>${css}</style>${watermarkHtml}`, widthMm, heightMm };
+  }
+
+  /**
+   * Composes a full HTML document (letterhead + header + sorted visible
+   * sections + footer) driven by a ReportTemplate and renders it to PDF.
+   */
+  async generateFromTemplate(
+    schoolSlug: string,
+    type: string,
+    data: any,
+    userId: string,
+    templateId?: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const template = await this.getTemplateForType(schoolSlug, type, templateId);
+
+    const letterheadHtml = this.buildLetterheadHtml(template, school);
+    const headerHtml = this.buildHeaderHtml(template, data);
+
+    const sections = (template.sections || [])
+      .filter((s: any) => s.visible !== false)
+      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+
+    const sectionsHtml = sections.map((s: any) => this.buildSectionHtml(s, data)).join('');
+    const footerHtml = this.buildFooterHtml(template, data);
+
+    const { css, widthMm, heightMm } = this.buildPageWrapperCss(template);
+
+    const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+${css}
+</head>
+<body>
+  <div class="page">
+    <div class="page-content">
+      ${letterheadHtml}
+      ${headerHtml}
+      ${sectionsHtml}
+      ${footerHtml}
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const page = template.page || {};
+    const pdf = await this.htmlToPdfWithOptions(html, {
+      width: `${widthMm}mm`,
+      height: `${heightMm}mm`,
+      landscape: page.orientation === 'landscape',
+      printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+
+    await this.logPdf({
+      schoolSlug,
+      type,
+      referenceId: templateId || (template._id ? String(template._id) : ''),
+      referenceName: data.documentNumber || data.receiptNumber || data.voucherNumber || template.name || type,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /** Loads a Payment (with invoice/student context) and renders a fee receipt. */
+  async generateFeeReceipt(
+    schoolSlug: string,
+    dto: { paymentId: string; templateId?: string },
+    userId: string,
+  ): Promise<Buffer> {
+    const payment = await this.paymentModel
+      .findOne({ _id: dto.paymentId })
+      .populate('invoiceId')
+      .populate('studentId')
+      .lean();
+    if (!payment) throw new NotFoundException('Payment not found');
+
+    const invoice: any = (payment as any).invoiceId;
+    const student: any = (payment as any).studentId;
+
+    const items = (invoice?.items || []).map((it: any) => ({
+      description: it.description,
+      amount: it.amount,
+    }));
+
+    const data = {
+      documentNumber: (payment as any).receiptNo,
+      receiptNumber: (payment as any).receiptNo,
+      date: (payment as any).paymentDate
+        ? new Date((payment as any).paymentDate).toLocaleDateString('en-GB')
+        : new Date().toLocaleDateString('en-GB'),
+      paymentDate: (payment as any).paymentDate
+        ? new Date((payment as any).paymentDate).toLocaleDateString('en-GB')
+        : new Date().toLocaleDateString('en-GB'),
+      studentName: (payment as any).studentName
+        || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : ''),
+      grade: student?.currentGrade || invoice?.gradeLevelName || '',
+      section: student?.currentSection || '',
+      rollNumber: student?.currentRollNumber || '',
+      admissionNo: student?.admissionNumber || invoice?.admissionNo || '',
+      fatherName: (student?.guardians || []).find((g: any) => g.relation === 'father')?.name || '',
+      invoiceNumber: invoice?.invoiceNo || '',
+      items: items.length ? items : [{ description: 'Payment', amount: (payment as any).amount }],
+      totalAmount: (payment as any).amount,
+      currency: (payment as any).currency || 'PKR',
+      paymentMethod: (payment as any).method,
+      transactionRef: (payment as any).transactionRef || 'N/A',
+    };
+
+    return this.generateFromTemplate(schoolSlug, 'fee_receipt', data, userId, dto.templateId);
+  }
+
+  /**
+   * Loads an Expense (for expense/payment vouchers) or accepts ad-hoc
+   * voucherData for journal vouchers etc., then renders the voucher.
+   */
+  async generateVoucher(
+    schoolSlug: string,
+    dto: { expenseId?: string; voucherData?: any; templateId?: string; type?: string },
+    userId: string,
+  ): Promise<Buffer> {
+    let data: any;
+
+    if (dto.expenseId) {
+      const expense = await this.expenseModel.findOne({ _id: dto.expenseId }).lean();
+      if (!expense) throw new NotFoundException('Expense not found');
+
+      data = {
+        documentNumber: (expense as any).expenseNo,
+        voucherNumber: (expense as any).expenseNo,
+        date: (expense as any).expenseDate
+          ? new Date((expense as any).expenseDate).toLocaleDateString('en-GB')
+          : new Date().toLocaleDateString('en-GB'),
+        debitAccount: (expense as any).category || 'Expense',
+        creditAccount: 'Cash / Bank',
+        amount: (expense as any).amount,
+        currency: (expense as any).currency || 'PKR',
+        narration: (expense as any).description,
+        paidTo: (expense as any).paidTo,
+        rows: [
+          { account: (expense as any).category || 'Expense', debit: (expense as any).amount, credit: 0 },
+          { account: 'Cash / Bank', debit: 0, credit: (expense as any).amount },
+        ],
+        preparedBy: '',
+        approvedBy: '',
+        items: [{ description: (expense as any).description, amount: (expense as any).amount }],
+      };
+    } else {
+      data = dto.voucherData || {};
+    }
+
+    return this.generateFromTemplate(
+      schoolSlug,
+      dto.type || 'payment_voucher',
+      data,
+      userId,
+      dto.templateId,
+    );
   }
 }

@@ -42,16 +42,28 @@ export class Staff {
   designationId: Types.ObjectId;
 
   @Prop()
+  designation: string;
+
+  @Prop()
+  campus: string;
+
+  @Prop()
+  erpRole: string;
+
+  @Prop()
   department: string;
 
   @Prop({
-    enum: ['full_time', 'part_time', 'contract', 'volunteer'],
+    enum: ['full_time', 'part_time', 'contract', 'visiting', 'intern', 'substitute', 'volunteer'],
     default: 'full_time',
   })
   employmentType: string;
 
   @Prop({ default: 0 })
   salary: number;
+
+  @Prop({ default: 'PKR' })
+  salaryCurrency: string;
 
   @Prop()
   avatarUrl: string;
@@ -63,13 +75,103 @@ export class Staff {
   address: Record<string, any>;
 
   @Prop({
-    enum: ['active', 'on_leave', 'resigned', 'terminated'],
+    enum: ['active', 'on_leave', 'resigned', 'terminated', 'probation', 'suspended'],
     default: 'active',
   })
   status: string;
 
   @Prop({ default: true })
   isActive: boolean;
+
+  @Prop({
+    type: {
+      title: String, middleName: String, preferredName: String, arabicName: String,
+      placeOfBirth: String, maritalStatus: String, nationality: String, secondNationality: String,
+      religion: String, bloodGroup: String, motherTongue: String, languagesSpoken: String,
+    },
+  })
+  personal: Record<string, any>;
+
+  @Prop({
+    type: {
+      nationalId: { no: String, expiry: Date },
+      passport: { no: String, expiry: Date },
+      visa: { no: String, expiry: Date },
+      residencePermit: { no: String, expiry: Date },
+      teachingLicense: { no: String, expiry: Date, authority: String, country: String },
+    },
+  })
+  identityDocs: Record<string, any>;
+
+  @Prop({
+    type: {
+      personalPhone: String, workPhone: String, whatsApp: String, altPhone: String, workEmail: String,
+      preferredContact: String,
+      currentAddress: { street: String, city: String, state: String, country: String, postalCode: String },
+      permanentAddress: { street: String, city: String, state: String, country: String, postalCode: String },
+      emergency: { name: String, relation: String, phone: String, altPhone: String },
+    },
+  })
+  contact: Record<string, any>;
+
+  @Prop({
+    type: {
+      reportingTo: String, probationEndDate: Date, contractType: String, contractEndDate: Date,
+      workingHoursPerWeek: Number, noticePeriodDays: Number, createPortalAccount: Boolean,
+    },
+  })
+  employment: Record<string, any>;
+
+  @Prop({
+    type: {
+      subjectsCanTeach: [String], gradeLevelsCanTeach: [String],
+      maxPeriodsPerDay: Number, maxPeriodsPerWeek: Number, isClassTeacher: Boolean, specializations: String,
+      certifications: { cambridge: Boolean, ib: Boolean, google: Boolean, microsoft: Boolean, sen: Boolean, ece: Boolean },
+    },
+  })
+  teacherProfile: Record<string, any>;
+
+  @Prop({
+    type: [{ degree: String, field: String, institution: String, country: String, year: String, grade: String, specialization: String }],
+    default: [],
+  })
+  qualifications: Record<string, any>[];
+
+  @Prop({
+    type: [{ name: String, issuedBy: String, issueDate: Date, expiryDate: Date }],
+    default: [],
+  })
+  certifications: Record<string, any>[];
+
+  @Prop({
+    type: [{ employer: String, jobTitle: String, fromDate: Date, toDate: Date, reason: String }],
+    default: [],
+  })
+  experience: Record<string, any>[];
+
+  @Prop({
+    type: [{ name: String, title: String, organization: String, phone: String, email: String }],
+    default: [],
+  })
+  references: Record<string, any>[];
+
+  @Prop({
+    type: {
+      bankName: String, accountTitle: String, accountNo: String, iban: String,
+      branchCode: String, branchName: String, currency: String, isVerified: Boolean,
+    },
+  })
+  bankDetails: Record<string, any>;
+
+  @Prop({
+    type: [{
+      label: String, url: String, key: String, fileName: String,
+      fileSize: Number, fileType: String, verified: { type: Boolean, default: false },
+      uploadedAt: { type: Date, default: Date.now },
+    }],
+    default: [],
+  })
+  documents: Record<string, any>[];
 }
 
 export const StaffSchema = SchemaFactory.createForClass(Staff);

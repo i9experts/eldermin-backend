@@ -2,7 +2,7 @@
 // Setup: npm i -D supertest @types/supertest
 import request from 'supertest';
 
-export const API = process.env.API_URL || 'http://localhost:3001';
+export const API = process.env.API_URL || 'http://localhost:3001/api/v1';
 export const DEMO = {
   email: 'admin@demo-school.com',
   password: 'Admin@1234',
@@ -17,7 +17,7 @@ export async function login(
   if (![200, 201].includes(res.status)) {
     throw new Error(`Login failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
-  return (res.body.access_token ?? res.body.token) as string;
+  return (res.body.accessToken) as string;
 }
 
 export function authed(token: string, slug: string = DEMO.slug) {
