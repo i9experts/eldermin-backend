@@ -147,6 +147,10 @@ export class Student {
   @Prop() leftReason: string;
   @Prop() transferCertificateIssued: boolean;
 
+  // ── Family Linking ──────────────────────────────────────────
+  @Prop({ type: Types.ObjectId, ref: 'Family' }) familyId: Types.ObjectId;
+  @Prop() familyCode: string; // denormalized for fast list display
+
   // ── Multi-tenancy ──────────────────────────────────────────
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop() campusId: string;

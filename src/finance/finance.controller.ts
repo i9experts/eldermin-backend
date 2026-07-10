@@ -181,6 +181,15 @@ export class FinanceController {
   @Get('reports/collection')
   async getCollectionReport(@Request() req: any, @Query() query: any, @Res() res: Response) {
     const { schoolSlug } = this.ctx(req);
+
+    if (query.format === 'detail') {
+      const detailData = await this.service.getCollectionDetailReport(schoolSlug, {
+        from: query.from, to: query.to, month: query.month,
+        grade: query.grade, academicYear: query.academicYear,
+      });
+      return res.json(detailData);
+    }
+
     const data = await this.service.getCollectionReport(schoolSlug, {
       groupBy: query.groupBy || 'summary',
       from: query.from, to: query.to, month: query.month,
@@ -201,6 +210,14 @@ export class FinanceController {
   @Get('reports/outstanding')
   async getOutstandingReport(@Request() req: any, @Query() query: any, @Res() res: Response) {
     const { schoolSlug } = this.ctx(req);
+
+    if (query.format === 'detail') {
+      const detailData = await this.service.getOutstandingDetailReport(schoolSlug, {
+        grade: query.grade, academicYear: query.academicYear,
+      });
+      return res.json(detailData);
+    }
+
     const data = await this.service.getOutstandingReport(schoolSlug, {
       groupBy: query.groupBy || 'summary',
       grade: query.grade, academicYear: query.academicYear,

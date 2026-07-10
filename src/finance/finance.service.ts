@@ -620,4 +620,170 @@ export class FinanceService {
     if (!invoice) throw new NotFoundException('Invoice not found');
     return invoice;
   }
+
+  private formatInvoiceMonth(month: string): string {
+    if (!month) return '';
+    const [y, m] = month.split('-');
+    const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const idx = parseInt(m, 10) - 1;
+    return (names[idx] || m) + ' ' + y;
+  }
+
+  async getOutstandingDetailReport(schoolSlug: string, params: { grade?: string; academicYear?: string }) {
+    const { grade, academicYear } = params;
+    const match: any = {
+      schoolSlug, isDeleted: { $ne: true },
+      status: { $in: ['sent', 'partial', 'overdue'] },
+      balanceDue: { $gt: 0 },
+    };
+    if (grade) match.grade = grade;
+    if (academicYear) match.academicYear = academicYear;
+
+    const invoices = await this.invoiceModel.aggregate([
+      { $match: match },
+      { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+      { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        studentId: 1, studentName: 1, balanceDue: 1, month: 1, items: 1,
+        admissionNumber: '$student.admissionNumber',
+        gender: '$student.gender',
+        currentGrade: { $ifNull: ['$student.currentGrade', '$grade'] },
+        currentSection: '$student.currentSection',
+        contact: { $ifNull: [{ $arrayElemAt: ['$student.guardians.phone', 0] }, '$student.personalPhone'] },
+      } },
+    ]);
+
+    // Build per-student rows
+    const studentMap = new Map<string, any>();
+    for (const inv of invoices) {
+      const sid = String(inv.studentId || inv.studentName);
+      if (!studentMap.has(sid)) {
+        studentMap.set(sid, {
+          studentId: sid,
+          studentName: inv.studentName,
+          admissionNumber: inv.admissionNumber || '',
+          gender: inv.gender || '',
+          grade: inv.currentGrade || 'Unassigned',
+          section: inv.currentSection || '',
+          contact: inv.contact || '',
+          items: [],
+          subtotal: 0,
+        });
+      }
+      const entry = studentMap.get(sid);
+      const descriptions = (inv.items || []).map((i: any) => i.description).filter(Boolean).join(', ') || 'Fee';
+      const particular = descriptions + ' - ' + this.formatInvoiceMonth(inv.month);
+      entry.items.push({ particular, balance: inv.balanceDue });
+      entry.subtotal += inv.balanceDue;
+    }
+
+    // Group students by grade + section
+    const groupMap = new Map<string, any>();
+    for (const student of studentMap.values()) {
+      const groupKey = student.grade + '||' + student.section;
+      if (!groupMap.has(groupKey)) {
+        const groupLabel = student.section ? (student.grade + ' - ' + student.section) : student.grade;
+        groupMap.set(groupKey, {
+          grade: student.grade, section: student.section, groupLabel,
+          students: [], studentCount: 0, maleCount: 0, femaleCount: 0, totalBalance: 0,
+        });
+      }
+      const group = groupMap.get(groupKey);
+      group.students.push(student);
+      group.studentCount += 1;
+      if (student.gender === 'male') group.maleCount += 1;
+      if (student.gender === 'female') group.femaleCount += 1;
+      group.totalBalance += student.subtotal;
+    }
+
+    const groups = Array.from(groupMap.values()).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+    const grandTotal = {
+      studentCount: groups.reduce((a, g) => a + g.studentCount, 0),
+      totalBalance: groups.reduce((a, g) => a + g.totalBalance, 0),
+    };
+
+    return { groups, grandTotal };
+  }
+
+  async getCollectionDetailReport(schoolSlug: string, params: {
+    from?: string; to?: string; month?: string; grade?: string; academicYear?: string;
+  }) {
+    const { from, to, month, grade, academicYear } = params;
+
+    const paymentMatch: any = { schoolSlug };
+    if (from || to) {
+      paymentMatch.paymentDate = {};
+      if (from) paymentMatch.paymentDate.$gte = new Date(from);
+      if (to) paymentMatch.paymentDate.$lte = new Date(to);
+    }
+
+    const payments = await this.paymentModel.aggregate([
+      { $match: paymentMatch },
+      { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'inv' } },
+      { $unwind: { path: '$inv', preserveNullAndEmptyArrays: true } },
+      ...(month ? [{ $match: { 'inv.month': month } }] : []),
+      ...(grade ? [{ $match: { 'inv.grade': grade } }] : []),
+      ...(academicYear ? [{ $match: { 'inv.academicYear': academicYear } }] : []),
+      { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+      { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        studentId: 1, studentName: 1, amount: 1, paymentDate: 1,
+        month: '$inv.month', items: '$inv.items',
+        admissionNumber: '$student.admissionNumber',
+        gender: '$student.gender',
+        currentGrade: { $ifNull: ['$student.currentGrade', '$inv.grade'] },
+        currentSection: '$student.currentSection',
+        contact: { $ifNull: [{ $arrayElemAt: ['$student.guardians.phone', 0] }, '$student.personalPhone'] },
+      } },
+    ]);
+
+    const studentMap = new Map<string, any>();
+    for (const p of payments) {
+      const sid = String(p.studentId || p.studentName);
+      if (!studentMap.has(sid)) {
+        studentMap.set(sid, {
+          studentId: sid,
+          studentName: p.studentName,
+          admissionNumber: p.admissionNumber || '',
+          gender: p.gender || '',
+          grade: p.currentGrade || 'Unassigned',
+          section: p.currentSection || '',
+          contact: p.contact || '',
+          items: [],
+          subtotal: 0,
+        });
+      }
+      const entry = studentMap.get(sid);
+      const descriptions = (p.items || []).map((i: any) => i.description).filter(Boolean).join(', ') || 'Fee';
+      const particular = descriptions + ' - ' + this.formatInvoiceMonth(p.month);
+      entry.items.push({ particular, balance: p.amount });
+      entry.subtotal += p.amount;
+    }
+
+    const groupMap = new Map<string, any>();
+    for (const student of studentMap.values()) {
+      const groupKey = student.grade + '||' + student.section;
+      if (!groupMap.has(groupKey)) {
+        const groupLabel = student.section ? (student.grade + ' - ' + student.section) : student.grade;
+        groupMap.set(groupKey, {
+          grade: student.grade, section: student.section, groupLabel,
+          students: [], studentCount: 0, maleCount: 0, femaleCount: 0, totalBalance: 0,
+        });
+      }
+      const group = groupMap.get(groupKey);
+      group.students.push(student);
+      group.studentCount += 1;
+      if (student.gender === 'male') group.maleCount += 1;
+      if (student.gender === 'female') group.femaleCount += 1;
+      group.totalBalance += student.subtotal;
+    }
+
+    const groups = Array.from(groupMap.values()).sort((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+    const grandTotal = {
+      studentCount: groups.reduce((a, g) => a + g.studentCount, 0),
+      totalBalance: groups.reduce((a, g) => a + g.totalBalance, 0),
+    };
+
+    return { groups, grandTotal };
+  }
 }

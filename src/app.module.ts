@@ -23,6 +23,7 @@ import { PdfModule } from './pdf/pdf.module';
 import { ReportTemplatesModule } from './modules/report-templates/report-templates.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ModulesModule } from './modules/modules.module';
+import { FamiliesModule } from './families/families.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 
@@ -53,6 +54,7 @@ import { RolesGuard } from './auth/roles.guard';
     ReportTemplatesModule,
     OnboardingModule,
     ModulesModule,
+    FamiliesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
