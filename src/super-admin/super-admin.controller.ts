@@ -8,9 +8,12 @@ import {
   Param, Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { SuperAdminService } from './super-admin.service';
+import { Roles } from '../auth/decorators';
+import { UserRole } from '../auth/roles.enum';
 
 // NOTE: In production, protect ALL routes with SuperAdminGuard
 // @UseGuards(JwtAuthGuard, SuperAdminGuard)
+@Roles(UserRole.SUPER_ADMIN)
 @Controller('super-admin')
 export class SuperAdminController {
   constructor(private readonly service: SuperAdminService) {}
