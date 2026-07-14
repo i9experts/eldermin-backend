@@ -8,6 +8,8 @@ import { User, UserDocument } from '../modules/organization/schemas/user.schema'
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { Institution, InstitutionDocument } from '../modules/organization/schemas/institution.schema';
 import { RegisterDto, SaveStepDto } from './dto/onboarding.dto';
+import { BankAccount, BankAccountDocument } from '../finance/schemas/finance.schema';
+import { ModulesService } from '../modules/modules.service';
 
 @Injectable()
 export class OnboardingService {
@@ -16,7 +18,10 @@ export class OnboardingService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel('OrgInstitution') private institutionModel: Model<InstitutionDocument>,
+    @InjectModel('School') private schoolModel: Model<any>,
+    @InjectModel(BankAccount.name) private bankAccountModel: Model<BankAccountDocument>,
     private jwtService: JwtService,
+    private modulesService: ModulesService,
   ) {}
 
   private generateSlug(name: string): string {
@@ -61,6 +66,12 @@ export class OnboardingService {
       currency: 'PKR',
       isActive: true,
     });
+
+    await this.schoolModel.findOneAndUpdate(
+      { slug },
+      { $setOnInsert: { slug, name: dto.schoolName, activeModules: ['organization'] } },
+      { upsert: true, new: true },
+    );
 
     const user = await this.userModel.create({
       tenantId: tenant._id,
@@ -129,6 +140,8 @@ export class OnboardingService {
     const tenantUpdates: any = {};
     const institutionUpdates: any = {};
 
+    const schoolUpdates: any = {};
+
     if (step === 1) {
       if (data.country) institutionUpdates['address.country'] = data.country;
       if (data.city) institutionUpdates['address.city'] = data.city;
@@ -136,6 +149,12 @@ export class OnboardingService {
       if (data.institutionType) institutionUpdates.type = data.institutionType;
       if (data.logoUrl) institutionUpdates.logoUrl = data.logoUrl;
       if (data.academicSystem) institutionUpdates.academicSystem = data.academicSystem;
+
+      if (data.country) schoolUpdates['address.country'] = data.country;
+      if (data.city) schoolUpdates['address.city'] = data.city;
+      if (data.institutionType) schoolUpdates.type = data.institutionType;
+      if (data.logoUrl) schoolUpdates.logo = data.logoUrl;
+      if (data.academicSystem) schoolUpdates.academicSystem = data.academicSystem;
     }
 
     if (step === 2) {
@@ -154,11 +173,32 @@ export class OnboardingService {
     if (step === 5) {
       if (data.selectedModules) tenantUpdates.activeModules = data.selectedModules;
       if (data.selectedBundle) tenantUpdates.plan = data.selectedBundle;
+      if (data.selectedModules && data.selectedModules.length > 0) {
+        await this.modulesService.bulkActivate(slug, data.selectedModules);
+      }
     }
 
     if (step === 6) {
       if (data.feeFrequency) institutionUpdates.feeFrequency = data.feeFrequency;
       if (data.bankAccount) institutionUpdates.bankAccount = data.bankAccount;
+      if (data.bankAccount && data.bankAccount.bankName && data.bankAccount.accountNumber) {
+        const existingBank = await this.bankAccountModel.findOne({ schoolSlug: slug });
+        if (!existingBank) {
+          await this.bankAccountModel.create({
+            schoolSlug: slug,
+            bankName: data.bankAccount.bankName,
+            accountTitle: data.bankAccount.accountTitle || data.bankAccount.bankName,
+            accountNumber: data.bankAccount.accountNumber,
+            branchName: data.bankAccount.branchName,
+            iban: data.bankAccount.iban,
+            isPrimary: true,
+          });
+        }
+      }
+    }
+
+    if (step === 7) {
+      schoolUpdates.documentRequirements = data;
     }
 
     if (Object.keys(tenantUpdates).length > 0) {
@@ -170,6 +210,10 @@ export class OnboardingService {
       if (tenant) {
         await this.institutionModel.updateOne({ tenantId: tenant._id }, { $set: institutionUpdates });
       }
+    }
+
+    if (Object.keys(schoolUpdates).length > 0) {
+      await this.schoolModel.updateOne({ slug }, { $set: schoolUpdates });
     }
   }
 

@@ -8,14 +8,20 @@ import { OnboardingSession, OnboardingSessionSchema } from './schemas/onboarding
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
+import { SchoolSchema } from '../organization/schemas/organization.schema';
+import { BankAccount, BankAccountSchema } from '../finance/schemas/finance.schema';
+import { ModulesModule } from '../modules/modules.module';
 
 @Module({
   imports: [
+    ModulesModule,
     MongooseModule.forFeature([
       { name: OnboardingSession.name, schema: OnboardingSessionSchema },
       { name: User.name, schema: UserSchema },
       { name: Tenant.name, schema: TenantSchema },
       { name: 'OrgInstitution', schema: InstitutionSchema },
+      { name: 'School', schema: SchoolSchema },
+      { name: BankAccount.name, schema: BankAccountSchema },
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -59,6 +59,8 @@ export class School {
 
   @Prop({ type: Address, default: {} }) address: Address;
   @Prop({ type: SocialLinks, default: {} }) social: SocialLinks;
+  @Prop() academicSystem: string; // e.g. cambridge, matric, o_levels, american, ib
+  @Prop({ type: Object }) documentRequirements: any; // from onboarding step 7, not yet a full document-type management system
 
   @Prop() registrationNumber: string;
   @Prop() taxNumber: string;

@@ -62,5 +62,5 @@ export class OnboardingStep7Dto {
 
 export class SaveStepDto {
   @IsNumber() step: number;
-  data: any;
+  @IsOptional() data: any;
 }
