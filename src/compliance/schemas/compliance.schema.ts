@@ -100,13 +100,12 @@ export class SafeguardingCase {
 }
 export const SafeguardingCaseSchema = SchemaFactory.createForClass(SafeguardingCase);
 SafeguardingCaseSchema.index({ schoolSlug: 1, status: 1, severity: 1 });
-SafeguardingCaseSchema.pre('save', function (next: (err?: Error) => void) {
+SafeguardingCaseSchema.pre('validate', function () {
   if (this.isNew && !this.caseNumber) {
     const y = new Date().getFullYear();
     const r = Math.floor(100 + Math.random() * 900);
     this.caseNumber = `SC-${y}-${r}`;
   }
-  next();
 });
 
 // ── AuditLog ──────────────────────────────────────────────────

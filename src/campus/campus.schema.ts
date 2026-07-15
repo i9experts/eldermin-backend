@@ -243,13 +243,12 @@ export class MaintenanceRequest {
 }
 export const MaintenanceRequestSchema = SchemaFactory.createForClass(MaintenanceRequest);
 MaintenanceRequestSchema.index({ schoolSlug: 1, status: 1, priority: 1 });
-MaintenanceRequestSchema.pre('save', function (next: any) {
+MaintenanceRequestSchema.pre('validate', function () {
   if (this.isNew && !this.mrNumber) {
     const y = new Date().getFullYear();
     const r = Math.floor(1000 + Math.random() * 9000);
     this.mrNumber = `MR-${y}-${r}`;
   }
-  next();
 });
 
 // ============================================================
@@ -301,12 +300,11 @@ export class Asset {
 }
 export const AssetSchema = SchemaFactory.createForClass(Asset);
 AssetSchema.index({ schoolSlug: 1, category: 1, status: 1 });
-AssetSchema.pre('save', async function (next: any) {
+AssetSchema.pre('validate', async function () {
   if (this.isNew && !this.assetCode) {
     const rand = Math.floor(100 + Math.random() * 900);
     this.assetCode = `AST-${rand}`;
   }
-  next();
 });
 
 // ============================================================

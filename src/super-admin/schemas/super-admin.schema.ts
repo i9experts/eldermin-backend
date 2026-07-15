@@ -286,7 +286,7 @@ export class SupportTicket {
 }
 
 export const SupportTicketSchema = SchemaFactory.createForClass(SupportTicket);
-SupportTicketSchema.pre('save', function () {
+SupportTicketSchema.pre('validate', function () {
   if (this.isNew && !this.ticketNumber) {
     const rand = Math.floor(100000 + Math.random() * 900000);
     this.ticketNumber = `TKT-${rand}`;

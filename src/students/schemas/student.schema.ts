@@ -168,7 +168,7 @@ StudentSchema.index({
 });
 
 // Auto-generate studentId
-StudentSchema.pre('save', async function () {
+StudentSchema.pre('validate', async function () {
   if (this.isNew && !this.studentId) {
     const year = new Date().getFullYear();
     const random = Math.floor(1000 + Math.random() * 9000);

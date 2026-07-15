@@ -109,13 +109,12 @@ export class PurchaseRequest {
 export const PurchaseRequestSchema = SchemaFactory.createForClass(PurchaseRequest);
 PurchaseRequestSchema.index({ schoolSlug: 1, status: 1 });
 PurchaseRequestSchema.index({ schoolSlug: 1, priority: 1 });
-PurchaseRequestSchema.pre('save', function (next: any) {
+PurchaseRequestSchema.pre('validate', function () {
   if (this.isNew && !this.prNumber) {
     const y = new Date().getFullYear();
     const r = Math.floor(1000 + Math.random() * 9000);
     this.prNumber = `PR-${y}-${r}`;
   }
-  next();
 });
 
 // ============================================================
@@ -195,13 +194,12 @@ export class PurchaseOrder {
 export const PurchaseOrderSchema = SchemaFactory.createForClass(PurchaseOrder);
 PurchaseOrderSchema.index({ schoolSlug: 1, status: 1 });
 PurchaseOrderSchema.index({ schoolSlug: 1, vendorId: 1 });
-PurchaseOrderSchema.pre('save', function (next: any) {
+PurchaseOrderSchema.pre('validate', function () {
   if (this.isNew && !this.poNumber) {
     const y = new Date().getFullYear();
     const r = Math.floor(1000 + Math.random() * 9000);
     this.poNumber = `PO-${y}-${r}`;
   }
-  next();
 });
 
 // ============================================================
@@ -245,13 +243,12 @@ export class GRN {
 
 export const GRNSchema = SchemaFactory.createForClass(GRN);
 GRNSchema.index({ schoolSlug: 1, purchaseOrderId: 1 });
-GRNSchema.pre('save', function (next: any) {
+GRNSchema.pre('validate', function () {
   if (this.isNew && !this.grnNumber) {
     const y = new Date().getFullYear();
     const r = Math.floor(1000 + Math.random() * 9000);
     this.grnNumber = `GRN-${y}-${r}`;
   }
-  next();
 });
 
 // ============================================================

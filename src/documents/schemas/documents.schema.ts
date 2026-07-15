@@ -141,7 +141,7 @@ export const WorkflowInstanceSchema = SchemaFactory.createForClass(WorkflowInsta
 WorkflowInstanceSchema.index({ schoolSlug: 1, status: 1 });
 WorkflowInstanceSchema.index({ schoolSlug: 1, workflowType: 1 });
 WorkflowInstanceSchema.index({ 'steps.assignedToId': 1, status: 1 });
-WorkflowInstanceSchema.pre('save', async function () {
+WorkflowInstanceSchema.pre('validate', async function () {
   if (this.isNew && !this.instanceNumber) {
     const d = new Date();
     const rand = Math.floor(1000 + Math.random() * 9000);
