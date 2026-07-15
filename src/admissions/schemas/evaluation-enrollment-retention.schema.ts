@@ -152,7 +152,7 @@ export class Enrollment {
 
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop({ required: true }) academicYear: string;
-  @Prop({ required: true }) campusId: string;
+  @Prop() campusId: string;
 }
 
 export const EnrollmentSchema = SchemaFactory.createForClass(Enrollment);
