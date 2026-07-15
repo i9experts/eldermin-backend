@@ -149,6 +149,7 @@ export class BehaviourService {
   async createRecord(data: any) {
     const record = new this.recordModel({
       ...data,
+      studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       date: new Date(data.date),
       followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
     });
@@ -253,6 +254,7 @@ export class BehaviourService {
 
     const assessment = new this.tarbiyahModel({
       ...data,
+      studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       assessmentDate: new Date(data.assessmentDate),
       overallScore: parseFloat(avgScore.toFixed(2)),
       overallPercentage: parseFloat(overallPercentage.toFixed(1)),
@@ -321,6 +323,7 @@ export class BehaviourService {
   async createCounsellingSession(data: any) {
     const session = new this.counsellingModel({
       ...data,
+      studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       sessionDate: new Date(data.sessionDate),
       nextSessionDate: data.nextSessionDate ? new Date(data.nextSessionDate) : undefined,
     });
@@ -378,6 +381,7 @@ export class BehaviourService {
   async createIntervention(data: any) {
     const intervention = new this.interventionModel({
       ...data,
+      studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       startDate: new Date(data.startDate),
       reviewDate: data.reviewDate ? new Date(data.reviewDate) : undefined,
     });
@@ -437,6 +441,7 @@ export class BehaviourService {
   async createContract(data: any) {
     const contract = new this.contractModel({
       ...data,
+      studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       startDate: new Date(data.startDate),
       reviewDate: new Date(data.reviewDate),
     });
