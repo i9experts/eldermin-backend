@@ -71,6 +71,10 @@ export class LeadQueryDto extends PaginationDto {
 export class ConvertLeadDto {
   @IsString() gradeApplied: string;
   @IsString() academicYear: string;
+  @IsDateString() dateOfBirth: string;
+  @IsString() gender: string;
+  @IsString() fatherName: string;
+  @IsOptional() @IsString() motherName?: string;
   @IsOptional() @IsString() campusId?: string;
   @IsOptional() @IsString() assignedTo?: string;
   @IsOptional() @IsString() notes?: string;

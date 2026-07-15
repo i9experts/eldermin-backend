@@ -118,7 +118,7 @@ ApplicantSchema.index({ schoolSlug: 1, academicYear: 1 });
 ApplicantSchema.index({ applicationNumber: 1 }, { unique: true });
 
 // Auto-generate applicationNumber before save
-ApplicantSchema.pre('save', async function () {
+ApplicantSchema.pre('validate', async function () {
   if (this.isNew && !this.applicationNumber) {
     const year = new Date().getFullYear();
     const random = Math.floor(1000 + Math.random() * 9000);
