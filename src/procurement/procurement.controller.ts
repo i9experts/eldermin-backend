@@ -89,15 +89,15 @@ export class ProcurementController {
   }
 
   @Patch('requests/:id/approve')
-  async approvePR(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+  async approvePR(@Param('id') id: string, @Body() dto: any = {}, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
-    return this.service.approvePR(id, schoolSlug, dto.approvedBy || userName, dto.notes);
+    return this.service.approvePR(id, schoolSlug, dto?.approvedBy || userName, dto?.notes);
   }
 
   @Patch('requests/:id/reject')
-  async rejectPR(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+  async rejectPR(@Param('id') id: string, @Body() dto: any = {}, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
-    return this.service.rejectPR(id, schoolSlug, dto.rejectedBy || userName, dto.reason);
+    return this.service.rejectPR(id, schoolSlug, dto?.rejectedBy || userName, dto?.reason);
   }
 
   // Purchase Orders
