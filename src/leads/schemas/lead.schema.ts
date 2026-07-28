@@ -52,7 +52,7 @@ export class Lead extends Document {
 
   @Prop({ type: [LeadNoteSchema], default: [] }) notes: LeadNote[];
   @Prop({ type: Types.ObjectId, default: null }) convertedInstitutionId?: Types.ObjectId | null;
-  @Prop({ default: null }) lastContactedAt?: Date | null;
+  @Prop({ type: Date, default: null }) lastContactedAt?: Date | null;
 }
 
 export const LeadSchema = SchemaFactory.createForClass(Lead);
