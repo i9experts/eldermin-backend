@@ -21,7 +21,6 @@ async function bootstrap() {
       'https://www.eldermin.com',
       'https://app.eldermin.com',
       'https://api.eldermin.com',
-      'https://eldermin-frontend.vercel.app', // temporary — testing frontend migration, remove after app.eldermin.com DNS cutover
       'http://localhost:5173',
       'http://localhost:3000',
     ],
