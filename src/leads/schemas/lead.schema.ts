@@ -13,8 +13,8 @@ export class LeadNote {
 }
 export const LeadNoteSchema = SchemaFactory.createForClass(LeadNote);
 
-@Schema({ timestamps: true })
-export class Lead extends Document {
+@Schema({ timestamps: true, collection: 'leads' })
+export class MarketingLead extends Document {
   @Prop({ required: true, enum: ['onboarding_wizard', 'contact_form', 'manual'], default: 'manual' })
   source: LeadSource;
 
@@ -52,9 +52,9 @@ export class Lead extends Document {
 
   @Prop({ type: [LeadNoteSchema], default: [] }) notes: LeadNote[];
   @Prop({ type: Types.ObjectId, default: null }) convertedInstitutionId?: Types.ObjectId | null;
-  @Prop({ default: null }) lastContactedAt?: Date | null;
+  @Prop({ type: Date, default: null }) lastContactedAt?: Date | null;
 }
 
-export const LeadSchema = SchemaFactory.createForClass(Lead);
+export const LeadSchema = SchemaFactory.createForClass(MarketingLead);
 LeadSchema.index({ adminEmail: 1 });
 LeadSchema.index({ createdAt: -1 });

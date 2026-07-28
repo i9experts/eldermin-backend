@@ -1,13 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Lead, LeadStage } from './schemas/lead.schema';
+import { MarketingLead, LeadStage } from './schemas/lead.schema';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 
 @Injectable()
 export class LeadsService {
-  constructor(@InjectModel(Lead.name) private leadModel: Model<Lead>) {}
+  constructor(@InjectModel(MarketingLead.name) private leadModel: Model<MarketingLead>) {}
 
   async create(dto: CreateLeadDto) {
     return this.leadModel.create({ ...dto, stage: 'new' });
