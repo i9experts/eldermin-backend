@@ -27,6 +27,7 @@ import { OnboardingModule } from './onboarding/onboarding.module';
 import { ModulesModule } from './modules/modules.module';
 import { FamiliesModule } from './families/families.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { LeadsModule } from './leads/leads.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 
@@ -59,6 +60,7 @@ import { RolesGuard } from './auth/roles.guard';
     ModulesModule,
     FamiliesModule,
     AnalyticsModule,
+    LeadsModule,
   ],
   controllers: [AppController],
   providers: [
