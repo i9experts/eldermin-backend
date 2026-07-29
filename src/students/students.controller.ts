@@ -121,6 +121,18 @@ export class StudentsController {
     return this.studentsService.updateStudent(id, schoolSlug, dto);
   }
 
+  /** POST /api/v1/students/:id/photo */
+  @Post(':id/photo')
+  @UseInterceptors(FileInterceptor('photo'))
+  async uploadPhoto(
+    @Param('id') id: string,
+    @UploadedFile() photo: Express.Multer.File,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.uploadPhoto(id, schoolSlug, photo);
+  }
+
   // ============================================================
   // ATTENDANCE
   // ============================================================

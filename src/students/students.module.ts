@@ -13,9 +13,11 @@ import {
   Behaviour, BehaviourSchema,
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
+    UploadModule,
     MongooseModule.forFeature([
       { name: Student.name, schema: StudentSchema },
       { name: StudentAttendance.name, schema: StudentAttendanceSchema },

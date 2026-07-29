@@ -10,6 +10,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
 import { Student, StudentDocument } from './schemas/student.schema';
+import { UploadService } from '../upload/upload.service';
 import {
   StudentAttendance, StudentAttendanceDocument,
   StudentFee, StudentFeeDocument,
@@ -50,6 +51,7 @@ export class StudentsService {
     @InjectModel(StudentFee.name) private feeModel: Model<StudentFeeDocument>,
     @InjectModel(Behaviour.name) private behaviourModel: Model<BehaviourDocument>,
     @InjectModel(AssessmentResult.name) private resultModel: Model<AssessmentResultDocument>,
+    private uploadService: UploadService,
   ) {}
 
   // ============================================================
@@ -142,6 +144,15 @@ export class StudentsService {
     );
     if (!student) throw new NotFoundException('Student not found');
     return student;
+  }
+
+  async uploadPhoto(id: string, schoolSlug: string, file: Express.Multer.File) {
+    const { url } = await this.uploadService.uploadFile(file, 'student-photos', schoolSlug);
+    const student = await this.studentModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: { photo: url } }, { new: true },
+    );
+    if (!student) throw new NotFoundException('Student not found');
+    return { photoUrl: url };
   }
 
   // ============================================================
@@ -873,6 +884,24 @@ export class StudentsService {
       return id;
     };
 
+    // Template says 'leave blank to auto-generate' for admissionNumber but
+    // nothing actually generated one — blank values were just passed
+    // through as-is. Same collision-avoidance pattern as studentId.
+    const usedAdmissionNumbers = new Set<string>();
+    const existingAdmissionsThisYear = await this.studentModel
+      .find({ schoolSlug, admissionNumber: { $regex: `^ADM-${year}-` } })
+      .select('admissionNumber').lean();
+    existingAdmissionsThisYear.forEach((s: any) => usedAdmissionNumbers.add(s.admissionNumber));
+    const generateUniqueAdmissionNumber = (): string => {
+      let num: string;
+      do {
+        const random = Math.floor(1000 + Math.random() * 9000);
+        num = `ADM-${year}-${random}`;
+      } while (usedAdmissionNumbers.has(num));
+      usedAdmissionNumbers.add(num);
+      return num;
+    };
+
     for (const row of importable) {
       const admissionNumber = row.data.admissionNumber;
       const nameDobKey = `${(row.data.firstName || '').toLowerCase()}|${(row.data.lastName || '').toLowerCase()}|${row.data.dateOfBirth || ''}`;
@@ -926,7 +955,7 @@ export class StudentsService {
           currentSection: row.data.currentSection,
           currentRollNumber: row.data.currentRollNumber,
           currentAcademicYear: academicYear,
-          admissionNumber: row.data.admissionNumber,
+          admissionNumber: row.data.admissionNumber || generateUniqueAdmissionNumber(),
           personalEmail: row.data.personalEmail,
           personalPhone: row.data.personalPhone,
           address: row.data.address,
