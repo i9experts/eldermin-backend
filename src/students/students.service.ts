@@ -11,6 +11,7 @@ import { Model, Types } from 'mongoose';
 
 import { Student, StudentDocument } from './schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import {
   StudentAttendance, StudentAttendanceDocument,
   StudentFee, StudentFeeDocument,
@@ -51,6 +52,7 @@ export class StudentsService {
     @InjectModel(StudentFee.name) private feeModel: Model<StudentFeeDocument>,
     @InjectModel(Behaviour.name) private behaviourModel: Model<BehaviourDocument>,
     @InjectModel(AssessmentResult.name) private resultModel: Model<AssessmentResultDocument>,
+    @InjectModel('School') private schoolModel: Model<any>,
     private uploadService: UploadService,
   ) {}
 
@@ -153,6 +155,189 @@ export class StudentsService {
     );
     if (!student) throw new NotFoundException('Student not found');
     return { photoUrl: url };
+  }
+
+  // Field groups + labels available for the Print Profile PDF report.
+  // Keep in sync with the frontend's field-selection checklist.
+  private readonly PDF_FIELD_GROUPS: Record<string, { label: string; fields: Record<string, string> }> = {
+    personal: {
+      label: 'Personal Information',
+      fields: {
+        firstName: 'First Name', lastName: 'Last Name', dateOfBirth: 'Date of Birth',
+        gender: 'Gender', nationality: 'Nationality', religion: 'Religion', arabicName: 'Arabic Name',
+      },
+    },
+    contact: {
+      label: 'Contact Information',
+      fields: {
+        personalEmail: 'Email', personalPhone: 'Phone',
+        address: 'Address', city: 'City', province: 'Province',
+      },
+    },
+    academic: {
+      label: 'Academic Information',
+      fields: {
+        currentGrade: 'Grade', currentSection: 'Section', currentRollNumber: 'Roll Number',
+        currentAcademicYear: 'Academic Year', houseGroup: 'House Group',
+      },
+    },
+    admission: {
+      label: 'Admission Information',
+      fields: {
+        admissionNumber: 'Admission Number', admissionDate: 'Admission Date',
+        previousSchool: 'Previous School',
+      },
+    },
+    status: {
+      label: 'Status',
+      fields: {
+        status: 'Status', scholarshipHolder: 'Scholarship Holder', specialNeeds: 'Special Needs',
+      },
+    },
+  };
+
+  async generateProfilePdf(id: string, schoolSlug: string, selectedFields: string[]): Promise<Buffer> {
+    const student: any = await this.studentModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!student) throw new NotFoundException('Student not found');
+    const school: any = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+
+    const selected = new Set(selectedFields || []);
+    const includePhoto = selected.has('photo');
+    const includeGuardians = selected.has('guardians');
+
+    const pdfDoc = await PDFDocument.create();
+    let page = pdfDoc.addPage([595, 842]); // A4
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.047, 0.267, 0.486);   // #0C447C
+    const amber = rgb(0.937, 0.624, 0.153);  // #EF9F27
+    const grayText = rgb(0.4, 0.4, 0.4);
+    const black = rgb(0.1, 0.1, 0.1);
+
+    const margin = 45;
+    let y = 842 - margin;
+    const pageWidth = 595;
+
+    const ensureSpace = (needed: number) => {
+      if (y - needed < margin) {
+        page = pdfDoc.addPage([595, 842]);
+        y = 842 - margin;
+      }
+    };
+
+    const fetchImageBytes = async (url: string): Promise<{ bytes: ArrayBuffer; isPng: boolean } | null> => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const bytes = await res.arrayBuffer();
+        const isPng = url.toLowerCase().includes('.png') || res.headers.get('content-type')?.includes('png');
+        return { bytes, isPng: !!isPng };
+      } catch {
+        return null;
+      }
+    };
+
+    // ── Header banner ──
+    page.drawRectangle({ x: 0, y: y - 55, width: pageWidth, height: 75, color: navy });
+
+    let logoDrawn = false;
+    if (school?.logo) {
+      const img = await fetchImageBytes(school.logo);
+      if (img) {
+        try {
+          const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
+          const logoH = 40;
+          const logoW = (embedded.width / embedded.height) * logoH;
+          page.drawImage(embedded, { x: margin, y: y - 45, width: logoW, height: logoH });
+          logoDrawn = true;
+        } catch { /* corrupt/unsupported image — fall through to text-only header */ }
+      }
+    }
+
+    page.drawText(school?.name || 'School', {
+      x: logoDrawn ? margin + 55 : margin, y: y - 20, size: 16, font: bold, color: rgb(1, 1, 1),
+    });
+    page.drawText('Student Profile Report', {
+      x: logoDrawn ? margin + 55 : margin, y: y - 38, size: 10, font, color: rgb(0.85, 0.85, 0.95),
+    });
+    y -= 90;
+
+    // ── Student name + photo ──
+    if (includePhoto && student.photo) {
+      const img = await fetchImageBytes(student.photo);
+      if (img) {
+        try {
+          const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
+          const size = 70;
+          page.drawImage(embedded, { x: pageWidth - margin - size, y: y - size + 15, width: size, height: size });
+        } catch { /* skip if the image can't be embedded */ }
+      }
+    }
+
+    page.drawText(`${student.firstName || ''} ${student.lastName || ''}`.trim(), {
+      x: margin, y, size: 20, font: bold, color: black,
+    });
+    y -= 22;
+    page.drawText(`Student ID: ${student.studentId || '—'}`, { x: margin, y, size: 10, font, color: grayText });
+    y -= 25;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1, color: rgb(0.85, 0.85, 0.85) });
+    y -= 20;
+
+    const fmtValue = (v: any): string => {
+      if (v === undefined || v === null || v === '') return '—';
+      if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+      if (v instanceof Date) return v.toISOString().slice(0, 10);
+      return String(v);
+    };
+
+    // ── Field group sections ──
+    for (const groupKey of Object.keys(this.PDF_FIELD_GROUPS)) {
+      const group = this.PDF_FIELD_GROUPS[groupKey];
+      const fieldsInGroup = Object.keys(group.fields).filter(f => selected.has(f));
+      if (fieldsInGroup.length === 0) continue;
+
+      ensureSpace(35 + fieldsInGroup.length * 20);
+      page.drawRectangle({ x: margin, y: y - 4, width: 4, height: 16, color: amber });
+      page.drawText(group.label, { x: margin + 12, y, size: 12, font: bold, color: navy });
+      y -= 24;
+
+      for (const fieldKey of fieldsInGroup) {
+        ensureSpace(20);
+        page.drawText(`${group.fields[fieldKey]}:`, { x: margin + 12, y, size: 10, font: bold, color: black });
+        let value = student[fieldKey];
+        if (fieldKey === 'dateOfBirth' || fieldKey === 'admissionDate') value = fmtValue(value ? new Date(value) : null);
+        else value = fmtValue(value);
+        page.drawText(value, { x: margin + 160, y, size: 10, font, color: black });
+        y -= 20;
+      }
+      y -= 10;
+    }
+
+    // ── Guardians ──
+    if (includeGuardians && Array.isArray(student.guardians) && student.guardians.length > 0) {
+      ensureSpace(35 + student.guardians.length * 20);
+      page.drawRectangle({ x: margin, y: y - 4, width: 4, height: 16, color: amber });
+      page.drawText('Guardian Information', { x: margin + 12, y, size: 12, font: bold, color: navy });
+      y -= 24;
+      for (const g of student.guardians) {
+        ensureSpace(20);
+        const line = `${g.name || '—'} (${g.relation || '—'}) — ${g.phone || '—'}${g.email ? ' · ' + g.email : ''}`;
+        page.drawText(line, { x: margin + 12, y, size: 10, font, color: black });
+        y -= 20;
+      }
+      y -= 10;
+    }
+
+    // ── Footer ──
+    const pages = pdfDoc.getPages();
+    pages.forEach((p, i) => {
+      p.drawText(`Generated ${new Date().toISOString().slice(0, 10)} · Page ${i + 1} of ${pages.length}`, {
+        x: margin, y: 25, size: 8, font, color: grayText,
+      });
+    });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 
   // ============================================================

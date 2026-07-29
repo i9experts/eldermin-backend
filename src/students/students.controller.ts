@@ -133,6 +133,24 @@ export class StudentsController {
     return this.studentsService.uploadPhoto(id, schoolSlug, photo);
   }
 
+  /** POST /api/v1/students/:id/profile-pdf */
+  @Post(':id/profile-pdf')
+  async generateProfilePdf(
+    @Param('id') id: string,
+    @Body('fields') fields: string[],
+    @Request() req: any,
+    @Res() res: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    const pdfBuffer = await this.studentsService.generateProfilePdf(id, schoolSlug, fields || []);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="student-profile-${id}.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.send(pdfBuffer);
+  }
+
   // ============================================================
   // ATTENDANCE
   // ============================================================
