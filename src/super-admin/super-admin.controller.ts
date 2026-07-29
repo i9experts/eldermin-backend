@@ -47,7 +47,13 @@ export class SuperAdminController {
 
   @Put('institutions/:slug')
   async updateInstitution(@Param('slug') slug: string, @Body() dto: any) {
-    return { message: 'Updated', slug };
+    return this.service.updateInstitution(slug, dto);
+  }
+
+  @Post('institutions/activate-from-lead/:leadId')
+  @HttpCode(HttpStatus.CREATED)
+  async activateFromLead(@Param('leadId') leadId: string, @Request() req: any) {
+    return this.service.activateInstitutionFromLead(leadId, this.adminUser(req));
   }
 
   @Patch('institutions/:slug/status')

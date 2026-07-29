@@ -6,6 +6,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as bcrypt from 'bcryptjs';
 import {
   Institution, InstitutionDocument, SUBSCRIPTION_PLANS,
   SubscriptionHistory, SubscriptionHistoryDocument,
@@ -13,6 +14,9 @@ import {
   Announcement, AnnouncementDocument,
   SupportTicket, SupportTicketDocument,
 } from './schemas/super-admin.schema';
+import { User, UserDocument } from '../modules/organization/schemas/user.schema';
+import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
+import { MarketingLead } from '../leads/schemas/lead.schema';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -64,6 +68,11 @@ export class SuperAdminService {
     @InjectModel(UsageLog.name) private usageLogModel: Model<UsageLogDocument>,
     @InjectModel(Announcement.name) private announcementModel: Model<AnnouncementDocument>,
     @InjectModel(SupportTicket.name) private ticketModel: Model<SupportTicketDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
+    @InjectModel('OrgInstitution') private orgInstitutionModel: Model<any>,
+    @InjectModel('School') private schoolModel: Model<any>,
+    @InjectModel(MarketingLead.name) private leadModel: Model<MarketingLead>,
   ) {}
 
   // ============================================================
@@ -320,6 +329,147 @@ export class SuperAdminService {
     await history.save();
 
     return institution;
+  }
+
+  async updateInstitution(slug: string, data: any) {
+    const inst = await this.institutionModel.findOneAndUpdate(
+      { slug },
+      { $set: data },
+      { new: true },
+    );
+    if (!inst) throw new NotFoundException('Institution not found');
+    return inst;
+  }
+
+  private generateSlug(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .trim()
+      .substring(0, 50);
+  }
+
+  private async uniqueSlug(base: string): Promise<string> {
+    let slug = base || 'school';
+    let counter = 1;
+    while (await this.tenantModel.findOne({ slug })) {
+      slug = `${base}-${counter++}`;
+    }
+    return slug;
+  }
+
+  private generateTempPassword(): string {
+    // Human-typeable temp password: Word + 4 digits (e.g. "Welcome4821") —
+    // meant to be communicated once and changed on first real login.
+    const digits = Math.floor(1000 + Math.random() * 9000);
+    return `Welcome${digits}!`;
+  }
+
+  // ============================================================
+  // ACTIVATE INSTITUTION FROM A WON CRM LEAD
+  // Provisions a REAL, usable account (Tenant + org Institution +
+  // School tenant record + admin User) — not just a billing/tracking
+  // row. Reuses the same document shape the self-service onboarding
+  // flow (OnboardingService.register) creates, so an activated lead
+  // ends up completely indistinguishable from a self-signed-up school.
+  // ============================================================
+  async activateInstitutionFromLead(leadId: string, activatedBy: string) {
+    const lead = await this.leadModel.findById(leadId);
+    if (!lead) throw new NotFoundException('Lead not found');
+    if (lead.convertedInstitutionId) {
+      throw new BadRequestException('This lead has already been activated');
+    }
+
+    const existingUser = await this.userModel.findOne({ email: lead.adminEmail.toLowerCase() });
+    if (existingUser) throw new BadRequestException('An account with this admin email already exists');
+
+    const slug = await this.uniqueSlug(this.generateSlug(lead.schoolName));
+    const tempPassword = this.generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
+
+    const [firstName, ...rest] = (lead.adminName || 'School Admin').split(' ');
+    const lastName = rest.join(' ') || '—';
+
+    const tenant = await this.tenantModel.create({
+      slug,
+      displayName: lead.schoolName,
+      status: 'onboarding',
+      plan: 'trial',
+      activeModules: ['organization'],
+      billingEmail: lead.adminEmail.toLowerCase(),
+      isSetupComplete: false,
+    });
+
+    const orgInstitution = await this.orgInstitutionModel.create({
+      tenantId: tenant._id,
+      name: lead.schoolName,
+      type: lead.schoolType || 'school',
+      currency: 'PKR',
+      isActive: true,
+    });
+
+    await this.schoolModel.findOneAndUpdate(
+      { slug },
+      { $setOnInsert: { slug, name: lead.schoolName, activeModules: ['organization'] } },
+      { upsert: true, new: true },
+    );
+
+    const user = await this.userModel.create({
+      tenantId: tenant._id,
+      institutionId: orgInstitution._id,
+      email: lead.adminEmail.toLowerCase(),
+      passwordHash,
+      profile: { firstName, lastName },
+      primaryRole: 'institution_owner',
+      isActive: true,
+    });
+
+    // Super Admin's own tracking/billing record — separate from the real
+    // tenant above, used for MRR/health-score/subscription reporting.
+    const now = new Date();
+    const trialEndDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const trackingInstitution = new this.institutionModel({
+      name: lead.schoolName,
+      slug,
+      city: lead.city,
+      country: lead.country || 'Pakistan',
+      primaryContact: { name: lead.adminName, email: lead.adminEmail, phone: lead.adminPhone },
+      status: 'trial',
+      plan: 'free_trial',
+      trialStartDate: now,
+      trialEndDate,
+      enabledModules: ['organization', 'students', 'admissions', 'hr'],
+      onboardingStep: 0,
+      healthScore: 0,
+    });
+    await trackingInstitution.save();
+
+    await new this.subHistoryModel({
+      institutionSlug: slug,
+      institutionName: lead.schoolName,
+      event: 'trial_started',
+      toPlan: 'free_trial',
+      amount: 0,
+      paymentStatus: 'free',
+      processedBy: activatedBy,
+      effectiveDate: now,
+    }).save();
+
+    lead.stage = 'converted';
+    lead.convertedInstitutionId = trackingInstitution._id as any;
+    await lead.save();
+
+    return {
+      message: 'Institution activated',
+      slug,
+      schoolName: lead.schoolName,
+      adminEmail: lead.adminEmail,
+      tempPassword,
+      loginUrl: 'https://app.eldermin.com/login',
+      institution: trackingInstitution,
+    };
   }
 
   async updateInstitutionStatus(slug: string, status: string, reason: string, updatedBy: string) {
