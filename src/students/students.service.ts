@@ -834,52 +834,69 @@ export class StudentsService {
     let created = 0, updated = 0, skipped = 0;
     const failed: any[] = [];
 
-    for (const row of rows) {
-      try {
-        if (row.errors && row.errors.length > 0) { skipped++; continue; }
+    const importable = rows.filter(r => !(r.errors && r.errors.length > 0));
+    skipped += rows.length - importable.length;
 
-        let existing: any = null;
-        if (row.data.admissionNumber) {
-          existing = await this.studentModel.findOne({ schoolSlug, admissionNumber: row.data.admissionNumber });
-        }
-        if (!existing) {
-          existing = await this.studentModel.findOne({
-            schoolSlug, firstName: row.data.firstName, lastName: row.data.lastName,
-            dateOfBirth: new Date(row.data.dateOfBirth),
-          });
-        }
+    // Batch-fetch every possible existing match ONCE instead of one findOne
+    // per row (was ~2 sequential DB round-trips per row — for a few hundred
+    // students that's easily enough to blow past a request timeout).
+    const admissionNumbers = importable.map(r => r.data.admissionNumber).filter(Boolean);
+    const existingByAdmission = admissionNumbers.length
+      ? await this.studentModel.find({ schoolSlug, admissionNumber: { $in: admissionNumbers } }).lean()
+      : [];
+    const admissionMap = new Map(existingByAdmission.map((s: any) => [s.admissionNumber, s]));
 
-        if (existing) {
-          if (duplicateAction === 'skip') { skipped++; continue; }
-          if (duplicateAction === 'update') {
-            await this.studentModel.findByIdAndUpdate(existing._id, {
-              $set: {
-                currentGrade: row.data.currentGrade,
-                currentSection: row.data.currentSection,
-                currentRollNumber: row.data.currentRollNumber,
-                personalEmail: row.data.personalEmail,
-                personalPhone: row.data.personalPhone,
-                address: row.data.address,
-                city: row.data.city,
-                province: row.data.province,
+    const existingAll = await this.studentModel.find({ schoolSlug })
+      .select('admissionNumber firstName lastName dateOfBirth').lean();
+    const nameDobMap = new Map(existingAll.map((s: any) =>
+      [`${(s.firstName || '').toLowerCase()}|${(s.lastName || '').toLowerCase()}|${s.dateOfBirth ? new Date(s.dateOfBirth).toISOString().slice(0, 10) : ''}`, s]));
+
+    const toInsert: any[] = [];
+    const updateOps: any[] = [];
+
+    for (const row of importable) {
+      const admissionNumber = row.data.admissionNumber;
+      const nameDobKey = `${(row.data.firstName || '').toLowerCase()}|${(row.data.lastName || '').toLowerCase()}|${row.data.dateOfBirth || ''}`;
+      const existing = (admissionNumber && admissionMap.get(admissionNumber)) || nameDobMap.get(nameDobKey);
+
+      if (existing) {
+        if (duplicateAction === 'skip') { skipped++; continue; }
+        if (duplicateAction === 'update') {
+          updateOps.push({
+            updateOne: {
+              filter: { _id: existing._id },
+              update: {
+                $set: {
+                  currentGrade: row.data.currentGrade,
+                  currentSection: row.data.currentSection,
+                  currentRollNumber: row.data.currentRollNumber,
+                  personalEmail: row.data.personalEmail,
+                  personalPhone: row.data.personalPhone,
+                  address: row.data.address,
+                  city: row.data.city,
+                  province: row.data.province,
+                },
               },
-            });
-            updated++;
-            continue;
-          }
+            },
+          });
+          continue;
         }
+        // duplicateAction === 'createAnyway' falls through to insert below
+      }
 
-        const year = new Date().getFullYear();
-        const random = Math.floor(1000 + Math.random() * 9000);
-        const guardians = row.data.guardianName ? [{
-          name: row.data.guardianName,
-          relation: row.data.guardianRelation || 'guardian',
-          phone: row.data.guardianPhone,
-          email: row.data.guardianEmail,
-          isPrimary: true,
-        }] : [];
+      const year = new Date().getFullYear();
+      const random = Math.floor(1000 + Math.random() * 9000);
+      const guardians = row.data.guardianName ? [{
+        name: row.data.guardianName,
+        relation: row.data.guardianRelation || 'guardian',
+        phone: row.data.guardianPhone,
+        email: row.data.guardianEmail,
+        isPrimary: true,
+      }] : [];
 
-        const student = new this.studentModel({
+      toInsert.push({
+        _row: row.row,
+        doc: {
           studentId: `STU-${year}-${random}`,
           firstName: row.data.firstName,
           lastName: row.data.lastName,
@@ -898,11 +915,34 @@ export class StudentsService {
           guardians,
           schoolSlug,
           status: 'active',
-        });
-        await student.save();
-        created++;
+        },
+      });
+    }
+
+    if (updateOps.length > 0) {
+      const result = await this.studentModel.bulkWrite(updateOps, { ordered: false });
+      updated += result.modifiedCount || 0;
+    }
+
+    if (toInsert.length > 0) {
+      try {
+        await this.studentModel.insertMany(toInsert.map(t => t.doc), { ordered: false });
+        created += toInsert.length;
       } catch (err: any) {
-        failed.push({ row: row.row, error: err.message || 'Unknown error' });
+        // insertMany with ordered:false still inserts every valid doc and
+        // reports the ones that failed — surface exactly which rows failed
+        // rather than losing the whole batch to one bad document.
+        const writeErrors = err.writeErrors || [];
+        const failedIndexes = new Set(writeErrors.map((e: any) => e.index));
+        created += toInsert.length - failedIndexes.size;
+        writeErrors.forEach((e: any) => {
+          failed.push({ row: toInsert[e.index]?._row, error: e.errmsg || e.message || 'Insert failed' });
+        });
+        if (writeErrors.length === 0) {
+          // Not a per-document write error (e.g. connection issue) — whole batch failed.
+          toInsert.forEach(t => failed.push({ row: t._row, error: err.message || 'Unknown error' }));
+          created -= toInsert.length;
+        }
       }
     }
 
