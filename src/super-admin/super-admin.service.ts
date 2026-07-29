@@ -367,6 +367,20 @@ export class SuperAdminService {
     return `Welcome${digits}!`;
   }
 
+  // Maps free-text school-type strings (e.g. from the marketing site's
+  // wizard: "Nursery/Primary", "Secondary/O-Level") to the org Institution
+  // schema's strict enum (school/college/university/training_center/
+  // madrasa/other), since a mismatch throws a Mongoose validation error.
+  private normalizeInstitutionType(raw?: string): string {
+    const allowed = ['school', 'college', 'university', 'training_center', 'madrasa', 'other'];
+    const v = (raw || '').toLowerCase();
+    if (allowed.includes(v)) return v;
+    if (v.includes('madrasa')) return 'madrasa';
+    if (v.includes('college')) return 'college';
+    if (v.includes('university') || v.includes('higher')) return 'university';
+    return 'school';
+  }
+
   // ============================================================
   // ACTIVATE INSTITUTION FROM A WON CRM LEAD
   // Provisions a REAL, usable account (Tenant + org Institution +
@@ -405,7 +419,7 @@ export class SuperAdminService {
     const orgInstitution = await this.orgInstitutionModel.create({
       tenantId: tenant._id,
       name: lead.schoolName,
-      type: lead.schoolType || 'school',
+      type: this.normalizeInstitutionType(lead.schoolType),
       currency: 'PKR',
       isActive: true,
     });
