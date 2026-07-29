@@ -930,6 +930,8 @@ export class StudentsService {
       try {
         const result = await this.studentModel.insertMany(toInsert.map(t => t.doc), { ordered: false });
         console.log(`[bulkImport] insertMany resolved. insertedCount=${result.length}, first _id=${result[0]?._id}`);
+        const verifyCount = await this.studentModel.countDocuments({ schoolSlug });
+        console.log(`[bulkImport] Immediate re-query countDocuments({schoolSlug: '${schoolSlug}'}) = ${verifyCount}`);
         created += toInsert.length;
       } catch (err: any) {
         console.log(`[bulkImport] insertMany THREW. err.name=${err?.name}, err.message=${err?.message}`);
