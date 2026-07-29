@@ -925,33 +925,21 @@ export class StudentsService {
     }
 
     if (toInsert.length > 0) {
-      console.log(`[bulkImport] About to insertMany ${toInsert.length} docs into db='${this.studentModel.db.name}' collection='${this.studentModel.collection.name}'`);
-      console.log(`[bulkImport] Sample doc[0]:`, JSON.stringify(toInsert[0].doc));
-      try {
-        const result = await this.studentModel.insertMany(toInsert.map(t => t.doc), { ordered: false });
-        console.log(`[bulkImport] insertMany resolved. insertedCount=${result.length}, first _id=${result[0]?._id}`);
-        const verifyCount = await this.studentModel.countDocuments({ schoolSlug });
-        console.log(`[bulkImport] Immediate re-query countDocuments({schoolSlug: '${schoolSlug}'}) = ${verifyCount}`);
-        created += toInsert.length;
-      } catch (err: any) {
-        console.log(`[bulkImport] insertMany THREW. err.name=${err?.name}, err.message=${err?.message}`);
-        console.log(`[bulkImport] err.writeErrors=`, JSON.stringify(err?.writeErrors || 'none'));
-        console.log(`[bulkImport] err.errors (mongoose validation)=`, JSON.stringify(err?.errors ? Object.keys(err.errors) : 'none'));
-        console.log(`[bulkImport] err.insertedDocs count=`, err?.insertedDocs?.length ?? 'n/a');
-        console.log(`[bulkImport] err.result=`, JSON.stringify(err?.result || 'none'));
-        // insertMany with ordered:false still inserts every valid doc and
-        // reports the ones that failed — surface exactly which rows failed
-        // rather than losing the whole batch to one bad document.
-        const writeErrors = err.writeErrors || [];
-        const failedIndexes = new Set(writeErrors.map((e: any) => e.index));
-        created += toInsert.length - failedIndexes.size;
-        writeErrors.forEach((e: any) => {
-          failed.push({ row: toInsert[e.index]?._row, error: e.errmsg || e.message || 'Insert failed' });
-        });
-        if (writeErrors.length === 0) {
-          // Not a per-document write error (e.g. connection issue) — whole batch failed.
-          toInsert.forEach(t => failed.push({ row: t._row, error: err.message || 'Unknown error' }));
-          created -= toInsert.length;
+      // NOTE: insertMany() was tried here first but mysteriously resolved
+      // successfully with insertedCount=0 and zero documents actually
+      // persisted (confirmed via an immediate same-request re-query) —
+      // with no thrown error to explain why. Individual .create() calls
+      // are the same operation type used successfully everywhere else in
+      // this codebase (Leads, Tenants, Users, tickets), so falling back to
+      // that here rather than continue chasing insertMany's specific
+      // silent failure. Still avoids the original N sequential
+      // duplicate-check queries per row, which was the actual timeout cause.
+      for (const item of toInsert) {
+        try {
+          await this.studentModel.create(item.doc);
+          created++;
+        } catch (err: any) {
+          failed.push({ row: item._row, error: err.message || 'Insert failed' });
         }
       }
     }
