@@ -561,6 +561,13 @@ export class StudentsService {
   // BULK IMPORT
   // ============================================================
 
+  private csvEscape(field: string): string {
+    if (field.includes(',') || field.includes('"') || field.includes('\n')) {
+      return `"${field.replace(/"/g, '""')}"`;
+    }
+    return field;
+  }
+
   generateImportTemplate(): string {
     const headers = [
       'firstName', 'lastName', 'dateOfBirth', 'gender', 'currentGrade',
@@ -568,13 +575,29 @@ export class StudentsService {
       'personalEmail', 'personalPhone', 'address', 'city', 'province',
       'guardianName', 'guardianRelation', 'guardianPhone', 'guardianEmail',
     ];
+    // Guidance row: starts with '#' so it's visually unmistakable as an
+    // instruction (not a student) and is automatically skipped by the
+    // importer even if someone forgets to delete it before uploading.
+    // Fields containing commas MUST go through csvEscape — this row is
+    // exactly the kind of thing that silently breaks a naive CSV join.
+    const guidance = [
+      '# REQUIRED', '# REQUIRED (leave blank if student has one name only)',
+      '# REQUIRED — DD/MM/YYYY or YYYY-MM-DD', '# REQUIRED — male or female',
+      '# REQUIRED — e.g. Grade 5, Prek-2, KG',
+      'e.g. A', 'e.g. 12', 'leave blank to auto-generate',
+      'optional', 'optional — digits only',
+      'if address has a comma, wrap the whole field in quotes',
+      'optional', 'optional',
+      'optional', 'e.g. Father, Mother, Guardian',
+      'optional', 'optional',
+    ].map(f => this.csvEscape(f));
     const example = [
-      'Ahmed', 'Khan', '2015-03-12', 'male', 'Grade 5',
+      'SAMPLE', 'DELETE-THIS-ROW', '2015-03-12', 'male', 'Grade 5',
       'A', '12', 'ADM-2026-0001',
       '', '03001234567', '123 Main Blvd', 'Lahore', 'Punjab',
       'Muhammad Khan', 'father', '03009876543', 'father@example.com',
     ];
-    return [headers.join(','), example.join(',')].join('\n');
+    return [headers.join(','), guidance.join(','), example.join(',')].join('\n');
   }
 
   // RFC4180-aware CSV parser: naive split(newline) then split(',') breaks the
@@ -701,6 +724,15 @@ export class StudentsService {
 
     rows.forEach((cols, i) => {
       const rowNum = i + 2;
+
+      // Skip the template's own guidance row (starts with '#') and the
+      // obviously-a-placeholder sample row, in case someone forgets to
+      // delete either before uploading their real data.
+      const firstCell = (cols[0] || '').trim();
+      if (firstCell.startsWith('#') || firstCell.toUpperCase() === 'SAMPLE') {
+        return;
+      }
+
       const errors: string[] = [];
       const get = (key: string) => {
         const v = idx[key] !== -1 ? cols[idx[key]] : '';
