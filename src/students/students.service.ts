@@ -910,21 +910,26 @@ export class StudentsService {
       if (existing) {
         if (duplicateAction === 'skip') { skipped++; continue; }
         if (duplicateAction === 'update') {
+          const setFields: any = {
+            currentGrade: row.data.currentGrade,
+            currentSection: row.data.currentSection,
+            currentRollNumber: row.data.currentRollNumber,
+            personalEmail: row.data.personalEmail,
+            personalPhone: row.data.personalPhone,
+            address: row.data.address,
+            city: row.data.city,
+            province: row.data.province,
+          };
+          // Backfill admission number for existing records that never got
+          // one (e.g. created before auto-generation was added) — updating
+          // a duplicate shouldn't leave it permanently blank.
+          if (!(existing as any).admissionNumber) {
+            setFields.admissionNumber = row.data.admissionNumber || generateUniqueAdmissionNumber();
+          }
           updateOps.push({
             updateOne: {
               filter: { _id: existing._id },
-              update: {
-                $set: {
-                  currentGrade: row.data.currentGrade,
-                  currentSection: row.data.currentSection,
-                  currentRollNumber: row.data.currentRollNumber,
-                  personalEmail: row.data.personalEmail,
-                  personalPhone: row.data.personalPhone,
-                  address: row.data.address,
-                  city: row.data.city,
-                  province: row.data.province,
-                },
-              },
+              update: { $set: setFields },
             },
           });
           continue;
