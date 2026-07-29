@@ -17,6 +17,7 @@ import {
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { MarketingLead } from '../leads/schemas/lead.schema';
+import { ModulesService } from '../modules/modules.service';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -73,6 +74,7 @@ export class SuperAdminService {
     @InjectModel('OrgInstitution') private orgInstitutionModel: Model<any>,
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(MarketingLead.name) private leadModel: Model<MarketingLead>,
+    private modulesService: ModulesService,
   ) {}
 
   // ============================================================
@@ -367,6 +369,36 @@ export class SuperAdminService {
     return `Welcome${digits}!`;
   }
 
+  // The marketing site's wizard sends human-readable module names
+  // ("Human Resource", "Curriculum Intelligence"), but the real
+  // authorization checks (activeModules array, module-registry ids)
+  // use short internal keys. Map one to the other here.
+  private readonly MODULE_NAME_TO_ID: Record<string, string> = {
+    'Organization': 'organization',
+    'Compliance & Governance': 'compliance',
+    'Documents & Workflow': 'documents',
+    'Human Resource': 'hr',
+    'Teacher Module': 'teaching',
+    'Financial Module': 'finance',
+    'Procurement & Purchase': 'procurement',
+    'Campus Operations': 'campus-ops',
+    'Admission Life Cycle': 'admissions',
+    'Curriculum Intelligence': 'curriculum',
+    'Syllabus Coverage': 'syllabus',
+    'Timetable Intelligence': 'timetable',
+    'Library Management': 'library',
+    'Student Profile': 'students',
+    'Assessment': 'assessment',
+    'Behaviour & Tarbiyah': 'behaviour',
+    'Data Intelligence': 'analytics',
+  };
+
+  private mapRequestedModulesToIds(requested: string[]): string[] {
+    return requested
+      .map((name) => this.MODULE_NAME_TO_ID[name])
+      .filter((id): id is string => !!id);
+  }
+
   // Maps free-text school-type strings (e.g. from the marketing site's
   // wizard: "Nursery/Primary", "Secondary/O-Level") to the org Institution
   // schema's strict enum (school/college/university/training_center/
@@ -406,12 +438,23 @@ export class SuperAdminService {
     const [firstName, ...rest] = (lead.adminName || 'School Admin').split(' ');
     const lastName = rest.join(' ') || '—';
 
+    // IMPORTANT: login reads activeModules from the Tenant document, but
+    // ModulesService.bulkActivate() (the same one the self-service wizard's
+    // module-selection step calls) only updates the School document. These
+    // two can drift apart if not kept in sync explicitly — set both here
+    // from the same merged list so a fresh login immediately has access to
+    // every module the lead actually asked for, not just 'organization'.
+    const requestedModules = this.mapRequestedModulesToIds(
+      Array.isArray(lead.modulesRequested) ? lead.modulesRequested : [],
+    );
+    const mergedModules = Array.from(new Set(['organization', ...requestedModules]));
+
     const tenant = await this.tenantModel.create({
       slug,
       displayName: lead.schoolName,
       status: 'onboarding',
       plan: 'trial',
-      activeModules: ['organization'],
+      activeModules: mergedModules,
       billingEmail: lead.adminEmail.toLowerCase(),
       isSetupComplete: false,
     });
@@ -426,7 +469,7 @@ export class SuperAdminService {
 
     await this.schoolModel.findOneAndUpdate(
       { slug },
-      { $setOnInsert: { slug, name: lead.schoolName, activeModules: ['organization'] } },
+      { $setOnInsert: { slug, name: lead.schoolName, activeModules: mergedModules } },
       { upsert: true, new: true },
     );
 
@@ -454,7 +497,7 @@ export class SuperAdminService {
       plan: 'free_trial',
       trialStartDate: now,
       trialEndDate,
-      enabledModules: ['organization', 'students', 'admissions', 'hr'],
+      enabledModules: mergedModules,
       onboardingStep: 0,
       healthScore: 0,
     });

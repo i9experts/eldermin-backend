@@ -14,9 +14,11 @@ import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.sch
 import { InstitutionSchema as OrgInstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { SchoolSchema } from '../organization/schemas/organization.schema';
 import { MarketingLead, LeadSchema } from '../leads/schemas/lead.schema';
+import { ModulesModule } from '../modules/modules.module';
 
 @Module({
   imports: [
+    ModulesModule,
     MongooseModule.forFeature([
       { name: Institution.name, schema: InstitutionSchema },
       { name: SubscriptionHistory.name, schema: SubscriptionHistorySchema },
