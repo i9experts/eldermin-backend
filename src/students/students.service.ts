@@ -853,6 +853,25 @@ export class StudentsService {
 
     const toInsert: any[] = [];
     const updateOps: any[] = [];
+    const usedStudentIds = new Set<string>();
+    const year = new Date().getFullYear();
+    // studentId has a GLOBAL unique index (not scoped per school), so seed
+    // the used-set with every existing id for this year across all schools
+    // too — not just checking uniqueness within this one batch.
+    const existingIdsThisYear = await this.studentModel
+      .find({ studentId: { $regex: `^STU-${year}-` } })
+      .select('studentId').lean();
+    existingIdsThisYear.forEach((s: any) => usedStudentIds.add(s.studentId));
+
+    const generateUniqueStudentId = (): string => {
+      let id: string;
+      do {
+        const random = Math.floor(1000 + Math.random() * 9000);
+        id = `STU-${year}-${random}`;
+      } while (usedStudentIds.has(id));
+      usedStudentIds.add(id);
+      return id;
+    };
 
     for (const row of importable) {
       const admissionNumber = row.data.admissionNumber;
@@ -884,8 +903,7 @@ export class StudentsService {
         // duplicateAction === 'createAnyway' falls through to insert below
       }
 
-      const year = new Date().getFullYear();
-      const random = Math.floor(1000 + Math.random() * 9000);
+      const studentId = generateUniqueStudentId();
       const allowedRelations = ['father', 'mother', 'guardian'];
       const normalizedRelation = (row.data.guardianRelation || '').toLowerCase().trim();
       const guardians = row.data.guardianName ? [{
@@ -899,7 +917,7 @@ export class StudentsService {
       toInsert.push({
         _row: row.row,
         doc: {
-          studentId: `STU-${year}-${random}`,
+          studentId,
           firstName: row.data.firstName,
           lastName: row.data.lastName,
           dateOfBirth: new Date(row.data.dateOfBirth),
