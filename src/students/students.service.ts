@@ -926,11 +926,17 @@ export class StudentsService {
 
     if (toInsert.length > 0) {
       console.log(`[bulkImport] About to insertMany ${toInsert.length} docs into db='${this.studentModel.db.name}' collection='${this.studentModel.collection.name}'`);
+      console.log(`[bulkImport] Sample doc[0]:`, JSON.stringify(toInsert[0].doc));
       try {
         const result = await this.studentModel.insertMany(toInsert.map(t => t.doc), { ordered: false });
         console.log(`[bulkImport] insertMany resolved. insertedCount=${result.length}, first _id=${result[0]?._id}`);
         created += toInsert.length;
       } catch (err: any) {
+        console.log(`[bulkImport] insertMany THREW. err.name=${err?.name}, err.message=${err?.message}`);
+        console.log(`[bulkImport] err.writeErrors=`, JSON.stringify(err?.writeErrors || 'none'));
+        console.log(`[bulkImport] err.errors (mongoose validation)=`, JSON.stringify(err?.errors ? Object.keys(err.errors) : 'none'));
+        console.log(`[bulkImport] err.insertedDocs count=`, err?.insertedDocs?.length ?? 'n/a');
+        console.log(`[bulkImport] err.result=`, JSON.stringify(err?.result || 'none'));
         // insertMany with ordered:false still inserts every valid doc and
         // reports the ones that failed — surface exactly which rows failed
         // rather than losing the whole batch to one bad document.
