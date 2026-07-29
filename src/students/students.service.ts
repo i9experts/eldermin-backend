@@ -238,50 +238,86 @@ export class StudentsService {
     };
 
     // ── Header banner ──
-    page.drawRectangle({ x: 0, y: y - 55, width: pageWidth, height: 75, color: navy });
+    const bannerHeight = 95;
+    page.drawRectangle({ x: 0, y: y - (bannerHeight - 25), width: pageWidth, height: bannerHeight, color: navy });
+    const bannerTop = y + 25;
+    const bannerBottom = y - (bannerHeight - 25);
+    const bannerCenterY = (bannerTop + bannerBottom) / 2;
 
-    let logoDrawn = false;
+    let textStartX = margin;
     if (school?.logo) {
       const img = await fetchImageBytes(school.logo);
       if (img) {
         try {
           const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
-          const logoH = 40;
-          const logoW = (embedded.width / embedded.height) * logoH;
-          page.drawImage(embedded, { x: margin, y: y - 45, width: logoW, height: logoH });
-          logoDrawn = true;
+          // Constrain BOTH dimensions (not just height) so a wide/landscape
+          // logo can't stretch far enough to collide with the title text —
+          // scale by whichever limit is hit first, keeping aspect ratio.
+          const maxLogoH = 52;
+          const maxLogoW = 100;
+          const ratio = embedded.width / embedded.height;
+          let logoW = maxLogoW;
+          let logoH = logoW / ratio;
+          if (logoH > maxLogoH) { logoH = maxLogoH; logoW = logoH * ratio; }
+          const logoX = margin;
+          const logoY = bannerCenterY - logoH / 2;
+          // Subtle white card behind the logo — most school logos are
+          // designed for a light background, so dropping them directly
+          // onto navy can look muddy or let a white-background PNG show
+          // an ugly rectangle. A small padded white card fixes both.
+          const pad = 6;
+          page.drawRectangle({
+            x: logoX - pad, y: logoY - pad, width: logoW + pad * 2, height: logoH + pad * 2,
+            color: rgb(1, 1, 1), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5,
+          });
+          page.drawImage(embedded, { x: logoX, y: logoY, width: logoW, height: logoH });
+          textStartX = logoX + logoW + pad * 2 + 18; // dynamic gap based on actual rendered width
         } catch { /* corrupt/unsupported image — fall through to text-only header */ }
       }
     }
 
-    page.drawText(school?.name || 'School', {
-      x: logoDrawn ? margin + 55 : margin, y: y - 20, size: 16, font: bold, color: rgb(1, 1, 1),
+    const schoolName = school?.name || 'School';
+    // Shrink the school name if it's long enough to risk crowding the page edge
+    const nameSize = schoolName.length > 38 ? 15 : 17;
+    page.drawText(schoolName, {
+      x: textStartX, y: bannerCenterY + 6, size: nameSize, font: bold, color: rgb(1, 1, 1),
+      maxWidth: pageWidth - textStartX - margin,
     });
-    page.drawText('Student Profile Report', {
-      x: logoDrawn ? margin + 55 : margin, y: y - 38, size: 10, font, color: rgb(0.85, 0.85, 0.95),
+    page.drawText('STUDENT PROFILE REPORT', {
+      x: textStartX, y: bannerCenterY - 14, size: 9, font: bold, color: rgb(0.75, 0.82, 0.93),
     });
-    y -= 90;
+    y = bannerBottom - 40;
 
     // ── Student name + photo ──
-    if (includePhoto && student.photo) {
+    const hasPhoto = includePhoto && student.photo;
+    const nameBlockWidth = hasPhoto ? pageWidth - margin * 2 - 90 : pageWidth - margin * 2;
+    if (hasPhoto) {
       const img = await fetchImageBytes(student.photo);
       if (img) {
         try {
           const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
-          const size = 70;
-          page.drawImage(embedded, { x: pageWidth - margin - size, y: y - size + 15, width: size, height: size });
+          const size = 72;
+          const photoX = pageWidth - margin - size;
+          const photoY = y - size + 30;
+          // Bordered frame so the photo reads as an intentional portrait
+          // slot regardless of the source image's own aspect ratio/content.
+          page.drawRectangle({
+            x: photoX - 3, y: photoY - 3, width: size + 6, height: size + 6,
+            color: rgb(1, 1, 1), borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
+          });
+          page.drawImage(embedded, { x: photoX, y: photoY, width: size, height: size });
         } catch { /* skip if the image can't be embedded */ }
       }
     }
 
     page.drawText(`${student.firstName || ''} ${student.lastName || ''}`.trim(), {
-      x: margin, y, size: 20, font: bold, color: black,
+      x: margin, y, size: 21, font: bold, color: black, maxWidth: nameBlockWidth,
     });
-    y -= 22;
-    page.drawText(`Student ID: ${student.studentId || '—'}`, { x: margin, y, size: 10, font, color: grayText });
-    y -= 25;
-    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1, color: rgb(0.85, 0.85, 0.85) });
     y -= 20;
+    page.drawText(`Student ID: ${student.studentId || '—'}`, { x: margin, y, size: 10, font, color: grayText });
+    y -= 22;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1, color: rgb(0.85, 0.85, 0.85) });
+    y -= 22;
 
     const fmtValue = (v: any): string => {
       if (v === undefined || v === null || v === '') return '—';
@@ -290,42 +326,51 @@ export class StudentsService {
       return String(v);
     };
 
+
     // ── Field group sections ──
     for (const groupKey of Object.keys(this.PDF_FIELD_GROUPS)) {
       const group = this.PDF_FIELD_GROUPS[groupKey];
       const fieldsInGroup = Object.keys(group.fields).filter(f => selected.has(f));
       if (fieldsInGroup.length === 0) continue;
 
-      ensureSpace(35 + fieldsInGroup.length * 20);
-      page.drawRectangle({ x: margin, y: y - 4, width: 4, height: 16, color: amber });
-      page.drawText(group.label, { x: margin + 12, y, size: 12, font: bold, color: navy });
-      y -= 24;
+      ensureSpace(40 + fieldsInGroup.length * 22);
+      page.drawRectangle({ x: margin, y: y - 8, width: pageWidth - margin * 2, height: 26, color: rgb(0.96, 0.97, 0.98) });
+      page.drawRectangle({ x: margin, y: y - 8, width: 4, height: 26, color: amber });
+      page.drawText(group.label.toUpperCase(), { x: margin + 14, y, size: 10.5, font: bold, color: navy });
+      y -= 34;
 
-      for (const fieldKey of fieldsInGroup) {
-        ensureSpace(20);
-        page.drawText(`${group.fields[fieldKey]}:`, { x: margin + 12, y, size: 10, font: bold, color: black });
+      fieldsInGroup.forEach((fieldKey, idx) => {
+        ensureSpace(22);
+        if (idx % 2 === 1) {
+          page.drawRectangle({ x: margin, y: y - 5, width: pageWidth - margin * 2, height: 21, color: rgb(0.985, 0.985, 0.985) });
+        }
+        page.drawText(`${group.fields[fieldKey]}`, { x: margin + 14, y, size: 9.5, font: bold, color: rgb(0.35, 0.35, 0.35) });
         let value = student[fieldKey];
         if (fieldKey === 'dateOfBirth' || fieldKey === 'admissionDate') value = fmtValue(value ? new Date(value) : null);
         else value = fmtValue(value);
-        page.drawText(value, { x: margin + 160, y, size: 10, font, color: black });
-        y -= 20;
-      }
-      y -= 10;
+        page.drawText(value, { x: margin + 175, y, size: 10, font, color: black });
+        y -= 22;
+      });
+      y -= 12;
     }
 
     // ── Guardians ──
     if (includeGuardians && Array.isArray(student.guardians) && student.guardians.length > 0) {
-      ensureSpace(35 + student.guardians.length * 20);
-      page.drawRectangle({ x: margin, y: y - 4, width: 4, height: 16, color: amber });
-      page.drawText('Guardian Information', { x: margin + 12, y, size: 12, font: bold, color: navy });
-      y -= 24;
-      for (const g of student.guardians) {
-        ensureSpace(20);
+      ensureSpace(40 + student.guardians.length * 22);
+      page.drawRectangle({ x: margin, y: y - 8, width: pageWidth - margin * 2, height: 26, color: rgb(0.96, 0.97, 0.98) });
+      page.drawRectangle({ x: margin, y: y - 8, width: 4, height: 26, color: amber });
+      page.drawText('GUARDIAN INFORMATION', { x: margin + 14, y, size: 10.5, font: bold, color: navy });
+      y -= 34;
+      student.guardians.forEach((g: any, idx: number) => {
+        ensureSpace(22);
+        if (idx % 2 === 1) {
+          page.drawRectangle({ x: margin, y: y - 5, width: pageWidth - margin * 2, height: 21, color: rgb(0.985, 0.985, 0.985) });
+        }
         const line = `${g.name || '—'} (${g.relation || '—'}) — ${g.phone || '—'}${g.email ? ' · ' + g.email : ''}`;
-        page.drawText(line, { x: margin + 12, y, size: 10, font, color: black });
-        y -= 20;
-      }
-      y -= 10;
+        page.drawText(line, { x: margin + 14, y, size: 10, font, color: black });
+        y -= 22;
+      });
+      y -= 12;
     }
 
     // ── Footer ──
