@@ -221,7 +221,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => `
   </div>
   <div class="student-box">
     <div><div class="info-label">Student Name</div><div class="info-value">${data.studentName}</div></div>
-    <div><div class="info-label">Roll Number</div><div class="info-value">${data.rollNumber || 'N/A'}</div></div>
+    <div><div class="info-label">GR No</div><div class="info-value">${data.rollNumber || 'N/A'}</div></div>
     <div><div class="info-label">Grade / Class</div><div class="info-value">${data.grade} ${data.section || ''}</div></div>
     <div><div class="info-label">Date of Birth</div><div class="info-value">${data.dob || 'N/A'}</div></div>
     <div><div class="info-label">Attendance</div><div class="info-value">${data.attendance || 'N/A'}</div></div>

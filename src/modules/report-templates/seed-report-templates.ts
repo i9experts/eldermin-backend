@@ -75,7 +75,7 @@ async function seedReportTemplates() {
               fields: [
                 { label: 'Student Name', field: 'studentName' },
                 { label: 'Class', field: 'grade' },
-                { label: 'Roll No.', field: 'rollNumber' },
+                { label: 'GR No', field: 'rollNumber' },
                 { label: "Father's Name", field: 'fatherName' },
               ],
             },

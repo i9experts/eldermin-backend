@@ -177,7 +177,7 @@ export class StudentsService {
     academic: {
       label: 'Academic Information',
       fields: {
-        currentGrade: 'Grade', currentSection: 'Section', currentRollNumber: 'Roll Number',
+        currentGrade: 'Grade', currentSection: 'Section', currentRollNumber: 'GR No',
         currentAcademicYear: 'Academic Year', houseGroup: 'House Group',
       },
     },
