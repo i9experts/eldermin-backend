@@ -1,7 +1,9 @@
 import {
   Controller, Get, Post, Put, Patch, Delete,
   Body, Param, Query, Request, HttpCode, HttpStatus,
+  UseInterceptors, UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { OrganizationService } from './organization.service';
 import {
   UpdateSchoolDto, CreateCampusDto, CreateAcademicYearDto,
@@ -23,7 +25,9 @@ export class OrganizationController {
   // School
   @Get('profile') async getProfile(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getSchool(schoolSlug);
+    const school: any = await this.service.getSchool(schoolSlug);
+    const obj = school.toObject ? school.toObject() : school;
+    return { ...obj, logoUrl: obj.logo || '' };
   }
 
   @Get('overview') async getOverview(@Request() req: any) {
@@ -34,6 +38,13 @@ export class OrganizationController {
   @Put('profile') async updateProfile(@Body() dto: UpdateSchoolDto, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateSchool(schoolSlug, dto);
+  }
+
+  @Post('profile/logo')
+  @UseInterceptors(FileInterceptor('logo'))
+  async uploadLogo(@UploadedFile() logo: Express.Multer.File, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.uploadLogo(schoolSlug, logo);
   }
 
   // Campuses

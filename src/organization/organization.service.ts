@@ -15,6 +15,7 @@ import {
   CreateGroupInstitutionDto,
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class OrganizationService {
@@ -26,6 +27,7 @@ export class OrganizationService {
     @InjectModel(Department.name) private deptModel: Model<DepartmentDocument>,
     @InjectModel(Designation.name) private designModel: Model<DesignationDocument>,
     @InjectModel(GroupInstitution.name) private groupInstitutionModel: Model<GroupInstitutionDocument>,
+    private uploadService: UploadService,
   ) {}
 
   // ── School ────────────────────────────────────────────────
@@ -42,6 +44,15 @@ export class OrganizationService {
     return this.schoolModel.findOneAndUpdate(
       { slug }, { $set: dto }, { new: true, upsert: true },
     );
+  }
+
+  async uploadLogo(slug: string, file: Express.Multer.File) {
+    const { url } = await this.uploadService.uploadFile(file, 'institution-logos', slug);
+    const school = await this.schoolModel.findOneAndUpdate(
+      { slug }, { $set: { logo: url } }, { new: true },
+    );
+    if (!school) throw new NotFoundException('School not found');
+    return { logoUrl: url };
   }
 
   async getOrganizationOverview(schoolSlug: string) {

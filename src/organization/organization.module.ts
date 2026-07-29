@@ -19,9 +19,11 @@ import {
   Workflow, WorkflowSchema,
 } from './schemas/institution-setup.schema';
 import { GroupInstitution, GroupInstitutionSchema } from './schemas/group-institution.schema';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
+    UploadModule,
     MongooseModule.forFeature([
       { name: School.name, schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },
