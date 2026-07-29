@@ -925,8 +925,10 @@ export class StudentsService {
     }
 
     if (toInsert.length > 0) {
+      console.log(`[bulkImport] About to insertMany ${toInsert.length} docs into db='${this.studentModel.db.name}' collection='${this.studentModel.collection.name}'`);
       try {
-        await this.studentModel.insertMany(toInsert.map(t => t.doc), { ordered: false });
+        const result = await this.studentModel.insertMany(toInsert.map(t => t.doc), { ordered: false });
+        console.log(`[bulkImport] insertMany resolved. insertedCount=${result.length}, first _id=${result[0]?._id}`);
         created += toInsert.length;
       } catch (err: any) {
         // insertMany with ordered:false still inserts every valid doc and
