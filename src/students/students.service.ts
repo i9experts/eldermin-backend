@@ -886,9 +886,11 @@ export class StudentsService {
 
       const year = new Date().getFullYear();
       const random = Math.floor(1000 + Math.random() * 9000);
+      const allowedRelations = ['father', 'mother', 'guardian'];
+      const normalizedRelation = (row.data.guardianRelation || '').toLowerCase().trim();
       const guardians = row.data.guardianName ? [{
         name: row.data.guardianName,
-        relation: row.data.guardianRelation || 'guardian',
+        relation: allowedRelations.includes(normalizedRelation) ? normalizedRelation : 'guardian',
         phone: row.data.guardianPhone,
         email: row.data.guardianEmail,
         isPrimary: true,
