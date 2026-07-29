@@ -577,13 +577,93 @@ export class StudentsService {
     return [headers.join(','), example.join(',')].join('\n');
   }
 
+  // RFC4180-aware CSV parser: naive split(newline) then split(',') breaks the
+  // moment any field is quoted and contains a comma or an embedded line break
+  // (both are valid CSV and both are common in real address fields) — a quoted
+  // field like "Flat no,302\nVilla Nazimabad" was being sliced into two broken
+  // rows before, silently shifting every column after it on the wrapped row.
   private parseCsv(buffer: Buffer): { headers: string[]; rows: string[][] } {
-    const text = buffer.toString('utf-8');
-    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-    if (lines.length < 2) throw new BadRequestException('CSV file has no data rows');
-    const headers = lines[0].split(',').map(h => h.trim());
-    const rows = lines.slice(1).map(l => l.split(',').map(c => c.trim()));
-    return { headers, rows };
+    let text = buffer.toString('utf-8');
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // strip UTF-8 BOM if present
+
+    const records: string[][] = [];
+    let field = '';
+    let record: string[] = [];
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; } // escaped quote
+          else inQuotes = false;
+        } else {
+          field += ch;
+        }
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        record.push(field.trim());
+        field = '';
+      } else if (ch === '\r') {
+        // skip — \n (or end) handles the line break
+      } else if (ch === '\n') {
+        record.push(field.trim());
+        field = '';
+        if (record.some(c => c.length > 0)) records.push(record);
+        record = [];
+      } else {
+        field += ch;
+      }
+    }
+    // last field/record if file doesn't end with a newline
+    if (field.length > 0 || record.length > 0) {
+      record.push(field.trim());
+      if (record.some(c => c.length > 0)) records.push(record);
+    }
+
+    if (records.length < 2) throw new BadRequestException('CSV file has no data rows');
+    const [headers, ...rows] = records;
+    return { headers: headers.map(h => h.trim()), rows };
+  }
+
+  // Excel exports a date-formatted cell as its underlying serial number
+  // (days since 1899-12-30) when the CSV export doesn't preserve display
+  // formatting — e.g. '44716' instead of '2022-05-05'. A bare 5-digit
+  // number in this field is essentially always this, not a real date typed
+  // by a human, so convert it rather than let `new Date(44716)` silently
+  // produce a nonsense 1970s date.
+  private parseFlexibleDate(raw: string): Date | null {
+    const trimmed = (raw || '').replace(/[?|]/g, '').trim();
+    if (!trimmed) return null;
+
+    // Excel date-serial number leaking through from a CSV export that
+    // dropped the cell's display format (e.g. '44716' instead of a date).
+    if (/^\d{4,6}$/.test(trimmed)) {
+      const serial = parseInt(trimmed, 10);
+      if (serial > 20000 && serial < 60000) {
+        const excelEpoch = Date.UTC(1899, 11, 30);
+        return new Date(excelEpoch + serial * 86400000);
+      }
+    }
+
+    // Day-first DD/MM/YYYY or DD-MM-YYYY — the standard convention here,
+    // but JS's native Date() assumes US MM/DD/YYYY and silently mis-parses
+    // or rejects it (e.g. '18/07/2022' has no month 18, so it fails).
+    const dayFirst = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+    if (dayFirst) {
+      let [, d, m, y] = dayFirst;
+      if (y.length === 2) y = (parseInt(y, 10) > 30 ? '19' : '20') + y;
+      const day = parseInt(d, 10), month = parseInt(m, 10), year = parseInt(y, 10);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const date = new Date(Date.UTC(year, month - 1, day));
+        if (!isNaN(date.getTime())) return date;
+      }
+      return null; // e.g. a typo'd day/month like '06/-9/2021' — genuinely bad data
+    }
+
+    const parsed = new Date(trimmed);
+    return isNaN(parsed.getTime()) ? null : parsed;
   }
 
   async previewBulkImport(schoolSlug: string, file: Express.Multer.File) {
@@ -622,7 +702,10 @@ export class StudentsService {
     rows.forEach((cols, i) => {
       const rowNum = i + 2;
       const errors: string[] = [];
-      const get = (key: string) => idx[key] !== -1 ? cols[idx[key]] : '';
+      const get = (key: string) => {
+        const v = idx[key] !== -1 ? cols[idx[key]] : '';
+        return (v ?? '').replace(/^\?+/, '').trim();
+      };
 
       const firstName = get('firstName');
       const lastName = get('lastName');
@@ -639,8 +722,8 @@ export class StudentsService {
       if (!dobRaw) {
         errors.push("missing required field 'dateOfBirth'");
       } else {
-        dateOfBirth = new Date(dobRaw);
-        if (isNaN(dateOfBirth.getTime())) {
+        dateOfBirth = this.parseFlexibleDate(dobRaw);
+        if (!dateOfBirth) {
           errors.push(`invalid dateOfBirth '${dobRaw}' — use YYYY-MM-DD`);
         }
       }
