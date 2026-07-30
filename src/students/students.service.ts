@@ -11,6 +11,7 @@ import { Model, Types } from 'mongoose';
 
 import { Student, StudentDocument } from './schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
+import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import {
   StudentAttendance, StudentAttendanceDocument,
@@ -53,6 +54,7 @@ export class StudentsService {
     @InjectModel(Behaviour.name) private behaviourModel: Model<BehaviourDocument>,
     @InjectModel(AssessmentResult.name) private resultModel: Model<AssessmentResultDocument>,
     @InjectModel('School') private schoolModel: Model<any>,
+    @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -630,6 +632,7 @@ export class StudentsService {
     const [
       totalStudents, activeStudents, maleCount, femaleCount,
       gradeDistribution, newThisMonth, scholarship, specialNeeds,
+      gradeSectionDistribution, sectionAgeStats, townDistribution,
     ] = await Promise.all([
       this.studentModel.countDocuments({ schoolSlug }),
       this.studentModel.countDocuments({ ...filter, status: 'active' }),
@@ -646,7 +649,62 @@ export class StudentsService {
       }),
       this.studentModel.countDocuments({ ...filter, scholarshipHolder: true }),
       this.studentModel.countDocuments({ ...filter, specialNeeds: true }),
+      // Grade+Section breakdown — same as gradeDistribution but split further
+      this.studentModel.aggregate([
+        { $match: { ...filter, status: 'active' } },
+        { $group: { _id: { grade: '$currentGrade', section: '$currentSection' }, count: { $sum: 1 } } },
+        { $sort: { '_id.grade': 1, '_id.section': 1 } },
+      ]),
+      // Min/max/avg age per grade+section, computed from dateOfBirth as of today.
+      // Using basic $subtract/$divide arithmetic (works on any MongoDB version)
+      // rather than $dateDiff, which needs MongoDB 5.0+ — safer given this can't
+      // be tested against the live Atlas cluster directly from here.
+      this.studentModel.aggregate([
+        { $match: { ...filter, status: 'active', dateOfBirth: { $exists: true, $ne: null } } },
+        {
+          $addFields: {
+            ageYears: {
+              $divide: [
+                { $subtract: ['$$NOW', '$dateOfBirth'] },
+                1000 * 60 * 60 * 24 * 365.25,
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: { grade: '$currentGrade', section: '$currentSection' },
+            minAge: { $min: '$ageYears' },
+            maxAge: { $max: '$ageYears' },
+            avgAge: { $avg: '$ageYears' },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { '_id.grade': 1, '_id.section': 1 } },
+      ]),
+      // Town/city distribution
+      this.studentModel.aggregate([
+        { $match: { ...filter, status: 'active', city: { $exists: true, $ne: '' } } },
+        { $group: { _id: '$city', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
     ]);
+
+    // Family-size distribution (from the Family module — linked via phone/CNIC
+    // matching or manual assignment). Only counts VERIFIED families, since
+    // retrofit-lastname groups start unverified and may be false positives.
+    const families = await this.familyModel.find({ schoolSlug, verified: true }).lean();
+    const familySizeBuckets: Record<string, number> = {};
+    families.forEach(f => {
+      const size = (f.studentIds || []).length;
+      const key = size >= 3 ? '3+' : String(size);
+      familySizeBuckets[key] = (familySizeBuckets[key] || 0) + 1;
+    });
+    const linkedStudentIds = new Set(families.flatMap(f => (f.studentIds || []).map((id: any) => String(id))));
+    const unlinkedActiveCount = await this.studentModel.countDocuments({
+      ...filter, status: 'active',
+      _id: { $nin: Array.from(linkedStudentIds).map(id => new Types.ObjectId(id)) },
+    });
 
     // Today's attendance summary
     const today = new Date();
@@ -683,6 +741,22 @@ export class StudentsService {
         newThisMonth, scholarship, specialNeeds,
       },
       gradeDistribution,
+      gradeSectionDistribution: gradeSectionDistribution.map((r: any) => ({
+        grade: r._id.grade, section: r._id.section, count: r.count,
+      })),
+      sectionAgeStats: sectionAgeStats.map((r: any) => ({
+        grade: r._id.grade, section: r._id.section,
+        minAge: Math.floor(r.minAge),
+        maxAge: Math.floor(r.maxAge),
+        avgAge: Math.round(r.avgAge * 10) / 10,
+        count: r.count,
+      })),
+      townDistribution: townDistribution.map((r: any) => ({ town: r._id, count: r.count })),
+      familyDistribution: {
+        byChildrenCount: familySizeBuckets, // e.g. { "1": 40, "2": 15, "3+": 4 }
+        totalFamilies: families.length,
+        studentsNotYetLinked: unlinkedActiveCount,
+      },
       todayAttendance: {
         present: attMap['present'] || 0,
         absent: attMap['absent'] || 0,

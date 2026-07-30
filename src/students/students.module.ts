@@ -15,6 +15,7 @@ import {
 } from './schemas/student-supporting.schema';
 import { UploadModule } from '../upload/upload.module';
 import { SchoolSchema } from '../organization/schemas/organization.schema';
+import { Family, FamilySchema } from '../families/schemas/family.schema';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { SchoolSchema } from '../organization/schemas/organization.schema';
       { name: Behaviour.name, schema: BehaviourSchema },
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
       { name: 'School', schema: SchoolSchema },
+      { name: Family.name, schema: FamilySchema },
     ]),
   ],
   controllers: [StudentsController],
