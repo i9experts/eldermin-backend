@@ -52,6 +52,13 @@ export class StudentsController {
     return this.studentsService.getStudents(schoolSlug, query);
   }
 
+  /** GET /api/v1/students/filters/grades-sections */
+  @Get('filters/grades-sections')
+  async getDistinctGradesSections(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getDistinctGradesSections(schoolSlug);
+  }
+
   // ============================================================
   // BULK IMPORT
   // ============================================================

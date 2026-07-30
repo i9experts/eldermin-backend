@@ -94,6 +94,20 @@ export class StudentsService {
     return student.save();
   }
 
+  async getDistinctGradesSections(schoolSlug: string) {
+    // The formal Organization-module Grade/Section entities may not exist
+    // for every school (e.g. one activated directly from a CRM lead skips
+    // the self-service wizard steps that create them) — but real students
+    // always carry their own grade/section as plain strings regardless.
+    // Deriving filter options from actual data means this always works.
+    const grades: string[] = await this.studentModel.distinct('currentGrade', { schoolSlug });
+    const sections: string[] = await this.studentModel.distinct('currentSection', { schoolSlug });
+    return {
+      grades: grades.filter(Boolean).sort(),
+      sections: sections.filter(Boolean).sort(),
+    };
+  }
+
   async getStudents(schoolSlug: string, query: StudentQueryDto) {
     const { page, limit, search, sortBy, sortOrder,
       grade, section, status, gender, academicYear, scholarshipHolder, specialNeeds } = query;
