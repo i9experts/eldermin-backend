@@ -9,6 +9,7 @@ export class RolesController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || 'demo-school',
+      tenantId: req?.user?.tenantId,
       userName: req?.user?.name || req?.user?.email || 'Admin',
     };
   }
@@ -16,6 +17,12 @@ export class RolesController {
   @Get('modules')
   getAssignableModules() {
     return this.service.getAssignableModules();
+  }
+
+  @Get('users')
+  async getUsers(@Request() req: any) {
+    const { tenantId } = this.ctx(req);
+    return this.service.getUsersForSchool(tenantId);
   }
 
   @Get()

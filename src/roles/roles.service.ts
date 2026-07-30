@@ -148,4 +148,20 @@ export class RolesService {
     if (!role) return null;
     return RolesService.toPermissions(role.moduleAccess);
   }
+
+  // Real login accounts at this school — separate from the HR Staff
+  // directory, which is just records and doesn't necessarily have a
+  // corresponding account able to log in at all. Role assignment only
+  // makes sense against something that can actually authenticate.
+  async getUsersForSchool(tenantId: string) {
+    const users = await this.userModel.find({ tenantId, isActive: true })
+      .select('email profile primaryRole customRoleId').lean();
+    return users.map((u: any) => ({
+      id: u._id,
+      name: `${u.profile?.firstName || ''} ${u.profile?.lastName || ''}`.trim() || u.email,
+      email: u.email,
+      standardRole: u.primaryRole,
+      customRoleId: u.customRoleId || null,
+    }));
+  }
 }
