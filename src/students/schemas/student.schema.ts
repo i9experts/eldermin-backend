@@ -88,6 +88,7 @@ export class Student {
 
   // ── Contact ────────────────────────────────────────────────
   @Prop() address: string;
+  @Prop() town: string;     // neighborhood/area within the city, e.g. North Nazimabad, Gulberg
   @Prop() city: string;
   @Prop() province: string;
   @Prop() postalCode: string;

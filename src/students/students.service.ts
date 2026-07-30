@@ -187,7 +187,7 @@ export class StudentsService {
       label: 'Contact Information',
       fields: {
         personalEmail: 'Email', personalPhone: 'Phone',
-        address: 'Address', city: 'City', province: 'Province',
+        address: 'Address', town: 'Town', city: 'City', province: 'Province',
       },
     },
     academic: {
@@ -682,10 +682,10 @@ export class StudentsService {
         },
         { $sort: { '_id.grade': 1, '_id.section': 1 } },
       ]),
-      // Town/city distribution
+      // Town-wise distribution (neighborhood/area, not the broader city)
       this.studentModel.aggregate([
-        { $match: { ...filter, status: 'active', city: { $exists: true, $ne: '' } } },
-        { $group: { _id: '$city', count: { $sum: 1 } } },
+        { $match: { ...filter, status: 'active', town: { $exists: true, $ne: '' } } },
+        { $group: { _id: '$town', count: { $sum: 1 } } },
         { $sort: { count: -1 } },
       ]),
     ]);
@@ -1025,7 +1025,7 @@ export class StudentsService {
     const headers = [
       'firstName', 'lastName', 'dateOfBirth', 'gender', 'currentGrade',
       'currentSection', 'currentRollNumber', 'admissionNumber',
-      'personalEmail', 'personalPhone', 'address', 'city', 'province',
+      'personalEmail', 'personalPhone', 'address', 'town', 'city', 'province',
       'guardianName', 'guardianRelation', 'guardianPhone', 'guardianEmail',
     ];
     // Guidance row: starts with '#' so it's visually unmistakable as an
@@ -1040,6 +1040,7 @@ export class StudentsService {
       'e.g. A', 'e.g. 12', 'leave blank to auto-generate',
       'optional', 'optional — digits only',
       'if address has a comma, wrap the whole field in quotes',
+      'optional — neighborhood/area, e.g. North Nazimabad, Gulberg, F.B. Area',
       'optional', 'optional',
       'optional', 'e.g. Father, Mother, Guardian',
       'optional', 'optional',
@@ -1047,7 +1048,7 @@ export class StudentsService {
     const example = [
       'SAMPLE', 'DELETE-THIS-ROW', '2015-03-12', 'male', 'Grade 5',
       'A', '12', 'ADM-2026-0001',
-      '', '03001234567', '123 Main Blvd', 'Lahore', 'Punjab',
+      '', '03001234567', '123 Main Blvd', 'North Nazimabad', 'Karachi', 'Sindh',
       'Muhammad Khan', 'father', '03009876543', 'father@example.com',
     ];
     return [headers.join(','), guidance.join(','), example.join(',')].join('\n');
@@ -1153,7 +1154,7 @@ export class StudentsService {
       currentGrade: col('currentGrade'), currentSection: col('currentSection'),
       currentRollNumber: col('currentRollNumber'), admissionNumber: col('admissionNumber'),
       personalEmail: col('personalEmail'), personalPhone: col('personalPhone'),
-      address: col('address'), city: col('city'), province: col('province'),
+      address: col('address'), town: col('town'), city: col('city'), province: col('province'),
       guardianName: col('guardianName'), guardianRelation: col('guardianRelation'),
       guardianPhone: col('guardianPhone'), guardianEmail: col('guardianEmail'),
     };
@@ -1242,6 +1243,7 @@ export class StudentsService {
         personalEmail: email,
         personalPhone: get('personalPhone'),
         address: get('address'),
+        town: get('town'),
         city: get('city'),
         province: get('province'),
         guardianName: get('guardianName'),
@@ -1359,6 +1361,7 @@ export class StudentsService {
             personalEmail: row.data.personalEmail,
             personalPhone: row.data.personalPhone,
             address: row.data.address,
+            town: row.data.town,
             city: row.data.city,
             province: row.data.province,
           };
@@ -1406,6 +1409,7 @@ export class StudentsService {
           personalEmail: row.data.personalEmail,
           personalPhone: row.data.personalPhone,
           address: row.data.address,
+          town: row.data.town,
           city: row.data.city,
           province: row.data.province,
           guardians,

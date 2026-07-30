@@ -60,6 +60,7 @@ export class CreateStudentDto {
 
   // Contact
   @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsString() town?: string;
   @IsOptional() @IsString() city?: string;
   @IsOptional() @IsString() province?: string;
 
