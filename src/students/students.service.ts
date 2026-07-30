@@ -386,6 +386,130 @@ export class StudentsService {
   }
 
   // ============================================================
+  // STUDENT LIST REPORT (PDF) — filtered, multi-column, class/section/status
+  // ============================================================
+  private calculateAge(dob: Date, asOf: Date): string {
+    let years = asOf.getFullYear() - dob.getFullYear();
+    let months = asOf.getMonth() - dob.getMonth();
+    if (asOf.getDate() < dob.getDate()) months--;
+    if (months < 0) { years--; months += 12; }
+    return `${years}y ${months}m`;
+  }
+
+  async generateStudentListPdf(
+    schoolSlug: string,
+    filters: { grades?: string[]; sections?: string[]; statuses?: string[] },
+  ): Promise<Buffer> {
+    const query: any = { schoolSlug };
+    if (filters.grades?.length) query.currentGrade = { $in: filters.grades };
+    if (filters.sections?.length) query.currentSection = { $in: filters.sections };
+    if (filters.statuses?.length) query.status = { $in: filters.statuses };
+
+    const students: any[] = await this.studentModel.find(query)
+      .sort({ currentGrade: 1, currentSection: 1, firstName: 1 }).lean();
+    const school: any = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.047, 0.267, 0.486);
+    const black = rgb(0.1, 0.1, 0.1);
+    const grayText = rgb(0.4, 0.4, 0.4);
+
+    // Landscape A4 — 7 wide columns (2 of them compound: father/mother each
+    // carry name+phone+CNIC on 3 lines) don't fit a portrait page sensibly.
+    const pageWidth = 842, pageHeight = 595;
+    const margin = 30;
+    const printDate = new Date();
+
+    const cols = [
+      { key: 'gr', label: 'GR No.', width: 60 },
+      { key: 'name', label: 'Student Name', width: 100 },
+      { key: 'father', label: 'Father (Name / Phone / CNIC)', width: 150 },
+      { key: 'mother', label: 'Mother (Name / Phone / CNIC)', width: 150 },
+      { key: 'age', label: 'Age', width: 45 },
+      { key: 'bform', label: 'B-Form No.', width: 90 },
+      { key: 'address', label: 'Address', width: 195 },
+    ];
+    const tableWidth = cols.reduce((s, c) => s + c.width, 0);
+
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    let y = pageHeight - margin;
+
+    const drawHeader = () => {
+      page.drawRectangle({ x: 0, y: y - 45, width: pageWidth, height: 60, color: navy });
+      page.drawText(school?.name || 'School', { x: margin, y: y - 20, size: 15, font: bold, color: rgb(1, 1, 1) });
+      const filterDesc = [
+        filters.grades?.length ? `Grades: ${filters.grades.join(', ')}` : 'All Grades',
+        filters.sections?.length ? `Sections: ${filters.sections.join(', ')}` : 'All Sections',
+        filters.statuses?.length ? `Status: ${filters.statuses.join(', ')}` : 'All Statuses',
+      ].join(' · ');
+      page.drawText(`Student List Report — ${filterDesc}`, { x: margin, y: y - 36, size: 8.5, font, color: rgb(0.8, 0.85, 0.95) });
+      y -= 70;
+
+      // Table header row
+      page.drawRectangle({ x: margin, y: y - 6, width: tableWidth, height: 20, color: rgb(0.93, 0.94, 0.96) });
+      let x = margin;
+      cols.forEach(c => {
+        page.drawText(c.label, { x: x + 4, y: y, size: 7.5, font: bold, color: navy, maxWidth: c.width - 8 });
+        x += c.width;
+      });
+      y -= 22;
+    };
+
+    drawHeader();
+
+    const ensureRowSpace = (needed: number) => {
+      if (y - needed < margin + 20) {
+        page = pdfDoc.addPage([pageWidth, pageHeight]);
+        y = pageHeight - margin;
+        drawHeader();
+      }
+    };
+
+    students.forEach((s, idx) => {
+      const father = (s.guardians || []).find((g: any) => g.relation === 'father');
+      const mother = (s.guardians || []).find((g: any) => g.relation === 'mother');
+      const age = s.dateOfBirth ? this.calculateAge(new Date(s.dateOfBirth), printDate) : '—';
+
+      const fatherLines = [father?.name || '—', father?.phone || '—', father?.cnic || '—'];
+      const motherLines = [mother?.name || '—', mother?.phone || '—', mother?.cnic || '—'];
+      const rowHeight = 34; // 3 lines for father/mother columns
+
+      ensureRowSpace(rowHeight);
+      if (idx % 2 === 1) {
+        page.drawRectangle({ x: margin, y: y - rowHeight + 8, width: tableWidth, height: rowHeight, color: rgb(0.98, 0.98, 0.98) });
+      }
+
+      let x = margin;
+      const topY = y - 2;
+      page.drawText(s.admissionNumber || '—', { x: x + 4, y: topY, size: 7.5, font, color: black, maxWidth: cols[0].width - 8 }); x += cols[0].width;
+      page.drawText(`${s.firstName || ''} ${s.lastName || ''}`.trim(), { x: x + 4, y: topY, size: 7.5, font, color: black, maxWidth: cols[1].width - 8 }); x += cols[1].width;
+      fatherLines.forEach((line, i) => page.drawText(line, { x: x + 4, y: topY - i * 11, size: 7, font, color: black, maxWidth: cols[2].width - 8 })); x += cols[2].width;
+      motherLines.forEach((line, i) => page.drawText(line, { x: x + 4, y: topY - i * 11, size: 7, font, color: black, maxWidth: cols[3].width - 8 })); x += cols[3].width;
+      page.drawText(age, { x: x + 4, y: topY, size: 7.5, font, color: black }); x += cols[4].width;
+      page.drawText(s.bForm || '—', { x: x + 4, y: topY, size: 7.5, font, color: black, maxWidth: cols[5].width - 8 }); x += cols[5].width;
+      page.drawText(s.address || '—', { x: x + 4, y: topY, size: 7, font, color: black, maxWidth: cols[6].width - 8 });
+
+      y -= rowHeight;
+    });
+
+    if (students.length === 0) {
+      page.drawText('No students match the selected filters.', { x: margin, y, size: 10, font, color: grayText });
+    }
+
+    const pages = pdfDoc.getPages();
+    pages.forEach((p, i) => {
+      p.drawText(`Print Date: ${printDate.toISOString().slice(0, 10)} · Total: ${students.length} · Page ${i + 1} of ${pages.length}`, {
+        x: margin, y: 15, size: 7.5, font, color: grayText,
+      });
+    });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
+  }
+
+  // ============================================================
   // STUDENT 360 — Full Profile
   // ============================================================
   async getStudent360(id: string, schoolSlug: string) {

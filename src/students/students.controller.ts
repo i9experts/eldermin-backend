@@ -151,6 +151,25 @@ export class StudentsController {
     res.send(pdfBuffer);
   }
 
+  /** POST /api/v1/students/reports/print-list */
+  @Post('reports/print-list')
+  async generateStudentListPdf(
+    @Body() body: { grades?: string[]; sections?: string[]; statuses?: string[] },
+    @Request() req: any,
+    @Res() res: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    const pdfBuffer = await this.studentsService.generateStudentListPdf(schoolSlug, {
+      grades: body.grades, sections: body.sections, statuses: body.statuses,
+    });
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="student-list-report.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.send(pdfBuffer);
+  }
+
   // ============================================================
   // ATTENDANCE
   // ============================================================
