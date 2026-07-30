@@ -9,10 +9,12 @@ import { JwtStrategy } from './jwt.strategy';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
 import { UploadModule } from '../../upload/upload.module';
+import { RolesModule } from '../../roles/roles.module';
 
 @Module({
   imports: [
     UploadModule,
+    RolesModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

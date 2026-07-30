@@ -6,6 +6,7 @@ import * as bcrypt from 'bcryptjs';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
 import { UploadService } from '../../upload/upload.service';
+import { RolesService } from '../../roles/roles.service';
 
 @Injectable()
 export class AuthService {
@@ -14,6 +15,7 @@ export class AuthService {
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
+    private rolesService: RolesService,
   ) {}
 
   async login(email: string, password: string, slug?: string) {
@@ -51,6 +53,7 @@ export class AuthService {
     const activeModules = tenant?.activeModules || ['organization'];
 
     const schoolSlug = tenant?.slug || slugToUse || null;
+    const permissions = await this.rolesService.getPermissionsForUser(user._id.toString());
 
     const payload = {
       sub: user._id.toString(),
@@ -70,6 +73,11 @@ export class AuthService {
         email: user.email,
         role,
         avatarUrl: user.profile?.avatarUrl || null,
+        // Present only when a school-defined custom role is assigned — the
+        // frontend falls back to its existing standard-role matrix when
+        // this is absent, so every account without one keeps working
+        // exactly as it always has.
+        permissions: permissions || undefined,
       },
       institution: {
         name: tenant?.displayName || slugToUse || 'Unknown',
@@ -81,11 +89,12 @@ export class AuthService {
   }
 
   async getMe(userId: string, tenantId: string) {
-    const user = await this.userModel
+    const user: any = await this.userModel
       .findOne({ _id: userId, tenantId, isActive: true })
       .select('-passwordHash').lean();
     if (!user) throw new UnauthorizedException('User not found');
-    return user;
+    const permissions = await this.rolesService.getPermissionsForUser(userId);
+    return { ...user, permissions: permissions || undefined };
   }
 
   async uploadAvatar(userId: string, tenantId: string, file: Express.Multer.File) {

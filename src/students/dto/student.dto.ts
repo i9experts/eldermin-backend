@@ -59,6 +59,8 @@ export class CreateStudentDto {
   @IsOptional() @IsString() photo?: string;
 
   // Contact
+  @IsOptional() @IsString() personalEmail?: string;
+  @IsOptional() @IsString() personalPhone?: string;
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() town?: string;
   @IsOptional() @IsString() city?: string;

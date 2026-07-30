@@ -29,6 +29,7 @@ import { FamiliesModule } from './families/families.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { LeadsModule } from './leads/leads.module';
 import { SupportModule } from './support/support.module';
+import { RolesModule } from './roles/roles.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 
@@ -63,6 +64,7 @@ import { RolesGuard } from './auth/roles.guard';
     AnalyticsModule,
     LeadsModule,
     SupportModule,
+    RolesModule,
   ],
   controllers: [AppController],
   providers: [

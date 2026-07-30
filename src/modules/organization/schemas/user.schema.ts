@@ -29,6 +29,12 @@ export class User {
   })
   primaryRole: string;
 
+  // Optional custom role (school-defined, module-level access) — when set,
+  // this overrides the standard enum-based permission matrix entirely for
+  // this user. Left unset, everyone keeps working exactly as before.
+  @Prop({ type: Types.ObjectId, ref: 'Role', default: null })
+  customRoleId: Types.ObjectId | null;
+
   @Prop({ default: true })
   isActive: boolean;
 
