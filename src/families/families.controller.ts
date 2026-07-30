@@ -23,6 +23,15 @@ export class FamiliesController {
     return this.service.getFamilies(schoolSlug, search, vFilter);
   }
 
+  /** GET /api/v1/families/search-by-guardian?query=... — finds any student
+   * (linked to a family or not) whose guardian phone/CNIC matches, so staff
+   * can quickly link a sibling to an existing family or start a new one. */
+  @Get('search-by-guardian')
+  async searchByGuardian(@Query('query') query: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.searchByGuardianContact(schoolSlug, query);
+  }
+
   @Get(':id')
   async getFamily(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);

@@ -37,6 +37,39 @@ export class FamiliesService {
     return family.save();
   }
 
+  async searchByGuardianContact(schoolSlug: string, query: string) {
+    if (!query || query.trim().length < 3) return [];
+    const q = query.trim();
+    // Search the actual source of truth (Student.guardians) rather than only
+    // the Family collection — this way a match works even for students who
+    // aren't linked to a family yet, which is the whole point of an "easy
+    // way to assign a guardian to students" tool.
+    const matches = await this.studentModel.find({
+      schoolSlug,
+      $or: [
+        { 'guardians.phone': { $regex: q, $options: 'i' } },
+        { 'guardians.cnic': { $regex: q, $options: 'i' } },
+      ],
+    }).select('firstName lastName currentGrade currentSection guardians familyId familyCode').lean();
+
+    return matches.map((s: any) => {
+      const matchedGuardian = (s.guardians || []).find(
+        (g: any) => (g.phone && g.phone.includes(q)) || (g.cnic && g.cnic.includes(q)),
+      );
+      return {
+        studentId: s._id,
+        studentName: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+        grade: s.currentGrade,
+        section: s.currentSection,
+        guardianName: matchedGuardian?.name,
+        guardianRelation: matchedGuardian?.relation,
+        matchedOn: matchedGuardian?.phone?.includes(q) ? 'phone' : 'cnic',
+        familyId: s.familyId || null,
+        familyCode: s.familyCode || null,
+      };
+    });
+  }
+
   async getFamilies(schoolSlug: string, search?: string, verifiedOnly?: boolean) {
     const filter: any = { schoolSlug };
     if (verifiedOnly !== undefined) filter.verified = verifiedOnly;
