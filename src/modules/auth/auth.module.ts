@@ -8,9 +8,11 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
+import { UploadModule } from '../../upload/upload.module';
 
 @Module({
   imports: [
+    UploadModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

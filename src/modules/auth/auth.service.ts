@@ -5,6 +5,7 @@ import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
+import { UploadService } from '../../upload/upload.service';
 
 @Injectable()
 export class AuthService {
@@ -12,6 +13,7 @@ export class AuthService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     private jwtService: JwtService,
+    private uploadService: UploadService,
   ) {}
 
   async login(email: string, password: string, slug?: string) {
@@ -84,5 +86,16 @@ export class AuthService {
       .select('-passwordHash').lean();
     if (!user) throw new UnauthorizedException('User not found');
     return user;
+  }
+
+  async uploadAvatar(userId: string, tenantId: string, file: Express.Multer.File) {
+    const { url } = await this.uploadService.uploadFile(file, 'avatars', tenantId);
+    const user = await this.userModel.findOneAndUpdate(
+      { _id: userId, tenantId },
+      { $set: { 'profile.avatarUrl': url } },
+      { new: true },
+    ).select('-passwordHash');
+    if (!user) throw new UnauthorizedException('User not found');
+    return { avatarUrl: url };
   }
 }

@@ -1,4 +1,5 @@
-import { Controller, Post, Get, Body, Request, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, Request, HttpCode, HttpStatus, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
 import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
 import { Public } from '../../auth/decorators';
@@ -25,6 +26,12 @@ export class AuthController {
   @Get('me')
   getMe(@Request() req) {
     return this.authService.getMe(req.user.userId, req.user.tenantId);
+  }
+
+  @Post('me/avatar')
+  @UseInterceptors(FileInterceptor('avatar'))
+  uploadAvatar(@Request() req, @UploadedFile() avatar: Express.Multer.File) {
+    return this.authService.uploadAvatar(req.user.userId, req.user.tenantId, avatar);
   }
 
   @Public()
