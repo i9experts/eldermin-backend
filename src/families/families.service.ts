@@ -145,24 +145,60 @@ export class FamiliesService {
     let phoneGroupsCreated = 0;
     let phoneStudentsLinked = 0;
 
-    // ---- Pass 1: phone-based ----
-    const phoneMap = new Map<string, typeof unlinkedStudents>();
+    // ---- Pass 1: phone-or-CNIC-based, checking ALL guardians on each ----
+    // student (not just the first) — a student's father might be listed
+    // first on one record and mother first on another, so only checking
+    // index 0 missed real matches. CNIC is a more reliable identifier than
+    // phone (numbers get changed/shared) so it's checked as an equally
+    // valid match key, not just a tiebreaker.
+    const keyMap = new Map<string, typeof unlinkedStudents>();
+    const keyToGuardian = new Map<string, any>();
     for (const s of unlinkedStudents) {
-      const phone = s.guardians?.[0]?.phone;
-      if (!phone) continue;
-      if (!phoneMap.has(phone)) phoneMap.set(phone, []);
-      phoneMap.get(phone)!.push(s);
+      const seenKeysForThisStudent = new Set<string>();
+      for (const g of s.guardians || []) {
+        const keys = [g.phone ? `phone:${g.phone}` : null, g.cnic ? `cnic:${g.cnic}` : null].filter(Boolean) as string[];
+        for (const key of keys) {
+          if (seenKeysForThisStudent.has(key)) continue; // don't double-count same student under same key
+          seenKeysForThisStudent.add(key);
+          if (!keyMap.has(key)) keyMap.set(key, []);
+          keyMap.get(key)!.push(s);
+          if (!keyToGuardian.has(key)) keyToGuardian.set(key, g);
+        }
+      }
+    }
+
+    // A phone and a CNIC belonging to the same guardian would otherwise
+    // create two separate, overlapping family groups for the same
+    // students — merge any groups that share at least one student.
+    const mergedGroups: typeof unlinkedStudents[] = [];
+    const studentToGroupIndex = new Map<string, number>();
+    for (const [, students] of keyMap.entries()) {
+      if (students.length < 2) continue; // only a real "family" if 2+ students share the key
+      const existingGroupIdx = students
+        .map(s => studentToGroupIndex.get(String(s._id)))
+        .find(idx => idx !== undefined);
+      if (existingGroupIdx !== undefined) {
+        const group = mergedGroups[existingGroupIdx];
+        students.forEach(s => {
+          if (!group.some(existing => String(existing._id) === String(s._id))) group.push(s);
+          studentToGroupIndex.set(String(s._id), existingGroupIdx);
+        });
+      } else {
+        const newIdx = mergedGroups.length;
+        mergedGroups.push([...students]);
+        students.forEach(s => studentToGroupIndex.set(String(s._id), newIdx));
+      }
     }
 
     const stillUnlinkedIds = new Set(unlinkedStudents.map(s => String(s._id)));
 
-    for (const [phone, students] of phoneMap.entries()) {
-      const g = students[0].guardians?.[0];
+    for (const students of mergedGroups) {
+      const g = students[0].guardians?.find((gd: any) => gd.phone || gd.cnic) || students[0].guardians?.[0];
       const familyCode = await this.generateFamilyCode(schoolSlug);
       const family = new this.familyModel({
         familyCode, schoolSlug,
         primaryGuardianName: g?.name || '',
-        phone, email: g?.email || '',
+        phone: g?.phone || '', email: g?.email || '',
         source: 'retrofit-phone', verified: false,
         studentIds: students.map(s => s._id),
       });
