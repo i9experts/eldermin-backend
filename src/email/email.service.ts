@@ -283,31 +283,66 @@ export class EmailService {
     venue: string | undefined,
     agenda: string | undefined,
     schoolName: string,
+    extra?: {
+      durationMinutes?: number;
+      mode?: string;
+      meetingLink?: string;
+      chairperson?: string;
+      minuteTaker?: string;
+      agendaItems?: { order: number; topic: string; description?: string; presenter?: string; durationMinutes?: number; itemType?: string }[];
+    },
   ) {
     const dt = new Date(scheduledAt);
     const dateStr = dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
     const timeStr = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const items = (extra?.agendaItems || []).slice().sort((a, b) => a.order - b.order);
+
+    const typeColors: Record<string, string> = {
+      discussion: '#3b82f6', decision: '#ef4444', information: '#6b7280', update: '#10b981',
+    };
+    const agendaRows = items.map((item, i) => `
+      <tr style="border-bottom:1px solid #f3f4f6">
+        <td style="padding:10px 8px;color:#9ca3af;font-size:13px;vertical-align:top">${i + 1}.</td>
+        <td style="padding:10px 8px;vertical-align:top">
+          <div style="font-weight:bold;color:#1e293b;font-size:14px">${item.topic}</div>
+          ${item.description ? `<div style="color:#6b7280;font-size:12px;margin-top:2px">${item.description}</div>` : ''}
+          <div style="margin-top:4px">
+            ${item.itemType ? `<span style="display:inline-block;background:${typeColors[item.itemType] || '#6b7280'}22;color:${typeColors[item.itemType] || '#6b7280'};font-size:10px;font-weight:bold;text-transform:uppercase;padding:2px 8px;border-radius:10px;margin-right:6px">${item.itemType}</span>` : ''}
+            ${item.presenter ? `<span style="color:#9ca3af;font-size:11px">Presented by ${item.presenter}</span>` : ''}
+          </div>
+        </td>
+        <td style="padding:10px 8px;color:#9ca3af;font-size:12px;text-align:right;vertical-align:top;white-space:nowrap">${item.durationMinutes ? `${item.durationMinutes} min` : ''}</td>
+      </tr>`).join('');
+
     return this.sendEmail({
       to,
       subject: `📅 Meeting Notice: ${meetingTitle} — ${committeeName}`,
       html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto">
           <div style="background:#1e3a5f;padding:25px;text-align:center">
             <h1 style="color:white;margin:0">elder<span style="color:#f59e0b">min</span></h1>
           </div>
-          <div style="background:white;padding:25px">
-            <h2 style="color:#1e3a5f">Meeting Notice</h2>
+          <div style="background:white;padding:30px">
+            <h2 style="color:#1e3a5f;margin-top:0">Meeting Notice</h2>
             <p>Dear <strong>${memberName}</strong>,</p>
             <p>You are invited to attend the following <strong>${committeeName}</strong> meeting:</p>
-            <div style="background:#f9fafb;border-radius:8px;padding:15px;margin:15px 0">
-              <table style="width:100%;border-collapse:collapse">
-                <tr><td style="padding:6px 0;color:#6b7280">Meeting:</td><td style="font-weight:bold">${meetingTitle}</td></tr>
-                <tr><td style="padding:6px 0;color:#6b7280">Date:</td><td style="font-weight:bold">${dateStr}</td></tr>
-                <tr><td style="padding:6px 0;color:#6b7280">Time:</td><td style="font-weight:bold">${timeStr}</td></tr>
-                ${venue ? `<tr><td style="padding:6px 0;color:#6b7280">Venue:</td><td>${venue}</td></tr>` : ''}
+
+            <div style="background:#f9fafb;border-radius:10px;padding:18px;margin:18px 0">
+              <h3 style="margin:0 0 12px;color:#1e3a5f">${meetingTitle}</h3>
+              <table style="width:100%;border-collapse:collapse;font-size:13px">
+                <tr><td style="padding:5px 0;color:#6b7280;width:120px">📅 Date</td><td style="font-weight:bold">${dateStr}</td></tr>
+                <tr><td style="padding:5px 0;color:#6b7280">🕐 Time</td><td style="font-weight:bold">${timeStr}${extra?.durationMinutes ? ` (${extra.durationMinutes} min)` : ''}</td></tr>
+                ${extra?.mode === 'virtual' && extra?.meetingLink ? `<tr><td style="padding:5px 0;color:#6b7280">💻 Join Online</td><td><a href="${extra.meetingLink}" style="color:#1e3a5f">${extra.meetingLink}</a></td></tr>` : ''}
+                ${venue ? `<tr><td style="padding:5px 0;color:#6b7280">📍 Venue</td><td>${venue}</td></tr>` : ''}
+                ${extra?.chairperson ? `<tr><td style="padding:5px 0;color:#6b7280">👤 Chair</td><td>${extra.chairperson}</td></tr>` : ''}
               </table>
-              ${agenda ? `<p style="margin:12px 0 0;color:#374151"><strong>Agenda:</strong><br/>${agenda}</p>` : ''}
             </div>
+
+            ${items.length > 0 ? `
+            <h4 style="color:#1e3a5f;margin-bottom:8px">📋 Agenda</h4>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:18px">${agendaRows}</table>
+            ` : agenda ? `<p style="color:#374151"><strong>Agenda:</strong><br/>${agenda}</p>` : ''}
+
             <p style="color:#6b7280;font-size:12px">— ${schoolName}</p>
           </div>
         </div>`,

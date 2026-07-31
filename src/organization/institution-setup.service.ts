@@ -118,6 +118,14 @@ export class InstitutionSetupService {
       const ok = await this.emailService.sendCommitteeMeetingNotice(
         m.email, m.name, committee.name, meeting.title,
         meeting.scheduledAt.toString(), meeting.venue, meeting.agenda, schoolName,
+        {
+          durationMinutes: meeting.durationMinutes,
+          mode: meeting.mode,
+          meetingLink: meeting.meetingLink,
+          chairperson: meeting.chairperson,
+          minuteTaker: meeting.minuteTaker,
+          agendaItems: meeting.agendaItems,
+        },
       );
       if (ok) emailsSent++; else { emailsFailed++; failures.push(m.name); }
     }

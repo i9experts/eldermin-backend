@@ -83,6 +83,18 @@ CommitteeSchema.index({ schoolSlug: 1, status: 1 });
 // ============================================================
 export type MeetingDocument = Meeting & Document;
 
+@Schema({ _id: false })
+export class AgendaItem {
+  @Prop({ required: true }) order: number;
+  @Prop({ required: true }) topic: string;
+  @Prop() description: string;
+  @Prop() presenter: string;
+  @Prop() durationMinutes: number;
+  @Prop({ enum: ['discussion', 'decision', 'information', 'update'], default: 'discussion' })
+  itemType: string;
+}
+export const AgendaItemSchema = SchemaFactory.createForClass(AgendaItem);
+
 @Schema({ timestamps: true, collection: 'meetings' })
 export class Meeting {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
@@ -99,9 +111,26 @@ export class Meeting {
   })
   type: string;
 
+  @Prop({ enum: ['regular', 'emergency', 'special', 'agm'], default: 'regular' })
+  category: string;
+
   @Prop({ required: true }) scheduledAt: Date;
+  @Prop({ default: 60 }) durationMinutes: number;
+
+  @Prop({ enum: ['in_person', 'virtual', 'hybrid'], default: 'in_person' })
+  mode: string;
   @Prop() venue: string;
+  @Prop() meetingLink: string;
+
+  @Prop() chairperson: string;
+  @Prop() minuteTaker: string;
+
+  // Kept as a simple optional overview/summary alongside the structured
+  // items below — some meetings genuinely just need a one-line agenda,
+  // and this also preserves what already existed on older meetings.
   @Prop() agenda: string;
+  @Prop({ type: [AgendaItemSchema], default: [] }) agendaItems: AgendaItem[];
+
   @Prop({ type: [String], default: [] }) attendees: string[];
 
   @Prop({ enum: ['scheduled', 'completed', 'cancelled'], default: 'scheduled' })

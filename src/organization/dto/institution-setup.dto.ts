@@ -62,13 +62,29 @@ export class UpdateCommitteeDto {
 }
 
 // ── Meeting ──────────────────────────────────────────────────
+export class AgendaItemDto {
+  @IsNumber() order: number;
+  @IsString() topic: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() presenter?: string;
+  @IsOptional() @IsNumber() durationMinutes?: number;
+  @IsOptional() @IsEnum(['discussion', 'decision', 'information', 'update']) itemType?: string;
+}
+
 export class CreateMeetingDto {
   @IsString() title: string;
   @IsOptional() @IsMongoId() committeeId?: string;
   @IsOptional() @IsEnum(['board', 'committee', 'staff', 'parent', 'emergency', 'other']) type?: string;
+  @IsOptional() @IsEnum(['regular', 'emergency', 'special', 'agm']) category?: string;
   @IsDateString() scheduledAt: string;
+  @IsOptional() @IsNumber() durationMinutes?: number;
+  @IsOptional() @IsEnum(['in_person', 'virtual', 'hybrid']) mode?: string;
   @IsOptional() @IsString() venue?: string;
+  @IsOptional() @IsString() meetingLink?: string;
+  @IsOptional() @IsString() chairperson?: string;
+  @IsOptional() @IsString() minuteTaker?: string;
   @IsOptional() @IsString() agenda?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AgendaItemDto) agendaItems?: AgendaItemDto[];
   @IsOptional() @IsArray() @IsString({ each: true }) attendees?: string[];
   @IsOptional() @IsEnum(['scheduled', 'completed', 'cancelled']) status?: string;
   @IsOptional() @IsString() minutes?: string;
@@ -78,9 +94,16 @@ export class CreateMeetingDto {
 export class UpdateMeetingDto {
   @IsOptional() @IsString() title?: string;
   @IsOptional() @IsEnum(['board', 'committee', 'staff', 'parent', 'emergency', 'other']) type?: string;
+  @IsOptional() @IsEnum(['regular', 'emergency', 'special', 'agm']) category?: string;
   @IsOptional() @IsDateString() scheduledAt?: string;
+  @IsOptional() @IsNumber() durationMinutes?: number;
+  @IsOptional() @IsEnum(['in_person', 'virtual', 'hybrid']) mode?: string;
   @IsOptional() @IsString() venue?: string;
+  @IsOptional() @IsString() meetingLink?: string;
+  @IsOptional() @IsString() chairperson?: string;
+  @IsOptional() @IsString() minuteTaker?: string;
   @IsOptional() @IsString() agenda?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AgendaItemDto) agendaItems?: AgendaItemDto[];
   @IsOptional() @IsArray() @IsString({ each: true }) attendees?: string[];
   @IsOptional() @IsEnum(['scheduled', 'completed', 'cancelled']) status?: string;
   @IsOptional() @IsString() minutes?: string;
