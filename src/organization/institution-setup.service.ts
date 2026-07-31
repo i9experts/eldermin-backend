@@ -10,6 +10,7 @@ import {
 import { School, SchoolDocument } from './schemas/organization.schema';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
+import { UploadService } from '../upload/upload.service';
 
 @Injectable()
 export class InstitutionSetupService {
@@ -21,6 +22,7 @@ export class InstitutionSetupService {
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private emailService: EmailService,
     private whatsAppService: WhatsAppService,
+    private uploadService: UploadService,
   ) {}
 
   // ── Board Members ─────────────────────────────────────────
@@ -83,6 +85,15 @@ export class InstitutionSetupService {
   async createBoardMember(tenantId: string, schoolSlug: string, dto: any) {
     const member = new this.boardMemberModel({ ...dto, tenantId, schoolSlug });
     return member.save();
+  }
+
+  async uploadBoardMemberPhoto(id: string, schoolSlug: string, file: Express.Multer.File) {
+    const { url } = await this.uploadService.uploadFile(file, 'board-member-avatars', schoolSlug);
+    const member = await this.boardMemberModel
+      .findOneAndUpdate({ _id: id, schoolSlug }, { $set: { profilePhotoUrl: url } }, { new: true })
+      .lean();
+    if (!member) throw new NotFoundException('Board member not found');
+    return { profilePhotoUrl: url };
   }
 
   async updateBoardMember(id: string, schoolSlug: string, dto: any) {

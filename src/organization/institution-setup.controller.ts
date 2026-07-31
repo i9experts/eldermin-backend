@@ -1,7 +1,9 @@
 import {
   Controller, Get, Post, Put, Delete,
   Body, Param, Query, Request, HttpCode, HttpStatus,
+  UseInterceptors, UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { InstitutionSetupService } from './institution-setup.service';
 import {
   CreateBoardMemberDto, UpdateBoardMemberDto,
@@ -38,6 +40,13 @@ export class InstitutionSetupController {
   async createBoardMember(@Body() dto: CreateBoardMemberDto, @Request() req: any) {
     const { tenantId, schoolSlug } = this.ctx(req);
     return this.service.createBoardMember(tenantId, schoolSlug, dto);
+  }
+
+  @Post('board-members/:id/photo')
+  @UseInterceptors(FileInterceptor('photo'))
+  async uploadBoardMemberPhoto(@Param('id') id: string, @UploadedFile() photo: Express.Multer.File, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.uploadBoardMemberPhoto(id, schoolSlug, photo);
   }
 
   @Put('board-members/:id')
