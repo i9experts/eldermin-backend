@@ -145,6 +145,8 @@ export class WorkflowStepDto {
   @IsNumber() order: number;
   @IsString() approverRole: string;
   @IsOptional() @IsString() sla?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) requiredChecks?: string[];
+  @IsOptional() @IsBoolean() notifyByEmail?: boolean;
 }
 
 export class CreateWorkflowDto {
@@ -153,6 +155,9 @@ export class CreateWorkflowDto {
   @IsOptional() @IsString() trigger?: string;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => WorkflowStepDto) steps?: WorkflowStepDto[];
   @IsOptional() @IsString() sla?: string;
+  @IsOptional() @IsString() version?: string;
+  @IsOptional() @IsString() escalationContact?: string;
+  @IsOptional() @IsString() escalationAfter?: string;
   @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
   @IsOptional() @IsString() description?: string;
 }
@@ -163,6 +168,9 @@ export class UpdateWorkflowDto {
   @IsOptional() @IsString() trigger?: string;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => WorkflowStepDto) steps?: WorkflowStepDto[];
   @IsOptional() @IsString() sla?: string;
+  @IsOptional() @IsString() version?: string;
+  @IsOptional() @IsString() escalationContact?: string;
+  @IsOptional() @IsString() escalationAfter?: string;
   @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
   @IsOptional() @IsString() description?: string;
 }

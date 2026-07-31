@@ -190,6 +190,11 @@ class WorkflowStep {
   @Prop({ required: true }) order: number;
   @Prop({ required: true }) approverRole: string;
   @Prop() sla: string;
+  // What the approver at this step needs to check before deciding —
+  // a real BPM completeness practice (a step without a clear checklist
+  // is just a name in a chain, not an actual defined process).
+  @Prop({ type: [String], default: [] }) requiredChecks: string[];
+  @Prop({ default: false }) notifyByEmail: boolean;
 }
 const WorkflowStepSchema = SchemaFactory.createForClass(WorkflowStep);
 
@@ -209,6 +214,13 @@ export class Workflow {
   @Prop() trigger: string;
   @Prop({ type: [WorkflowStepSchema], default: [] }) steps: WorkflowStep[];
   @Prop() sla: string;
+
+  // Governance/version tracking, same convention as Policy documents —
+  // a workflow definition changing over time should leave a trail, not
+  // silently overwrite what people were trained on.
+  @Prop({ default: '1.0' }) version: string;
+  @Prop() escalationContact: string;
+  @Prop() escalationAfter: string; // e.g. "48h past SLA"
 
   @Prop({ enum: ['active', 'inactive'], default: 'active' })
   status: string;
