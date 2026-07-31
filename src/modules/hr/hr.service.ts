@@ -126,17 +126,24 @@ export class HrService {
     if (staffIds?.length) filter._id = { $in: staffIds };
     const candidates = await this.staffModel.find(filter);
 
-    const created: { name: string; email: string; tempPassword: string }[] = [];
-    const skipped: { name: string; reason: string }[] = [];
-
-    for (const staff of candidates) {
+    // Each account involves a deliberately slow bcrypt hash plus several DB
+    // round-trips — doing this sequentially for a real batch (18+ staff)
+    // can take long enough to blow past the frontend's request timeout even
+    // though the batch itself completes successfully server-side (exactly
+    // what happened: a client-side "failed" error, but the accounts were
+    // genuinely all created). Running them concurrently instead of one at
+    // a time is the real fix, not just a longer timeout.
+    const results = await Promise.all(candidates.map(async (staff) => {
       try {
         const result = await this.createLoginForStaff(tenantId, institutionId, staff._id.toString());
-        created.push({ name: `${staff.firstName} ${staff.lastName}`, email: result.email, tempPassword: result.tempPassword });
+        return { ok: true as const, name: `${staff.firstName} ${staff.lastName}`, email: result.email, tempPassword: result.tempPassword };
       } catch (err: any) {
-        skipped.push({ name: `${staff.firstName} ${staff.lastName}`, reason: err?.message || 'Failed' });
+        return { ok: false as const, name: `${staff.firstName} ${staff.lastName}`, reason: err?.message || 'Failed' };
       }
-    }
+    }));
+
+    const created = results.filter(r => r.ok).map(r => ({ name: r.name, email: (r as any).email, tempPassword: (r as any).tempPassword }));
+    const skipped = results.filter(r => !r.ok).map(r => ({ name: r.name, reason: (r as any).reason }));
     return { created, skipped, totalCreated: created.length, totalSkipped: skipped.length };
   }
 
