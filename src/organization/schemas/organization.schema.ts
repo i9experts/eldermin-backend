@@ -102,6 +102,7 @@ export class Campus {
   @Prop({ required: true }) name: string;
   @Prop() code: string;
   @Prop() description: string;
+  @Prop() type: string; // Main Campus / Branch Campus / Virtual Campus / Satellite Campus
   @Prop() phone: string;
   @Prop() email: string;
   @Prop() address: string;

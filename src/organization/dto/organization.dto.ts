@@ -32,6 +32,7 @@ export class UpdateSchoolDto {
 export class CreateCampusDto {
   @IsString() name: string;
   @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() type?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() email?: string;
   @IsOptional() @IsString() address?: string;
@@ -39,6 +40,7 @@ export class CreateCampusDto {
   @IsOptional() @IsString() principalName?: string;
   @IsOptional() @IsMongoId() principalId?: string;
   @IsOptional() @IsNumber() capacity?: number;
+  @IsOptional() @IsBoolean() isActive?: boolean;
   schoolSlug?: string;
 }
 
