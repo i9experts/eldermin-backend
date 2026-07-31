@@ -15,6 +15,20 @@ import { SentryExceptionFilter } from './filters/sentry.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // Express auto-generates ETags for every response by default, which lets
+  // browsers send conditional GETs (If-None-Match) and get back a 304 with
+  // no body at all — silently reusing whatever was cached from a PREVIOUS
+  // request instead of fetching fresh data. Confirmed this happening for
+  // real: a staff list request came back 304 after new staff/logins were
+  // added, and the browser kept showing the old cached list with no error
+  // at all. API responses here are all dynamic and tenant-scoped — none of
+  // them should ever be served from a stale browser cache.
+  app.getHttpAdapter().getInstance().set('etag', false);
+  app.use((req: any, res: any, next: any) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   app.enableCors({
     origin: [
       'https://eldermin.com',
