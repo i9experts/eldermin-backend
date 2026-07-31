@@ -19,6 +19,7 @@ import {
   Workflow, WorkflowSchema,
 } from './schemas/institution-setup.schema';
 import { GroupInstitution, GroupInstitutionSchema } from './schemas/group-institution.schema';
+import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { UploadModule } from '../upload/upload.module';
 
 @Module({
@@ -36,6 +37,7 @@ import { UploadModule } from '../upload/upload.module';
       { name: Meeting.name, schema: MeetingSchema },
       { name: Workflow.name, schema: WorkflowSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
+      { name: Student.name, schema: StudentSchema },
     ]),
   ],
   controllers: [OrganizationController, InstitutionSetupController],

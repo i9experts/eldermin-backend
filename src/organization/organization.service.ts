@@ -15,6 +15,7 @@ import {
   CreateGroupInstitutionDto,
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
 
 @Injectable()
@@ -27,6 +28,7 @@ export class OrganizationService {
     @InjectModel(Department.name) private deptModel: Model<DepartmentDocument>,
     @InjectModel(Designation.name) private designModel: Model<DesignationDocument>,
     @InjectModel(GroupInstitution.name) private groupInstitutionModel: Model<GroupInstitutionDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -68,7 +70,34 @@ export class OrganizationService {
 
   // ── Campuses ──────────────────────────────────────────────
   async getCampuses(schoolSlug: string) {
-    return this.campusModel.find({ schoolSlug, isActive: true }).sort({ name: 1 });
+    const campuses = await this.campusModel.find({ schoolSlug, isActive: true }).sort({ name: 1 }).lean();
+    if (campuses.length === 0) return campuses;
+
+    // Real per-campus counts, not the hardcoded 0 this used to be. Students
+    // bulk-imported before multi-campus support existed here have no
+    // campusId at all — rather than showing them as belonging nowhere (which
+    // would make a single-campus school's real enrollment always read 0,
+    // exactly what was reported), they're counted against whichever campus
+    // was created first for this school, since that's genuinely where they
+    // belong until someone explicitly moves them elsewhere.
+    const [countsByCampus, unassignedCount, oldestCampus] = await Promise.all([
+      this.studentModel.aggregate([
+        { $match: { schoolSlug, status: 'active', campusId: { $exists: true, $nin: [null, ''] } } },
+        { $group: { _id: '$campusId', count: { $sum: 1 } } },
+      ]),
+      this.studentModel.countDocuments({
+        schoolSlug, status: 'active',
+        $or: [{ campusId: { $exists: false } }, { campusId: null }, { campusId: '' }],
+      }),
+      this.campusModel.findOne({ schoolSlug, isActive: true }).sort({ createdAt: 1 }).lean(),
+    ]);
+    const countMap = new Map(countsByCampus.map((c: any) => [String(c._id), c.count]));
+    const oldestCampusId = oldestCampus ? String((oldestCampus as any)._id) : null;
+
+    return campuses.map((c: any) => ({
+      ...c,
+      currentStudentCount: (countMap.get(String(c._id)) || 0) + (String(c._id) === oldestCampusId ? unassignedCount : 0),
+    }));
   }
 
   async createCampus(dto: CreateCampusDto) {
