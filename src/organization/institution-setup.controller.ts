@@ -28,6 +28,12 @@ export class InstitutionSetupController {
     return this.service.getBoardMembers(schoolSlug);
   }
 
+  @Get('board-composition')
+  async getBoardComposition(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBoardComposition(schoolSlug);
+  }
+
   @Post('board-members') @HttpCode(HttpStatus.CREATED)
   async createBoardMember(@Body() dto: CreateBoardMemberDto, @Request() req: any) {
     const { tenantId, schoolSlug } = this.ctx(req);

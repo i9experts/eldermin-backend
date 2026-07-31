@@ -20,6 +20,9 @@ export class BoardMember {
   @Prop({ required: true }) lastName: string;
   @Prop({ lowercase: true, trim: true }) email: string;
   @Prop() phone: string;
+  @Prop() profilePhotoUrl: string;
+  @Prop() biography: string;
+  @Prop({ enum: ['male', 'female', 'other', 'prefer_not_to_say'] }) gender: string;
 
   @Prop({
     required: true,
@@ -28,11 +31,44 @@ export class BoardMember {
   })
   boardRole: string;
 
-  @Prop() designation: string;
-  @Prop() appointedDate: Date;
-  @Prop() tenure: string;
+  // The fundamental international governance classification (OECD
+  // Principles / UK Corporate Governance Code) — determines conflict-of-
+  // interest exposure and is central to board composition disclosures.
+  // Independent = no material relationship with the organization beyond
+  // the directorship itself; Executive = also holds a management role;
+  // Non-Executive = neither independent nor an executive (e.g. a founder
+  // or major donor's representative).
+  @Prop({ enum: ['independent', 'non_executive', 'executive'], default: 'non_executive' })
+  directorType: string;
 
-  @Prop({ enum: ['active', 'inactive'], default: 'active' })
+  @Prop() designation: string;
+
+  // Structured term tracking replaces a free-text 'tenure' string — this
+  // is what actually enables term-limit enforcement and expiration alerts,
+  // both standard governance-code requirements.
+  @Prop() appointedDate: Date;
+  @Prop() termStartDate: Date;
+  @Prop() termEndDate: Date;
+  @Prop({ default: 1 }) termNumber: number;
+
+  @Prop({ type: [String], default: [] })
+  expertiseAreas: string[]; // e.g. Finance, Legal, Education, Fundraising, HR, Marketing, Audit
+
+  // Annual conflict-of-interest declaration — a standard requirement under
+  // most nonprofit/trust and corporate governance codes, not optional
+  // paperwork.
+  @Prop({ default: false }) conflictOfInterestDeclared: boolean;
+  @Prop() conflictOfInterestDetails: string;
+  @Prop() conflictOfInterestDate: Date;
+
+  @Prop({ default: false }) codeOfConductSigned: boolean;
+  @Prop() codeOfConductSignedDate: Date;
+  @Prop({ default: false }) orientationCompleted: boolean;
+
+  @Prop({ default: true }) isVoluntary: boolean;
+  @Prop() annualRemuneration: number;
+
+  @Prop({ enum: ['active', 'inactive', 'resigned', 'term_expired'], default: 'active' })
   status: string;
 
   @Prop() notes: string;

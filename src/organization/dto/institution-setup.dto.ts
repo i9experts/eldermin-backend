@@ -1,6 +1,6 @@
 import {
   IsString, IsOptional, IsEnum, IsArray, IsDateString,
-  IsEmail, IsNumber, ValidateNested, IsMongoId,
+  IsEmail, IsNumber, ValidateNested, IsMongoId, IsBoolean,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -10,11 +10,26 @@ export class CreateBoardMemberDto {
   @IsString() lastName: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() profilePhotoUrl?: string;
+  @IsOptional() @IsString() biography?: string;
+  @IsOptional() @IsEnum(['male', 'female', 'other', 'prefer_not_to_say']) gender?: string;
   @IsOptional() @IsEnum(['chair', 'vice-chair', 'secretary', 'treasurer', 'member']) boardRole?: string;
+  @IsOptional() @IsEnum(['independent', 'non_executive', 'executive']) directorType?: string;
   @IsOptional() @IsString() designation?: string;
   @IsOptional() @IsDateString() appointedDate?: string;
-  @IsOptional() @IsString() tenure?: string;
-  @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
+  @IsOptional() @IsDateString() termStartDate?: string;
+  @IsOptional() @IsDateString() termEndDate?: string;
+  @IsOptional() @IsNumber() termNumber?: number;
+  @IsOptional() @IsArray() @IsString({ each: true }) expertiseAreas?: string[];
+  @IsOptional() @IsBoolean() conflictOfInterestDeclared?: boolean;
+  @IsOptional() @IsString() conflictOfInterestDetails?: string;
+  @IsOptional() @IsDateString() conflictOfInterestDate?: string;
+  @IsOptional() @IsBoolean() codeOfConductSigned?: boolean;
+  @IsOptional() @IsDateString() codeOfConductSignedDate?: string;
+  @IsOptional() @IsBoolean() orientationCompleted?: boolean;
+  @IsOptional() @IsBoolean() isVoluntary?: boolean;
+  @IsOptional() @IsNumber() annualRemuneration?: number;
+  @IsOptional() @IsEnum(['active', 'inactive', 'resigned', 'term_expired']) status?: string;
   @IsOptional() @IsString() notes?: string;
 }
 
@@ -23,11 +38,26 @@ export class UpdateBoardMemberDto {
   @IsOptional() @IsString() lastName?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() profilePhotoUrl?: string;
+  @IsOptional() @IsString() biography?: string;
+  @IsOptional() @IsEnum(['male', 'female', 'other', 'prefer_not_to_say']) gender?: string;
   @IsOptional() @IsEnum(['chair', 'vice-chair', 'secretary', 'treasurer', 'member']) boardRole?: string;
+  @IsOptional() @IsEnum(['independent', 'non_executive', 'executive']) directorType?: string;
   @IsOptional() @IsString() designation?: string;
   @IsOptional() @IsDateString() appointedDate?: string;
-  @IsOptional() @IsString() tenure?: string;
-  @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
+  @IsOptional() @IsDateString() termStartDate?: string;
+  @IsOptional() @IsDateString() termEndDate?: string;
+  @IsOptional() @IsNumber() termNumber?: number;
+  @IsOptional() @IsArray() @IsString({ each: true }) expertiseAreas?: string[];
+  @IsOptional() @IsBoolean() conflictOfInterestDeclared?: boolean;
+  @IsOptional() @IsString() conflictOfInterestDetails?: string;
+  @IsOptional() @IsDateString() conflictOfInterestDate?: string;
+  @IsOptional() @IsBoolean() codeOfConductSigned?: boolean;
+  @IsOptional() @IsDateString() codeOfConductSignedDate?: string;
+  @IsOptional() @IsBoolean() orientationCompleted?: boolean;
+  @IsOptional() @IsBoolean() isVoluntary?: boolean;
+  @IsOptional() @IsNumber() annualRemuneration?: number;
+  @IsOptional() @IsEnum(['active', 'inactive', 'resigned', 'term_expired']) status?: string;
   @IsOptional() @IsString() notes?: string;
 }
 

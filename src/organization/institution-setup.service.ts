@@ -28,6 +28,58 @@ export class InstitutionSetupService {
     return this.boardMemberModel.find({ schoolSlug }).sort({ createdAt: -1 });
   }
 
+  // Board composition analytics — the metrics an organization actually
+  // following international governance codes (OECD Principles, UK
+  // Corporate Governance Code, BoardSource nonprofit standards) would
+  // track and disclose: director-independence ratio, diversity, average
+  // tenure, upcoming term expirations, and skills-matrix coverage.
+  async getBoardComposition(schoolSlug: string) {
+    const members = await this.boardMemberModel.find({ schoolSlug, status: 'active' }).lean();
+    const total = members.length;
+
+    const byDirectorType = { independent: 0, non_executive: 0, executive: 0 };
+    const byGender: Record<string, number> = {};
+    const skillsCoverage: Record<string, number> = {};
+    let totalTenureDays = 0;
+    let membersWithTenure = 0;
+    const now = new Date();
+    const in90Days = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+    const expiringTerms: { name: string; termEndDate: Date }[] = [];
+    let conflictDeclaredCount = 0;
+    let codeOfConductSignedCount = 0;
+
+    for (const m of members as any[]) {
+      if (m.directorType) byDirectorType[m.directorType as keyof typeof byDirectorType]++;
+      const g = m.gender || 'not_specified';
+      byGender[g] = (byGender[g] || 0) + 1;
+      for (const skill of m.expertiseAreas || []) skillsCoverage[skill] = (skillsCoverage[skill] || 0) + 1;
+      if (m.appointedDate) {
+        totalTenureDays += (now.getTime() - new Date(m.appointedDate).getTime()) / (1000 * 60 * 60 * 24);
+        membersWithTenure++;
+      }
+      if (m.termEndDate && new Date(m.termEndDate) <= in90Days && new Date(m.termEndDate) >= now) {
+        expiringTerms.push({ name: `${m.firstName} ${m.lastName}`, termEndDate: m.termEndDate });
+      }
+      if (m.conflictOfInterestDeclared) conflictDeclaredCount++;
+      if (m.codeOfConductSigned) codeOfConductSignedCount++;
+    }
+
+    return {
+      totalMembers: total,
+      independenceRatio: total > 0 ? Math.round((byDirectorType.independent / total) * 100) : 0,
+      byDirectorType,
+      byGender,
+      genderDiversityRatio: total > 0 ? Math.round(((byGender['female'] || 0) / total) * 100) : 0,
+      averageTenureYears: membersWithTenure > 0 ? Math.round((totalTenureDays / membersWithTenure / 365) * 10) / 10 : 0,
+      skillsCoverage,
+      expiringTerms: expiringTerms.sort((a, b) => a.termEndDate.getTime() - b.termEndDate.getTime()),
+      governanceCompliance: {
+        conflictOfInterestDeclaredPct: total > 0 ? Math.round((conflictDeclaredCount / total) * 100) : 0,
+        codeOfConductSignedPct: total > 0 ? Math.round((codeOfConductSignedCount / total) * 100) : 0,
+      },
+    };
+  }
+
   async createBoardMember(tenantId: string, schoolSlug: string, dto: any) {
     const member = new this.boardMemberModel({ ...dto, tenantId, schoolSlug });
     return member.save();
