@@ -62,7 +62,11 @@ export class Committee {
 
   @Prop() purpose: string;
   @Prop() chairperson: string;
-  @Prop({ type: [String], default: [] }) members: string[];
+  @Prop({
+    type: [{ name: String, phone: String, email: String, whatsapp: String }],
+    default: [],
+  })
+  members: { name: string; phone?: string; email?: string; whatsapp?: string }[];
   @Prop() establishedDate: Date;
 
   @Prop({ enum: ['active', 'inactive'], default: 'active' })
@@ -85,6 +89,8 @@ export class Meeting {
   @Prop({ required: true, index: true }) schoolSlug: string;
 
   @Prop({ required: true }) title: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'Committee' }) committeeId: Types.ObjectId;
 
   @Prop({
     required: true,

@@ -1,6 +1,6 @@
 import {
   IsString, IsOptional, IsEnum, IsArray, IsDateString,
-  IsEmail, IsNumber, ValidateNested,
+  IsEmail, IsNumber, ValidateNested, IsMongoId,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -32,12 +32,19 @@ export class UpdateBoardMemberDto {
 }
 
 // ── Committee ────────────────────────────────────────────────
+export class CommitteeMemberDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsString() whatsapp?: string;
+}
+
 export class CreateCommitteeDto {
   @IsString() name: string;
   @IsOptional() @IsEnum(['academic', 'finance', 'disciplinary', 'examination', 'sports', 'other']) type?: string;
   @IsOptional() @IsString() purpose?: string;
   @IsOptional() @IsString() chairperson?: string;
-  @IsOptional() @IsArray() @IsString({ each: true }) members?: string[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => CommitteeMemberDto) members?: CommitteeMemberDto[];
   @IsOptional() @IsDateString() establishedDate?: string;
   @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
   @IsOptional() @IsString() meetingFrequency?: string;
@@ -48,7 +55,7 @@ export class UpdateCommitteeDto {
   @IsOptional() @IsEnum(['academic', 'finance', 'disciplinary', 'examination', 'sports', 'other']) type?: string;
   @IsOptional() @IsString() purpose?: string;
   @IsOptional() @IsString() chairperson?: string;
-  @IsOptional() @IsArray() @IsString({ each: true }) members?: string[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => CommitteeMemberDto) members?: CommitteeMemberDto[];
   @IsOptional() @IsDateString() establishedDate?: string;
   @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
   @IsOptional() @IsString() meetingFrequency?: string;
@@ -57,6 +64,7 @@ export class UpdateCommitteeDto {
 // ── Meeting ──────────────────────────────────────────────────
 export class CreateMeetingDto {
   @IsString() title: string;
+  @IsOptional() @IsMongoId() committeeId?: string;
   @IsOptional() @IsEnum(['board', 'committee', 'staff', 'parent', 'emergency', 'other']) type?: string;
   @IsDateString() scheduledAt: string;
   @IsOptional() @IsString() venue?: string;

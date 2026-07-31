@@ -21,10 +21,12 @@ import {
 import { GroupInstitution, GroupInstitutionSchema } from './schemas/group-institution.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { UploadModule } from '../upload/upload.module';
+import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [
     UploadModule,
+    EmailModule,
     MongooseModule.forFeature([
       { name: School.name, schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },

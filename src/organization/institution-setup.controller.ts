@@ -96,6 +96,15 @@ export class InstitutionSetupController {
     return this.service.deleteMeeting(id, schoolSlug);
   }
 
+  /** POST /api/v1/organization/meetings/:id/notify — emails every committee
+   * member who has an address on file, and reports honestly on WhatsApp
+   * (not actually sent — no real WABA account connected yet). */
+  @Post('meetings/:id/notify')
+  async notifyMeeting(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.notifyMeetingMembers(id, schoolSlug);
+  }
+
   // ── Workflows ─────────────────────────────────────────────
   @Get('workflows')
   async getWorkflows(@Request() req: any) {

@@ -273,4 +273,44 @@ export class EmailService {
         </div>`,
     });
   }
+
+  async sendCommitteeMeetingNotice(
+    to: string,
+    memberName: string,
+    committeeName: string,
+    meetingTitle: string,
+    scheduledAt: string,
+    venue: string | undefined,
+    agenda: string | undefined,
+    schoolName: string,
+  ) {
+    const dt = new Date(scheduledAt);
+    const dateStr = dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    const timeStr = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return this.sendEmail({
+      to,
+      subject: `📅 Meeting Notice: ${meetingTitle} — ${committeeName}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+          <div style="background:#1e3a5f;padding:25px;text-align:center">
+            <h1 style="color:white;margin:0">elder<span style="color:#f59e0b">min</span></h1>
+          </div>
+          <div style="background:white;padding:25px">
+            <h2 style="color:#1e3a5f">Meeting Notice</h2>
+            <p>Dear <strong>${memberName}</strong>,</p>
+            <p>You are invited to attend the following <strong>${committeeName}</strong> meeting:</p>
+            <div style="background:#f9fafb;border-radius:8px;padding:15px;margin:15px 0">
+              <table style="width:100%;border-collapse:collapse">
+                <tr><td style="padding:6px 0;color:#6b7280">Meeting:</td><td style="font-weight:bold">${meetingTitle}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280">Date:</td><td style="font-weight:bold">${dateStr}</td></tr>
+                <tr><td style="padding:6px 0;color:#6b7280">Time:</td><td style="font-weight:bold">${timeStr}</td></tr>
+                ${venue ? `<tr><td style="padding:6px 0;color:#6b7280">Venue:</td><td>${venue}</td></tr>` : ''}
+              </table>
+              ${agenda ? `<p style="margin:12px 0 0;color:#374151"><strong>Agenda:</strong><br/>${agenda}</p>` : ''}
+            </div>
+            <p style="color:#6b7280;font-size:12px">— ${schoolName}</p>
+          </div>
+        </div>`,
+    });
+  }
 }

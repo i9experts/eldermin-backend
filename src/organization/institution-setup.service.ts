@@ -7,6 +7,9 @@ import {
   Meeting, MeetingDocument,
   Workflow, WorkflowDocument,
 } from './schemas/institution-setup.schema';
+import { School, SchoolDocument } from './schemas/organization.schema';
+import { EmailService } from '../email/email.service';
+import { WhatsAppService } from '../email/whatsapp.service';
 
 @Injectable()
 export class InstitutionSetupService {
@@ -15,6 +18,9 @@ export class InstitutionSetupService {
     @InjectModel(Committee.name) private committeeModel: Model<CommitteeDocument>,
     @InjectModel(Meeting.name) private meetingModel: Model<MeetingDocument>,
     @InjectModel(Workflow.name) private workflowModel: Model<WorkflowDocument>,
+    @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
+    private emailService: EmailService,
+    private whatsAppService: WhatsAppService,
   ) {}
 
   // ── Board Members ─────────────────────────────────────────
@@ -89,6 +95,52 @@ export class InstitutionSetupService {
     const result = await this.meetingModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!result) throw new NotFoundException('Meeting not found');
     return { message: 'Meeting deleted' };
+  }
+
+  async notifyMeetingMembers(meetingId: string, schoolSlug: string) {
+    const meeting = await this.meetingModel.findOne({ _id: meetingId, schoolSlug }).lean();
+    if (!meeting) throw new NotFoundException('Meeting not found');
+    if (!meeting.committeeId) {
+      return { emailsSent: 0, emailsFailed: 0, whatsapp: { sent: 0, reason: 'This meeting is not linked to a committee, so there are no members to notify.' } };
+    }
+    const committee = await this.committeeModel.findOne({ _id: meeting.committeeId, schoolSlug }).lean();
+    if (!committee) throw new NotFoundException('Committee not found for this meeting');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || schoolSlug;
+
+    const members = committee.members || [];
+    let emailsSent = 0;
+    let emailsFailed = 0;
+    const failures: string[] = [];
+
+    for (const m of members) {
+      if (!m.email) continue;
+      const ok = await this.emailService.sendCommitteeMeetingNotice(
+        m.email, m.name, committee.name, meeting.title,
+        meeting.scheduledAt.toString(), meeting.venue, meeting.agenda, schoolName,
+      );
+      if (ok) emailsSent++; else { emailsFailed++; failures.push(m.name); }
+    }
+
+    // WhatsApp: attempted honestly for every member with a number on file,
+    // but nothing actually sends until a real WABA account is connected —
+    // see whatsapp.service.ts for what that requires.
+    const membersWithWhatsapp = members.filter(m => m.whatsapp || m.phone);
+    let whatsappResult: { sent: boolean; reason?: string } = { sent: false, reason: 'No committee members have a WhatsApp number on file.' };
+    if (membersWithWhatsapp.length > 0) {
+      whatsappResult = await this.whatsAppService.sendTemplateMessage(
+        membersWithWhatsapp[0].whatsapp || membersWithWhatsapp[0].phone || '',
+        'meeting_notice',
+        { committee: committee.name, meeting: meeting.title },
+      );
+    }
+
+    return {
+      totalMembers: members.length,
+      membersWithEmail: members.filter(m => m.email).length,
+      emailsSent, emailsFailed, emailFailures: failures,
+      whatsapp: { attempted: membersWithWhatsapp.length, sent: whatsappResult.sent ? membersWithWhatsapp.length : 0, reason: whatsappResult.reason },
+    };
   }
 
   // ── Workflows ─────────────────────────────────────────────
