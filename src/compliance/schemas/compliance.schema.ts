@@ -174,3 +174,56 @@ export class Accreditation {
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const AccreditationSchema = SchemaFactory.createForClass(Accreditation);
+
+// ── Approval Request ────────────────────────────────────────────
+// A real, sequential multi-stage approval chain (Requester → Department
+// Head → Board/Committee → Final Sign-off, or however many stages an
+// organization needs) — not just a single pending/approved flag. Each
+// stage records its own approver, decision, and timestamp, matching how
+// real governance approval workflows operate.
+@Schema({ _id: false })
+export class ApprovalStage {
+  @Prop({ required: true }) order: number;
+  @Prop({ required: true }) approverName: string;
+  @Prop() approverRole: string;
+  @Prop({ enum: ['pending', 'approved', 'rejected', 'skipped'], default: 'pending' })
+  status: string;
+  @Prop() decidedAt: Date;
+  @Prop() comments: string;
+}
+export const ApprovalStageSchema = SchemaFactory.createForClass(ApprovalStage);
+
+export type ApprovalRequestDocument = ApprovalRequest & Document;
+
+@Schema({ timestamps: true, collection: 'compliance_approval_requests' })
+export class ApprovalRequest {
+  @Prop({ required: true }) title: string;
+  @Prop() description: string;
+  @Prop({
+    enum: ['policy', 'budget', 'hiring', 'procurement', 'hr', 'academic', 'other'],
+    default: 'other',
+  })
+  category: string;
+  @Prop({ enum: ['low', 'medium', 'high', 'urgent'], default: 'medium' })
+  priority: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'Policy' }) linkedPolicyId: Types.ObjectId;
+  @Prop() linkedPolicyTitle: string;
+
+  @Prop({ required: true }) requestedBy: string;
+  @Prop() requestedByRole: string;
+  @Prop() dueDate: Date;
+  @Prop() attachmentUrl: string;
+
+  @Prop({ type: [ApprovalStageSchema], default: [] }) approvalChain: ApprovalStage[];
+
+  @Prop({ enum: ['pending', 'approved', 'rejected', 'on_hold'], default: 'pending' })
+  status: string;
+  @Prop() decidedBy: string;
+  @Prop() decidedAt: Date;
+  @Prop() decisionNote: string;
+
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const ApprovalRequestSchema = SchemaFactory.createForClass(ApprovalRequest);
+ApprovalRequestSchema.index({ schoolSlug: 1, status: 1 });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -7,7 +7,9 @@ import {
   SafeguardingCase, SafeguardingCaseDocument,
   AuditLog, AuditLogDocument,
   Accreditation, AccreditationDocument,
+  ApprovalRequest, ApprovalRequestDocument,
 } from './schemas/compliance.schema';
+import { UploadService } from '../upload/upload.service';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -19,6 +21,8 @@ export class ComplianceService {
     @InjectModel(SafeguardingCase.name) private safeguardingModel: Model<SafeguardingCaseDocument>,
     @InjectModel(AuditLog.name) private auditModel: Model<AuditLogDocument>,
     @InjectModel(Accreditation.name) private accreditationModel: Model<AccreditationDocument>,
+    @InjectModel(ApprovalRequest.name) private approvalModel: Model<ApprovalRequestDocument>,
+    private uploadService: UploadService,
   ) {}
 
   async getDashboard(schoolSlug: string) {
@@ -114,6 +118,95 @@ export class ComplianceService {
     await ack.save();
     await this.policyModel.findByIdAndUpdate(policyId, { $inc: { acknowledgedCount: 1 } });
     return ack;
+  }
+
+  async uploadPolicyFile(id: string, schoolSlug: string, file: Express.Multer.File) {
+    const { url } = await this.uploadService.uploadFile(file, 'policy-documents', schoolSlug);
+    const policy = await this.policyModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: { fileUrl: url } }, { new: true },
+    );
+    if (!policy) throw new NotFoundException('Policy not found');
+    return { fileUrl: url };
+  }
+
+  async getPolicyAcknowledgements(policyId: string, schoolSlug: string) {
+    return this.ackModel.find({ policyId, schoolSlug }).sort({ acknowledgedAt: -1 }).lean();
+  }
+
+  // ── Approval Requests ────────────────────────────────────────
+  async getApprovals(schoolSlug: string, query: any) {
+    const { page = 1, limit = 20, category, status } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (category) filter.category = category;
+    if (status) filter.status = status;
+    const [data, total] = await Promise.all([
+      this.approvalModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.approvalModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit } };
+  }
+
+  async createApproval(schoolSlug: string, requestedBy: string, dto: any) {
+    // approvalChain comes in as a simple ordered list of approver names —
+    // normalize into real stage objects rather than trusting the client to
+    // send fully-formed ones.
+    const approvalChain = (dto.approvalChain || []).map((stage: any, i: number) => ({
+      order: i,
+      approverName: typeof stage === 'string' ? stage : stage.approverName,
+      approverRole: typeof stage === 'string' ? undefined : stage.approverRole,
+      status: 'pending',
+    }));
+    const approval = new this.approvalModel({
+      ...dto, schoolSlug, requestedBy, approvalChain,
+      status: approvalChain.length > 0 ? 'pending' : dto.status || 'pending',
+    });
+    return approval.save();
+  }
+
+  async updateApproval(id: string, schoolSlug: string, dto: any) {
+    const approval = await this.approvalModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!approval) throw new NotFoundException('Approval request not found');
+    return approval;
+  }
+
+  // Advances exactly one stage in the chain — the next pending stage in
+  // order — recording the decision, then rolls the overall request status
+  // up once every stage has a decision (rejected at any stage short-
+  // circuits the whole request to rejected, matching how a real sequential
+  // sign-off chain works).
+  async decideApprovalStage(id: string, schoolSlug: string, decision: 'approved' | 'rejected', comments: string, decidedByName: string) {
+    const approval = await this.approvalModel.findOne({ _id: id, schoolSlug });
+    if (!approval) throw new NotFoundException('Approval request not found');
+    if (approval.status !== 'pending' && approval.status !== 'on_hold') {
+      throw new Error(`This request has already been ${approval.status}`);
+    }
+
+    const chain = approval.approvalChain || [];
+    const nextStage = chain.find((s) => s.status === 'pending');
+    if (nextStage) {
+      nextStage.status = decision;
+      nextStage.decidedAt = new Date();
+      nextStage.comments = comments;
+    }
+
+    const anyRejected = chain.some((s) => s.status === 'rejected');
+    const allDecided = chain.every((s) => s.status !== 'pending');
+
+    if (anyRejected) {
+      approval.status = 'rejected';
+      approval.decidedBy = decidedByName;
+      approval.decidedAt = new Date();
+      approval.decisionNote = comments;
+    } else if (allDecided || chain.length === 0) {
+      approval.status = 'approved';
+      approval.decidedBy = decidedByName;
+      approval.decidedAt = new Date();
+      approval.decisionNote = comments;
+    }
+
+    await approval.save();
+    return approval;
   }
 
   async getSafeguardingCases(schoolSlug: string, query: any) {

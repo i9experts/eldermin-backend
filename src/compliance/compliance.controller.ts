@@ -1,7 +1,9 @@
 import {
   Controller, Get, Post, Put,
   Body, Param, Query, Request, HttpCode, HttpStatus,
+  UseInterceptors, UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ComplianceService } from './compliance.service';
 
 @Controller('compliance')
@@ -44,6 +46,43 @@ export class ComplianceController {
   async acknowledgePolicy(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.acknowledgePolicy(id, schoolSlug, dto.staffId || userName, dto.staffName || userName);
+  }
+
+  @Post('policies/:id/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadPolicyFile(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.uploadPolicyFile(id, schoolSlug, file);
+  }
+
+  @Get('policies/:id/acknowledgements')
+  async getPolicyAcknowledgements(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPolicyAcknowledgements(id, schoolSlug);
+  }
+
+  @Get('approvals')
+  async getApprovals(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getApprovals(schoolSlug, query);
+  }
+
+  @Post('approvals') @HttpCode(HttpStatus.CREATED)
+  async createApproval(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createApproval(schoolSlug, dto.requestedBy || userName, dto);
+  }
+
+  @Put('approvals/:id')
+  async updateApproval(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateApproval(id, schoolSlug, dto);
+  }
+
+  @Post('approvals/:id/decide')
+  async decideApproval(@Param('id') id: string, @Body() dto: { decision: 'approved' | 'rejected'; comments?: string }, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.decideApprovalStage(id, schoolSlug, dto.decision, dto.comments || '', userName);
   }
 
   @Get('safeguarding')
