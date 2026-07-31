@@ -50,6 +50,13 @@ export class Staff {
   @Prop()
   erpRole: string;
 
+  // Links to the real login-capable User account, once one has been
+  // created for this staff member — most staff added via HR (manually or
+  // via bulk import) don't get one automatically, so this stays null until
+  // someone explicitly provisions a login for them.
+  @Prop({ type: Types.ObjectId, ref: 'User', default: null })
+  userId: Types.ObjectId | null;
+
   @Prop()
   department: string;
 

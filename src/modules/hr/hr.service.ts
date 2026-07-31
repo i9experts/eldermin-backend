@@ -3,6 +3,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as net from 'net';
 import { UploadService } from '../../upload/upload.service';
+import * as bcrypt from 'bcryptjs';
+import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Staff, StaffDocument } from './schemas/staff.schema';
 import { Designation, DesignationDocument } from './schemas/designation.schema';
 import { LeaveApplication, LeaveApplicationDocument } from './schemas/leave-application.schema';
@@ -41,6 +43,7 @@ export class HrService {
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
     @InjectModel(BiometricConfig.name) private biometricConfigModel: Model<BiometricConfigDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private readonly uploadService: UploadService,
   ) {}
 
@@ -68,6 +71,73 @@ export class HrService {
       employeeId = `EMP-${String(lastNum + 1).padStart(3, '0')}`;
     }
     return this.staffModel.create({ ...data, employeeId, tenantId: this.newTid(tenantId) });
+  }
+
+  private generateTempPassword(): string {
+    const digits = Math.floor(1000 + Math.random() * 9000);
+    return `Welcome${digits}!`;
+  }
+
+  private readonly VALID_PRIMARY_ROLES = [
+    'super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
+    'academic_coordinator', 'finance_manager', 'hr_manager', 'teacher',
+    'librarian', 'parent', 'student', 'support_staff',
+  ];
+
+  private resolvePrimaryRole(erpRole?: string): string {
+    const cleaned = (erpRole || '').toLowerCase().trim();
+    return this.VALID_PRIMARY_ROLES.includes(cleaned) ? cleaned : 'teacher';
+  }
+
+  // Adding a staff member (manually or via bulk import) only creates an HR
+  // record — it never creates a real login-capable account, which is why
+  // newly-added employees don't show up anywhere that lists actual users
+  // (like Roles & Permissions' Team Members). This explicitly provisions one.
+  async createLoginForStaff(tenantId: string, institutionId: string, staffId: string) {
+    const staff = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) });
+    if (!staff) throw new NotFoundException('Staff member not found');
+    if (staff.userId) throw new BadRequestException('This staff member already has a login account');
+    if (!staff.email) throw new BadRequestException('This staff member has no email on file — add one first');
+
+    const existing = await this.userModel.findOne({ email: staff.email.toLowerCase() });
+    if (existing) throw new BadRequestException('An account with this email already exists');
+
+    const tempPassword = this.generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
+
+    const user = await this.userModel.create({
+      tenantId: this.newTid(tenantId),
+      institutionId,
+      email: staff.email.toLowerCase(),
+      passwordHash,
+      profile: { firstName: staff.firstName, lastName: staff.lastName },
+      primaryRole: this.resolvePrimaryRole(staff.erpRole),
+      isActive: true,
+    });
+
+    staff.userId = user._id as any;
+    await staff.save();
+
+    return { email: user.email, tempPassword, primaryRole: user.primaryRole };
+  }
+
+  async bulkCreateLogins(tenantId: string, institutionId: string, staffIds?: string[]) {
+    const filter: any = { tenantId: this.newTid(tenantId), userId: null, email: { $exists: true, $ne: '' } };
+    if (staffIds?.length) filter._id = { $in: staffIds };
+    const candidates = await this.staffModel.find(filter);
+
+    const created: { name: string; email: string; tempPassword: string }[] = [];
+    const skipped: { name: string; reason: string }[] = [];
+
+    for (const staff of candidates) {
+      try {
+        const result = await this.createLoginForStaff(tenantId, institutionId, staff._id.toString());
+        created.push({ name: `${staff.firstName} ${staff.lastName}`, email: result.email, tempPassword: result.tempPassword });
+      } catch (err: any) {
+        skipped.push({ name: `${staff.firstName} ${staff.lastName}`, reason: err?.message || 'Failed' });
+      }
+    }
+    return { created, skipped, totalCreated: created.length, totalSkipped: skipped.length };
   }
 
   async getStaffById(tenantId: string, staffId: string) {
