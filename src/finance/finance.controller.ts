@@ -255,6 +255,17 @@ export class FinanceController {
     );
   }
 
+  @Post('invoices/retag-year') @HttpCode(HttpStatus.OK)
+  async retagInvoiceYear(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, academicYear } = this.ctx(req);
+    return this.service.retagInvoiceYear(schoolSlug, {
+      month: dto.month,
+      toAcademicYear: dto.toAcademicYear || academicYear,
+      scopeType: dto.scopeType,
+      scopeValue: dto.scopeValue,
+    });
+  }
+
   // ── Discount / Scholarship Programs ─────────────────────────
   @Get('discount-programs') async getDiscountPrograms(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);

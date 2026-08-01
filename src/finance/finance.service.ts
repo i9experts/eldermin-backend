@@ -696,6 +696,55 @@ export class FinanceService {
     return { deleted: result.modifiedCount, matched: result.matchedCount };
   }
 
+  /**
+   * Direct, one-click fix for the exact situation this whole academic-year
+   * saga produces: challans that exist and are fine, just tagged under a
+   * stale year because they were generated before the header-injection
+   * bug was fixed. Rather than requiring the person to toggle the Academic
+   * Year switcher back to the old year, delete, switch back, and
+   * regenerate - this just retags the existing records in place to the
+   * year they're actually being asked about. No data is deleted or
+   * recreated; only the academicYear field changes.
+   */
+  async retagInvoiceYear(
+    schoolSlug: string,
+    params: {
+      month: string;
+      toAcademicYear: string;
+      scopeType?: 'all' | 'class' | 'section' | 'campus' | 'student';
+      scopeValue?: string;
+    },
+  ) {
+    if (!params.month) throw new BadRequestException('month is required');
+    if (!params.toAcademicYear) throw new BadRequestException('toAcademicYear is required');
+
+    const match: any = {
+      schoolSlug, month: params.month, academicYear: { $ne: params.toAcademicYear }, isDeleted: { $ne: true },
+    };
+    if (params.scopeType === 'class' && params.scopeValue) {
+      match.grade = params.scopeValue;
+    } else if (params.scopeType === 'section' && params.scopeValue) {
+      const [g, s] = params.scopeValue.split('::');
+      match.grade = g;
+      if (s) match.section = s;
+    } else if (params.scopeType === 'student' && params.scopeValue) {
+      match.studentId = new Types.ObjectId(params.scopeValue);
+    } else if (params.scopeType === 'campus' && params.scopeValue) {
+      match.campus = params.scopeValue;
+    }
+
+    const before = await this.invoiceModel.find(match, { academicYear: 1 }).lean();
+    const fromYears = Array.from(new Set(before.map((inv: any) => inv.academicYear)));
+
+    const result = await this.invoiceModel.updateMany(match, { $set: { academicYear: params.toAcademicYear } });
+
+    return {
+      retagged: result.modifiedCount,
+      fromYears,
+      toAcademicYear: params.toAcademicYear,
+    };
+  }
+
   private formatInvoiceMonth(month: string): string {
     if (!month) return '';
     const [y, m] = month.split('-');
