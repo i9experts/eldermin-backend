@@ -638,6 +638,64 @@ export class FinanceService {
     return invoice;
   }
 
+  /**
+   * Bulk "undo generate" - soft-deletes every invoice matching the same
+   * month/scope used to generate them, so a mistaken or stale batch (e.g.
+   * generated under the wrong academic year before that bug was fixed)
+   * can be cleanly reverted instead of deleted one at a time. Soft delete
+   * (not a hard delete) - matches the existing single-invoice convention,
+   * keeps an audit trail, and every other read already filters out
+   * isDeleted invoices, so these disappear from Receivables/Print/Reports
+   * immediately.
+   */
+  async bulkDeleteInvoices(
+    schoolSlug: string,
+    params: {
+      month: string;
+      academicYear: string;
+      scopeType?: 'all' | 'class' | 'section' | 'campus' | 'student';
+      scopeValue?: string;
+    },
+    deletedBy: string,
+    reason?: string,
+  ) {
+    if (!params.month) throw new BadRequestException('month is required');
+    if (!params.academicYear) throw new BadRequestException('academicYear is required');
+
+    const match: any = {
+      schoolSlug, month: params.month, academicYear: params.academicYear, isDeleted: { $ne: true },
+    };
+    if (params.scopeType === 'class' && params.scopeValue) {
+      match.grade = params.scopeValue;
+    } else if (params.scopeType === 'section' && params.scopeValue) {
+      const [g, s] = params.scopeValue.split('::');
+      match.grade = g;
+      if (s) match.section = s;
+    } else if (params.scopeType === 'student' && params.scopeValue) {
+      match.studentId = new Types.ObjectId(params.scopeValue);
+    } else if (params.scopeType === 'campus' && params.scopeValue) {
+      match.campus = params.scopeValue;
+    }
+
+    const result = await this.invoiceModel.updateMany(match, {
+      $set: { isDeleted: true, deletedAt: new Date(), deletedBy, deleteReason: reason || 'Bulk reverted from Fee Assignment' },
+    });
+
+    if (result.matchedCount === 0) {
+      const { academicYear, ...matchWithoutYear } = match;
+      const anyYearMatch = await this.invoiceModel.find(matchWithoutYear).lean();
+      if (anyYearMatch.length > 0) {
+        const years = Array.from(new Set(anyYearMatch.map((inv: any) => inv.academicYear))).join(', ');
+        throw new BadRequestException(
+          `Found ${anyYearMatch.length} challan(s) for this month/scope, but under academic year(s) "${years}" - ` +
+          `you're currently viewing "${params.academicYear}". Switch the Academic Year selector and try again.`,
+        );
+      }
+    }
+
+    return { deleted: result.modifiedCount, matched: result.matchedCount };
+  }
+
   private formatInvoiceMonth(month: string): string {
     if (!month) return '';
     const [y, m] = month.split('-');

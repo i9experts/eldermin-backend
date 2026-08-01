@@ -239,6 +239,22 @@ export class FinanceController {
     return this.service.softDeleteInvoice(id, schoolSlug, userName, reason);
   }
 
+  @Post('invoices/bulk-delete') @HttpCode(HttpStatus.OK)
+  async bulkDeleteInvoices(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    return this.service.bulkDeleteInvoices(
+      schoolSlug,
+      {
+        month: dto.month,
+        academicYear: dto.academicYear || academicYear,
+        scopeType: dto.scopeType,
+        scopeValue: dto.scopeValue,
+      },
+      userName,
+      dto.reason,
+    );
+  }
+
   // ── Discount / Scholarship Programs ─────────────────────────
   @Get('discount-programs') async getDiscountPrograms(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);
