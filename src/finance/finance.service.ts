@@ -307,7 +307,13 @@ export class FinanceService {
     if (data.isPrimary) {
       await this.bankModel.updateMany({ schoolSlug: data.schoolSlug }, { $set: { isPrimary: false } });
     }
-    const acc = new this.bankModel(data);
+    const acc = new this.bankModel({
+      ...data,
+      // currentBalance must start equal to openingBalance, otherwise it silently
+      // defaults to 0 and the UI's `currentBalance ?? openingBalance` fallback
+      // never kicks in (0 is not null/undefined, so ?? short-circuits on it).
+      currentBalance: data.openingBalance ?? 0,
+    });
     return acc.save();
   }
 

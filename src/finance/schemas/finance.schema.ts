@@ -288,6 +288,7 @@ export class BankAccount {
   @Prop({ default: 0 }) currentBalance: number;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ default: false }) isPrimary: boolean;
+  @Prop() campus: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
