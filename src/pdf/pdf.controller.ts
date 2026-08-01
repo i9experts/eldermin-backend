@@ -39,7 +39,7 @@ export class PdfController {
     @Res() res: Response,
   ) {
     const schoolSlug = req.headers['x-school-slug'];
-    const pdf = await this.pdfService.generateReportCard(schoolSlug, dto, req.user.sub);
+    const pdf = await this.pdfService.generateReportCard(schoolSlug, dto, req.user.userId);
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="report-card-${dto.studentId}-${dto.academicYear}.pdf"`,
@@ -55,7 +55,7 @@ export class PdfController {
     @Res() res: Response,
   ) {
     const schoolSlug = req.headers['x-school-slug'];
-    const pdf = await this.pdfService.generateInvoice(schoolSlug, dto, req.user.sub);
+    const pdf = await this.pdfService.generateInvoice(schoolSlug, dto, req.user.userId);
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="invoice-${dto.invoiceId}.pdf"`,
@@ -75,7 +75,7 @@ export class PdfController {
     const pdf = await this.pdfService.generateBulkChallans(
       schoolSlug,
       { month: dto.month, academicYear, scopeType: dto.scopeType as any, scopeValue: dto.scopeValue },
-      req.user.sub,
+      req.user.userId,
     );
     res.set({
       'Content-Type': 'application/pdf',
@@ -91,7 +91,7 @@ export class PdfController {
     @Request() req: any,
   ) {
     const schoolSlug = req.headers['x-school-slug'];
-    return this.pdfService.generateBulkReportCards(schoolSlug, dto, req.user.sub);
+    return this.pdfService.generateBulkReportCards(schoolSlug, dto, req.user.userId);
   }
 
   @Get('logs')
