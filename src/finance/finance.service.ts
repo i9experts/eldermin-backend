@@ -918,12 +918,13 @@ export class FinanceService {
       .lean();
     const alreadyInvoiced = new Set(existingInvoices.map((inv: any) => String(inv.studentId)));
 
-    let created = 0, skipped = 0;
+    let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0;
     const errors: string[] = [];
+    const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
 
     for (const student of students) {
       try {
-        if (alreadyInvoiced.has(String(student._id))) { skipped++; continue; }
+        if (alreadyInvoiced.has(String(student._id))) { skippedAlreadyBilled++; continue; }
 
         const studentCampusName = campusIdToName.get(String((student as any).campusId)) || '';
 
@@ -932,7 +933,12 @@ export class FinanceService {
           (!fs.section || fs.section === (student as any).currentSection) &&
           (!fs.campus || fs.campus === studentCampusName)
         );
-        if (applicableStructures.length === 0) { skipped++; continue; }
+        if (applicableStructures.length === 0) {
+          skippedNoMatch++;
+          const key = `${(student as any).currentGrade || 'Unknown'}${(student as any).currentSection ? ' - ' + (student as any).currentSection : ''}`;
+          gradesWithNoMatch.set(key, (gradesWithNoMatch.get(key) || 0) + 1);
+          continue;
+        }
 
         const studentAssignments = assignments.filter((a: any) => {
           if (a.effectiveFrom && new Date(a.effectiveFrom) > now) return false;
@@ -1006,6 +1012,14 @@ export class FinanceService {
       }
     }
 
-    return { created, skipped, errors, totalStudents: students.length };
+    return {
+      created,
+      skipped: skippedAlreadyBilled + skippedNoMatch,
+      skippedAlreadyBilled,
+      skippedNoMatch,
+      noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, count]) => ({ grade, count })),
+      errors,
+      totalStudents: students.length,
+    };
   }
 }
