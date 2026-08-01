@@ -908,15 +908,22 @@ export class FinanceService {
     const campusIdToName = new Map(campuses.map((c: any) => [String(c._id), c.name]));
     const now = new Date();
 
+    // Batch-fetch which students already have an invoice for this month -
+    // one query for the whole run instead of one findOne() per student.
+    // With ~179 students, the per-student version meant ~179 sequential
+    // DB round-trips, easily timing out the request (the same class of
+    // bug already found once before in the bulk student import).
+    const existingInvoices = await this.invoiceModel
+      .find({ schoolSlug, month, academicYear, isDeleted: { $ne: true } }, { studentId: 1 })
+      .lean();
+    const alreadyInvoiced = new Set(existingInvoices.map((inv: any) => String(inv.studentId)));
+
     let created = 0, skipped = 0;
     const errors: string[] = [];
 
     for (const student of students) {
       try {
-        const exists = await this.invoiceModel.findOne({
-          schoolSlug, studentId: student._id, month, academicYear, isDeleted: { $ne: true },
-        });
-        if (exists) { skipped++; continue; }
+        if (alreadyInvoiced.has(String(student._id))) { skipped++; continue; }
 
         const studentCampusName = campusIdToName.get(String((student as any).campusId)) || '';
 
