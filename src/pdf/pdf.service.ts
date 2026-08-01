@@ -661,6 +661,18 @@ export class PdfService {
     }
 
     if (invoices.length === 0) {
+      // Diagnostic fallback: check if matching invoices exist under a
+      // DIFFERENT academic year for the same month/scope, so the actual
+      // mismatch is visible instead of a dead-end "not found."
+      const { academicYear, ...matchWithoutYear } = invoiceMatch;
+      const anyYearMatch = await this.invoiceModel.find(matchWithoutYear).lean();
+      if (anyYearMatch.length > 0) {
+        const years = Array.from(new Set(anyYearMatch.map((inv: any) => inv.academicYear))).join(', ');
+        throw new NotFoundException(
+          `Found ${anyYearMatch.length} challan(s) for this month/scope, but under academic year(s) "${years}" - ` +
+          `you're currently viewing "${params.academicYear}". Switch the Academic Year selector in the top bar and try again.`,
+        );
+      }
       throw new NotFoundException('No challans found for this scope/month - generate challans first under Fee Assignment');
     }
 
