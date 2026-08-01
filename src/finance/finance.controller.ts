@@ -238,4 +238,56 @@ export class FinanceController {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.softDeleteInvoice(id, schoolSlug, userName, reason);
   }
+
+  // ── Discount / Scholarship Programs ─────────────────────────
+  @Get('discount-programs') async getDiscountPrograms(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDiscountPrograms(schoolSlug);
+  }
+
+  @Post('discount-programs') @HttpCode(HttpStatus.CREATED)
+  async createDiscountProgram(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDiscountProgram({ ...dto, schoolSlug });
+  }
+
+  @Put('discount-programs/:id') async updateDiscountProgram(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateDiscountProgram(id, schoolSlug, dto);
+  }
+
+  @Delete('discount-programs/:id') async deleteDiscountProgram(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteDiscountProgram(id, schoolSlug);
+  }
+
+  // ── Fee Assignments (assign discounts/scholarships to targets) ──
+  @Get('fee-assignments') async getFeeAssignments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getFeeAssignments(schoolSlug);
+  }
+
+  @Post('fee-assignments') @HttpCode(HttpStatus.CREATED)
+  async createFeeAssignment(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createFeeAssignment({ ...dto, schoolSlug });
+  }
+
+  @Delete('fee-assignments/:id') async deleteFeeAssignment(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteFeeAssignment(id, schoolSlug);
+  }
+
+  // ── Challan / Invoice Generation ─────────────────────────────
+  @Post('invoices/generate') @HttpCode(HttpStatus.CREATED)
+  async generateInvoices(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    return this.service.generateInvoices(schoolSlug, {
+      month: dto.month,
+      academicYear: dto.academicYear || academicYear,
+      scopeType: dto.scopeType,
+      scopeValue: dto.scopeValue,
+      createdBy: userName,
+    });
+  }
 }

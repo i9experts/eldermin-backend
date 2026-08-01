@@ -10,7 +10,12 @@ import {
   Expense, ExpenseSchema,
   Budget, BudgetSchema,
   BankAccount, BankAccountSchema,
+  DiscountProgram, DiscountProgramSchema,
+  FeeAssignment, FeeAssignmentSchema,
 } from './schemas/finance.schema';
+import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { Family, FamilySchema } from '../families/schemas/family.schema';
+import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
 
 @Module({
   imports: [
@@ -22,6 +27,12 @@ import {
       { name: Expense.name, schema: ExpenseSchema },
       { name: Budget.name, schema: BudgetSchema },
       { name: BankAccount.name, schema: BankAccountSchema },
+      { name: DiscountProgram.name, schema: DiscountProgramSchema },
+      { name: FeeAssignment.name, schema: FeeAssignmentSchema },
+      { name: Student.name, schema: StudentSchema },
+      { name: Family.name, schema: FamilySchema },
+      { name: Campus.name, schema: CampusSchema },
+      { name: Grade.name, schema: GradeSchema },
     ]),
   ],
   controllers: [FinanceController],

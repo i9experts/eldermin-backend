@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as puppeteer from 'puppeteer';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { IsString, IsOptional, IsMongoId } from 'class-validator';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 
@@ -415,6 +416,7 @@ export class PdfService {
     @InjectModel('ReportTemplate') private reportTemplateModel: Model<any>,
     @InjectModel('Payment') private paymentModel: Model<any>,
     @InjectModel('Expense') private expenseModel: Model<any>,
+    @InjectModel('BankAccount') private bankAccountModel: Model<any>,
   ) {}
 
   private async htmlToPdf(html: string): Promise<Buffer> {
@@ -567,54 +569,74 @@ export class PdfService {
     return pdf;
   }
 
+  /**
+   * Generates a fee challan as a real PDF using pdf-lib (not Puppeteer/HTML —
+   * Railway has no Chrome binary, so htmlToPdf-based generation silently
+   * cannot run there at all). Produces the standard Pakistani school
+   * triplicate layout — Bank Copy / School Copy / Student Copy stacked on
+   * one A4 page with cut lines — since that's the format schools here
+   * actually use at the counter.
+   */
   async generateInvoice(
     schoolSlug: string,
     dto: GenerateInvoiceDto,
     userId: string,
   ): Promise<Buffer> {
-    const school = await this.getSchool(schoolSlug);
+    const school: any = await this.getSchool(schoolSlug);
 
-    const invoice = await this.invoiceModel
+    const invoice: any = await this.invoiceModel
       .findOne({ _id: dto.invoiceId, schoolSlug })
       .populate('studentId')
       .lean();
-
     if (!invoice) throw new NotFoundException('Invoice not found');
 
-    const student: any = (invoice as any).studentId;
+    const student: any = invoice.studentId;
+    const bankAccount: any = await this.bankAccountModel
+      .findOne({ schoolSlug, isActive: true })
+      .sort({ isPrimary: -1 })
+      .lean();
+
+    const father = (student?.guardians || []).find((g: any) => g.relation === 'father');
+    const guardian = father || (student?.guardians || [])[0];
+
+    const monthLabel = invoice.month
+      ? new Date(`${invoice.month}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+      : (invoice.academicYear || '');
 
     const data = {
-      schoolName: (school as any).name,
-      schoolAddress: (school as any).address || '',
-      schoolPhone: (school as any).phone || '',
-      bankName: (school as any).bankName || 'HBL',
-      accountTitle: (school as any).accountTitle || (school as any).name,
-      accountNumber: (school as any).accountNumber || '',
-      iban: (school as any).iban || '',
-      currency: (school as any).currency || 'PKR',
-      invoiceNumber: (invoice as any).invoiceNumber || `INV-${dto.invoiceId.slice(-6).toUpperCase()}`,
-      status: (invoice as any).status || 'pending',
-      issueDate: (invoice as any).issueDate
-        ? new Date((invoice as any).issueDate).toLocaleDateString('en-GB')
-        : new Date().toLocaleDateString('en-GB'),
-      dueDate: (invoice as any).dueDate
-        ? new Date((invoice as any).dueDate).toLocaleDateString('en-GB')
-        : 'N/A',
-      period: (invoice as any).period || (invoice as any).academicYear || '',
-      studentName: student ? `${student.firstName} ${student.lastName}` : 'N/A',
-      grade: student?.grade || '',
-      section: student?.section || '',
-      parentName: student?.parentName || '',
-      parentPhone: student?.parentPhone || '',
-      feeItems: (invoice as any).feeItems || [],
-      subtotal: (invoice as any).subtotal || (invoice as any).amount || 0,
-      discount: (invoice as any).discount || 0,
-      lateFee: (invoice as any).lateFee || 0,
-      totalAmount: (invoice as any).totalAmount || (invoice as any).amount || 0,
+      schoolName: school?.name || 'School',
+      schoolAddress: school?.address || '',
+      schoolPhone: school?.phone || '',
+      bankName: bankAccount?.bankName || 'N/A',
+      accountTitle: bankAccount?.accountTitle || school?.name || '',
+      accountNumber: bankAccount?.accountNumber || '',
+      iban: bankAccount?.iban || '',
+      invoiceNumber: invoice.invoiceNumber || `INV-${String(dto.invoiceId).slice(-6).toUpperCase()}`,
+      status: invoice.status || 'sent',
+      monthLabel,
+      academicYear: invoice.academicYear || '',
+      dueDate: invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('en-GB') : 'N/A',
+      studentName: invoice.studentName || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : 'N/A'),
+      admissionNumber: student?.admissionNumber || '',
+      grade: invoice.grade || student?.currentGrade || '',
+      section: invoice.section || student?.currentSection || '',
+      guardianName: guardian?.name || '',
+      guardianPhone: guardian?.phone || '',
+      items: (invoice.items || []).map((it: any) => ({
+        description: it.description,
+        amount: it.amount || 0,
+        discount: it.discount || 0,
+        netAmount: it.netAmount ?? (it.amount || 0) - (it.discount || 0),
+      })),
+      subtotal: invoice.subtotal || 0,
+      totalDiscount: invoice.totalDiscount || 0,
+      lateFine: invoice.lateFine || 0,
+      totalAmount: invoice.totalAmount || 0,
+      paidAmount: invoice.paidAmount || 0,
+      balanceDue: invoice.balanceDue ?? invoice.totalAmount ?? 0,
     };
 
-    const html = INVOICE_TEMPLATE(data);
-    const pdf = await this.htmlToPdf(html);
+    const pdf = await this.renderChallanPdf(data);
 
     await this.logPdf({
       schoolSlug,
@@ -627,6 +649,120 @@ export class PdfService {
     });
 
     return pdf;
+  }
+
+  private async renderChallanPdf(data: any): Promise<Buffer> {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595, 842]); // A4
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.047, 0.267, 0.486);   // #0C447C
+    const amber = rgb(0.937, 0.624, 0.153);  // #EF9F27
+    const grayText = rgb(0.45, 0.45, 0.45);
+    const black = rgb(0.1, 0.1, 0.1);
+    const lightGray = rgb(0.93, 0.93, 0.93);
+    const pageWidth = 595;
+    const pageHeight = 842;
+    const margin = 30;
+    const copyHeight = (pageHeight - margin * 2) / 3;
+    const copyLabels = ['BANK COPY', 'SCHOOL COPY', 'STUDENT COPY'];
+
+    const drawCopy = (index: number) => {
+      const top = pageHeight - margin - index * copyHeight;
+      let y = top - 8;
+      const contentWidth = pageWidth - margin * 2;
+
+      // Cut line above every copy except the first
+      if (index > 0) {
+        for (let x = margin; x < pageWidth - margin; x += 8) {
+          page.drawLine({ start: { x, y: top + 6 }, end: { x: x + 4, y: top + 6 }, thickness: 0.75, color: grayText });
+        }
+        page.drawText('✂  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -', {
+          x: margin, y: top + 10, size: 7, font, color: grayText,
+        });
+      }
+
+      // Header band
+      page.drawRectangle({ x: margin, y: y - 24, width: contentWidth, height: 26, color: navy });
+      page.drawText(data.schoolName, { x: margin + 8, y: y - 16, size: 11, font: bold, color: rgb(1, 1, 1), maxWidth: contentWidth * 0.6 });
+      page.drawText(copyLabels[index], { x: pageWidth - margin - 8 - bold.widthOfTextAtSize(copyLabels[index], 9), y: y - 15, size: 9, font: bold, color: amber });
+      y -= 24 + 14;
+
+      // Challan meta row
+      page.drawText(`Challan #: ${data.invoiceNumber}`, { x: margin + 8, y, size: 8, font: bold, color: black });
+      page.drawText(`Month: ${data.monthLabel}`, { x: margin + 180, y, size: 8, font, color: black });
+      page.drawText(`Due Date: ${data.dueDate}`, { x: margin + 340, y, size: 8, font: bold, color: rgb(0.75, 0.15, 0.15) });
+      y -= 14;
+
+      // Student row
+      page.drawText(`Student: ${data.studentName}`, { x: margin + 8, y, size: 8, font: bold, color: black, maxWidth: 220 });
+      page.drawText(`GR No: ${data.admissionNumber || '—'}`, { x: margin + 240, y, size: 8, font, color: black });
+      page.drawText(`Class: ${data.grade}${data.section ? ' - ' + data.section : ''}`, { x: margin + 380, y, size: 8, font, color: black });
+      y -= 12;
+      if (data.guardianName) {
+        page.drawText(`Guardian: ${data.guardianName}${data.guardianPhone ? '  (' + data.guardianPhone + ')' : ''}`, { x: margin + 8, y, size: 7.5, font, color: grayText });
+        y -= 12;
+      }
+
+      // Items table
+      const tableTop = y;
+      const col1 = margin + 8, col2 = margin + 300, col3 = margin + 380, col4 = margin + 460;
+      page.drawRectangle({ x: margin, y: tableTop - 12, width: contentWidth, height: 14, color: lightGray });
+      page.drawText('Fee Head', { x: col1, y: tableTop - 9, size: 7.5, font: bold, color: black });
+      page.drawText('Amount', { x: col2, y: tableTop - 9, size: 7.5, font: bold, color: black });
+      page.drawText('Discount', { x: col3, y: tableTop - 9, size: 7.5, font: bold, color: black });
+      page.drawText('Net', { x: col4, y: tableTop - 9, size: 7.5, font: bold, color: black });
+      y = tableTop - 12;
+
+      const maxRows = 5; // fits the compact triplicate band; overflow items are summed into "Other charges"
+      const items = data.items.length > maxRows
+        ? [
+            ...data.items.slice(0, maxRows - 1),
+            {
+              description: 'Other charges',
+              amount: data.items.slice(maxRows - 1).reduce((a: number, i: any) => a + i.amount, 0),
+              discount: data.items.slice(maxRows - 1).reduce((a: number, i: any) => a + i.discount, 0),
+              netAmount: data.items.slice(maxRows - 1).reduce((a: number, i: any) => a + i.netAmount, 0),
+            },
+          ]
+        : data.items;
+
+      for (const item of items) {
+        y -= 12;
+        page.drawText(String(item.description || '').slice(0, 42), { x: col1, y, size: 7.5, font, color: black });
+        page.drawText((item.amount || 0).toLocaleString(), { x: col2, y, size: 7.5, font, color: black });
+        page.drawText(item.discount ? (item.discount).toLocaleString() : '-', { x: col3, y, size: 7.5, font, color: black });
+        page.drawText((item.netAmount || 0).toLocaleString(), { x: col4, y, size: 7.5, font: bold, color: black });
+      }
+      y -= 10;
+      page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.5, color: grayText });
+      y -= 12;
+
+      if (data.lateFine > 0) {
+        page.drawText(`Late Fine (if paid after due date): PKR ${data.lateFine.toLocaleString()}`, { x: col1, y, size: 7.5, font, color: rgb(0.75, 0.15, 0.15) });
+        y -= 12;
+      }
+
+      page.drawText('Total Payable:', { x: col3 - 20, y, size: 9, font: bold, color: black });
+      page.drawText(`PKR ${(data.balanceDue || 0).toLocaleString()}`, { x: col4, y, size: 10, font: bold, color: navy });
+      y -= 16;
+
+      // Bank details
+      page.drawText(`Bank: ${data.bankName}   A/C Title: ${data.accountTitle}   A/C#: ${data.accountNumber}${data.iban ? '   IBAN: ' + data.iban : ''}`, {
+        x: col1, y, size: 7, font, color: grayText, maxWidth: contentWidth - 16,
+      });
+      y -= 16;
+
+      page.drawText('Parent/Guardian Signature: ____________________', { x: col1, y, size: 7.5, font, color: black });
+      page.drawText('Bank Stamp: ____________________', { x: col1 + 260, y, size: 7.5, font, color: black });
+    };
+
+    drawCopy(0);
+    drawCopy(1);
+    drawCopy(2);
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 
   async generateBulkReportCards(
@@ -1109,20 +1245,32 @@ ${css}
   }
 
   /** Loads a Payment (with invoice/student context) and renders a fee receipt. */
+  /**
+   * Generates the payment receipt as a real PDF using pdf-lib. Previously
+   * routed through generateFromTemplate (Puppeteer/HTML - broken on
+   * Railway) and read field names that don't exist on the real Payment
+   * schema (receiptNo instead of receiptNumber, method instead of
+   * paymentMethod, invoice.invoiceNo/gradeLevelName/admissionNo instead of
+   * invoiceNumber/grade/admissionNumber) - so this was generating with
+   * blank data even before the Railway move.
+   */
   async generateFeeReceipt(
     schoolSlug: string,
     dto: { paymentId: string; templateId?: string },
     userId: string,
   ): Promise<Buffer> {
-    const payment = await this.paymentModel
-      .findOne({ _id: dto.paymentId })
+    const school: any = await this.getSchool(schoolSlug);
+    const payment: any = await this.paymentModel
+      .findOne({ _id: dto.paymentId, schoolSlug })
       .populate('invoiceId')
       .populate('studentId')
       .lean();
     if (!payment) throw new NotFoundException('Payment not found');
 
-    const invoice: any = (payment as any).invoiceId;
-    const student: any = (payment as any).studentId;
+    const invoice: any = payment.invoiceId;
+    const student: any = payment.studentId;
+    const father = (student?.guardians || []).find((g: any) => g.relation === 'father');
+    const guardian = father || (student?.guardians || [])[0];
 
     const items = (invoice?.items || []).map((it: any) => ({
       description: it.description,
@@ -1130,30 +1278,101 @@ ${css}
     }));
 
     const data = {
-      documentNumber: (payment as any).receiptNo,
-      receiptNumber: (payment as any).receiptNo,
-      date: (payment as any).paymentDate
-        ? new Date((payment as any).paymentDate).toLocaleDateString('en-GB')
-        : new Date().toLocaleDateString('en-GB'),
-      paymentDate: (payment as any).paymentDate
-        ? new Date((payment as any).paymentDate).toLocaleDateString('en-GB')
-        : new Date().toLocaleDateString('en-GB'),
-      studentName: (payment as any).studentName
-        || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : ''),
-      grade: student?.currentGrade || invoice?.gradeLevelName || '',
-      section: student?.currentSection || '',
-      rollNumber: student?.currentRollNumber || '',
-      admissionNo: student?.admissionNumber || invoice?.admissionNo || '',
-      fatherName: (student?.guardians || []).find((g: any) => g.relation === 'father')?.name || '',
-      invoiceNumber: invoice?.invoiceNo || '',
-      items: items.length ? items : [{ description: 'Payment', amount: (payment as any).amount }],
-      totalAmount: (payment as any).amount,
-      currency: (payment as any).currency || 'PKR',
-      paymentMethod: (payment as any).method,
-      transactionRef: (payment as any).transactionRef || 'N/A',
+      schoolName: school?.name || 'School',
+      receiptNumber: payment.receiptNumber || `RCP-${String(dto.paymentId).slice(-6).toUpperCase()}`,
+      paymentDate: payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
+      studentName: payment.studentName || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : ''),
+      grade: invoice?.grade || student?.currentGrade || '',
+      section: invoice?.section || student?.currentSection || '',
+      admissionNumber: student?.admissionNumber || '',
+      guardianName: guardian?.name || '',
+      invoiceNumber: invoice?.invoiceNumber || '',
+      items: items.length ? items : [{ description: 'Payment', amount: payment.amount || 0 }],
+      amount: payment.amount || 0,
+      paymentMethod: (payment.paymentMethod || 'cash').replace('_', ' '),
+      transactionId: payment.transactionId || payment.chequeNumber || 'N/A',
+      collectedBy: payment.collectedBy || '',
     };
 
-    return this.generateFromTemplate(schoolSlug, 'fee_receipt', data, userId, dto.templateId);
+    const pdf = await this.renderReceiptPdf(data);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'fee_receipt',
+      referenceId: dto.paymentId,
+      referenceName: `${data.receiptNumber} - ${data.studentName}`,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  private async renderReceiptPdf(data: any): Promise<Buffer> {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([420, 560]); // roughly A5 - a receipt doesn't need a full A4 sheet
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.047, 0.267, 0.486);
+    const grayText = rgb(0.45, 0.45, 0.45);
+    const black = rgb(0.1, 0.1, 0.1);
+    const lightGray = rgb(0.93, 0.93, 0.93);
+    const margin = 32;
+    const width = 420;
+    let y = 560 - margin;
+
+    page.drawRectangle({ x: 0, y: y - 30, width, height: 40, color: navy });
+    page.drawText(data.schoolName, { x: margin, y: y - 18, size: 13, font: bold, color: rgb(1, 1, 1), maxWidth: width - margin * 2 });
+    y -= 55;
+
+    page.drawText('PAYMENT RECEIPT', { x: margin, y, size: 12, font: bold, color: navy });
+    page.drawText(data.receiptNumber, { x: width - margin - bold.widthOfTextAtSize(data.receiptNumber, 10), y, size: 10, font: bold, color: black });
+    y -= 22;
+
+    const row = (label: string, value: string) => {
+      page.drawText(label, { x: margin, y, size: 9, font, color: grayText });
+      page.drawText(value || '—', { x: margin + 110, y, size: 9, font: bold, color: black, maxWidth: width - margin * 2 - 110 });
+      y -= 16;
+    };
+    row('Date', data.paymentDate);
+    row('Student', data.studentName);
+    row('Class', `${data.grade}${data.section ? ' - ' + data.section : ''}`);
+    row('GR No', data.admissionNumber);
+    if (data.guardianName) row('Guardian', data.guardianName);
+    if (data.invoiceNumber) row('Against Invoice', data.invoiceNumber);
+    y -= 4;
+
+    page.drawRectangle({ x: margin, y: y - 12, width: width - margin * 2, height: 14, color: lightGray });
+    page.drawText('Description', { x: margin + 6, y: y - 9, size: 8, font: bold, color: black });
+    page.drawText('Amount (PKR)', { x: width - margin - 90, y: y - 9, size: 8, font: bold, color: black });
+    y -= 12;
+    for (const item of data.items) {
+      y -= 14;
+      page.drawText(String(item.description || 'Payment').slice(0, 42), { x: margin + 6, y, size: 8.5, font, color: black });
+      page.drawText((item.amount || 0).toLocaleString(), { x: width - margin - 90, y, size: 8.5, font, color: black });
+    }
+    y -= 10;
+    page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 0.5, color: grayText });
+    y -= 18;
+
+    page.drawText('Total Received:', { x: margin, y, size: 11, font: bold, color: black });
+    page.drawText(`PKR ${(data.amount || 0).toLocaleString()}`, { x: width - margin - 100, y, size: 12, font: bold, color: navy });
+    y -= 22;
+
+    row('Payment Method', data.paymentMethod);
+    row('Reference / Cheque #', data.transactionId);
+    if (data.collectedBy) row('Collected By', data.collectedBy);
+
+    y -= 20;
+    page.drawText('Signature: ____________________', { x: margin, y, size: 9, font, color: black });
+    page.drawText('Stamp: ____________________', { x: margin + 220, y, size: 9, font, color: black });
+
+    y -= 24;
+    page.drawText('This is a computer-generated receipt.', { x: margin, y, size: 7, font, color: grayText });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 
   /**

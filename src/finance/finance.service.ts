@@ -9,7 +9,12 @@ import {
   Expense, ExpenseDocument,
   Budget, BudgetDocument,
   BankAccount, BankAccountDocument,
+  DiscountProgram, DiscountProgramDocument,
+  FeeAssignment, FeeAssignmentDocument,
 } from './schemas/finance.schema';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { Family, FamilyDocument } from '../families/schemas/family.schema';
+import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -23,6 +28,12 @@ export class FinanceService {
     @InjectModel(Expense.name) private expenseModel: Model<ExpenseDocument>,
     @InjectModel(Budget.name) private budgetModel: Model<BudgetDocument>,
     @InjectModel(BankAccount.name) private bankModel: Model<BankAccountDocument>,
+    @InjectModel(DiscountProgram.name) private discountProgramModel: Model<DiscountProgramDocument>,
+    @InjectModel(FeeAssignment.name) private feeAssignmentModel: Model<FeeAssignmentDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
+    @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
+    @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
   ) {}
 
   // ── Dashboard ───────────────────────────────────────────
@@ -791,5 +802,196 @@ export class FinanceService {
     };
 
     return { groups, grandTotal };
+  }
+
+  // ============================================================
+  // DISCOUNT / SCHOLARSHIP PROGRAMS
+  // ============================================================
+  async getDiscountPrograms(schoolSlug: string) {
+    return this.discountProgramModel.find({ schoolSlug }).sort({ name: 1 }).lean();
+  }
+
+  async createDiscountProgram(data: any) {
+    const program = new this.discountProgramModel(data);
+    return program.save();
+  }
+
+  async updateDiscountProgram(id: string, schoolSlug: string, data: any) {
+    const program = await this.discountProgramModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!program) throw new NotFoundException('Discount program not found');
+    return program;
+  }
+
+  async deleteDiscountProgram(id: string, schoolSlug: string) {
+    const program = await this.discountProgramModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    if (!program) throw new NotFoundException('Discount program not found');
+    return { message: 'Discount program deactivated' };
+  }
+
+  // ============================================================
+  // FEE ASSIGNMENTS (assign a discount/scholarship to a student,
+  // family, class, section, or campus)
+  // ============================================================
+  async getFeeAssignments(schoolSlug: string) {
+    return this.feeAssignmentModel.find({ schoolSlug, isActive: true }).sort({ createdAt: -1 }).lean();
+  }
+
+  async createFeeAssignment(data: any) {
+    if (data.discountProgramId) {
+      const program = await this.discountProgramModel.findOne({ _id: data.discountProgramId, schoolSlug: data.schoolSlug });
+      if (!program) throw new BadRequestException('Discount program not found');
+      data.discountProgramName = program.name;
+    } else if (!data.overrideValueType || data.overrideValue == null) {
+      throw new BadRequestException('Either a discount program or an override value/type is required');
+    }
+    const assignment = new this.feeAssignmentModel(data);
+    return assignment.save();
+  }
+
+  async deleteFeeAssignment(id: string, schoolSlug: string) {
+    const assignment = await this.feeAssignmentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    if (!assignment) throw new NotFoundException('Fee assignment not found');
+    return { message: 'Fee assignment removed' };
+  }
+
+  // ============================================================
+  // CHALLAN / INVOICE GENERATION ENGINE
+  // Bridges Fee Structure (pricing per class/section) + Fee Assignments
+  // (discounts/scholarships per student/family/class/section/campus)
+  // into real, per-student Invoice (challan) records for a given month.
+  // Idempotent: re-running for the same student+month+academicYear will
+  // not create duplicates.
+  // ============================================================
+  async generateInvoices(schoolSlug: string, params: {
+    month: string;
+    academicYear: string;
+    scopeType?: 'all' | 'class' | 'section' | 'campus' | 'student';
+    scopeValue?: string;
+    createdBy?: string;
+  }) {
+    const { month, academicYear, scopeType = 'all', scopeValue, createdBy } = params;
+    if (!month) throw new BadRequestException('month is required (e.g. 2026-03)');
+    if (!academicYear) throw new BadRequestException('academicYear is required');
+
+    const studentMatch: any = { schoolSlug, status: 'active' };
+    if (scopeType === 'class' && scopeValue) {
+      studentMatch.currentGrade = scopeValue;
+    } else if (scopeType === 'section' && scopeValue) {
+      const [g, s] = scopeValue.split('::');
+      studentMatch.currentGrade = g;
+      if (s) studentMatch.currentSection = s;
+    } else if (scopeType === 'student' && scopeValue) {
+      studentMatch._id = new Types.ObjectId(scopeValue);
+    } else if (scopeType === 'campus' && scopeValue) {
+      const campus = await this.campusModel.findOne({ schoolSlug, name: scopeValue }).lean();
+      if (!campus) return { created: 0, skipped: 0, errors: [`Campus "${scopeValue}" not found`] };
+      studentMatch.campusId = String((campus as any)._id);
+    }
+
+    const students = await this.studentModel.find(studentMatch).lean();
+    if (students.length === 0) return { created: 0, skipped: 0, errors: ['No matching active students found for this scope'] };
+
+    const [feeStructures, assignments, discountPrograms, campuses] = await Promise.all([
+      this.feeStructModel.find({ schoolSlug, isActive: true, academicYear }).lean(),
+      this.feeAssignmentModel.find({ schoolSlug, isActive: true }).lean(),
+      this.discountProgramModel.find({ schoolSlug, isActive: true }).lean(),
+      this.campusModel.find({ schoolSlug }).lean(),
+    ]);
+    const programById = new Map(discountPrograms.map((p: any) => [String(p._id), p]));
+    const campusIdToName = new Map(campuses.map((c: any) => [String(c._id), c.name]));
+    const now = new Date();
+
+    let created = 0, skipped = 0;
+    const errors: string[] = [];
+
+    for (const student of students) {
+      try {
+        const exists = await this.invoiceModel.findOne({
+          schoolSlug, studentId: student._id, month, academicYear, isDeleted: { $ne: true },
+        });
+        if (exists) { skipped++; continue; }
+
+        const studentCampusName = campusIdToName.get(String((student as any).campusId)) || '';
+
+        const applicableStructures = feeStructures.filter((fs: any) =>
+          fs.grade === (student as any).currentGrade &&
+          (!fs.section || fs.section === (student as any).currentSection) &&
+          (!fs.campus || fs.campus === studentCampusName)
+        );
+        if (applicableStructures.length === 0) { skipped++; continue; }
+
+        const studentAssignments = assignments.filter((a: any) => {
+          if (a.effectiveFrom && new Date(a.effectiveFrom) > now) return false;
+          if (a.effectiveTo && new Date(a.effectiveTo) < now) return false;
+          if (a.targetType === 'student') return a.targetValue === String(student._id);
+          if (a.targetType === 'family') return (student as any).familyId && a.targetValue === String((student as any).familyId);
+          if (a.targetType === 'class') return a.targetValue === (student as any).currentGrade;
+          if (a.targetType === 'section') return a.targetValue === `${(student as any).currentGrade}::${(student as any).currentSection}`;
+          if (a.targetType === 'campus') return a.targetValue === studentCampusName;
+          return false;
+        });
+
+        const items: any[] = [];
+        let dueDay = 10;
+        let lateFine = 0;
+
+        for (const fs of applicableStructures) {
+          if (fs.dueDay) dueDay = fs.dueDay;
+          if (fs.lateFeeAmount) lateFine += fs.lateFeeAmount;
+          for (const item of (fs.items || [])) {
+            const baseAmount = item.amount || 0;
+            let discount = 0;
+            for (const a of studentAssignments) {
+              if (a.feeHeadName && a.feeHeadName !== item.feeHead) continue;
+              let valueType = a.overrideValueType, value = a.overrideValue, maxAmount: number | undefined;
+              if (a.discountProgramId) {
+                const program = programById.get(String(a.discountProgramId));
+                if (!program) continue;
+                valueType = program.valueType; value = program.value; maxAmount = program.maxAmount;
+              }
+              let thisDiscount = valueType === 'percentage' ? (baseAmount * (value || 0)) / 100 : (value || 0);
+              if (maxAmount != null) thisDiscount = Math.min(thisDiscount, maxAmount);
+              discount += thisDiscount;
+            }
+            discount = Math.min(discount, baseAmount); // never let stacked discounts exceed the item itself
+            items.push({
+              description: `${fs.name}${fs.section ? ` (${fs.grade} - ${fs.section})` : ` (${fs.grade})`}`,
+              amount: baseAmount,
+              discount: Math.round(discount),
+              netAmount: Math.round(baseAmount - discount),
+            });
+          }
+        }
+
+        const subtotal = items.reduce((a, i) => a + i.amount, 0);
+        const totalDiscount = items.reduce((a, i) => a + i.discount, 0);
+        const totalAmount = subtotal - totalDiscount;
+
+        const [y, m] = month.split('-').map(Number);
+        const dueDate = y && m ? new Date(y, m - 1, Math.min(dueDay, 28)) : undefined;
+
+        const invoice = new this.invoiceModel({
+          type: 'fee',
+          studentId: student._id,
+          studentName: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(),
+          grade: (student as any).currentGrade,
+          section: (student as any).currentSection,
+          month, academicYear,
+          items, subtotal, totalDiscount, totalAmount,
+          balanceDue: totalAmount,
+          status: 'sent',
+          dueDate,
+          lateFine,
+          createdBy,
+          schoolSlug,
+        });
+        await invoice.save();
+        created++;
+      } catch (err: any) {
+        errors.push(`${(student as any).firstName || ''} ${(student as any).lastName || ''}: ${err.message}`);
+      }
+    }
+
+    return { created, skipped, errors, totalStudents: students.length };
   }
 }

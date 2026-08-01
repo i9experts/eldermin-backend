@@ -295,3 +295,61 @@ export class BankAccount {
 }
 
 export const BankAccountSchema = SchemaFactory.createForClass(BankAccount);
+
+// ============================================================
+// DISCOUNT / SCHOLARSHIP PROGRAM
+// Reusable templates (e.g. "Merit Scholarship 2026", "Sibling Discount",
+// "Staff Ward Waiver", "Hifz Incentive") that get applied to students via
+// FeeAssignment below. Kept separate from FeeAssignment so the same
+// program can be assigned to many different targets without redefining
+// its value/type each time.
+// ============================================================
+export type DiscountProgramDocument = DiscountProgram & Document;
+
+@Schema({ timestamps: true, collection: 'discount_programs' })
+export class DiscountProgram {
+  @Prop({ required: true }) name: string;
+  @Prop({ enum: ['scholarship', 'discount', 'grant', 'incentive'], required: true }) type: string;
+  @Prop({ enum: ['percentage', 'flat'], required: true }) valueType: string;
+  @Prop({ required: true }) value: number;
+  @Prop() maxAmount: number; // optional cap, mainly for percentage-based programs
+  @Prop() description: string;
+  @Prop() validFrom: Date;
+  @Prop() validTo: Date;
+  @Prop({ default: true }) isActive: boolean;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const DiscountProgramSchema = SchemaFactory.createForClass(DiscountProgram);
+
+// ============================================================
+// FEE ASSIGNMENT
+// The actual bridge: assigns a DiscountProgram (or an ad-hoc one-off
+// override) to a target — a single student, a whole family, a class,
+// a section, or a campus. This is what was completely missing: Fee
+// Structure defines the base price per class/section, but there was no
+// way to say "this specific student/family gets X% off" without
+// changing the whole class's pricing.
+// ============================================================
+export type FeeAssignmentDocument = FeeAssignment & Document;
+
+@Schema({ timestamps: true, collection: 'fee_assignments' })
+export class FeeAssignment {
+  @Prop({ enum: ['student', 'family', 'class', 'section', 'campus'], required: true }) targetType: string;
+  @Prop({ required: true }) targetValue: string; // studentId / familyId / grade name / "grade::section" / campus name
+  @Prop() targetLabel: string; // denormalized human-readable label, e.g. "Ali Khan (STU-2026-5621)"
+  @Prop({ type: Types.ObjectId, ref: 'DiscountProgram' }) discountProgramId: Types.ObjectId;
+  @Prop() discountProgramName: string; // denormalized for display without a populate
+  @Prop({ enum: ['percentage', 'flat'] }) overrideValueType: string; // used only for ad-hoc assignments (no program)
+  @Prop() overrideValue: number;
+  @Prop() feeHeadName: string; // optional - restrict to one fee head; empty/undefined = applies to all fee heads billed to the target
+  @Prop() effectiveFrom: Date;
+  @Prop() effectiveTo: Date;
+  @Prop() approvedBy: string;
+  @Prop() notes: string;
+  @Prop({ default: true }) isActive: boolean;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const FeeAssignmentSchema = SchemaFactory.createForClass(FeeAssignment);
+FeeAssignmentSchema.index({ schoolSlug: 1, targetType: 1, targetValue: 1 });
