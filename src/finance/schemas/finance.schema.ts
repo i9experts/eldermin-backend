@@ -58,16 +58,18 @@ export class FeeStructure {
   @Prop({ required: true }) grade: string;
   @Prop() section: string;
   @Prop({ required: true }) academicYear: string;
-  @Prop({
-    enum: ['monthly','quarterly','termly','annually','one_time'],
-    default: 'monthly',
-  })
-  frequency: string;
+  // Free-form (not a strict enum) so schools can define their own billing cycles
+  // e.g. "Every 2 Months" - many Pakistani schools bill two months of tuition at once.
+  @Prop({ default: 'monthly' }) frequency: string;
   @Prop({ type: [FeeLineItemSchema], default: [] }) items: FeeLineItem[];
   @Prop() totalAmount: number;
   @Prop() dueDay: number; // day of month
   @Prop({ default: 0 }) lateFinePerDay: number;
   @Prop({ default: 0 }) gracePeriodDays: number;
+  @Prop({ default: 0 }) lateFeeAmount: number; // flat late fee (distinct from the daily fine above)
+  @Prop() effectiveFrom: Date;
+  @Prop() campus: string;
+  @Prop({ default: false }) isTaxable: boolean;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
