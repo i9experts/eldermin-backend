@@ -81,6 +81,16 @@ export class OrganizationController {
     return this.service.createAcademicYear({ ...dto, schoolSlug });
   }
 
+  @Put('academic-years/:id') async updateYear(@Param('id') id: string, @Body() dto: Partial<CreateAcademicYearDto>, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateAcademicYear(id, schoolSlug, dto);
+  }
+
+  @Delete('academic-years/:id') async deleteYear(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteAcademicYear(id, schoolSlug);
+  }
+
   @Patch('academic-years/:id/set-current')
   async setCurrentYear(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);

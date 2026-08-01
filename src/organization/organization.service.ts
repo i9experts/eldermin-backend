@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -136,6 +136,24 @@ export class OrganizationService {
       })),
     });
     return year.save();
+  }
+
+  async updateAcademicYear(id: string, schoolSlug: string, dto: Partial<CreateAcademicYearDto>) {
+    const update: any = { ...dto };
+    if (dto.startDate) update.startDate = new Date(dto.startDate);
+    if (dto.endDate) update.endDate = new Date(dto.endDate);
+    if (dto.terms) update.terms = dto.terms.map(t => ({ ...t, startDate: new Date(t.startDate), endDate: new Date(t.endDate) }));
+    const year = await this.yearModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+    if (!year) throw new NotFoundException('Academic year not found');
+    return year;
+  }
+
+  async deleteAcademicYear(id: string, schoolSlug: string) {
+    const year = await this.yearModel.findOne({ _id: id, schoolSlug });
+    if (!year) throw new NotFoundException('Academic year not found');
+    if (year.isCurrent) throw new BadRequestException('Cannot delete the current academic year — set another year as current first');
+    await this.yearModel.deleteOne({ _id: id, schoolSlug });
+    return { message: 'Academic year deleted' };
   }
 
   async setCurrentYear(id: string, schoolSlug: string) {
