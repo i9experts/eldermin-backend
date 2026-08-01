@@ -104,6 +104,7 @@ export class Invoice {
   @Prop({ required: true }) studentName: string;
   @Prop({ required: true }) grade: string;
   @Prop() section: string;
+  @Prop() campus: string;
   @Prop({ required: true }) month: string; // 2025-02
   @Prop({ required: true }) academicYear: string;
   @Prop({ type: [InvoiceLineItemSchema], default: [] }) items: InvoiceLineItem[];

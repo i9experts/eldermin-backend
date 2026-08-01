@@ -64,6 +64,27 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @Post('challans/bulk')
+  async generateBulkChallans(
+    @Body() dto: { month: string; academicYear?: string; scopeType?: string; scopeValue?: string },
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = req.headers['x-school-slug'];
+    const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
+    const pdf = await this.pdfService.generateBulkChallans(
+      schoolSlug,
+      { month: dto.month, academicYear, scopeType: dto.scopeType as any, scopeValue: dto.scopeValue },
+      req.user.sub,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="challans-${dto.scopeType || 'all'}-${dto.month}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
   @Post('report-cards/bulk')
   async bulkReportCards(
     @Body() dto: BulkReportCardDto,

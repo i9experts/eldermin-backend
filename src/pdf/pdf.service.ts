@@ -1,6 +1,6 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import * as puppeteer from 'puppeteer';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { IsString, IsOptional, IsMongoId } from 'class-validator';
@@ -417,6 +417,7 @@ export class PdfService {
     @InjectModel('Payment') private paymentModel: Model<any>,
     @InjectModel('Expense') private expenseModel: Model<any>,
     @InjectModel('BankAccount') private bankAccountModel: Model<any>,
+    @InjectModel('Campus') private campusModel: Model<any>,
   ) {}
 
   private async htmlToPdf(html: string): Promise<Buffer> {
@@ -571,11 +572,10 @@ export class PdfService {
 
   /**
    * Generates a fee challan as a real PDF using pdf-lib (not Puppeteer/HTML —
-   * Railway has no Chrome binary, so htmlToPdf-based generation silently
-   * cannot run there at all). Produces the standard Pakistani school
-   * triplicate layout — Bank Copy / School Copy / Student Copy stacked on
-   * one A4 page with cut lines — since that's the format schools here
-   * actually use at the counter.
+   * Railway has no Chrome binary). Matches the school's real-world reference
+   * format: landscape page, 3 side-by-side copies (Bank/School/Parent's),
+   * separated by dashed cut lines, each with Issue/Due/Validity dates,
+   * Challan No/GRN, Payable-by and After-due-date amounts.
    */
   async generateInvoice(
     schoolSlug: string,
@@ -583,60 +583,27 @@ export class PdfService {
     userId: string,
   ): Promise<Buffer> {
     const school: any = await this.getSchool(schoolSlug);
-
     const invoice: any = await this.invoiceModel
       .findOne({ _id: dto.invoiceId, schoolSlug })
       .populate('studentId')
       .lean();
     if (!invoice) throw new NotFoundException('Invoice not found');
 
-    const student: any = invoice.studentId;
     const bankAccount: any = await this.bankAccountModel
       .findOne({ schoolSlug, isActive: true })
       .sort({ isPrimary: -1 })
       .lean();
 
-    const father = (student?.guardians || []).find((g: any) => g.relation === 'father');
-    const guardian = father || (student?.guardians || [])[0];
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const logoImg = await this.embedSchoolLogo(pdfDoc, school);
 
-    const monthLabel = invoice.month
-      ? new Date(`${invoice.month}-01T00:00:00`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
-      : (invoice.academicYear || '');
+    const data = this.buildChallanData(school, bankAccount, invoice);
+    this.drawChallanPage(pdfDoc, data, logoImg, font, bold);
 
-    const data = {
-      schoolName: school?.name || 'School',
-      schoolAddress: school?.address || '',
-      schoolPhone: school?.phone || '',
-      bankName: bankAccount?.bankName || 'N/A',
-      accountTitle: bankAccount?.accountTitle || school?.name || '',
-      accountNumber: bankAccount?.accountNumber || '',
-      iban: bankAccount?.iban || '',
-      invoiceNumber: invoice.invoiceNumber || `INV-${String(dto.invoiceId).slice(-6).toUpperCase()}`,
-      status: invoice.status || 'sent',
-      monthLabel,
-      academicYear: invoice.academicYear || '',
-      dueDate: invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('en-GB') : 'N/A',
-      studentName: invoice.studentName || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : 'N/A'),
-      admissionNumber: student?.admissionNumber || '',
-      grade: invoice.grade || student?.currentGrade || '',
-      section: invoice.section || student?.currentSection || '',
-      guardianName: guardian?.name || '',
-      guardianPhone: guardian?.phone || '',
-      items: (invoice.items || []).map((it: any) => ({
-        description: it.description,
-        amount: it.amount || 0,
-        discount: it.discount || 0,
-        netAmount: it.netAmount ?? (it.amount || 0) - (it.discount || 0),
-      })),
-      subtotal: invoice.subtotal || 0,
-      totalDiscount: invoice.totalDiscount || 0,
-      lateFine: invoice.lateFine || 0,
-      totalAmount: invoice.totalAmount || 0,
-      paidAmount: invoice.paidAmount || 0,
-      balanceDue: invoice.balanceDue ?? invoice.totalAmount ?? 0,
-    };
-
-    const pdf = await this.renderChallanPdf(data);
+    const bytes = await pdfDoc.save();
+    const pdf = Buffer.from(bytes);
 
     await this.logPdf({
       schoolSlug,
@@ -651,118 +618,237 @@ export class PdfService {
     return pdf;
   }
 
-  private async renderChallanPdf(data: any): Promise<Buffer> {
+  /**
+   * Bulk challan printing - class-wise, section-wise, campus-wise, or every
+   * billed student for a month - one landscape page (3 copies) per student
+   * in a single combined PDF, so a school can print a whole class's
+   * vouchers in one go instead of downloading them one at a time.
+   */
+  async generateBulkChallans(
+    schoolSlug: string,
+    params: {
+      month: string;
+      academicYear: string;
+      scopeType?: 'all' | 'class' | 'section' | 'campus' | 'student';
+      scopeValue?: string;
+    },
+    userId: string,
+  ): Promise<Buffer> {
+    if (!params.month) throw new BadRequestException('month is required');
+    if (!params.academicYear) throw new BadRequestException('academicYear is required');
+
+    const invoiceMatch: any = {
+      schoolSlug, month: params.month, academicYear: params.academicYear, isDeleted: { $ne: true },
+    };
+    if (params.scopeType === 'class' && params.scopeValue) {
+      invoiceMatch.grade = params.scopeValue;
+    } else if (params.scopeType === 'section' && params.scopeValue) {
+      const [g, s] = params.scopeValue.split('::');
+      invoiceMatch.grade = g;
+      if (s) invoiceMatch.section = s;
+    } else if (params.scopeType === 'student' && params.scopeValue) {
+      invoiceMatch.studentId = new Types.ObjectId(params.scopeValue);
+    }
+
+    let invoices: any[] = await this.invoiceModel.find(invoiceMatch).populate('studentId').lean();
+
+    if (params.scopeType === 'campus' && params.scopeValue) {
+      const campus = await this.campusModel.findOne({ schoolSlug, name: params.scopeValue }).lean();
+      const campusId = campus ? String((campus as any)._id) : null;
+      invoices = campusId
+        ? invoices.filter((inv: any) => String(inv.studentId?.campusId || '') === campusId)
+        : [];
+    }
+
+    if (invoices.length === 0) {
+      throw new NotFoundException('No challans found for this scope/month - generate challans first under Fee Assignment');
+    }
+
+    const school: any = await this.getSchool(schoolSlug);
+    const bankAccount: any = await this.bankAccountModel
+      .findOne({ schoolSlug, isActive: true })
+      .sort({ isPrimary: -1 })
+      .lean();
+
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([595, 842]); // A4
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    const navy = rgb(0.047, 0.267, 0.486);   // #0C447C
-    const amber = rgb(0.937, 0.624, 0.153);  // #EF9F27
-    const grayText = rgb(0.45, 0.45, 0.45);
+    const logoImg = await this.embedSchoolLogo(pdfDoc, school);
+
+    for (const invoice of invoices) {
+      const data = this.buildChallanData(school, bankAccount, invoice);
+      this.drawChallanPage(pdfDoc, data, logoImg, font, bold);
+    }
+
+    const bytes = await pdfDoc.save();
+    const pdf = Buffer.from(bytes);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'invoice',
+      referenceId: params.scopeValue || 'bulk',
+      referenceName: `Bulk challans - ${params.scopeType || 'all'} - ${params.month} (${invoices.length} students)`,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  private async embedSchoolLogo(pdfDoc: any, school: any): Promise<any> {
+    if (!school?.logo) return null;
+    try {
+      const res = await fetch(school.logo);
+      if (!res.ok) return null;
+      const bytes = await res.arrayBuffer();
+      const isPng = school.logo.toLowerCase().includes('.png') || res.headers.get('content-type')?.includes('png');
+      return isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+    } catch {
+      return null;
+    }
+  }
+
+  private buildChallanData(school: any, bankAccount: any, invoice: any): any {
+    const student: any = invoice.studentId;
+    const father = (student?.guardians || []).find((g: any) => g.relation === 'father');
+    const guardian = father || (student?.guardians || [])[0];
+
+    const fmtDate = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '-');
+
+    let issueDateLabel = 'N/A', validityLabel = 'N/A', monthLabel = invoice.academicYear || '';
+    if (invoice.month) {
+      const [y, m] = invoice.month.split('-').map(Number);
+      if (y && m) {
+        issueDateLabel = fmtDate(new Date(y, m - 1, 1));
+        validityLabel = fmtDate(new Date(y, m, 0)); // last day of the billing month
+        monthLabel = new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+      }
+    }
+    const dueDateLabel = invoice.dueDate ? fmtDate(new Date(invoice.dueDate)) : issueDateLabel;
+
+    return {
+      schoolName: school?.name || 'School',
+      campusName: invoice.campus || 'N/A',
+      bankName: bankAccount?.bankName || 'N/A',
+      accountTitle: bankAccount?.accountTitle || school?.name || '',
+      accountNumber: bankAccount?.accountNumber || '',
+      invoiceNumber: invoice.invoiceNumber || `INV-${String(invoice._id).slice(-6).toUpperCase()}`,
+      issueDateLabel,
+      dueDateLabel,
+      validityLabel,
+      monthLabel,
+      studentName: invoice.studentName || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : 'N/A'),
+      admissionNumber: student?.admissionNumber || '',
+      grade: invoice.grade || student?.currentGrade || '',
+      section: invoice.section || student?.currentSection || '',
+      guardianName: guardian?.name || '',
+      items: (invoice.items || []).map((it: any) => ({
+        description: it.description,
+        netAmount: it.netAmount ?? (it.amount || 0) - (it.discount || 0),
+      })),
+      totalAmount: invoice.totalAmount || 0,
+      lateFine: invoice.lateFine || 0,
+    };
+  }
+
+  private drawChallanPage(pdfDoc: any, data: any, logoImg: any, font: any, bold: any) {
+    const pageWidth = 842, pageHeight = 595; // landscape A4
+    const page = pdfDoc.addPage([pageWidth, pageHeight]);
+    const navy = rgb(0.047, 0.267, 0.486);
     const black = rgb(0.1, 0.1, 0.1);
+    const gray = rgb(0.42, 0.42, 0.42);
     const lightGray = rgb(0.93, 0.93, 0.93);
-    const pageWidth = 595;
-    const pageHeight = 842;
-    const margin = 30;
-    const copyHeight = (pageHeight - margin * 2) / 3;
-    const copyLabels = ['BANK COPY', 'SCHOOL COPY', 'STUDENT COPY'];
+    const red = rgb(0.7, 0.15, 0.15);
 
-    const drawCopy = (index: number) => {
-      const top = pageHeight - margin - index * copyHeight;
-      let y = top - 8;
-      const contentWidth = pageWidth - margin * 2;
+    const margin = 22;
+    const gap = 16;
+    const colWidth = (pageWidth - margin * 2 - gap * 2) / 3;
+    const copyLabels = ['Bank Copy', 'School Copy', "Parent's Copy"];
 
-      // Cut line above every copy except the first
-      if (index > 0) {
-        for (let x = margin; x < pageWidth - margin; x += 8) {
-          page.drawLine({ start: { x, y: top + 6 }, end: { x: x + 4, y: top + 6 }, thickness: 0.75, color: grayText });
+    for (let i = 0; i < 3; i++) {
+      const colX = margin + i * (colWidth + gap);
+      let y = pageHeight - margin - 6;
+
+      if (i > 0) {
+        const sepX = colX - gap / 2;
+        for (let yy = margin; yy < pageHeight - margin; yy += 6) {
+          page.drawLine({ start: { x: sepX, y: yy }, end: { x: sepX, y: Math.min(yy + 3, pageHeight - margin) }, thickness: 0.75, color: gray });
         }
-        page.drawText('✂  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -', {
-          x: margin, y: top + 10, size: 7, font, color: grayText,
-        });
       }
 
-      // Header band
-      page.drawRectangle({ x: margin, y: y - 24, width: contentWidth, height: 26, color: navy });
-      page.drawText(data.schoolName, { x: margin + 8, y: y - 16, size: 11, font: bold, color: rgb(1, 1, 1), maxWidth: contentWidth * 0.6 });
-      page.drawText(copyLabels[index], { x: pageWidth - margin - 8 - bold.widthOfTextAtSize(copyLabels[index], 9), y: y - 15, size: 9, font: bold, color: amber });
-      y -= 24 + 14;
-
-      // Challan meta row
-      page.drawText(`Challan #: ${data.invoiceNumber}`, { x: margin + 8, y, size: 8, font: bold, color: black });
-      page.drawText(`Month: ${data.monthLabel}`, { x: margin + 180, y, size: 8, font, color: black });
-      page.drawText(`Due Date: ${data.dueDate}`, { x: margin + 340, y, size: 8, font: bold, color: rgb(0.75, 0.15, 0.15) });
-      y -= 14;
-
-      // Student row
-      page.drawText(`Student: ${data.studentName}`, { x: margin + 8, y, size: 8, font: bold, color: black, maxWidth: 220 });
-      page.drawText(`GR No: ${data.admissionNumber || '—'}`, { x: margin + 240, y, size: 8, font, color: black });
-      page.drawText(`Class: ${data.grade}${data.section ? ' - ' + data.section : ''}`, { x: margin + 380, y, size: 8, font, color: black });
-      y -= 12;
-      if (data.guardianName) {
-        page.drawText(`Guardian: ${data.guardianName}${data.guardianPhone ? '  (' + data.guardianPhone + ')' : ''}`, { x: margin + 8, y, size: 7.5, font, color: grayText });
-        y -= 12;
+      const logoSize = 26;
+      const textX = logoImg ? colX + logoSize + 6 : colX;
+      if (logoImg) {
+        page.drawImage(logoImg, { x: colX, y: y - logoSize, width: logoSize, height: logoSize });
       }
+      page.drawText(data.schoolName, { x: textX, y: y - 9, size: 9, font: bold, color: black, maxWidth: colWidth - (logoImg ? logoSize + 6 : 0) });
+      page.drawText(`${data.campusName} Campus`, { x: textX, y: y - 19, size: 6.5, font, color: gray });
+      page.drawText(data.bankName, { x: textX, y: y - 28, size: 6.5, font, color: gray });
+      y -= logoSize + 8;
 
-      // Items table
-      const tableTop = y;
-      const col1 = margin + 8, col2 = margin + 300, col3 = margin + 380, col4 = margin + 460;
-      page.drawRectangle({ x: margin, y: tableTop - 12, width: contentWidth, height: 14, color: lightGray });
-      page.drawText('Fee Head', { x: col1, y: tableTop - 9, size: 7.5, font: bold, color: black });
-      page.drawText('Amount', { x: col2, y: tableTop - 9, size: 7.5, font: bold, color: black });
-      page.drawText('Discount', { x: col3, y: tableTop - 9, size: 7.5, font: bold, color: black });
-      page.drawText('Net', { x: col4, y: tableTop - 9, size: 7.5, font: bold, color: black });
-      y = tableTop - 12;
-
-      const maxRows = 5; // fits the compact triplicate band; overflow items are summed into "Other charges"
-      const items = data.items.length > maxRows
-        ? [
-            ...data.items.slice(0, maxRows - 1),
-            {
-              description: 'Other charges',
-              amount: data.items.slice(maxRows - 1).reduce((a: number, i: any) => a + i.amount, 0),
-              discount: data.items.slice(maxRows - 1).reduce((a: number, i: any) => a + i.discount, 0),
-              netAmount: data.items.slice(maxRows - 1).reduce((a: number, i: any) => a + i.netAmount, 0),
-            },
-          ]
-        : data.items;
-
-      for (const item of items) {
-        y -= 12;
-        page.drawText(String(item.description || '').slice(0, 42), { x: col1, y, size: 7.5, font, color: black });
-        page.drawText((item.amount || 0).toLocaleString(), { x: col2, y, size: 7.5, font, color: black });
-        page.drawText(item.discount ? (item.discount).toLocaleString() : '-', { x: col3, y, size: 7.5, font, color: black });
-        page.drawText((item.netAmount || 0).toLocaleString(), { x: col4, y, size: 7.5, font: bold, color: black });
-      }
+      page.drawText(`A/C Title: ${data.accountTitle}`, { x: colX, y, size: 6, font, color: gray, maxWidth: colWidth });
+      y -= 9;
+      page.drawText(`Account #: ${data.accountNumber || 'N/A'}`, { x: colX, y, size: 6, font, color: gray });
       y -= 10;
-      page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.5, color: grayText });
+
+      page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
+      y -= 13;
+
+      page.drawText('Fee Voucher', { x: colX, y, size: 8, font: bold, color: black });
+      page.drawText(`Campus: ${data.campusName}`, { x: colX + 68, y, size: 6.5, font, color: black });
+      const labelW = bold.widthOfTextAtSize(copyLabels[i], 8);
+      page.drawText(copyLabels[i], { x: colX + colWidth - labelW, y, size: 8, font: bold, color: navy });
+      y -= 13;
+
+      const third = colWidth / 3;
+      page.drawText('Issue Date:', { x: colX, y, size: 6, font, color: gray });
+      page.drawText('Due Date:', { x: colX + third, y, size: 6, font, color: gray });
+      page.drawText('Validity:', { x: colX + third * 2, y, size: 6, font, color: gray });
+      y -= 9;
+      page.drawText(data.issueDateLabel, { x: colX, y, size: 6.5, font: bold, color: black });
+      page.drawText(data.dueDateLabel, { x: colX + third, y, size: 6.5, font: bold, color: black });
+      page.drawText(data.validityLabel, { x: colX + third * 2, y, size: 6.5, font: bold, color: black });
+      y -= 13;
+
+      page.drawText(`Challan No: ${data.invoiceNumber}`, { x: colX, y, size: 7, font: bold, color: black });
+      page.drawText(`GRN: ${data.admissionNumber || '-'}`, { x: colX + colWidth * 0.62, y, size: 7, font: bold, color: black });
+      y -= 12;
+
+      page.drawText(`Name: ${data.studentName}`, { x: colX, y, size: 7, font: bold, color: black, maxWidth: colWidth });
+      y -= 11;
+      page.drawText(`Father's Name: ${data.guardianName || '-'}`, { x: colX, y, size: 7, font, color: black, maxWidth: colWidth });
+      y -= 11;
+      page.drawText(`Class: ${data.grade}${data.section ? ' - ' + data.section : ''}`, { x: colX, y, size: 7, font, color: black });
+      page.drawText(`For the month of: ${data.monthLabel}`, { x: colX + colWidth * 0.5, y, size: 6.5, font, color: black });
+      y -= 13;
+
+      page.drawRectangle({ x: colX, y: y - 10, width: colWidth, height: 12, color: lightGray });
+      page.drawText('Description', { x: colX + 3, y: y - 8, size: 6.5, font: bold, color: black });
+      page.drawText('Amount', { x: colX + colWidth - 38, y: y - 8, size: 6.5, font: bold, color: black });
+      y -= 10;
+
+      for (const item of data.items) {
+        y -= 11;
+        page.drawText(String(item.description || '').slice(0, 42), { x: colX + 3, y, size: 6.5, font, color: black });
+        page.drawText((item.netAmount || 0).toLocaleString(), { x: colX + colWidth - 38, y, size: 6.5, font, color: black });
+      }
+      y -= 8;
+      page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
+      y -= 12;
+
+      page.drawText(`Payable by: ${data.dueDateLabel}`, { x: colX, y, size: 7, font: bold, color: black });
+      page.drawText(data.totalAmount.toLocaleString(), { x: colX + colWidth - 38, y, size: 7, font: bold, color: black });
       y -= 12;
 
       if (data.lateFine > 0) {
-        page.drawText(`Late Fine (if paid after due date): PKR ${data.lateFine.toLocaleString()}`, { x: col1, y, size: 7.5, font, color: rgb(0.75, 0.15, 0.15) });
-        y -= 12;
+        page.drawText(`After ${data.dueDateLabel}`, { x: colX, y, size: 7, font, color: red });
+        page.drawText((data.totalAmount + data.lateFine).toLocaleString(), { x: colX + colWidth - 38, y, size: 7, font: bold, color: red });
       }
 
-      page.drawText('Total Payable:', { x: col3 - 20, y, size: 9, font: bold, color: black });
-      page.drawText(`PKR ${(data.balanceDue || 0).toLocaleString()}`, { x: col4, y, size: 10, font: bold, color: navy });
-      y -= 16;
-
-      // Bank details
-      page.drawText(`Bank: ${data.bankName}   A/C Title: ${data.accountTitle}   A/C#: ${data.accountNumber}${data.iban ? '   IBAN: ' + data.iban : ''}`, {
-        x: col1, y, size: 7, font, color: grayText, maxWidth: contentWidth - 16,
-      });
-      y -= 16;
-
-      page.drawText('Parent/Guardian Signature: ____________________', { x: col1, y, size: 7.5, font, color: black });
-      page.drawText('Bank Stamp: ____________________', { x: col1 + 260, y, size: 7.5, font, color: black });
-    };
-
-    drawCopy(0);
-    drawCopy(1);
-    drawCopy(2);
-
-    const bytes = await pdfDoc.save();
-    return Buffer.from(bytes);
+      page.drawText('Instructions:', { x: colX, y: margin + 22, size: 6.5, font: bold, color: black });
+      page.drawText('Not Acceptable / Null & Void After Due Date', { x: colX, y: margin + 12, size: 6, font, color: gray });
+    }
   }
 
   async generateBulkReportCards(

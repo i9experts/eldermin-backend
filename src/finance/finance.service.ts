@@ -996,6 +996,7 @@ export class FinanceService {
           studentName: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(),
           grade: (student as any).currentGrade,
           section: (student as any).currentSection,
+          campus: studentCampusName || undefined,
           month, academicYear,
           items, subtotal, totalDiscount, totalAmount,
           balanceDue: totalAmount,
