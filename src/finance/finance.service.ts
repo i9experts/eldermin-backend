@@ -892,7 +892,14 @@ export class FinanceService {
     if (students.length === 0) return { created: 0, skipped: 0, errors: ['No matching active students found for this scope'] };
 
     const [feeStructures, assignments, discountPrograms, campuses] = await Promise.all([
-      this.feeStructModel.find({ schoolSlug, isActive: true, academicYear }).lean(),
+      // Match on isActive + grade/section/campus only, not academicYear.
+      // FeeStructure.academicYear reflects whatever year happened to be
+      // "current" at creation time (which, for structures made before the
+      // Academic Year system existed, is stale) - a class's pricing is a
+      // current-state catalog, not something that needs a fresh record
+      // every year, so requiring an exact year match here just silently
+      // produced zero matches.
+      this.feeStructModel.find({ schoolSlug, isActive: true }).lean(),
       this.feeAssignmentModel.find({ schoolSlug, isActive: true }).lean(),
       this.discountProgramModel.find({ schoolSlug, isActive: true }).lean(),
       this.campusModel.find({ schoolSlug }).lean(),
