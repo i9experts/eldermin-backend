@@ -8,7 +8,7 @@ import { OnboardingSession, OnboardingSessionSchema } from './schemas/onboarding
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
-import { SchoolSchema } from '../organization/schemas/organization.schema';
+import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema, AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { BankAccount, BankAccountSchema } from '../finance/schemas/finance.schema';
 import { ModulesModule } from '../modules/modules.module';
 
@@ -22,6 +22,9 @@ import { ModulesModule } from '../modules/modules.module';
       { name: 'OrgInstitution', schema: InstitutionSchema },
       { name: 'School', schema: SchoolSchema },
       { name: BankAccount.name, schema: BankAccountSchema },
+      { name: Campus.name, schema: CampusSchema },
+      { name: Grade.name, schema: GradeSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -17,6 +17,7 @@ import {
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { MarketingLead } from '../leads/schemas/lead.schema';
+import { Campus, Grade, AcademicYear } from '../organization/schemas/organization.schema';
 import { ModulesService } from '../modules/modules.service';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -74,6 +75,9 @@ export class SuperAdminService {
     @InjectModel('OrgInstitution') private orgInstitutionModel: Model<any>,
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(MarketingLead.name) private leadModel: Model<MarketingLead>,
+    @InjectModel(Campus.name) private campusModel: Model<any>,
+    @InjectModel(Grade.name) private gradeModel: Model<any>,
+    @InjectModel(AcademicYear.name) private academicYearModel: Model<any>,
     private modulesService: ModulesService,
   ) {}
 
@@ -472,6 +476,60 @@ export class SuperAdminService {
       { $setOnInsert: { slug, name: lead.schoolName, activeModules: mergedModules } },
       { upsert: true, new: true },
     );
+
+    // Real Campus, standard Grades+Sections, and a default Academic Year -
+    // previously nothing here created any of these, which is the exact
+    // root cause traced this session for every "no matching data" issue
+    // (Fee Structure -> student matching, Classes & Sections being empty,
+    // the header's academic year defaulting to a stale hardcoded value).
+    // A school activated with none of this existing had no way to use
+    // Fee Structure, Fee Assignment, or challan generation at all until
+    // someone manually built it all by hand in Institution Setup first.
+    const mainCampus = await this.campusModel.create({
+      name: 'Main Campus',
+      code: 'MAIN',
+      address: lead.city ? `${lead.city}, ${lead.country || 'Pakistan'}` : (lead.country || ''),
+      isActive: true,
+      schoolSlug: slug,
+    });
+
+    const defaultGrades = [
+      'Pre-Nursery', 'Nursery', 'KG-1', 'KG-2',
+      'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5',
+      'Grade 6', 'Grade 7', 'Grade 8',
+      'Grade 9', 'Grade 10', 'Grade 11', 'Grade 12',
+    ];
+    await this.gradeModel.bulkWrite(
+      defaultGrades.map((name, i) => ({
+        updateOne: {
+          filter: { name, schoolSlug: slug },
+          update: {
+            $setOnInsert: {
+              name, displayOrder: i + 1, schoolSlug: slug, isActive: true, sections: [],
+              campusId: String(mainCampus._id),
+            },
+          },
+          upsert: true,
+        },
+      })),
+    );
+
+    // Default academic year - name/dates are a reasonable starting point
+    // (today through +1 year), not a guess at the school's real term
+    // dates. The school can - and should - correct this immediately under
+    // Institution Setup -> Academic Years; this just ensures one exists
+    // so nothing silently breaks on day one.
+    const now2 = new Date();
+    const yearEnd = new Date(now2);
+    yearEnd.setFullYear(yearEnd.getFullYear() + 1);
+    yearEnd.setDate(yearEnd.getDate() - 1);
+    await this.academicYearModel.create({
+      name: `${now2.getFullYear()}-${String(now2.getFullYear() + 1).slice(-2)}`,
+      startDate: now2,
+      endDate: yearEnd,
+      isCurrent: true,
+      schoolSlug: slug,
+    });
 
     const user = await this.userModel.create({
       tenantId: tenant._id,

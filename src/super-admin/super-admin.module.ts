@@ -12,7 +12,7 @@ import {
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema as OrgInstitutionSchema } from '../modules/organization/schemas/institution.schema';
-import { SchoolSchema } from '../organization/schemas/organization.schema';
+import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema, AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { MarketingLead, LeadSchema } from '../leads/schemas/lead.schema';
 import { ModulesModule } from '../modules/modules.module';
 
@@ -30,6 +30,9 @@ import { ModulesModule } from '../modules/modules.module';
       { name: 'OrgInstitution', schema: OrgInstitutionSchema },
       { name: 'School', schema: SchoolSchema },
       { name: MarketingLead.name, schema: LeadSchema },
+      { name: Campus.name, schema: CampusSchema },
+      { name: Grade.name, schema: GradeSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
     ]),
   ],
   controllers: [SuperAdminController],

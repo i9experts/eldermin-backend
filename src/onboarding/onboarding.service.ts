@@ -9,6 +9,7 @@ import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.s
 import { Institution, InstitutionDocument } from '../modules/organization/schemas/institution.schema';
 import { RegisterDto, SaveStepDto } from './dto/onboarding.dto';
 import { BankAccount, BankAccountDocument } from '../finance/schemas/finance.schema';
+import { Campus, CampusDocument, Grade, GradeDocument, AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { ModulesService } from '../modules/modules.service';
 
 @Injectable()
@@ -20,6 +21,9 @@ export class OnboardingService {
     @InjectModel('OrgInstitution') private institutionModel: Model<InstitutionDocument>,
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(BankAccount.name) private bankAccountModel: Model<BankAccountDocument>,
+    @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
+    @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
+    @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
     private jwtService: JwtService,
     private modulesService: ModulesService,
   ) {}
@@ -159,11 +163,67 @@ export class OnboardingService {
 
     if (step === 2) {
       if (data.campusType === 'multi') institutionUpdates['settings.isMultiCampus'] = true;
+      // Previously only set a flag and threw away the actual campus list
+      // the person just filled in (name/code/address/head/phone per campus).
+      const campuses = Array.isArray(data.campuses) ? data.campuses : [];
+      for (const c of campuses) {
+        if (!c?.name) continue;
+        await this.campusModel.findOneAndUpdate(
+          { schoolSlug: slug, name: c.name },
+          { $setOnInsert: {
+            name: c.name, code: c.code || undefined, address: c.address || undefined,
+            isActive: true, schoolSlug: slug,
+          } },
+          { upsert: true },
+        );
+      }
     }
 
     if (step === 3) {
-      if (data.academicYearStart) institutionUpdates.academicYearStart = data.academicYearStart;
-      if (data.academicYearEnd) institutionUpdates.academicYearEnd = data.academicYearEnd;
+      if (data.yearStart) institutionUpdates.academicYearStart = data.yearStart;
+      if (data.yearEnd) institutionUpdates.academicYearEnd = data.yearEnd;
+      // Previously only stamped two date strings on the Institution doc -
+      // never created an actual AcademicYear record, nor any of the Grade
+      // records for the classes the person just listed. Without a real
+      // AcademicYear, every module that scopes data by year (Finance,
+      // Students, Reports) silently falls back to a stale hardcoded
+      // default. Without real Grades, Fee Structure/Fee Assignment have
+      // nothing to match students against.
+      if (data.yearStart && data.yearEnd) {
+        const name = `${new Date(data.yearStart).getFullYear()}-${String(new Date(data.yearEnd).getFullYear()).slice(-2)}`;
+        const existingYear = await this.academicYearModel.findOne({ schoolSlug: slug });
+        if (!existingYear) {
+          await this.academicYearModel.create({
+            name,
+            startDate: new Date(data.yearStart),
+            endDate: new Date(data.yearEnd),
+            terms: Array.isArray(data.terms) && data.terms.length
+              ? data.terms.map((t: string) => ({ name: t, startDate: new Date(data.yearStart), endDate: new Date(data.yearEnd) }))
+              : [],
+            isCurrent: true,
+            schoolSlug: slug,
+          });
+        }
+      }
+
+      if (Array.isArray(data.grades) && data.grades.length) {
+        const sectionCount = Math.max(1, Number(data.sectionsPerGrade) || 1);
+        const sectionNames = Array.from({ length: sectionCount }, (_, i) => String.fromCharCode(65 + i)); // A, B, C...
+        await this.gradeModel.bulkWrite(
+          data.grades.map((name: string, i: number) => ({
+            updateOne: {
+              filter: { name, schoolSlug: slug },
+              update: {
+                $setOnInsert: {
+                  name, displayOrder: i + 1, schoolSlug: slug, isActive: true,
+                  sections: sectionNames.map((s) => ({ name: s, isActive: true })),
+                },
+              },
+              upsert: true,
+            },
+          })),
+        );
+      }
     }
 
     if (step === 4) {
