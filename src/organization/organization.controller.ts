@@ -99,6 +99,16 @@ export class OrganizationController {
     return this.service.createGrade({ ...dto, schoolSlug });
   }
 
+  @Put('grades/:id') async updateGrade(@Param('id') id: string, @Body() dto: Partial<CreateGradeDto>, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateGrade(id, schoolSlug, dto);
+  }
+
+  @Delete('grades/:id') async deleteGrade(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deactivateGrade(id, schoolSlug);
+  }
+
   @Post('grades/seed') async seedGrades(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.bulkCreateGrades(schoolSlug);
@@ -108,6 +118,12 @@ export class OrganizationController {
   async addSection(@Param('id') id: string, @Body() section: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.addSection(id, schoolSlug, section);
+  }
+
+  @Delete('grades/:id/sections/:sectionId')
+  async removeSection(@Param('id') id: string, @Param('sectionId') sectionId: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.removeSection(id, schoolSlug, sectionId);
   }
 
   // Departments

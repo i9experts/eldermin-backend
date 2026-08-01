@@ -56,6 +56,7 @@ export class CreateAcademicYearDto {
 export class CreateGradeDto {
   @IsString() name: string;
   @IsOptional() @IsString() code?: string;
+  @IsOptional() @IsString() wing?: string;
   @IsOptional() @IsNumber() displayOrder?: number;
   @IsOptional() @IsString() campusId?: string;
   @IsOptional() sections?: { name: string; capacity?: number; classTeacher?: string }[];

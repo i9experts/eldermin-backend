@@ -155,12 +155,36 @@ export class OrganizationService {
     return grade.save();
   }
 
+  async updateGrade(id: string, schoolSlug: string, dto: Partial<CreateGradeDto>) {
+    const grade = await this.gradeModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: dto }, { new: true },
+    );
+    if (!grade) throw new NotFoundException('Grade not found');
+    return grade;
+  }
+
+  async deactivateGrade(id: string, schoolSlug: string) {
+    const grade = await this.gradeModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    if (!grade) throw new NotFoundException('Grade not found');
+    return { message: 'Grade deactivated' };
+  }
+
   async addSection(gradeId: string, schoolSlug: string, section: any) {
     return this.gradeModel.findOneAndUpdate(
       { _id: gradeId, schoolSlug },
       { $push: { sections: section } },
       { new: true },
     );
+  }
+
+  async removeSection(gradeId: string, schoolSlug: string, sectionId: string) {
+    const grade = await this.gradeModel.findOneAndUpdate(
+      { _id: gradeId, schoolSlug },
+      { $pull: { sections: { _id: sectionId } } },
+      { new: true },
+    );
+    if (!grade) throw new NotFoundException('Grade not found');
+    return grade;
   }
 
   async bulkCreateGrades(schoolSlug: string) {
