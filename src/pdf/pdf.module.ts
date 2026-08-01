@@ -5,7 +5,7 @@ import { PdfService } from './pdf.service';
 import { PdfController } from './pdf.controller';
 import { StudentSchema } from '../students/schemas/student.schema';
 import { InvoiceSchema, PaymentSchema, ExpenseSchema, BankAccountSchema } from '../finance/schemas/finance.schema';
-import { SchoolSchema } from '../organization/schemas/organization.schema';
+import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { AssessmentSchema } from '../assessments/schemas/assessment.schema';
 import { BehaviourRecordSchema } from '../behaviour/schemas/behaviour.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
@@ -30,6 +30,7 @@ import { ReportTemplateSchema } from '../modules/report-templates/schemas/report
       { name: 'Assessment', schema: AssessmentSchema },
       { name: 'Behaviour', schema: BehaviourRecordSchema },
       { name: 'ReportTemplate', schema: ReportTemplateSchema },
+      { name: Campus.name, schema: CampusSchema },
     ]),
   ],
   controllers: [PdfController],
