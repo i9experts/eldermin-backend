@@ -84,11 +84,11 @@ export class StudentsController {
   @Post('bulk-import/commit')
   @HttpCode(HttpStatus.CREATED)
   async commitBulkImport(
-    @Body() body: { rows: any[]; duplicateAction: 'skip' | 'update' | 'createAnyway' },
+    @Body() body: { rows: any[]; duplicateAction: 'skip' | 'update' | 'createAnyway'; campusId?: string },
     @Request() req: any,
   ) {
     const { schoolSlug, academicYear } = this.ctx(req);
-    return this.studentsService.commitBulkImport(schoolSlug, academicYear, body.rows, body.duplicateAction);
+    return this.studentsService.commitBulkImport(schoolSlug, academicYear, body.rows, body.duplicateAction, body.campusId);
   }
 
 
@@ -126,6 +126,23 @@ export class StudentsController {
   ) {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.updateStudent(id, schoolSlug, dto);
+  }
+
+  /**
+   * PATCH /api/v1/students/bulk-assign-campus
+   * Backfill fix: students created via bulk CSV import never got a
+   * campusId at all (only the Admissions -> Enrollment flow sets it),
+   * which silently breaks any campus-scoped matching downstream (e.g.
+   * Finance's Fee Structure -> student matching). Only touches students
+   * missing a campusId, never overwrites an existing assignment.
+   */
+  @Patch('bulk-assign-campus')
+  async bulkAssignCampus(
+    @Body() dto: { campusId: string; grade?: string; section?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkAssignCampus(schoolSlug, dto.campusId, dto.grade, dto.section);
   }
 
   /** POST /api/v1/students/:id/photo */

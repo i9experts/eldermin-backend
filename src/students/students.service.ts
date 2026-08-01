@@ -164,6 +164,18 @@ export class StudentsService {
     return student;
   }
 
+  async bulkAssignCampus(schoolSlug: string, campusId: string, grade?: string, section?: string) {
+    if (!campusId) throw new BadRequestException('campusId is required');
+    const filter: any = {
+      schoolSlug,
+      $or: [{ campusId: { $exists: false } }, { campusId: null }, { campusId: '' }],
+    };
+    if (grade) filter.currentGrade = grade;
+    if (section) filter.currentSection = section;
+    const result = await this.studentModel.updateMany(filter, { $set: { campusId } });
+    return { matched: result.matchedCount, updated: result.modifiedCount };
+  }
+
   async uploadPhoto(id: string, schoolSlug: string, file: Express.Multer.File) {
     const { url } = await this.uploadService.uploadFile(file, 'student-photos', schoolSlug);
     const student = await this.studentModel.findOneAndUpdate(
@@ -1283,6 +1295,7 @@ export class StudentsService {
     academicYear: string,
     rows: any[],
     duplicateAction: 'skip' | 'update' | 'createAnyway' = 'skip',
+    campusId?: string,
   ) {
     if (!rows || rows.length === 0) throw new BadRequestException('No rows to import');
 
@@ -1371,6 +1384,12 @@ export class StudentsService {
           if (!(existing as any).admissionNumber) {
             setFields.admissionNumber = row.data.admissionNumber || generateUniqueAdmissionNumber();
           }
+          // Same backfill logic for campusId - re-running an import with
+          // duplicateAction='update' is a natural opportunity to fix
+          // records that were created before campus assignment existed.
+          if (!(existing as any).campusId && campusId) {
+            setFields.campusId = campusId;
+          }
           updateOps.push({
             updateOne: {
               filter: { _id: existing._id },
@@ -1415,6 +1434,7 @@ export class StudentsService {
           guardians,
           schoolSlug,
           status: 'active',
+          ...(campusId ? { campusId } : {}),
         },
       });
     }
