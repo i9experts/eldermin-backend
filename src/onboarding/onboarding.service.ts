@@ -28,6 +28,33 @@ export class OnboardingService {
     private modulesService: ModulesService,
   ) {}
 
+  // The wizard's own module list (frontend types.ts ALL_MODULES) uses
+  // display names that match neither the canonical module-registry ids
+  // (activeModules array, authorization checks) nor even the *other*
+  // name->id dict already used by Super Admin's lead-activation flow
+  // (which has its own different display names). Sending wizard names
+  // straight through would silently activate modules under keys nothing
+  // else recognizes.
+  private readonly WIZARD_MODULE_NAME_TO_ID: Record<string, string> = {
+    'Institution Setup': 'organization',
+    'Governance & Compliance': 'compliance',
+    'Documents & Workflow': 'documents',
+    'Staff & HR': 'hr',
+    'Teaching Management': 'teaching',
+    'Finance': 'finance',
+    'Procurement': 'procurement',
+    'Campus Operations': 'campus-ops',
+    'Admissions': 'admissions',
+    'Curriculum Intelligence': 'curriculum',
+    'Syllabus Tracking': 'syllabus',
+    'Timetable Intelligence': 'timetable',
+    'Library': 'library',
+    'Student 360': 'students',
+    'Assessment & Results': 'assessment',
+    'Behaviour & Tarbiyah': 'behaviour',
+    'Analytics & Intelligence': 'analytics',
+  };
+
   private generateSlug(name: string): string {
     return name
       .toLowerCase()
@@ -231,11 +258,14 @@ export class OnboardingService {
     }
 
     if (step === 5) {
-      if (data.selectedModules) tenantUpdates.activeModules = data.selectedModules;
-      if (data.selectedBundle) tenantUpdates.plan = data.selectedBundle;
-      if (data.selectedModules && data.selectedModules.length > 0) {
-        await this.modulesService.bulkActivate(slug, data.selectedModules);
+      const moduleIds = Array.isArray(data.selectedModules)
+        ? data.selectedModules.map((name: string) => this.WIZARD_MODULE_NAME_TO_ID[name]).filter(Boolean)
+        : [];
+      if (moduleIds.length > 0) {
+        tenantUpdates.activeModules = moduleIds;
+        await this.modulesService.bulkActivate(slug, moduleIds);
       }
+      if (data.selectedBundle) tenantUpdates.plan = data.selectedBundle;
     }
 
     if (step === 6) {
