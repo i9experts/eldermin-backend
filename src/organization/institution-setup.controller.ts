@@ -10,6 +10,7 @@ import {
   CreateCommitteeDto, UpdateCommitteeDto,
   CreateMeetingDto, UpdateMeetingDto,
   CreateWorkflowDto, UpdateWorkflowDto,
+  CreateAuthorityDelegationDto,
 } from './dto/institution-setup.dto';
 
 @Controller('organization')
@@ -20,6 +21,7 @@ export class InstitutionSetupController {
     return {
       tenantId: req?.user?.tenantId,
       schoolSlug: req?.headers['x-school-slug'] || req?.user?.schoolSlug,
+      userName: req?.user?.name || 'Admin',
     };
   }
 
@@ -143,5 +145,24 @@ export class InstitutionSetupController {
   async deleteWorkflow(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteWorkflow(id, schoolSlug);
+  }
+
+  // ── Authority Delegation ──────────────────────────────────
+  @Get('delegations')
+  async getDelegations(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDelegations(schoolSlug);
+  }
+
+  @Post('delegations') @HttpCode(HttpStatus.CREATED)
+  async createDelegation(@Body() dto: CreateAuthorityDelegationDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createDelegation(schoolSlug, userName, dto);
+  }
+
+  @Put('delegations/:id/revoke')
+  async revokeDelegation(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.revokeDelegation(id, schoolSlug, userName);
   }
 }

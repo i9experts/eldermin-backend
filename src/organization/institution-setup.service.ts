@@ -6,6 +6,7 @@ import {
   Committee, CommitteeDocument,
   Meeting, MeetingDocument,
   Workflow, WorkflowDocument,
+  AuthorityDelegation, AuthorityDelegationDocument,
 } from './schemas/institution-setup.schema';
 import { School, SchoolDocument } from './schemas/organization.schema';
 import { EmailService } from '../email/email.service';
@@ -19,6 +20,7 @@ export class InstitutionSetupService {
     @InjectModel(Committee.name) private committeeModel: Model<CommitteeDocument>,
     @InjectModel(Meeting.name) private meetingModel: Model<MeetingDocument>,
     @InjectModel(Workflow.name) private workflowModel: Model<WorkflowDocument>,
+    @InjectModel(AuthorityDelegation.name) private delegationModel: Model<AuthorityDelegationDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private emailService: EmailService,
     private whatsAppService: WhatsAppService,
@@ -236,5 +238,32 @@ export class InstitutionSetupService {
     const result = await this.workflowModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!result) throw new NotFoundException('Workflow not found');
     return { message: 'Workflow deleted' };
+  }
+
+  // ── Authority Delegation ──────────────────────────────────
+  async getDelegations(schoolSlug: string) {
+    const delegations = await this.delegationModel.find({ schoolSlug }).sort({ startDate: -1 }).lean();
+    const now = new Date();
+    // "expired" is derived at read time from endDate, not a stored value -
+    // there's nothing to keep in sync with a scheduled job this way.
+    return delegations.map((d: any) => ({
+      ...d,
+      computedStatus: d.status === 'revoked' ? 'revoked' : new Date(d.endDate) < now ? 'expired' : 'active',
+    }));
+  }
+
+  async createDelegation(schoolSlug: string, createdBy: string, dto: any) {
+    const delegation = new this.delegationModel({ ...dto, schoolSlug, createdBy });
+    return delegation.save();
+  }
+
+  async revokeDelegation(id: string, schoolSlug: string, revokedBy: string) {
+    const delegation = await this.delegationModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: { status: 'revoked', revokedAt: new Date(), revokedBy } },
+      { new: true },
+    );
+    if (!delegation) throw new NotFoundException('Delegation not found');
+    return delegation;
   }
 }

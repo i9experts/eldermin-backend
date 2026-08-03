@@ -174,3 +174,14 @@ export class UpdateWorkflowDto {
   @IsOptional() @IsEnum(['active', 'inactive']) status?: string;
   @IsOptional() @IsString() description?: string;
 }
+
+export class CreateAuthorityDelegationDto {
+  @IsString() delegatorName: string;
+  @IsOptional() @IsString() delegatorRole?: string;
+  @IsString() delegateName: string;
+  @IsOptional() @IsString() delegateRole?: string;
+  @IsString() scope: string;
+  @IsOptional() @IsString() reason?: string;
+  @IsString() startDate: string;
+  @IsString() endDate: string;
+}

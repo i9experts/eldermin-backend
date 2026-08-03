@@ -230,3 +230,34 @@ export class Workflow {
 
 export const WorkflowSchema = SchemaFactory.createForClass(Workflow);
 WorkflowSchema.index({ schoolSlug: 1, module: 1 });
+
+// ============================================================
+// AUTHORITY DELEGATION
+// A named person temporarily hands their approval authority to someone
+// else for a defined period (e.g. Principal delegates to Vice Principal
+// while traveling) - without permanently changing anyone's actual role.
+// "active"/"revoked" is the only stored status; whether a delegation has
+// naturally expired is computed from endDate at read time rather than
+// needing a scheduled job to flip a stored value.
+// ============================================================
+export type AuthorityDelegationDocument = AuthorityDelegation & Document;
+
+@Schema({ timestamps: true, collection: 'authority_delegations' })
+export class AuthorityDelegation {
+  @Prop({ required: true }) delegatorName: string;
+  @Prop() delegatorRole: string;
+  @Prop({ required: true }) delegateName: string;
+  @Prop() delegateRole: string;
+  @Prop({ required: true }) scope: string; // e.g. "All Approvals", "Finance", "HR"
+  @Prop() reason: string; // e.g. "Annual Leave", "Hajj/Umrah", "Travel"
+  @Prop({ required: true }) startDate: Date;
+  @Prop({ required: true }) endDate: Date;
+  @Prop({ enum: ['active', 'revoked'], default: 'active' }) status: string;
+  @Prop() revokedAt: Date;
+  @Prop() revokedBy: string;
+  @Prop({ required: true }) createdBy: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const AuthorityDelegationSchema = SchemaFactory.createForClass(AuthorityDelegation);
+AuthorityDelegationSchema.index({ schoolSlug: 1, status: 1 });

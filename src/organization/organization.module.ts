@@ -17,6 +17,7 @@ import {
   Committee, CommitteeSchema,
   Meeting, MeetingSchema,
   Workflow, WorkflowSchema,
+  AuthorityDelegation, AuthorityDelegationSchema,
 } from './schemas/institution-setup.schema';
 import { GroupInstitution, GroupInstitutionSchema } from './schemas/group-institution.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
@@ -38,6 +39,7 @@ import { EmailModule } from '../email/email.module';
       { name: Committee.name, schema: CommitteeSchema },
       { name: Meeting.name, schema: MeetingSchema },
       { name: Workflow.name, schema: WorkflowSchema },
+      { name: AuthorityDelegation.name, schema: AuthorityDelegationSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: Student.name, schema: StudentSchema },
     ]),
