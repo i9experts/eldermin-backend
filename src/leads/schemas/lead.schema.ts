@@ -41,6 +41,7 @@ export class MarketingLead extends Document {
 
   @Prop({ type: [String], default: [] }) modulesRequested: string[];
   @Prop({ trim: true }) planRequested?: string;
+  @Prop({ trim: true }) billingCycle?: string;
   @Prop({ type: [String], default: [] }) integrationsRequested: string[];
 
   @Prop() preferredTrainingDate?: string;

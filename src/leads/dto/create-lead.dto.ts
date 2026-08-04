@@ -27,6 +27,7 @@ export class CreateLeadDto {
 
   @IsOptional() @IsArray() modulesRequested?: string[];
   @IsOptional() @IsString() planRequested?: string;
+  @IsOptional() @IsString() billingCycle?: string;
   @IsOptional() @IsArray() integrationsRequested?: string[];
 
   @IsOptional() @IsString() preferredTrainingDate?: string;
