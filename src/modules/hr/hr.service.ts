@@ -226,7 +226,7 @@ export class HrService {
     const filter: any = { tenantId: this.newTid(tenantId) };
     if (query.staffId) filter.staffId = this.newTid(query.staffId);
     if (query.status) filter.status = query.status;
-    return this.leaveApplicationModel.find(filter).sort({ createdAt: -1 }).lean();
+    return this.leaveApplicationModel.find(filter).populate('approvedBy', 'profile email').sort({ createdAt: -1 }).lean();
   }
 
   async submitLeaveApplication(tenantId: string, data: any) {

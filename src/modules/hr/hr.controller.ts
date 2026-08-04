@@ -37,13 +37,19 @@ export class HrController {
   updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
 
   @Get('staff/:id/attendance')
-  getStaffAttendanceById() { return []; }
+  getStaffAttendanceById(@Request() req, @Param('id') id: string) {
+    return this.hrService.getStaffAttendance(req.user.tenantId, { staffId: id });
+  }
 
   @Get('staff/:id/leave')
-  getStaffLeave() { return []; }
+  getStaffLeave(@Request() req, @Param('id') id: string) {
+    return this.hrService.getLeaveApplications(req.user.tenantId, { staffId: id });
+  }
 
   @Get('staff/:id/payslips')
-  getStaffPayslips() { return []; }
+  getStaffPayslips(@Request() req, @Param('id') id: string) {
+    return this.hrService.getPayslips(req.user.tenantId, { staffId: id });
+  }
 
   @Post('staff/:id/photo')
   @UseInterceptors(FileInterceptor('photo'))
