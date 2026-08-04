@@ -40,6 +40,14 @@ export class User {
 
   @Prop()
   lastLoginAt: Date;
+
+  // Forgot-password flow - stores a HASH of the reset token (never the raw
+  // token itself), same principle as never storing a plain password.
+  @Prop()
+  resetPasswordTokenHash: string;
+
+  @Prop()
+  resetPasswordExpires: Date;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

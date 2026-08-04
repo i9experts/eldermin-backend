@@ -10,11 +10,13 @@ import { User, UserSchema } from '../organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
+import { EmailModule } from '../../email/email.module';
 
 @Module({
   imports: [
     UploadModule,
     RolesModule,
+    EmailModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

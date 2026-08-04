@@ -12,6 +12,15 @@ class LoginDto {
   slug?: string;
 }
 
+class ForgotPasswordDto {
+  @IsEmail() email: string;
+}
+
+class ResetPasswordDto {
+  @IsString() token: string;
+  @IsString() @MinLength(6) newPassword: string;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -21,6 +30,20 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto.email, dto.password, dto.slug);
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.newPassword);
   }
 
   @Get('me')
