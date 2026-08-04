@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile, Res, HttpStatus } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { HrService } from './hr.service';
 
 @Controller('hr')
@@ -255,6 +256,17 @@ export class HrController {
 
   @Post('payslips')
   createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), body); }
+
+  @Get('payslips/:id/pdf')
+  async downloadPayslipPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
+    const pdf = await this.hrService.generatePayslipPdf(id, req.user.tenantId, req.user.schoolSlug);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="payslip-${id}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
 
   // ── PERFORMANCE ───────────────────────────────────────────────────────
 

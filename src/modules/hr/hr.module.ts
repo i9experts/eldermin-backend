@@ -21,6 +21,7 @@ import { ExitRecord, ExitRecordSchema } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicySchema } from './schemas/leave-policy.schema';
 import { BiometricConfig, BiometricConfigSchema } from './schemas/biometric-config.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
+import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { User, UserSchema } from '../organization/schemas/user.schema';
       { name: LeavePolicy.name, schema: LeavePolicySchema },
       { name: BiometricConfig.name, schema: BiometricConfigSchema },
       { name: User.name, schema: UserSchema },
+      { name: School.name, schema: SchoolSchema },
     ]),
   ],
   controllers: [HrController],

@@ -18,6 +18,8 @@ import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { PerformanceReview, PerformanceReviewDocument } from './schemas/performance-review.schema';
 import { Training, TrainingDocument } from './schemas/training.schema';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { School, SchoolDocument } from '../../organization/schemas/organization.schema';
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicyDocument } from './schemas/leave-policy.schema';
@@ -44,6 +46,7 @@ export class HrService {
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
     @InjectModel(BiometricConfig.name) private biometricConfigModel: Model<BiometricConfigDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
   ) {}
 
@@ -809,6 +812,109 @@ export class HrService {
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
     });
+  }
+
+  async generatePayslipPdf(payslipId: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
+    const payslip = await this.payslipModel.findOne({ _id: payslipId, tenantId: this.newTid(tenantId) }).lean();
+    if (!payslip) throw new NotFoundException('Payslip not found');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || 'Eldermin School';
+
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595, 842]); // A4
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.11, 0.23, 0.37);
+    const gray = rgb(0.42, 0.45, 0.5);
+    const lightGray = rgb(0.95, 0.96, 0.97);
+    let y = 800;
+
+    const drawText = (text: string, x: number, yPos: number, opts: { size?: number; f?: any; color?: any } = {}) => {
+      page.drawText(text ?? '', { x, y: yPos, size: opts.size ?? 10, font: opts.f ?? font, color: opts.color ?? rgb(0.15, 0.15, 0.18) });
+    };
+    const fmt = (n: number) => `${payslip.currency || 'PKR'} ${Number(n || 0).toLocaleString()}`;
+
+    // Header
+    page.drawRectangle({ x: 0, y: 792, width: 595, height: 50, color: navy });
+    drawText(schoolName, 40, 812, { size: 16, f: bold, color: rgb(1, 1, 1) });
+    drawText('PAYSLIP', 480, 812, { size: 14, f: bold, color: rgb(1, 1, 1) });
+    y = 765;
+
+    drawText(payslip.periodLabel || `${payslip.month}/${payslip.year}`, 40, y, { size: 12, f: bold, color: navy });
+    y -= 25;
+
+    // Employee details block
+    page.drawRectangle({ x: 40, y: y - 55, width: 515, height: 60, color: lightGray });
+    drawText('Employee Name', 50, y - 12, { size: 8, color: gray });
+    drawText(payslip.staffName || '—', 50, y - 26, { size: 11, f: bold });
+    drawText('Employee ID', 220, y - 12, { size: 8, color: gray });
+    drawText(payslip.employeeId || '—', 220, y - 26, { size: 11, f: bold });
+    drawText('Designation', 350, y - 12, { size: 8, color: gray });
+    drawText(payslip.designation || '—', 350, y - 26, { size: 11, f: bold });
+    drawText('Department', 50, y - 44, { size: 8, color: gray });
+    drawText(payslip.department || '—', 50, y - 56, { size: 10 });
+    drawText('Status', 350, y - 44, { size: 8, color: gray });
+    drawText((payslip.status || 'draft').toUpperCase(), 350, y - 56, { size: 10, f: bold });
+    y -= 85;
+
+    // Earnings / Deductions two-column table
+    const colWidth = 250;
+    drawText('EARNINGS', 40, y, { size: 10, f: bold, color: navy });
+    drawText('DEDUCTIONS', 40 + colWidth + 25, y, { size: 10, f: bold, color: navy });
+    y -= 5;
+    page.drawLine({ start: { x: 40, y }, end: { x: 40 + colWidth, y }, thickness: 0.5, color: gray });
+    page.drawLine({ start: { x: 40 + colWidth + 25, y }, end: { x: 595 - 40, y }, thickness: 0.5, color: gray });
+    y -= 18;
+
+    const earnings = [
+      ['Basic Salary', payslip.basicSalary], ['HRA', payslip.hra],
+      ['Transport Allowance', payslip.transportAllowance], ['Medical Allowance', payslip.medicalAllowance],
+      ['Other Allowances', payslip.otherAllowances],
+    ];
+    const deductions = [
+      ['Income Tax', payslip.incomeTax], ['Provident Fund', payslip.providentFund],
+      ['Loan Deduction', payslip.loanDeduction], ['Leave Deduction', payslip.leaveDeduction],
+      ['Other Deductions', payslip.otherDeductions],
+    ];
+    let ey = y, dy = y;
+    for (const [label, amt] of earnings) {
+      if (!amt) continue;
+      drawText(label as string, 40, ey, { size: 9 });
+      drawText(fmt(amt as number), 40 + colWidth - 70, ey, { size: 9 });
+      ey -= 16;
+    }
+    for (const [label, amt] of deductions) {
+      if (!amt) continue;
+      drawText(label as string, 40 + colWidth + 25, dy, { size: 9 });
+      drawText(fmt(amt as number), 595 - 110, dy, { size: 9 });
+      dy -= 16;
+    }
+    y = Math.min(ey, dy) - 10;
+    page.drawLine({ start: { x: 40, y }, end: { x: 40 + colWidth, y }, thickness: 0.5, color: gray });
+    page.drawLine({ start: { x: 40 + colWidth + 25, y }, end: { x: 595 - 40, y }, thickness: 0.5, color: gray });
+    y -= 16;
+    drawText('Gross Salary', 40, y, { size: 9, f: bold });
+    drawText(fmt(payslip.grossSalary), 40 + colWidth - 70, y, { size: 9, f: bold });
+    drawText('Total Deductions', 40 + colWidth + 25, y, { size: 9, f: bold });
+    drawText(fmt(payslip.totalDeductions), 595 - 110, y, { size: 9, f: bold });
+    y -= 40;
+
+    // Net Salary highlight
+    page.drawRectangle({ x: 40, y: y - 30, width: 515, height: 40, color: navy });
+    drawText('NET SALARY', 55, y - 15, { size: 12, f: bold, color: rgb(1, 1, 1) });
+    drawText(fmt(payslip.netSalary), 420, y - 15, { size: 14, f: bold, color: rgb(1, 1, 1) });
+    y -= 65;
+
+    // Attendance summary
+    drawText('Attendance Summary', 40, y, { size: 10, f: bold, color: navy });
+    y -= 18;
+    drawText(`Present: ${payslip.presentDays ?? 0}  ·  Absent: ${payslip.absentDays ?? 0}  ·  Leave: ${payslip.leaveDays ?? 0}`, 40, y, { size: 9, color: gray });
+    y -= 40;
+
+    drawText('This is a system-generated payslip and does not require a signature.', 40, 40, { size: 7, color: gray });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 
   async getPayrollStats(tenantId: string) {
