@@ -24,6 +24,12 @@ import {
   VendorBill, VendorBillDocument,
   VendorPayment, VendorPaymentDocument,
 } from './schemas/vendor.schema';
+import {
+  TaxTemplate, TaxTemplateDocument,
+  ItemTaxTemplate, ItemTaxTemplateDocument,
+  TaxRule, TaxRuleDocument,
+  WithholdingTaxCategory, WithholdingTaxCategoryDocument,
+} from './schemas/tax.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
@@ -55,6 +61,10 @@ export class FinanceService {
     @InjectModel(Vendor.name) private vendorModel: Model<VendorDocument>,
     @InjectModel(VendorBill.name) private vendorBillModel: Model<VendorBillDocument>,
     @InjectModel(VendorPayment.name) private vendorPaymentModel: Model<VendorPaymentDocument>,
+    @InjectModel(TaxTemplate.name) private taxTemplateModel: Model<TaxTemplateDocument>,
+    @InjectModel(ItemTaxTemplate.name) private itemTaxTemplateModel: Model<ItemTaxTemplateDocument>,
+    @InjectModel(TaxRule.name) private taxRuleModel: Model<TaxRuleDocument>,
+    @InjectModel(WithholdingTaxCategory.name) private withholdingCategoryModel: Model<WithholdingTaxCategoryDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
@@ -175,6 +185,12 @@ export class FinanceService {
       { code: '2100', name: 'Salaries Payable', type: 'liability', subType: 'current_liability' },
       { code: '2200', name: 'Tax Payable', type: 'liability', subType: 'current_liability' },
       { code: '2300', name: 'Provident Fund Payable', type: 'liability', subType: 'current_liability' },
+      // Phase 3 — tax engine accounts. Kept distinct from the generic 2200
+      // "Tax Payable" seeded in Phase 1 so sales tax, input tax, and
+      // withholding tax each have their own trackable ledger account.
+      { code: '2400', name: 'Sales Tax Payable', type: 'liability', subType: 'current_liability' },
+      { code: '1400', name: 'Input Tax / Purchase Tax Receivable', type: 'asset', subType: 'current_asset' },
+      { code: '2500', name: 'Withholding Tax Payable', type: 'liability', subType: 'current_liability' },
       { code: '3000', name: "Owner's Equity", type: 'equity', subType: 'equity' },
       { code: '4000', name: 'Tuition Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
       { code: '4100', name: 'Admission Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
@@ -352,7 +368,7 @@ export class FinanceService {
   async postJournalEntry(schoolSlug: string, dto: {
     date?: Date | string; reference?: string; narration?: string;
     sourceType: string; sourceId?: string; postedBy?: string;
-    lines: { accountCode: string; costCenterName?: string; debit?: number; credit?: number; partnerType?: string; partnerId?: string; partnerName?: string }[];
+    lines: { accountCode: string; costCenterName?: string; debit?: number; credit?: number; partnerType?: string; partnerId?: string; partnerName?: string; taxTemplateName?: string }[];
   }) {
     if (!dto.lines || dto.lines.length < 2) throw new BadRequestException('A journal entry needs at least two lines');
     const date = dto.date ? new Date(dto.date) : new Date();
@@ -370,6 +386,7 @@ export class FinanceService {
         debit, credit,
         partnerType: l.partnerType || null, partnerId: l.partnerId, partnerName: l.partnerName,
         isUnmapped: account.code === SUSPENSE_ACCOUNT_CODE && account.code !== l.accountCode,
+        taxTemplateName: l.taxTemplateName,
         _accountDoc: account,
       };
     }));
@@ -436,18 +453,78 @@ export class FinanceService {
     return '4000'; // Tuition Fee Revenue (default)
   }
 
-  private async postFeeInvoiceJournal(schoolSlug: string, invoice: any) {
+  // Phase 3 — resolves the sales tax to apply to a fee invoice (or the
+  // purchase tax to apply to a vendor bill line): checks active TaxRules
+  // in priority order first (a single-condition override, e.g. "campus X
+  // is exempt"), then falls back to the ItemTaxTemplate default for
+  // (direction, itemType). Returns null (no tax) rather than throwing —
+  // tax resolution is fully optional so schools with no tax configured
+  // see zero behavior change.
+  private async resolveTaxForLine(schoolSlug: string, direction: 'sales' | 'purchase', itemType: string, context: Record<string, any> = {}) {
+    try {
+      const rules = await this.taxRuleModel.find({ schoolSlug, isActive: true }).sort({ priority: 1 }).populate('taxTemplateId');
+      for (const rule of rules as any[]) {
+        const cond = rule.condition;
+        if (!cond?.field) continue;
+        const ctxValue = context?.[cond.field];
+        if (ctxValue === undefined || ctxValue === null) continue;
+        const matches = (cond.operator || 'eq') === 'eq' && String(ctxValue) === String(cond.value);
+        if (!matches) continue;
+        const template = rule.taxTemplateId as any;
+        if (template && template.isActive && (template.type === direction || (direction === 'purchase' && template.type === 'withholding'))) {
+          return template;
+        }
+      }
+
+      if (!itemType) return null;
+      const itemTemplate = await this.itemTaxTemplateModel.findOne({ schoolSlug, direction, itemType, isActive: true }).populate('taxTemplateId');
+      const template = itemTemplate?.taxTemplateId as any;
+      if (template && template.isActive) return template;
+      return null;
+    } catch {
+      return null; // tax resolution must never block the underlying transaction
+    }
+  }
+
+  // Computes the tax amount for a given base amount using a resolved
+  // TaxTemplate ('percentage' scales with the amount, 'fixed' is a flat
+  // charge regardless of amount). Returns 0 if no template resolves.
+  private async computeSalesTax(schoolSlug: string, itemType: string, context: Record<string, any>, baseAmount: number) {
+    const taxTemplate = await this.resolveTaxForLine(schoolSlug, 'sales', itemType, context);
+    if (!taxTemplate) return { taxAmount: 0, taxTemplate: null as any };
+    const taxAmount = taxTemplate.computationMethod === 'fixed'
+      ? Math.round((taxTemplate.rate || 0) * 100) / 100
+      : Math.round(baseAmount * (taxTemplate.rate || 0)) / 100;
+    return { taxAmount, taxTemplate };
+  }
+
+  private async postFeeInvoiceJournal(schoolSlug: string, invoice: any, taxTemplate?: any) {
     if (!invoice.totalAmount) return; // nothing to post for a zero-value invoice
     try {
+      const taxAmount = Math.round((invoice.totalTax || 0) * 100) / 100;
+      // The tax portion must never inflate revenue — the school doesn't
+      // keep the tax, it's a pass-through liability — so revenue is
+      // recognized net of tax while AR is debited for the tax-inclusive total.
+      const revenueAmount = Math.round((invoice.totalAmount - taxAmount) * 100) / 100;
+      const lines: any[] = [
+        { accountCode: '1200', debit: invoice.totalAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+        { accountCode: this.mapInvoiceTypeToRevenueAccount(invoice.type), credit: revenueAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+      ];
+      if (taxAmount > 0) {
+        lines.push({
+          accountCode: taxTemplate?.accountCode || '2400',
+          credit: taxAmount,
+          partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName,
+          costCenterName: invoice.campus,
+          taxTemplateName: taxTemplate?.name,
+        });
+      }
       await this.postJournalEntry(schoolSlug, {
         date: invoice.createdAt || new Date(),
         reference: invoice.invoiceNumber,
         narration: `Fee invoice ${invoice.invoiceNumber} — ${invoice.studentName}`,
         sourceType: 'fee_invoice', sourceId: String(invoice._id),
-        lines: [
-          { accountCode: '1200', debit: invoice.totalAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
-          { accountCode: this.mapInvoiceTypeToRevenueAccount(invoice.type), credit: invoice.totalAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
-        ],
+        lines,
       });
     } catch (err: any) {
       // A ledger posting failure must never block the underlying business
@@ -608,13 +685,21 @@ export class FinanceService {
   async createInvoice(data: any) {
     const subtotal = (data.items || []).reduce((a: number, i: any) => a + i.amount, 0);
     const totalDiscount = (data.items || []).reduce((a: number, i: any) => a + (i.discount || 0), 0);
-    const totalAmount = subtotal - totalDiscount;
+    const netBeforeTax = subtotal - totalDiscount;
+
+    // Phase 3 — auto-resolve sales tax for this invoice (no-op if the
+    // school hasn't configured any TaxTemplate/ItemTaxTemplate/TaxRule).
+    const { taxAmount: totalTax, taxTemplate } = await this.computeSalesTax(
+      data.schoolSlug, data.type || 'fee', { grade: data.grade, campus: data.campus }, netBeforeTax,
+    );
+    const totalAmount = Math.round((netBeforeTax + totalTax) * 100) / 100;
+
     const inv = new this.invoiceModel({
       ...data,
-      subtotal, totalDiscount, totalAmount, balanceDue: totalAmount,
+      subtotal, totalDiscount, totalTax, totalAmount, balanceDue: totalAmount,
     });
     await inv.save();
-    await this.postFeeInvoiceJournal(data.schoolSlug, inv);
+    await this.postFeeInvoiceJournal(data.schoolSlug, inv, taxTemplate);
     return inv;
   }
 
@@ -1499,7 +1584,13 @@ export class FinanceService {
 
         const subtotal = items.reduce((a, i) => a + i.amount, 0);
         const totalDiscount = items.reduce((a, i) => a + i.discount, 0);
-        const totalAmount = subtotal - totalDiscount;
+        const netBeforeTax = subtotal - totalDiscount;
+
+        // Phase 3 — auto-resolve sales tax the same way createInvoice does.
+        const { taxAmount: totalTax, taxTemplate } = await this.computeSalesTax(
+          schoolSlug, 'fee', { grade: (student as any).currentGrade, campus: studentCampusName }, netBeforeTax,
+        );
+        const totalAmount = Math.round((netBeforeTax + totalTax) * 100) / 100;
 
         const [y, m] = month.split('-').map(Number);
         const dueDate = y && m ? new Date(y, m - 1, Math.min(dueDay, 28)) : undefined;
@@ -1512,7 +1603,7 @@ export class FinanceService {
           section: (student as any).currentSection,
           campus: studentCampusName || undefined,
           month, academicYear,
-          items, subtotal, totalDiscount, totalAmount,
+          items, subtotal, totalDiscount, totalTax, totalAmount,
           balanceDue: totalAmount,
           status: 'sent',
           dueDate,
@@ -1521,7 +1612,7 @@ export class FinanceService {
           schoolSlug,
         });
         await invoice.save();
-        await this.postFeeInvoiceJournal(schoolSlug, invoice);
+        await this.postFeeInvoiceJournal(schoolSlug, invoice, taxTemplate);
         created++;
       } catch (err: any) {
         errors.push(`${(student as any).firstName || ''} ${(student as any).lastName || ''}: ${err.message}`);
@@ -1578,15 +1669,16 @@ export class FinanceService {
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
-  // Posts Dr each line's account (+ tax folded onto the first line's
-  // account, since Phase 2 deliberately does not build a tax engine) /
-  // Cr Accounts Payable (2000) for the bill total. Every line carries
+  // Posts Dr each line's account (+ auto-resolved purchase tax lines, or —
+  // if the caller passes an explicit legacy `taxAmount` — folded onto the
+  // first line's account, preserving exact Phase 2 behavior) / Cr Accounts
+  // Payable (2000) for the tax-inclusive bill total. Every line carries
   // partnerType 'vendor' + the same vendorId/vendorName used by
   // recordVendorPayment, so getPartnerLedger produces one coherent
   // running balance per vendor across bills and payments.
   async createVendorBill(data: any) {
     const { schoolSlug, vendorId, lines = [] } = data;
-    const taxAmount = Number(data.taxAmount || 0);
+    const explicitTaxAmount = Number(data.taxAmount || 0);
     if (!vendorId) throw new BadRequestException('vendorId is required');
     if (!lines.length) throw new BadRequestException('At least one bill line is required');
     for (const l of lines) {
@@ -1596,6 +1688,27 @@ export class FinanceService {
 
     const vendor = await this.vendorModel.findOne({ _id: vendorId, schoolSlug });
     if (!vendor) throw new NotFoundException('Vendor not found');
+
+    // Phase 3 — if the caller didn't pass an explicit flat taxAmount (Phase
+    // 2 style), auto-resolve purchase tax per line via TaxRule/ItemTaxTemplate.
+    // Explicit taxAmount always wins so existing Phase 2 callers are untouched.
+    const lineTaxInfo: { accountCode: string; taxAmount: number; taxTemplateName: string }[] = [];
+    if (!explicitTaxAmount) {
+      for (const l of lines) {
+        const { taxAmount: lineTax, taxTemplate } = await (async () => {
+          const template = await this.resolveTaxForLine(schoolSlug, 'purchase', l.accountCode, { vendorId });
+          if (!template) return { taxAmount: 0, taxTemplate: null as any };
+          const amt = Number(l.amount || 0);
+          const taxAmount = template.computationMethod === 'fixed'
+            ? Math.round((template.rate || 0) * 100) / 100
+            : Math.round(amt * (template.rate || 0)) / 100;
+          return { taxAmount, taxTemplate: template };
+        })();
+        if (lineTax > 0) lineTaxInfo.push({ accountCode: taxTemplate.accountCode, taxAmount: lineTax, taxTemplateName: taxTemplate.name });
+      }
+    }
+    const autoTaxAmount = Math.round(lineTaxInfo.reduce((a, t) => a + t.taxAmount, 0) * 100) / 100;
+    const taxAmount = explicitTaxAmount || autoTaxAmount;
 
     const subtotal = lines.reduce((a: number, l: any) => a + Number(l.amount || 0), 0);
     const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
@@ -1629,11 +1742,20 @@ export class FinanceService {
         accountCode: l.accountCode, debit: Number(l.amount || 0), costCenterName: l.costCenterName,
         partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
       }));
-      if (taxAmount > 0) {
+      if (explicitTaxAmount > 0) {
+        // Legacy Phase 2 behavior: fold the flat tax onto the first line's account.
         journalLines.push({
-          accountCode: lines[0].accountCode, debit: taxAmount,
+          accountCode: lines[0].accountCode, debit: explicitTaxAmount,
           partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
         });
+      } else {
+        for (const t of lineTaxInfo) {
+          journalLines.push({
+            accountCode: t.accountCode, debit: t.taxAmount,
+            partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
+            taxTemplateName: t.taxTemplateName,
+          });
+        }
       }
       journalLines.push({
         accountCode: '2000', credit: totalAmount,
@@ -1667,10 +1789,30 @@ export class FinanceService {
       throw new BadRequestException(`Payment amount (${amount}) exceeds balance due (${bill.balanceDue})`);
     }
 
+    // Phase 3 — withholding is deducted at PAYMENT time (not accrued at
+    // bill time): if the vendor is tagged with a WithholdingTaxCategory,
+    // a portion of this payment's gross `amount` is withheld and posted
+    // to Withholding Tax Payable instead of paid out in cash. The vendor
+    // is still deemed paid in full for `amount` (paidAmount/balanceDue
+    // below use the GROSS amount, unchanged from Phase 2) — only the cash
+    // leg of the journal entry shrinks.
+    let withholdingAmount = 0;
+    let withholdingCategory: any = null;
+    const vendor = await this.vendorModel.findOne({ _id: bill.vendorId, schoolSlug });
+    if (vendor?.withholdingCategoryId) {
+      withholdingCategory = await this.withholdingCategoryModel.findOne({ _id: vendor.withholdingCategoryId, schoolSlug, isActive: true });
+      if (withholdingCategory) {
+        withholdingAmount = Math.round(amount * (withholdingCategory.rate || 0)) / 100;
+        withholdingAmount = Math.min(withholdingAmount, amount); // never withhold more than the payment itself
+      }
+    }
+    const cashAmount = Math.round((amount - withholdingAmount) * 100) / 100;
+
     const payment = new this.vendorPaymentModel({
       billId: bill._id, billNo: bill.billNo, vendorId: bill.vendorId, vendorName: bill.vendorName,
       amount, paymentDate: new Date(data.paymentDate || Date.now()),
       paymentMethod: data.paymentMethod, referenceNumber: data.referenceNumber,
+      withholdingAmount,
       schoolSlug,
     });
     await payment.save();
@@ -1684,14 +1826,22 @@ export class FinanceService {
     });
 
     try {
+      const lines: any[] = [
+        { accountCode: '2000', debit: amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+        { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: cashAmount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+      ];
+      if (withholdingAmount > 0 && withholdingCategory) {
+        lines.push({
+          accountCode: withholdingCategory.accountCode, credit: withholdingAmount,
+          partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName,
+          taxTemplateName: withholdingCategory.name,
+        });
+      }
       await this.postJournalEntry(schoolSlug, {
         date: payment.paymentDate, reference: bill.billNo,
         narration: `Vendor payment for bill ${bill.billNo} — ${bill.vendorName}`,
         sourceType: 'vendor_payment', sourceId: String(payment._id),
-        lines: [
-          { accountCode: '2000', debit: amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
-          { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
-        ],
+        lines,
       });
     } catch (err: any) {
       // see createVendorBill note
@@ -1883,6 +2033,126 @@ export class FinanceService {
       totalCollected,
       paymentCount: payments.length,
       monthly,
+    };
+  }
+
+  // ============================================================
+  // PHASE 3 — TAX ENGINE (sales/purchase/withholding tax templates,
+  // item-level tax defaults, tax rules, withholding categories, and the
+  // tax summary report). Fully additive/optional: a school that hasn't
+  // configured any TaxTemplate sees zero behavior change in invoices or
+  // vendor bills. See the Odoo-standard finance build plan doc.
+  // ============================================================
+
+  // ── Tax Templates ────────────────────────────────────────────
+  async getTaxTemplates(schoolSlug: string, type?: string) {
+    const filter: any = { schoolSlug };
+    if (type) filter.type = type;
+    return this.taxTemplateModel.find(filter).sort({ name: 1 });
+  }
+
+  async createTaxTemplate(data: any) {
+    return this.taxTemplateModel.create(data);
+  }
+
+  async updateTaxTemplate(id: string, schoolSlug: string, data: any) {
+    const tpl = await this.taxTemplateModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!tpl) throw new NotFoundException('Tax template not found');
+    return tpl;
+  }
+
+  // ── Item Tax Templates ───────────────────────────────────────
+  async getItemTaxTemplates(schoolSlug: string, direction?: string) {
+    const filter: any = { schoolSlug };
+    if (direction) filter.direction = direction;
+    return this.itemTaxTemplateModel.find(filter).populate('taxTemplateId').sort({ itemType: 1 });
+  }
+
+  async createItemTaxTemplate(data: any) {
+    return this.itemTaxTemplateModel.create(data);
+  }
+
+  async updateItemTaxTemplate(id: string, schoolSlug: string, data: any) {
+    const item = await this.itemTaxTemplateModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!item) throw new NotFoundException('Item tax template not found');
+    return item;
+  }
+
+  // ── Tax Rules ─────────────────────────────────────────────────
+  async getTaxRules(schoolSlug: string) {
+    return this.taxRuleModel.find({ schoolSlug }).populate('taxTemplateId').sort({ priority: 1 });
+  }
+
+  async createTaxRule(data: any) {
+    return this.taxRuleModel.create(data);
+  }
+
+  async updateTaxRule(id: string, schoolSlug: string, data: any) {
+    const rule = await this.taxRuleModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!rule) throw new NotFoundException('Tax rule not found');
+    return rule;
+  }
+
+  // ── Withholding Tax Categories ────────────────────────────────
+  async getWithholdingCategories(schoolSlug: string) {
+    return this.withholdingCategoryModel.find({ schoolSlug }).sort({ name: 1 });
+  }
+
+  async createWithholdingCategory(data: any) {
+    return this.withholdingCategoryModel.create(data);
+  }
+
+  async updateWithholdingCategory(id: string, schoolSlug: string, data: any) {
+    const cat = await this.withholdingCategoryModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!cat) throw new NotFoundException('Withholding tax category not found');
+    return cat;
+  }
+
+  // ── Tax Summary Report ───────────────────────────────────────
+  // Aggregates posted journal lines by tax account code (Sales Tax
+  // Payable 2400, Input/Purchase Tax Receivable 1400, Withholding Tax
+  // Payable 2500) within the date range, plus a breakdown by
+  // taxTemplateName (denormalized onto the journal line at posting time).
+  async getTaxSummaryReport(schoolSlug: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const TAX_ACCOUNT_CODES = ['2400', '1400', '2500'];
+
+    const agg = await this.journalModel.aggregate([
+      { $match: { schoolSlug, status: 'posted', ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}) } },
+      { $unwind: '$lines' },
+      { $match: { 'lines.accountCode': { $in: TAX_ACCOUNT_CODES } } },
+      { $group: {
+        _id: { accountCode: '$lines.accountCode', taxTemplateName: '$lines.taxTemplateName' },
+        debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' },
+      } },
+    ]);
+
+    let salesTaxCollected = 0, inputTaxRecoverable = 0, withholdingDeducted = 0;
+    const byTemplate = new Map<string, { taxTemplateName: string; accountCode: string; amount: number }>();
+    for (const row of agg as any[]) {
+      const accountCode = row._id.accountCode;
+      const name = row._id.taxTemplateName || 'Unspecified';
+      // 1400 (Input Tax Receivable) is an asset — its natural balance
+      // increases on debit; 2400/2500 are liabilities — increase on credit.
+      const net = accountCode === '1400' ? (row.debit - row.credit) : (row.credit - row.debit);
+      if (accountCode === '2400') salesTaxCollected += net;
+      if (accountCode === '1400') inputTaxRecoverable += net;
+      if (accountCode === '2500') withholdingDeducted += net;
+
+      const key = `${accountCode}::${name}`;
+      if (!byTemplate.has(key)) byTemplate.set(key, { taxTemplateName: name, accountCode, amount: 0 });
+      byTemplate.get(key)!.amount += net;
+    }
+
+    return {
+      from: from ? new Date(from) : null,
+      to: to ? new Date(to) : null,
+      salesTaxCollected: Math.round(salesTaxCollected * 100) / 100,
+      inputTaxRecoverable: Math.round(inputTaxRecoverable * 100) / 100,
+      withholdingDeducted: Math.round(withholdingDeducted * 100) / 100,
+      breakdown: Array.from(byTemplate.values()).sort((a, b) => b.amount - a.amount),
     };
   }
 }

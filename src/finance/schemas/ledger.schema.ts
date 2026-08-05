@@ -101,6 +101,10 @@ export class JournalLine {
   @Prop() partnerId: string;
   @Prop() partnerName: string;
   @Prop({ default: false }) isUnmapped: boolean; // posted to the Suspense account because no real mapping existed yet
+  // Phase 3 — denormalized TaxTemplate/WithholdingTaxCategory name, set only
+  // on the tax leg of a posting, so getTaxSummaryReport can group by tax
+  // template without a second lookup (same pattern as costCenterName/partnerName).
+  @Prop() taxTemplateName: string;
 }
 const JournalLineSchema = SchemaFactory.createForClass(JournalLine);
 

@@ -25,6 +25,12 @@ import {
   VendorBill, VendorBillSchema,
   VendorPayment, VendorPaymentSchema,
 } from './schemas/vendor.schema';
+import {
+  TaxTemplate, TaxTemplateSchema,
+  ItemTaxTemplate, ItemTaxTemplateSchema,
+  TaxRule, TaxRuleSchema,
+  WithholdingTaxCategory, WithholdingTaxCategorySchema,
+} from './schemas/tax.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
@@ -49,6 +55,10 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: Vendor.name, schema: VendorSchema },
       { name: VendorBill.name, schema: VendorBillSchema },
       { name: VendorPayment.name, schema: VendorPaymentSchema },
+      { name: TaxTemplate.name, schema: TaxTemplateSchema },
+      { name: ItemTaxTemplate.name, schema: ItemTaxTemplateSchema },
+      { name: TaxRule.name, schema: TaxRuleSchema },
+      { name: WithholdingTaxCategory.name, schema: WithholdingTaxCategorySchema },
       { name: Student.name, schema: StudentSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },

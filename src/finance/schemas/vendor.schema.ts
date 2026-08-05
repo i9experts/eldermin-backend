@@ -25,6 +25,10 @@ export class Vendor {
   @Prop() taxId: string; // NTN / STRN etc.
   @Prop({ type: Types.ObjectId, ref: 'PaymentTerm', default: null }) paymentTermId: Types.ObjectId | null;
   @Prop() defaultExpenseAccountCode: string; // which COA expense/asset account this vendor's bills usually hit
+  // Phase 3 — tags this vendor as subject to withholding tax on every bill
+  // payment (Pakistan's withholding-at-source regime). Optional: a vendor
+  // with no category set behaves exactly as before (no withholding).
+  @Prop({ type: Types.ObjectId, ref: 'WithholdingTaxCategory', default: null }) withholdingCategoryId: Types.ObjectId | null;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
@@ -101,6 +105,13 @@ export class VendorPayment {
   })
   paymentMethod: string;
   @Prop() referenceNumber: string;
+  // Phase 3 — portion of `amount` withheld at source per the vendor's
+  // WithholdingTaxCategory, if any (0 when the vendor has none configured).
+  // The vendor is still deemed paid in full for `amount`; this is purely
+  // informational/reporting — the actual liability split happens in the
+  // journal posting (Cr Cash for amount-withholdingAmount, Cr Withholding
+  // Tax Payable for withholdingAmount).
+  @Prop({ default: 0 }) withholdingAmount: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const VendorPaymentSchema = SchemaFactory.createForClass(VendorPayment);

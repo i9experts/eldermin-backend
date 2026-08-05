@@ -460,4 +460,74 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.getPaymentPeriodReport(schoolSlug, from, to);
   }
+
+  // ============================================================
+  // PHASE 3 — TAX ENGINE
+  // ============================================================
+
+  // ── Tax Templates ─────────────────────────────────────────
+  @Get('tax-templates') async getTaxTemplates(@Request() req: any, @Query('type') type?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxTemplates(schoolSlug, type);
+  }
+  @Post('tax-templates') @HttpCode(HttpStatus.CREATED)
+  async createTaxTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createTaxTemplate({ ...dto, schoolSlug });
+  }
+  @Patch('tax-templates/:id') async updateTaxTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateTaxTemplate(id, schoolSlug, dto);
+  }
+
+  // ── Item Tax Templates ────────────────────────────────────
+  @Get('item-tax-templates') async getItemTaxTemplates(@Request() req: any, @Query('direction') direction?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getItemTaxTemplates(schoolSlug, direction);
+  }
+  @Post('item-tax-templates') @HttpCode(HttpStatus.CREATED)
+  async createItemTaxTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createItemTaxTemplate({ ...dto, schoolSlug });
+  }
+  @Patch('item-tax-templates/:id') async updateItemTaxTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateItemTaxTemplate(id, schoolSlug, dto);
+  }
+
+  // ── Tax Rules ──────────────────────────────────────────────
+  @Get('tax-rules') async getTaxRules(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxRules(schoolSlug);
+  }
+  @Post('tax-rules') @HttpCode(HttpStatus.CREATED)
+  async createTaxRule(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createTaxRule({ ...dto, schoolSlug });
+  }
+  @Patch('tax-rules/:id') async updateTaxRule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateTaxRule(id, schoolSlug, dto);
+  }
+
+  // ── Withholding Tax Categories ─────────────────────────────
+  @Get('withholding-categories') async getWithholdingCategories(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getWithholdingCategories(schoolSlug);
+  }
+  @Post('withholding-categories') @HttpCode(HttpStatus.CREATED)
+  async createWithholdingCategory(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createWithholdingCategory({ ...dto, schoolSlug });
+  }
+  @Patch('withholding-categories/:id') async updateWithholdingCategory(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateWithholdingCategory(id, schoolSlug, dto);
+  }
+
+  // ── Tax Summary Report ────────────────────────────────────
+  @Get('reports/tax-summary') async getTaxSummaryReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxSummaryReport(schoolSlug, from, to);
+  }
 }
