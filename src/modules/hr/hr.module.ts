@@ -26,6 +26,10 @@ import { ExitSettings, ExitSettingsSchema } from './schemas/exit-settings.schema
 import { HiringSettings, HiringSettingsSchema } from './schemas/hiring-settings.schema';
 import { AttendanceSettings, AttendanceSettingsSchema } from './schemas/attendance-settings.schema';
 import { Shift, ShiftSchema } from './schemas/shift.schema';
+import { Grievance, GrievanceSchema } from './schemas/grievance.schema';
+import { DailyWorkSummary, DailyWorkSummarySchema } from './schemas/daily-work-summary.schema';
+import { ExpenseClaim, ExpenseClaimSchema } from './schemas/expense-claim.schema';
+import { Advance, AdvanceSchema } from './schemas/advance.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
@@ -56,6 +60,10 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: HiringSettings.name, schema: HiringSettingsSchema },
       { name: AttendanceSettings.name, schema: AttendanceSettingsSchema },
       { name: Shift.name, schema: ShiftSchema },
+      { name: Grievance.name, schema: GrievanceSchema },
+      { name: DailyWorkSummary.name, schema: DailyWorkSummarySchema },
+      { name: ExpenseClaim.name, schema: ExpenseClaimSchema },
+      { name: Advance.name, schema: AdvanceSchema },
       { name: User.name, schema: UserSchema },
       { name: School.name, schema: SchoolSchema },
     ]),

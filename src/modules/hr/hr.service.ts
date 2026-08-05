@@ -30,6 +30,10 @@ import { ExitSettings, ExitSettingsDocument } from './schemas/exit-settings.sche
 import { HiringSettings, HiringSettingsDocument } from './schemas/hiring-settings.schema';
 import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
 import { Shift, ShiftDocument } from './schemas/shift.schema';
+import { Grievance, GrievanceDocument } from './schemas/grievance.schema';
+import { DailyWorkSummary, DailyWorkSummaryDocument } from './schemas/daily-work-summary.schema';
+import { ExpenseClaim, ExpenseClaimDocument } from './schemas/expense-claim.schema';
+import { Advance, AdvanceDocument } from './schemas/advance.schema';
 
 @Injectable()
 export class HrService {
@@ -57,6 +61,10 @@ export class HrService {
     @InjectModel(HiringSettings.name) private hiringSettingsModel: Model<HiringSettingsDocument>,
     @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
     @InjectModel(Shift.name) private shiftModel: Model<ShiftDocument>,
+    @InjectModel(Grievance.name) private grievanceModel: Model<GrievanceDocument>,
+    @InjectModel(DailyWorkSummary.name) private dailyWorkSummaryModel: Model<DailyWorkSummaryDocument>,
+    @InjectModel(ExpenseClaim.name) private expenseClaimModel: Model<ExpenseClaimDocument>,
+    @InjectModel(Advance.name) private advanceModel: Model<AdvanceDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
@@ -1485,5 +1493,175 @@ export class HrService {
     if (lateBy <= graceMins) return 'present';
     if (lateBy <= graceMins + lateThresholdMins) return 'late';
     return 'half_day';
+  }
+
+  // ── GRIEVANCE ────────────────────────────────────────────────────────
+  // Deliberately narrow first version: status workflow + basic case
+  // tracking, not a full investigation toolkit.
+
+  async getGrievances(tenantId: string, filters: { status?: string; staffId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.status) filter.status = filters.status;
+    if (filters.staffId) filter.raisedByStaffId = this.newTid(filters.staffId);
+    return this.grievanceModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async getGrievanceById(tenantId: string, id: string) {
+    const g = await this.grievanceModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
+    if (!g) throw new NotFoundException('Grievance not found');
+    return g;
+  }
+
+  async createGrievance(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
+    const count = await this.grievanceModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const caseNo = `GRV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.grievanceModel.create({
+      ...dto, caseNo,
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+      timeline: [{ note: 'Grievance submitted', byName: dto.raisedByName || 'Staff', status: 'submitted', at: new Date() }],
+    });
+  }
+
+  async updateGrievanceStatus(tenantId: string, id: string, status: string, note: string, byName: string) {
+    const update: any = {
+      $set: { status },
+      $push: { timeline: { note: note || `Status changed to ${status}`, byName: byName || 'HR', status, at: new Date() } },
+    };
+    if (status === 'resolved') { update.$set.resolvedAt = new Date(); }
+    const g = await this.grievanceModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
+    if (!g) throw new NotFoundException('Grievance not found');
+    return g;
+  }
+
+  async assignGrievance(tenantId: string, id: string, assignedToStaffId: string, assignedToName: string) {
+    const g = await this.grievanceModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) },
+      {
+        $set: { assignedToStaffId: this.newTid(assignedToStaffId), assignedToName, status: 'investigating' },
+        $push: { timeline: { note: `Assigned to ${assignedToName}`, byName: 'HR', status: 'investigating', at: new Date() } },
+      },
+      { new: true },
+    );
+    if (!g) throw new NotFoundException('Grievance not found');
+    return g;
+  }
+
+  // ── DAILY WORK SUMMARY ───────────────────────────────────────────────
+  // Intentionally a lightweight accountability log, not a task tracker.
+
+  async getDailyWorkSummaries(tenantId: string, filters: { staffId?: string; date?: string; from?: string; to?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    if (filters.date) filter.date = new Date(filters.date);
+    else if (filters.from || filters.to) {
+      filter.date = {};
+      if (filters.from) filter.date.$gte = new Date(filters.from);
+      if (filters.to) filter.date.$lte = new Date(filters.to);
+    }
+    return this.dailyWorkSummaryModel.find(filter).sort({ date: -1 }).lean();
+  }
+
+  async upsertDailyWorkSummary(tenantId: string, schoolSlug: string, dto: any) {
+    const date = new Date(dto.date);
+    date.setHours(0, 0, 0, 0);
+    return this.dailyWorkSummaryModel.findOneAndUpdate(
+      { tenantId: this.newTid(tenantId), staffId: this.newTid(dto.staffId), date },
+      { $set: { ...dto, date, tenantId: this.newTid(tenantId), schoolSlug, acknowledged: false } },
+      { upsert: true, new: true },
+    );
+  }
+
+  async acknowledgeDailyWorkSummary(tenantId: string, id: string, byName: string) {
+    const s = await this.dailyWorkSummaryModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) },
+      { $set: { acknowledged: true, acknowledgedBy: byName, acknowledgedAt: new Date() } },
+      { new: true },
+    );
+    if (!s) throw new NotFoundException('Daily work summary not found');
+    return s;
+  }
+
+  // Manager rollup for a given day: who submitted, and who's missing.
+  async getDailyWorkSummaryRollup(tenantId: string, schoolSlug: string, dateStr: string) {
+    const date = new Date(dateStr);
+    date.setHours(0, 0, 0, 0);
+    const [staffList, submitted] = await Promise.all([
+      this.staffModel.find({ tenantId: this.newTid(tenantId), isActive: true }, { firstName: 1, lastName: 1, department: 1 }).lean(),
+      this.dailyWorkSummaryModel.find({ tenantId: this.newTid(tenantId), date }).lean(),
+    ]);
+    const submittedStaffIds = new Set(submitted.map((s: any) => String(s.staffId)));
+    const missing = staffList.filter((s: any) => !submittedStaffIds.has(String(s._id)))
+      .map((s: any) => ({ staffId: s._id, name: `${s.firstName} ${s.lastName}`, department: s.department }));
+    return { submitted, missing, totalStaff: staffList.length };
+  }
+
+  // ── EXPENSE CLAIMS ───────────────────────────────────────────────────
+
+  async getExpenseClaims(tenantId: string, filters: { status?: string; staffId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.status) filter.status = filters.status;
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    return this.expenseClaimModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createExpenseClaim(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
+    const count = await this.expenseClaimModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const claimNo = `EXP-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.expenseClaimModel.create({
+      ...dto, claimNo,
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+    });
+  }
+
+  async updateExpenseClaimStatus(tenantId: string, id: string, status: string, approvedBy?: string, rejectionReason?: string) {
+    const update: any = { $set: { status } };
+    if (status === 'approved') { update.$set.approvedBy = approvedBy; update.$set.approvedAt = new Date(); }
+    if (status === 'rejected') { update.$set.rejectionReason = rejectionReason; }
+
+    const claim = await this.expenseClaimModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
+    if (!claim) throw new NotFoundException('Expense claim not found');
+
+    // If this claim settles an advance, roll the amount into the advance's
+    // settled total once approved.
+    if (status === 'approved' && claim.advanceId) {
+      await this.advanceModel.updateOne(
+        { _id: claim.advanceId },
+        [{ $set: { settledAmount: { $add: ['$settledAmount', claim.amount] } } }] as any,
+      );
+    }
+    return claim;
+  }
+
+  // ── ADVANCES ─────────────────────────────────────────────────────────
+
+  async getAdvances(tenantId: string, filters: { status?: string; staffId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.status) filter.status = filters.status;
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    return this.advanceModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createAdvance(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
+    const count = await this.advanceModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const advanceNo = `ADV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.advanceModel.create({
+      ...dto, advanceNo,
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+    });
+  }
+
+  async updateAdvanceStatus(tenantId: string, id: string, status: string, approvedBy?: string) {
+    const update: any = { $set: { status } };
+    if (status === 'approved') { update.$set.approvedBy = approvedBy; update.$set.approvedAt = new Date(); }
+    if (status === 'disbursed') { update.$set.disbursedAt = new Date(); }
+    const advance = await this.advanceModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
+    if (!advance) throw new NotFoundException('Advance not found');
+    return advance;
   }
 }

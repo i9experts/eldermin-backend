@@ -407,4 +407,69 @@ export class HrController {
   getUpcomingReminders(@Request() req, @Query('days') days?: string) {
     return this.hrService.getUpcomingReminders(req.user.tenantId, req.user.schoolSlug, days ? parseInt(days) : 30);
   }
+
+  // ── GRIEVANCE ──────────────────────────────────────────────────────────
+
+  @Get('grievances')
+  getGrievances(@Request() req, @Query() query: any) { return this.hrService.getGrievances(req.user.tenantId, query); }
+
+  @Get('grievances/:id')
+  getGrievanceById(@Request() req, @Param('id') id: string) { return this.hrService.getGrievanceById(req.user.tenantId, id); }
+
+  @Post('grievances')
+  createGrievance(@Request() req, @Body() body: any) { return this.hrService.createGrievance(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  @Patch('grievances/:id/status')
+  updateGrievanceStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string; byName: string }) {
+    return this.hrService.updateGrievanceStatus(req.user.tenantId, id, body.status, body.note, body.byName);
+  }
+
+  @Patch('grievances/:id/assign')
+  assignGrievance(@Request() req, @Param('id') id: string, @Body() body: { assignedToStaffId: string; assignedToName: string }) {
+    return this.hrService.assignGrievance(req.user.tenantId, id, body.assignedToStaffId, body.assignedToName);
+  }
+
+  // ── DAILY WORK SUMMARY ─────────────────────────────────────────────────
+
+  @Get('daily-summaries')
+  getDailyWorkSummaries(@Request() req, @Query() query: any) { return this.hrService.getDailyWorkSummaries(req.user.tenantId, query); }
+
+  @Post('daily-summaries')
+  upsertDailyWorkSummary(@Request() req, @Body() body: any) { return this.hrService.upsertDailyWorkSummary(req.user.tenantId, req.user.schoolSlug, body); }
+
+  @Patch('daily-summaries/:id/acknowledge')
+  acknowledgeDailyWorkSummary(@Request() req, @Param('id') id: string, @Body() body: { byName: string }) {
+    return this.hrService.acknowledgeDailyWorkSummary(req.user.tenantId, id, body.byName);
+  }
+
+  @Get('daily-summaries/rollup')
+  getDailyWorkSummaryRollup(@Request() req, @Query('date') date: string) {
+    return this.hrService.getDailyWorkSummaryRollup(req.user.tenantId, req.user.schoolSlug, date || new Date().toISOString().split('T')[0]);
+  }
+
+  // ── EXPENSE CLAIMS ─────────────────────────────────────────────────────
+
+  @Get('expense-claims')
+  getExpenseClaims(@Request() req, @Query() query: any) { return this.hrService.getExpenseClaims(req.user.tenantId, query); }
+
+  @Post('expense-claims')
+  createExpenseClaim(@Request() req, @Body() body: any) { return this.hrService.createExpenseClaim(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  @Patch('expense-claims/:id/status')
+  updateExpenseClaimStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string; rejectionReason?: string }) {
+    return this.hrService.updateExpenseClaimStatus(req.user.tenantId, id, body.status, body.approvedBy, body.rejectionReason);
+  }
+
+  // ── ADVANCES ───────────────────────────────────────────────────────────
+
+  @Get('advances')
+  getAdvances(@Request() req, @Query() query: any) { return this.hrService.getAdvances(req.user.tenantId, query); }
+
+  @Post('advances')
+  createAdvance(@Request() req, @Body() body: any) { return this.hrService.createAdvance(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  @Patch('advances/:id/status')
+  updateAdvanceStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string }) {
+    return this.hrService.updateAdvanceStatus(req.user.tenantId, id, body.status, body.approvedBy);
+  }
 }
