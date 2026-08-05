@@ -20,6 +20,11 @@ import {
   PaymentTerm, PaymentTermSchema,
   JournalEntry, JournalEntrySchema,
 } from './schemas/ledger.schema';
+import {
+  Vendor, VendorSchema,
+  VendorBill, VendorBillSchema,
+  VendorPayment, VendorPaymentSchema,
+} from './schemas/vendor.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
@@ -41,6 +46,9 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: CostCenter.name, schema: CostCenterSchema },
       { name: PaymentTerm.name, schema: PaymentTermSchema },
       { name: JournalEntry.name, schema: JournalEntrySchema },
+      { name: Vendor.name, schema: VendorSchema },
+      { name: VendorBill.name, schema: VendorBillSchema },
+      { name: VendorPayment.name, schema: VendorPaymentSchema },
       { name: Student.name, schema: StudentSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },

@@ -19,6 +19,11 @@ import {
   PaymentTerm, PaymentTermDocument,
   JournalEntry, JournalEntryDocument,
 } from './schemas/ledger.schema';
+import {
+  Vendor, VendorDocument,
+  VendorBill, VendorBillDocument,
+  VendorPayment, VendorPaymentDocument,
+} from './schemas/vendor.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
@@ -47,6 +52,9 @@ export class FinanceService {
     @InjectModel(CostCenter.name) private costCenterModel: Model<CostCenterDocument>,
     @InjectModel(PaymentTerm.name) private paymentTermModel: Model<PaymentTermDocument>,
     @InjectModel(JournalEntry.name) private journalModel: Model<JournalEntryDocument>,
+    @InjectModel(Vendor.name) private vendorModel: Model<VendorDocument>,
+    @InjectModel(VendorBill.name) private vendorBillModel: Model<VendorBillDocument>,
+    @InjectModel(VendorPayment.name) private vendorPaymentModel: Model<VendorPaymentDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
@@ -1528,6 +1536,353 @@ export class FinanceService {
       noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, count]) => ({ grade, count })),
       errors,
       totalStudents: students.length,
+    };
+  }
+
+  // ============================================================
+  // PHASE 2 — VENDOR MASTER / ACCOUNTS PAYABLE (formal bills, terms,
+  // partial payment), plus AR/AP aging, credit balance, and payment
+  // period reports. This is additive to the existing simple Expense
+  // spend-log, which is untouched. See the Odoo-standard finance build
+  // plan doc.
+  // ============================================================
+
+  // ── Vendor master ─────────────────────────────────────────
+  async getVendors(schoolSlug: string) {
+    return this.vendorModel.find({ schoolSlug }).sort({ name: 1 });
+  }
+
+  async createVendor(data: any) {
+    const vendor = new this.vendorModel(data);
+    return vendor.save();
+  }
+
+  async updateVendor(id: string, schoolSlug: string, data: any) {
+    const vendor = await this.vendorModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+    return vendor;
+  }
+
+  // ── Vendor Bills (Accounts Payable) ───────────────────────
+  async getVendorBills(schoolSlug: string, query: any = {}) {
+    const { page = 1, limit = 20, status, vendorId, from, to } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (status) filter.status = status;
+    if (vendorId) filter.vendorId = vendorId;
+    if (from || to) { filter.billDate = {}; if (from) filter.billDate.$gte = new Date(from); if (to) filter.billDate.$lte = new Date(to); }
+    const [data, total] = await Promise.all([
+      this.vendorBillModel.find(filter).sort({ billDate: -1, createdAt: -1 }).skip(skip).limit(limit),
+      this.vendorBillModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  // Posts Dr each line's account (+ tax folded onto the first line's
+  // account, since Phase 2 deliberately does not build a tax engine) /
+  // Cr Accounts Payable (2000) for the bill total. Every line carries
+  // partnerType 'vendor' + the same vendorId/vendorName used by
+  // recordVendorPayment, so getPartnerLedger produces one coherent
+  // running balance per vendor across bills and payments.
+  async createVendorBill(data: any) {
+    const { schoolSlug, vendorId, lines = [] } = data;
+    const taxAmount = Number(data.taxAmount || 0);
+    if (!vendorId) throw new BadRequestException('vendorId is required');
+    if (!lines.length) throw new BadRequestException('At least one bill line is required');
+    for (const l of lines) {
+      if (!l.accountCode) throw new BadRequestException('Every bill line requires an accountCode');
+      if (!l.amount || Number(l.amount) <= 0) throw new BadRequestException('Every bill line requires a positive amount');
+    }
+
+    const vendor = await this.vendorModel.findOne({ _id: vendorId, schoolSlug });
+    if (!vendor) throw new NotFoundException('Vendor not found');
+
+    const subtotal = lines.reduce((a: number, l: any) => a + Number(l.amount || 0), 0);
+    const totalAmount = Math.round((subtotal + taxAmount) * 100) / 100;
+    const billDate = data.billDate ? new Date(data.billDate) : new Date();
+
+    let dueDate = data.dueDate ? new Date(data.dueDate) : null;
+    if (!dueDate) {
+      let dueDays = 0;
+      const termId = data.paymentTermId || vendor.paymentTermId;
+      if (termId) {
+        const term = await this.paymentTermModel.findOne({ _id: termId, schoolSlug });
+        if (term) dueDays = term.dueDays || 0;
+      }
+      dueDate = new Date(billDate);
+      dueDate.setDate(dueDate.getDate() + dueDays);
+    }
+
+    const bill = new this.vendorBillModel({
+      ...data,
+      vendorName: vendor.name,
+      billDate, dueDate,
+      subtotal, taxAmount, totalAmount,
+      paidAmount: 0, balanceDue: totalAmount,
+      status: 'posted',
+      schoolSlug,
+    });
+    await bill.save();
+
+    try {
+      const journalLines: any[] = lines.map((l: any) => ({
+        accountCode: l.accountCode, debit: Number(l.amount || 0), costCenterName: l.costCenterName,
+        partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
+      }));
+      if (taxAmount > 0) {
+        journalLines.push({
+          accountCode: lines[0].accountCode, debit: taxAmount,
+          partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
+        });
+      }
+      journalLines.push({
+        accountCode: '2000', credit: totalAmount,
+        partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
+      });
+
+      await this.postJournalEntry(schoolSlug, {
+        date: billDate, reference: bill.billNo,
+        narration: `Vendor bill ${bill.billNo} — ${vendor.name}`,
+        sourceType: 'vendor_bill', sourceId: String(bill._id),
+        lines: journalLines,
+      });
+    } catch (err: any) {
+      // A ledger posting failure must never block the underlying bill —
+      // same convention as postFeeInvoiceJournal etc.
+    }
+
+    return bill;
+  }
+
+  // ── Vendor Payments ────────────────────────────────────────
+  async recordVendorPayment(billId: string, schoolSlug: string, data: any) {
+    const bill = await this.vendorBillModel.findOne({ _id: billId, schoolSlug });
+    if (!bill) throw new NotFoundException('Vendor bill not found');
+    if (bill.status === 'paid') throw new BadRequestException('Bill already fully paid');
+    if (bill.status === 'cancelled') throw new BadRequestException('Cannot pay a cancelled bill');
+
+    const amount = Math.round(Number(data.amount) * 100) / 100;
+    if (!amount || amount <= 0) throw new BadRequestException('amount must be greater than 0');
+    if (amount > bill.balanceDue + 0.01) {
+      throw new BadRequestException(`Payment amount (${amount}) exceeds balance due (${bill.balanceDue})`);
+    }
+
+    const payment = new this.vendorPaymentModel({
+      billId: bill._id, billNo: bill.billNo, vendorId: bill.vendorId, vendorName: bill.vendorName,
+      amount, paymentDate: new Date(data.paymentDate || Date.now()),
+      paymentMethod: data.paymentMethod, referenceNumber: data.referenceNumber,
+      schoolSlug,
+    });
+    await payment.save();
+
+    const newPaid = (bill.paidAmount || 0) + amount;
+    const newBalance = bill.totalAmount - newPaid;
+    const newStatus = newBalance <= 0.01 ? 'paid' : 'partial';
+
+    await this.vendorBillModel.findByIdAndUpdate(billId, {
+      $set: { paidAmount: newPaid, balanceDue: Math.max(0, newBalance), status: newStatus },
+    });
+
+    try {
+      await this.postJournalEntry(schoolSlug, {
+        date: payment.paymentDate, reference: bill.billNo,
+        narration: `Vendor payment for bill ${bill.billNo} — ${bill.vendorName}`,
+        sourceType: 'vendor_payment', sourceId: String(payment._id),
+        lines: [
+          { accountCode: '2000', debit: amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+          { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+        ],
+      });
+    } catch (err: any) {
+      // see createVendorBill note
+    }
+
+    return payment;
+  }
+
+  async getVendorPayments(schoolSlug: string, vendorId?: string) {
+    const filter: any = { schoolSlug };
+    if (vendorId) filter.vendorId = vendorId;
+    return this.vendorPaymentModel.find(filter).sort({ paymentDate: -1 }).limit(200);
+  }
+
+  // ── Reports — AR/AP aging, credit balance, payment period ─
+  private agingBucket(daysOverdue: number): 'current' | '1-30' | '31-60' | '61-90' | '90+' {
+    if (daysOverdue <= 0) return 'current';
+    if (daysOverdue <= 30) return '1-30';
+    if (daysOverdue <= 60) return '31-60';
+    if (daysOverdue <= 90) return '61-90';
+    return '90+';
+  }
+
+  // Buckets outstanding fee invoices by days-overdue from dueDate (falling
+  // back to createdAt for older invoices that predate the dueDate field),
+  // grouped by student/family — reuses the same guardians[0] lookup
+  // pattern as getOutstandingReport's 'family' groupBy.
+  async getArAging(schoolSlug: string, asOf?: string) {
+    const asOfDate = asOf ? new Date(asOf) : new Date();
+    const invoices = await this.invoiceModel.aggregate([
+      { $match: { schoolSlug, isDeleted: { $ne: true }, status: { $in: ['sent', 'partial', 'overdue'] }, balanceDue: { $gt: 0 } } },
+      { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+      { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        studentId: 1, studentName: 1, balanceDue: 1, dueDate: 1, createdAt: 1, grade: 1,
+        familyKey: { $ifNull: [{ $arrayElemAt: ['$student.guardians.phone', 0] }, 'Unknown Family'] },
+        guardianName: { $ifNull: [{ $arrayElemAt: ['$student.guardians.name', 0] }, 'Unknown'] },
+      } },
+    ]);
+
+    const buckets: Record<string, number> = { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
+    const byStudent = new Map<string, any>();
+    for (const inv of invoices) {
+      const refDate = inv.dueDate ? new Date(inv.dueDate) : new Date(inv.createdAt);
+      const daysOverdue = Math.floor((asOfDate.getTime() - refDate.getTime()) / 86400000);
+      const bucket = this.agingBucket(daysOverdue);
+      buckets[bucket] += inv.balanceDue;
+
+      const sid = String(inv.studentId || inv.studentName);
+      if (!byStudent.has(sid)) {
+        byStudent.set(sid, {
+          studentId: sid, studentName: inv.studentName, familyKey: inv.familyKey, guardianName: inv.guardianName,
+          current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0, total: 0,
+        });
+      }
+      const entry = byStudent.get(sid);
+      entry[bucket] += inv.balanceDue;
+      entry.total += inv.balanceDue;
+    }
+
+    const rows = Array.from(byStudent.values()).sort((a, b) => b.total - a.total);
+    const grandTotal = rows.reduce((a, r) => a + r.total, 0);
+    return { asOf: asOfDate, buckets, rows, grandTotal };
+  }
+
+  // Same bucketing logic as getArAging, but against VendorBill and
+  // grouped by vendor instead of student.
+  async getApAging(schoolSlug: string, asOf?: string) {
+    const asOfDate = asOf ? new Date(asOf) : new Date();
+    const bills = await this.vendorBillModel.find({
+      schoolSlug, status: { $in: ['posted', 'partial'] }, balanceDue: { $gt: 0 },
+    }).lean();
+
+    const buckets: Record<string, number> = { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
+    const byVendor = new Map<string, any>();
+    for (const bill of bills as any[]) {
+      const daysOverdue = Math.floor((asOfDate.getTime() - new Date(bill.dueDate).getTime()) / 86400000);
+      const bucket = this.agingBucket(daysOverdue);
+      buckets[bucket] += bill.balanceDue;
+
+      const vid = String(bill.vendorId);
+      if (!byVendor.has(vid)) {
+        byVendor.set(vid, {
+          vendorId: vid, vendorName: bill.vendorName,
+          current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0, total: 0,
+        });
+      }
+      const entry = byVendor.get(vid);
+      entry[bucket] += bill.balanceDue;
+      entry.total += bill.balanceDue;
+    }
+
+    const rows = Array.from(byVendor.values()).sort((a, b) => b.total - a.total);
+    const grandTotal = rows.reduce((a, r) => a + r.total, 0);
+    return { asOf: asOfDate, buckets, rows, grandTotal };
+  }
+
+  // Aggregates at the student level (sum of all invoices' totalAmount vs
+  // sum of all payments) rather than trusting per-invoice balanceDue to
+  // go negative — recordPayment's newBalance is clamped to
+  // Math.max(0, ...) before being saved, so a per-invoice negative
+  // balanceDue can never actually occur in this data model; a credit can
+  // only be observed by comparing totals across a student's invoices.
+  async getCustomerCreditBalance(schoolSlug: string) {
+    const rows = await this.invoiceModel.aggregate([
+      { $match: { schoolSlug, isDeleted: { $ne: true } } },
+      { $group: {
+        _id: '$studentId',
+        studentName: { $first: '$studentName' },
+        totalInvoiced: { $sum: '$totalAmount' },
+        totalPaid: { $sum: '$paidAmount' },
+      } },
+      { $project: {
+        studentName: 1, totalInvoiced: 1, totalPaid: 1,
+        creditAmount: { $subtract: ['$totalPaid', '$totalInvoiced'] },
+      } },
+      { $match: { creditAmount: { $gt: 0.01 } } },
+      { $sort: { creditAmount: -1 } },
+    ]);
+    return { rows, totalCredit: rows.reduce((a: number, r: any) => a + r.creditAmount, 0) };
+  }
+
+  // "How long does it take us to collect" — average days between an
+  // invoice's creation and the payment that settled it, plus a simple
+  // month-by-month invoiced/collected/avg-days-to-pay breakdown.
+  async getPaymentPeriodReport(schoolSlug: string, from?: string, to?: string) {
+    const paymentMatch: any = { schoolSlug };
+    if (from || to) {
+      paymentMatch.paymentDate = {};
+      if (from) paymentMatch.paymentDate.$gte = new Date(from);
+      if (to) paymentMatch.paymentDate.$lte = new Date(to);
+    }
+
+    const payments = await this.paymentModel.aggregate([
+      { $match: paymentMatch },
+      { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'inv' } },
+      { $unwind: { path: '$inv', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        amount: 1, paymentDate: 1,
+        invoiceCreatedAt: '$inv.createdAt',
+        daysToPay: {
+          $cond: [
+            { $ifNull: ['$inv.createdAt', false] },
+            { $divide: [{ $subtract: ['$paymentDate', '$inv.createdAt'] }, 1000 * 60 * 60 * 24] },
+            null,
+          ],
+        },
+        yearMonth: { $dateToString: { format: '%Y-%m', date: '$paymentDate' } },
+      } },
+    ]);
+
+    const validDays = payments.filter((p: any) => p.daysToPay != null).map((p: any) => p.daysToPay);
+    const avgDaysToPay = validDays.length ? validDays.reduce((a: number, b: number) => a + b, 0) / validDays.length : 0;
+    const totalCollected = payments.reduce((a: number, p: any) => a + p.amount, 0);
+
+    const monthMap = new Map<string, any>();
+    for (const p of payments as any[]) {
+      if (!monthMap.has(p.yearMonth)) monthMap.set(p.yearMonth, { month: p.yearMonth, collected: 0, count: 0, daysSum: 0, daysCount: 0 });
+      const entry = monthMap.get(p.yearMonth);
+      entry.collected += p.amount;
+      entry.count += 1;
+      if (p.daysToPay != null) { entry.daysSum += p.daysToPay; entry.daysCount += 1; }
+    }
+
+    const invoiceMatch: any = { schoolSlug, isDeleted: { $ne: true } };
+    if (from || to) {
+      invoiceMatch.createdAt = {};
+      if (from) invoiceMatch.createdAt.$gte = new Date(from);
+      if (to) invoiceMatch.createdAt.$lte = new Date(to);
+    }
+    const invoicedByMonth = await this.invoiceModel.aggregate([
+      { $match: invoiceMatch },
+      { $project: { totalAmount: 1, yearMonth: { $dateToString: { format: '%Y-%m', date: '$createdAt' } } } },
+      { $group: { _id: '$yearMonth', invoiced: { $sum: '$totalAmount' } } },
+    ]);
+    const invoicedMap = new Map(invoicedByMonth.map((r: any) => [r._id, r.invoiced]));
+
+    const monthly = Array.from(monthMap.values())
+      .map((m: any) => ({
+        month: m.month,
+        collected: m.collected,
+        invoiced: invoicedMap.get(m.month) || 0,
+        avgDaysToPay: m.daysCount ? Math.round((m.daysSum / m.daysCount) * 10) / 10 : null,
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    return {
+      avgDaysToPay: Math.round(avgDaysToPay * 10) / 10,
+      totalCollected,
+      paymentCount: payments.length,
+      monthly,
     };
   }
 }

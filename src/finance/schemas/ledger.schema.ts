@@ -114,7 +114,7 @@ export class JournalEntry {
   @Prop() narration: string;
   // Where this entry came from — every auto-posting hook tags its source so
   // a posting can always be traced back to the transaction that caused it.
-  @Prop({ enum: ['fee_invoice', 'fee_payment', 'expense', 'payroll', 'expense_claim', 'advance', 'manual'], required: true })
+  @Prop({ enum: ['fee_invoice', 'fee_payment', 'expense', 'payroll', 'expense_claim', 'advance', 'vendor_bill', 'vendor_payment', 'manual'], required: true })
   sourceType: string;
   @Prop() sourceId: string;
   @Prop({ type: [JournalLineSchema], default: [] }) lines: JournalLine[];

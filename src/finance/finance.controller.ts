@@ -401,4 +401,63 @@ export class FinanceController {
       createdBy: userName,
     });
   }
+
+  // ============================================================
+  // PHASE 2 — VENDOR MASTER / ACCOUNTS PAYABLE
+  // ============================================================
+
+  // ── Vendors ───────────────────────────────────────────────
+  @Get('vendors') async getVendors(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendors(schoolSlug);
+  }
+  @Post('vendors') @HttpCode(HttpStatus.CREATED)
+  async createVendor(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createVendor({ ...dto, schoolSlug });
+  }
+  @Patch('vendors/:id') async updateVendor(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateVendor(id, schoolSlug, dto);
+  }
+
+  // ── Vendor Bills ──────────────────────────────────────────
+  @Get('vendor-bills') async getVendorBills(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendorBills(schoolSlug, query);
+  }
+  @Post('vendor-bills') @HttpCode(HttpStatus.CREATED)
+  async createVendorBill(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createVendorBill({ ...dto, schoolSlug });
+  }
+  @Post('vendor-bills/:id/payments') @HttpCode(HttpStatus.CREATED)
+  async recordVendorPayment(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.recordVendorPayment(id, schoolSlug, dto);
+  }
+
+  // ── Vendor Payments ───────────────────────────────────────
+  @Get('vendor-payments') async getVendorPayments(@Request() req: any, @Query('vendorId') vendorId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendorPayments(schoolSlug, vendorId);
+  }
+
+  // ── AR / AP / Credit / Payment-period reports ────────────
+  @Get('reports/ar-aging') async getArAging(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getArAging(schoolSlug, asOf);
+  }
+  @Get('reports/ap-aging') async getApAging(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getApAging(schoolSlug, asOf);
+  }
+  @Get('reports/customer-credit-balance') async getCustomerCreditBalance(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCustomerCreditBalance(schoolSlug);
+  }
+  @Get('reports/payment-period') async getPaymentPeriodReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentPeriodReport(schoolSlug, from, to);
+  }
 }

@@ -1,0 +1,108 @@
+// ============================================================
+// VENDOR / ACCOUNTS PAYABLE — Eldermin ERP | NestJS + MongoDB
+// Phase 2 of the Odoo-standard finance rebuild: a proper vendor master +
+// formal vendor bill (with terms and multi-line account coding) + vendor
+// payment (with partial-payment allocation), separate from the existing
+// simple Expense spend-log. See
+// claude/finance-module-odoo-standard-build-plan.md.
+// ============================================================
+
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { Document, Types } from 'mongoose';
+
+// ============================================================
+// VENDOR (Supplier master)
+// ============================================================
+export type VendorDocument = Vendor & Document;
+
+@Schema({ timestamps: true, collection: 'vendors' })
+export class Vendor {
+  @Prop({ required: true }) name: string;
+  @Prop() contactPerson: string;
+  @Prop() phone: string;
+  @Prop() email: string;
+  @Prop() address: string;
+  @Prop() taxId: string; // NTN / STRN etc.
+  @Prop({ type: Types.ObjectId, ref: 'PaymentTerm', default: null }) paymentTermId: Types.ObjectId | null;
+  @Prop() defaultExpenseAccountCode: string; // which COA expense/asset account this vendor's bills usually hit
+  @Prop({ default: true }) isActive: boolean;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const VendorSchema = SchemaFactory.createForClass(Vendor);
+VendorSchema.index({ schoolSlug: 1, name: 1 });
+
+// ============================================================
+// VENDOR BILL — the formal AP document. Unlike the simple Expense
+// spend-log, a bill can carry multiple lines hitting different GL
+// accounts, has real payment terms (dueDate), and supports partial
+// payment across time via VendorPayment below.
+// ============================================================
+export type VendorBillDocument = VendorBill & Document;
+
+@Schema({ _id: false })
+class VendorBillLine {
+  @Prop({ required: true }) description: string;
+  @Prop({ required: true }) accountCode: string;
+  @Prop() costCenterName: string;
+  @Prop({ required: true }) amount: number;
+}
+const VendorBillLineSchema = SchemaFactory.createForClass(VendorBillLine);
+
+@Schema({ timestamps: true, collection: 'vendor_bills' })
+export class VendorBill {
+  @Prop({ required: true }) billNo: string; // e.g. BILL-2026-12345
+  @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true }) vendorId: Types.ObjectId;
+  @Prop({ required: true }) vendorName: string; // denormalized, same pattern as Invoice.studentName
+  @Prop({ required: true }) billDate: Date;
+  @Prop({ required: true }) dueDate: Date;
+  @Prop() referenceNumber: string; // vendor's own invoice number
+  @Prop({ type: [VendorBillLineSchema], default: [] }) lines: VendorBillLine[];
+  @Prop({ default: 0 }) subtotal: number;
+  @Prop({ default: 0 }) taxAmount: number; // flat amount — full tax templates are Phase 3
+  @Prop({ default: 0 }) totalAmount: number;
+  @Prop({ default: 0 }) paidAmount: number;
+  @Prop({ default: 0 }) balanceDue: number;
+  @Prop({
+    enum: ['draft', 'posted', 'partial', 'paid', 'cancelled'],
+    default: 'draft',
+  })
+  status: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const VendorBillSchema = SchemaFactory.createForClass(VendorBill);
+VendorBillSchema.index({ schoolSlug: 1, billNo: 1 }, { unique: true });
+VendorBillSchema.index({ schoolSlug: 1, vendorId: 1 });
+VendorBillSchema.index({ schoolSlug: 1, status: 1 });
+VendorBillSchema.pre('validate', function () {
+  if (this.isNew && !this.billNo) {
+    const year = new Date().getFullYear();
+    const rand = Math.floor(10000 + Math.random() * 90000);
+    this.billNo = `BILL-${year}-${rand}`;
+  }
+});
+
+// ============================================================
+// VENDOR PAYMENT — one or more payments allocated against a bill,
+// mirroring how Payment works against Invoice on the AR side.
+// ============================================================
+export type VendorPaymentDocument = VendorPayment & Document;
+
+@Schema({ timestamps: true, collection: 'vendor_payments' })
+export class VendorPayment {
+  @Prop({ type: Types.ObjectId, ref: 'VendorBill', required: true }) billId: Types.ObjectId;
+  @Prop({ required: true }) billNo: string;
+  @Prop({ type: Types.ObjectId, ref: 'Vendor', required: true }) vendorId: Types.ObjectId;
+  @Prop({ required: true }) vendorName: string;
+  @Prop({ required: true }) amount: number;
+  @Prop({ required: true }) paymentDate: Date;
+  @Prop({
+    enum: ['cash', 'bank_transfer', 'cheque', 'online', 'card', 'mobile_wallet'],
+    default: 'cash',
+  })
+  paymentMethod: string;
+  @Prop() referenceNumber: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const VendorPaymentSchema = SchemaFactory.createForClass(VendorPayment);
+VendorPaymentSchema.index({ schoolSlug: 1, vendorId: 1 });
+VendorPaymentSchema.index({ schoolSlug: 1, billId: 1 });
