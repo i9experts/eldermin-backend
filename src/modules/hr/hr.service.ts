@@ -29,6 +29,7 @@ import { Holiday, HolidayDocument } from './schemas/holiday.schema';
 import { ExitSettings, ExitSettingsDocument } from './schemas/exit-settings.schema';
 import { HiringSettings, HiringSettingsDocument } from './schemas/hiring-settings.schema';
 import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
+import { Shift, ShiftDocument } from './schemas/shift.schema';
 
 @Injectable()
 export class HrService {
@@ -55,6 +56,7 @@ export class HrService {
     @InjectModel(ExitSettings.name) private exitSettingsModel: Model<ExitSettingsDocument>,
     @InjectModel(HiringSettings.name) private hiringSettingsModel: Model<HiringSettingsDocument>,
     @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
+    @InjectModel(Shift.name) private shiftModel: Model<ShiftDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
@@ -662,13 +664,19 @@ export class HrService {
     }
 
     // When the CSV has no explicit status column, derive present/late/half_day
-    // from the actual check-in time against this school's configured grace
-    // period and half-day cutoff, instead of defaulting every row to 'present'
-    // regardless of when someone actually checked in.
+    // from the actual check-in time against the staff member's assigned
+    // shift (falling back to the school's default shift, then to the
+    // school-wide AttendanceSettings if no shifts are configured at all)
+    // instead of defaulting every row to 'present' regardless of when
+    // someone actually checked in.
     const attendanceSettings = schoolSlug ? await this.getAttendanceSettings(tenantId, schoolSlug) : null;
+    const shifts = schoolSlug ? await this.shiftModel.find({ schoolSlug, isActive: true }).lean() : [];
+    const shiftById = new Map(shifts.map((s: any) => [String(s._id), s]));
+    const defaultShift = shifts.find((s: any) => s.isDefault) || null;
 
-    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId').lean();
+    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId shiftId').lean();
     const employeeIdMap = new Map(staffList.map(s => [s.employeeId, s._id.toString()]));
+    const staffShiftMap = new Map(staffList.map((s: any) => [String(s._id), s.shiftId ? String(s.shiftId) : null]));
 
     const ops: any[] = [];
     const skipped: number[] = [];
@@ -679,9 +687,22 @@ export class HrService {
       const date = cols[dateCol];
       if (!staffId || !date) { skipped.push(i + 1); continue; }
       const checkInTime = checkInCol !== -1 ? cols[checkInCol] || '' : '';
-      const status = statusCol !== -1
-        ? (cols[statusCol] || 'present')
-        : (attendanceSettings ? this.computeAttendanceStatus(checkInTime, attendanceSettings) : 'present');
+      let status = 'present';
+      if (statusCol !== -1) {
+        status = cols[statusCol] || 'present';
+      } else if (attendanceSettings || shifts.length) {
+        const assignedShiftId = staffShiftMap.get(String(staffId));
+        const shift = (assignedShiftId && shiftById.get(assignedShiftId)) || defaultShift;
+        const rule = shift
+          ? {
+              standardCheckInTime: shift.startTime,
+              graceMinutes: shift.graceMinutes,
+              lateThresholdMinutes: shift.lateThresholdMinutes,
+              halfDayCutoffTime: shift.halfDayCutoffTime || attendanceSettings?.halfDayCutoffTime,
+            }
+          : attendanceSettings;
+        status = rule ? this.computeAttendanceStatus(checkInTime, rule) : 'present';
+      }
       ops.push({
         updateOne: {
           filter: { tenantId: this.newTid(tenantId), staffId: this.newTid(staffId), date: new Date(date) },
@@ -1396,6 +1417,51 @@ export class HrService {
   async updateAttendanceSettings(tenantId: string, schoolSlug: string, dto: any) {
     await this.getAttendanceSettings(tenantId, schoolSlug);
     return this.attendanceSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── SHIFTS ───────────────────────────────────────────────────────────
+  // Shift definitions are the real dependency underneath accurate attendance:
+  // a single school-wide "standard check-in time" breaks down the moment a
+  // school has staff on different schedules (admin vs teaching, or rotating
+  // duty shifts at a boarding school). Staff get assigned a shift; attendance
+  // status is computed against THEIR shift, falling back to whichever shift
+  // is marked as the school's default, then to AttendanceSettings if no
+  // shifts are configured at all.
+
+  async getShifts(tenantId: string, schoolSlug: string) {
+    return this.shiftModel.find({ schoolSlug }).sort({ isDefault: -1, name: 1 }).lean();
+  }
+
+  async createShift(tenantId: string, schoolSlug: string, dto: any) {
+    if (dto.isDefault) await this.shiftModel.updateMany({ schoolSlug }, { $set: { isDefault: false } });
+    return this.shiftModel.create({ ...dto, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateShift(id: string, schoolSlug: string, dto: any) {
+    if (dto.isDefault) await this.shiftModel.updateMany({ schoolSlug, _id: { $ne: id } }, { $set: { isDefault: false } });
+    const shift = await this.shiftModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!shift) throw new NotFoundException('Shift not found');
+    return shift;
+  }
+
+  async deleteShift(id: string, schoolSlug: string) {
+    const inUse = await this.staffModel.countDocuments({ schoolSlug, shiftId: this.newTid(id) } as any);
+    if (inUse > 0) {
+      throw new BadRequestException(`This shift is assigned to ${inUse} staff member(s) — reassign them first or deactivate the shift instead of deleting it`);
+    }
+    const result = await this.shiftModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Shift not found');
+    return { message: 'Shift deleted' };
+  }
+
+  async assignStaffShift(staffId: string, tenantId: string, shiftId: string | null) {
+    const staff = await this.staffModel.findOneAndUpdate(
+      { _id: staffId, tenantId: this.newTid(tenantId) },
+      { $set: { shiftId: shiftId ? this.newTid(shiftId) : null } },
+      { new: true },
+    );
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff;
   }
 
   // Computes present/late/half_day from a raw "HH:mm" check-in time using the

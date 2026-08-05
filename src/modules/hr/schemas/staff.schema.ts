@@ -106,6 +106,13 @@ export class Staff {
   @Prop({ default: true })
   isActive: boolean;
 
+  // The shift this staff member is assigned to, for attendance status
+  // computation. Null means they fall back to the school's default shift
+  // (Shift.isDefault) or, if no shifts are configured at all, the school's
+  // AttendanceSettings.
+  @Prop({ type: Types.ObjectId, ref: 'Shift', default: null })
+  shiftId: Types.ObjectId | null;
+
   @Prop({
     type: {
       title: String, middleName: String, preferredName: String, arabicName: String,

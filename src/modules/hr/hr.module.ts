@@ -25,6 +25,7 @@ import { Holiday, HolidaySchema } from './schemas/holiday.schema';
 import { ExitSettings, ExitSettingsSchema } from './schemas/exit-settings.schema';
 import { HiringSettings, HiringSettingsSchema } from './schemas/hiring-settings.schema';
 import { AttendanceSettings, AttendanceSettingsSchema } from './schemas/attendance-settings.schema';
+import { Shift, ShiftSchema } from './schemas/shift.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
@@ -54,6 +55,7 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: ExitSettings.name, schema: ExitSettingsSchema },
       { name: HiringSettings.name, schema: HiringSettingsSchema },
       { name: AttendanceSettings.name, schema: AttendanceSettingsSchema },
+      { name: Shift.name, schema: ShiftSchema },
       { name: User.name, schema: UserSchema },
       { name: School.name, schema: SchoolSchema },
     ]),

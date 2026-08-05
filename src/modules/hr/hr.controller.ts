@@ -370,6 +370,25 @@ export class HrController {
   @Patch('attendance-settings')
   updateAttendanceSettings(@Request() req, @Body() body: any) { return this.hrService.updateAttendanceSettings(req.user.tenantId, req.user.schoolSlug, body); }
 
+  // ── SHIFTS ─────────────────────────────────────────────────────────────
+
+  @Get('shifts')
+  getShifts(@Request() req) { return this.hrService.getShifts(req.user.tenantId, req.user.schoolSlug); }
+
+  @Post('shifts')
+  createShift(@Request() req, @Body() body: any) { return this.hrService.createShift(req.user.tenantId, req.user.schoolSlug, body); }
+
+  @Patch('shifts/:id')
+  updateShift(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateShift(id, req.user.schoolSlug, body); }
+
+  @Delete('shifts/:id')
+  deleteShift(@Request() req, @Param('id') id: string) { return this.hrService.deleteShift(id, req.user.schoolSlug); }
+
+  @Patch('staff/:id/shift')
+  assignStaffShift(@Request() req, @Param('id') id: string, @Body() body: { shiftId: string | null }) {
+    return this.hrService.assignStaffShift(id, req.user.tenantId, body.shiftId);
+  }
+
   // ── REMINDERS (holidays + upcoming) ───────────────────────────────────
 
   @Get('holidays')
