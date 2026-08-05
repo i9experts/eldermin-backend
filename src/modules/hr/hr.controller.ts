@@ -185,7 +185,7 @@ export class HrController {
 
   @Post('attendance/import')
   @UseInterceptors(FileInterceptor('file'))
-  importAttendance(@Request() req, @UploadedFile() file: Express.Multer.File) { return this.hrService.importAttendanceCsv(req.user.tenantId, this.iid(req), file); }
+  importAttendance(@Request() req, @UploadedFile() file: Express.Multer.File) { return this.hrService.importAttendanceCsv(req.user.tenantId, this.iid(req), file, req.user.schoolSlug); }
 
   // ── LEAVE ─────────────────────────────────────────────────────────────
 
@@ -340,11 +340,52 @@ export class HrController {
   getExitRecords(@Request() req) { return this.hrService.getExitRecords(req.user.tenantId); }
 
   @Post('exit')
-  createExitRecord(@Request() req, @Body() body: any) { return this.hrService.createExitRecord(req.user.tenantId, this.iid(req), body, req.user.userId); }
+  createExitRecord(@Request() req, @Body() body: any) { return this.hrService.createExitRecord(req.user.tenantId, this.iid(req), body, req.user.userId, req.user.schoolSlug); }
 
   @Patch('exit/:id')
   updateExitRecord(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateExitRecord(req.user.tenantId, id, body); }
 
   @Patch('exit/:id/clearance/:index')
   updateClearance(@Request() req, @Param('id') id: string, @Param('index') idx: string, @Body() body: { isDone: boolean; clearedBy: string }) { return this.hrService.updateClearanceItem(req.user.tenantId, id, parseInt(idx), body.isDone, body.clearedBy); }
+
+  @Get('exit-settings')
+  getExitSettings(@Request() req) { return this.hrService.getExitSettings(req.user.tenantId, req.user.schoolSlug); }
+
+  @Patch('exit-settings')
+  updateExitSettings(@Request() req, @Body() body: any) { return this.hrService.updateExitSettings(req.user.tenantId, req.user.schoolSlug, body); }
+
+  // ── HIRING SETTINGS ──────────────────────────────────────────────────
+
+  @Get('hiring-settings')
+  getHiringSettings(@Request() req) { return this.hrService.getHiringSettings(req.user.tenantId, req.user.schoolSlug); }
+
+  @Patch('hiring-settings')
+  updateHiringSettings(@Request() req, @Body() body: any) { return this.hrService.updateHiringSettings(req.user.tenantId, req.user.schoolSlug, body); }
+
+  // ── ATTENDANCE SETTINGS ──────────────────────────────────────────────
+
+  @Get('attendance-settings')
+  getAttendanceSettings(@Request() req) { return this.hrService.getAttendanceSettings(req.user.tenantId, req.user.schoolSlug); }
+
+  @Patch('attendance-settings')
+  updateAttendanceSettings(@Request() req, @Body() body: any) { return this.hrService.updateAttendanceSettings(req.user.tenantId, req.user.schoolSlug, body); }
+
+  // ── REMINDERS (holidays + upcoming) ───────────────────────────────────
+
+  @Get('holidays')
+  getHolidays(@Request() req) { return this.hrService.getHolidays(req.user.tenantId, req.user.schoolSlug); }
+
+  @Post('holidays')
+  createHoliday(@Request() req, @Body() body: any) { return this.hrService.createHoliday(req.user.tenantId, req.user.schoolSlug, body); }
+
+  @Patch('holidays/:id')
+  updateHoliday(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateHoliday(id, req.user.schoolSlug, body); }
+
+  @Delete('holidays/:id')
+  deleteHoliday(@Request() req, @Param('id') id: string) { return this.hrService.deleteHoliday(id, req.user.schoolSlug); }
+
+  @Get('reminders/upcoming')
+  getUpcomingReminders(@Request() req, @Query('days') days?: string) {
+    return this.hrService.getUpcomingReminders(req.user.tenantId, req.user.schoolSlug, days ? parseInt(days) : 30);
+  }
 }

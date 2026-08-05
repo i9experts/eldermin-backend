@@ -25,6 +25,10 @@ import { StaffContract, StaffContractDocument } from './schemas/staff-contract.s
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicyDocument } from './schemas/leave-policy.schema';
 import { BiometricConfig, BiometricConfigDocument } from './schemas/biometric-config.schema';
+import { Holiday, HolidayDocument } from './schemas/holiday.schema';
+import { ExitSettings, ExitSettingsDocument } from './schemas/exit-settings.schema';
+import { HiringSettings, HiringSettingsDocument } from './schemas/hiring-settings.schema';
+import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
 
 @Injectable()
 export class HrService {
@@ -47,6 +51,10 @@ export class HrService {
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
     @InjectModel(BiometricConfig.name) private biometricConfigModel: Model<BiometricConfigDocument>,
+    @InjectModel(Holiday.name) private holidayModel: Model<HolidayDocument>,
+    @InjectModel(ExitSettings.name) private exitSettingsModel: Model<ExitSettingsDocument>,
+    @InjectModel(HiringSettings.name) private hiringSettingsModel: Model<HiringSettingsDocument>,
+    @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
@@ -637,7 +645,7 @@ export class HrService {
     };
   }
 
-  async importAttendanceCsv(tenantId: string, institutionId: string, file: Express.Multer.File) {
+  async importAttendanceCsv(tenantId: string, institutionId: string, file: Express.Multer.File, schoolSlug?: string) {
     if (!file) throw new BadRequestException('No file uploaded');
     const text = file.buffer.toString('utf-8');
     const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
@@ -653,6 +661,12 @@ export class HrService {
       throw new BadRequestException('CSV must include staffId/employeeId and date columns');
     }
 
+    // When the CSV has no explicit status column, derive present/late/half_day
+    // from the actual check-in time against this school's configured grace
+    // period and half-day cutoff, instead of defaulting every row to 'present'
+    // regardless of when someone actually checked in.
+    const attendanceSettings = schoolSlug ? await this.getAttendanceSettings(tenantId, schoolSlug) : null;
+
     const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId').lean();
     const employeeIdMap = new Map(staffList.map(s => [s.employeeId, s._id.toString()]));
 
@@ -664,6 +678,10 @@ export class HrService {
       const staffId = Types.ObjectId.isValid(rawId) ? rawId : employeeIdMap.get(rawId);
       const date = cols[dateCol];
       if (!staffId || !date) { skipped.push(i + 1); continue; }
+      const checkInTime = checkInCol !== -1 ? cols[checkInCol] || '' : '';
+      const status = statusCol !== -1
+        ? (cols[statusCol] || 'present')
+        : (attendanceSettings ? this.computeAttendanceStatus(checkInTime, attendanceSettings) : 'present');
       ops.push({
         updateOne: {
           filter: { tenantId: this.newTid(tenantId), staffId: this.newTid(staffId), date: new Date(date) },
@@ -673,9 +691,9 @@ export class HrService {
               institutionId: this.newTid(institutionId),
               staffId: this.newTid(staffId),
               date: new Date(date),
-              checkInTime: checkInCol !== -1 ? cols[checkInCol] || '' : '',
+              checkInTime,
               checkOutTime: checkOutCol !== -1 ? cols[checkOutCol] || '' : '',
-              status: statusCol !== -1 ? cols[statusCol] || 'present' : 'present',
+              status,
             },
           },
           upsert: true,
@@ -1117,22 +1135,25 @@ export class HrService {
     return this.exitRecordModel.find({ tenantId: this.newTid(tenantId) }).sort({ createdAt: -1 }).lean();
   }
 
-  async createExitRecord(tenantId: string, institutionId: string, data: any, userId: string) {
-    const clearanceChecklist = [
-      { department: 'IT', item: 'Return laptop/equipment', isDone: false },
-      { department: 'IT', item: 'Disable system access', isDone: false },
-      { department: 'IT', item: 'Handover email account', isDone: false },
-      { department: 'Library', item: 'Return library books/materials', isDone: false },
-      { department: 'Finance', item: 'Clear outstanding dues', isDone: false },
-      { department: 'Finance', item: 'Final salary processed', isDone: false },
-      { department: 'HR', item: 'Return ID card', isDone: false },
-      { department: 'HR', item: 'Complete exit interview', isDone: false },
-      { department: 'HR', item: 'Issue experience letter', isDone: false },
-      { department: 'Academic', item: 'Handover classes/subjects', isDone: false },
-      { department: 'Academic', item: 'Submit lesson plans/records', isDone: false },
-    ];
+  async createExitRecord(tenantId: string, institutionId: string, data: any, userId: string, schoolSlug?: string) {
+    // Clearance checklist and notice period now come from this school's own
+    // configured Exit Settings (falling back to the same sensible defaults
+    // every record used to get hardcoded to) rather than one fixed list for
+    // every school and every employee type.
+    const settings = schoolSlug ? await this.getExitSettings(tenantId, schoolSlug) : null;
+    const templateChecklist = settings?.clearanceChecklistTemplate?.length
+      ? settings.clearanceChecklistTemplate
+      : this.DEFAULT_CLEARANCE_CHECKLIST;
+    const clearanceChecklist = templateChecklist.map((c: any) => ({ department: c.department, item: c.item, isDone: false }));
+
+    let noticePeriodDays = data.noticePeriodDays;
+    if (noticePeriodDays === undefined || noticePeriodDays === null) {
+      const byType = settings?.noticePeriodDaysByEmploymentType || {};
+      noticePeriodDays = byType[data.employmentType] ?? settings?.defaultNoticePeriodDays ?? 30;
+    }
+
     return this.exitRecordModel.create({
-      ...data, clearanceChecklist,
+      ...data, clearanceChecklist, noticePeriodDays,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
       processedBy: this.newTid(userId),
@@ -1235,5 +1256,168 @@ export class HrService {
       ),
     );
     return { created: results.filter(r => r.status === 'fulfilled').length };
+  }
+
+  // ── REMINDERS (holidays + upcoming birthdays/anniversaries) ───────────
+
+  async getHolidays(tenantId: string, schoolSlug: string) {
+    return this.holidayModel.find({ schoolSlug }).sort({ date: 1 }).lean();
+  }
+
+  async createHoliday(tenantId: string, schoolSlug: string, dto: any) {
+    return this.holidayModel.create({ ...dto, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateHoliday(id: string, schoolSlug: string, dto: any) {
+    const holiday = await this.holidayModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!holiday) throw new NotFoundException('Holiday not found');
+    return holiday;
+  }
+
+  async deleteHoliday(id: string, schoolSlug: string) {
+    const result = await this.holidayModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Holiday not found');
+    return { message: 'Holiday deleted' };
+  }
+
+  // Upcoming birthdays, work anniversaries, and holidays in the next `withinDays`
+  // days — computed live from Staff.dateOfBirth / Staff.dateOfJoining rather than
+  // needing a separate record per person per year.
+  async getUpcomingReminders(tenantId: string, schoolSlug: string, withinDays = 30) {
+    const tid = this.newTid(tenantId);
+    const staffList = await this.staffModel
+      .find({ tenantId: tid, isActive: true }, { firstName: 1, lastName: 1, dateOfBirth: 1, dateOfJoining: 1, department: 1 })
+      .lean();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const nextOccurrence = (date: Date) => {
+      const d = new Date(date);
+      const next = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+      if (next < today) next.setFullYear(today.getFullYear() + 1);
+      return next;
+    };
+    const daysUntil = (d: Date) => Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    const birthdays: any[] = [];
+    const anniversaries: any[] = [];
+    for (const s of staffList) {
+      const name = `${s.firstName} ${s.lastName}`;
+      if (s.dateOfBirth) {
+        const next = nextOccurrence(s.dateOfBirth);
+        const inDays = daysUntil(next);
+        if (inDays <= withinDays) birthdays.push({ staffId: s._id, name, department: s.department, date: next, inDays, type: 'birthday' });
+      }
+      if (s.dateOfJoining) {
+        const next = nextOccurrence(s.dateOfJoining);
+        const inDays = daysUntil(next);
+        const years = next.getFullYear() - new Date(s.dateOfJoining).getFullYear();
+        if (inDays <= withinDays && years > 0) anniversaries.push({ staffId: s._id, name, department: s.department, date: next, inDays, years, type: 'anniversary' });
+      }
+    }
+
+    const holidays = await this.holidayModel
+      .find({ schoolSlug, date: { $gte: today, $lte: new Date(today.getTime() + withinDays * 24 * 60 * 60 * 1000) } })
+      .sort({ date: 1 })
+      .lean();
+
+    return {
+      birthdays: birthdays.sort((a, b) => a.inDays - b.inDays),
+      anniversaries: anniversaries.sort((a, b) => a.inDays - b.inDays),
+      holidays: holidays.map(h => ({ ...h, type: 'holiday', inDays: daysUntil(new Date(h.date)) })),
+    };
+  }
+
+  // ── EXIT SETTINGS ──────────────────────────────────────────────────────
+
+  private readonly DEFAULT_CLEARANCE_CHECKLIST = [
+    { department: 'IT', item: 'Return laptop/equipment' },
+    { department: 'IT', item: 'Disable system access' },
+    { department: 'IT', item: 'Handover email account' },
+    { department: 'Library', item: 'Return library books/materials' },
+    { department: 'Finance', item: 'Clear outstanding dues' },
+    { department: 'Finance', item: 'Final salary processed' },
+    { department: 'HR', item: 'Return ID card' },
+    { department: 'HR', item: 'Complete exit interview' },
+    { department: 'HR', item: 'Issue experience letter' },
+    { department: 'Academic', item: 'Handover classes/subjects' },
+    { department: 'Academic', item: 'Submit lesson plans/records' },
+  ];
+  private readonly DEFAULT_EXIT_INTERVIEW_QUESTIONS = [
+    'What is your primary reason for leaving?',
+    'How would you rate your overall experience working here?',
+    'Did you feel supported by your manager and colleagues?',
+    'What could we have done differently to retain you?',
+    'Would you consider working here again in the future?',
+  ];
+
+  async getExitSettings(tenantId: string, schoolSlug: string) {
+    const existing = await this.exitSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    // Seed with the same sensible defaults every exit record used to get hardcoded —
+    // fully editable from here on, nothing locked in.
+    return this.exitSettingsModel.create({
+      tenantId: this.newTid(tenantId),
+      schoolSlug,
+      defaultNoticePeriodDays: 30,
+      noticePeriodDaysByEmploymentType: { permanent: 30, contract: 15, probation: 7, part_time: 7 },
+      clearanceChecklistTemplate: this.DEFAULT_CLEARANCE_CHECKLIST,
+      exitInterviewQuestions: this.DEFAULT_EXIT_INTERVIEW_QUESTIONS,
+    });
+  }
+
+  async updateExitSettings(tenantId: string, schoolSlug: string, dto: any) {
+    await this.getExitSettings(tenantId, schoolSlug); // ensure a doc exists to update
+    return this.exitSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── HIRING SETTINGS ────────────────────────────────────────────────────
+
+  async getHiringSettings(tenantId: string, schoolSlug: string) {
+    const existing = await this.hiringSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    return this.hiringSettingsModel.create({ tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateHiringSettings(tenantId: string, schoolSlug: string, dto: any) {
+    await this.getHiringSettings(tenantId, schoolSlug);
+    return this.hiringSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── ATTENDANCE SETTINGS ────────────────────────────────────────────────
+
+  async getAttendanceSettings(tenantId: string, schoolSlug: string) {
+    const existing = await this.attendanceSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    return this.attendanceSettingsModel.create({ tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateAttendanceSettings(tenantId: string, schoolSlug: string, dto: any) {
+    await this.getAttendanceSettings(tenantId, schoolSlug);
+    return this.attendanceSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // Computes present/late/half_day from a raw "HH:mm" check-in time using the
+  // school's configured grace period and half-day cutoff, instead of every
+  // imported row silently defaulting to 'present' regardless of when someone
+  // actually checked in.
+  private computeAttendanceStatus(checkInTime: string, settings: any): string {
+    if (!checkInTime) return 'absent';
+    const toMinutes = (hhmm: string) => {
+      const [h, m] = hhmm.split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+    const checkInMins = toMinutes(checkInTime);
+    const standardMins = toMinutes(settings.standardCheckInTime || '08:00');
+    const halfDayCutoffMins = toMinutes(settings.halfDayCutoffTime || '13:00');
+    const graceMins = settings.graceMinutes ?? 15;
+    const lateThresholdMins = settings.lateThresholdMinutes ?? 60;
+
+    if (checkInMins >= halfDayCutoffMins) return 'half_day';
+    const lateBy = checkInMins - standardMins;
+    if (lateBy <= graceMins) return 'present';
+    if (lateBy <= graceMins + lateThresholdMins) return 'late';
+    return 'half_day';
   }
 }

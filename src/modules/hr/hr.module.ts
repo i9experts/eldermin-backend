@@ -21,6 +21,10 @@ import { StaffContract, StaffContractSchema } from './schemas/staff-contract.sch
 import { ExitRecord, ExitRecordSchema } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicySchema } from './schemas/leave-policy.schema';
 import { BiometricConfig, BiometricConfigSchema } from './schemas/biometric-config.schema';
+import { Holiday, HolidaySchema } from './schemas/holiday.schema';
+import { ExitSettings, ExitSettingsSchema } from './schemas/exit-settings.schema';
+import { HiringSettings, HiringSettingsSchema } from './schemas/hiring-settings.schema';
+import { AttendanceSettings, AttendanceSettingsSchema } from './schemas/attendance-settings.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
@@ -46,6 +50,10 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: ExitRecord.name, schema: ExitRecordSchema },
       { name: LeavePolicy.name, schema: LeavePolicySchema },
       { name: BiometricConfig.name, schema: BiometricConfigSchema },
+      { name: Holiday.name, schema: HolidaySchema },
+      { name: ExitSettings.name, schema: ExitSettingsSchema },
+      { name: HiringSettings.name, schema: HiringSettingsSchema },
+      { name: AttendanceSettings.name, schema: AttendanceSettingsSchema },
       { name: User.name, schema: UserSchema },
       { name: School.name, schema: SchoolSchema },
     ]),
