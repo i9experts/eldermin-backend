@@ -255,7 +255,7 @@ export class HrController {
   getPayslips(@Request() req, @Query() q: any) { return this.hrService.getPayslips(req.user.tenantId, q); }
 
   @Post('payslips')
-  createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), body); }
+  createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
 
   // ── SALARY COMPONENTS (payroll configuration root system) ──────────────
 
@@ -457,7 +457,7 @@ export class HrController {
 
   @Patch('expense-claims/:id/status')
   updateExpenseClaimStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string; rejectionReason?: string }) {
-    return this.hrService.updateExpenseClaimStatus(req.user.tenantId, id, body.status, body.approvedBy, body.rejectionReason);
+    return this.hrService.updateExpenseClaimStatus(req.user.tenantId, id, body.status, req.user.schoolSlug, body.approvedBy, body.rejectionReason);
   }
 
   @Post('expense-claims/:id/receipts')
@@ -476,6 +476,6 @@ export class HrController {
 
   @Patch('advances/:id/status')
   updateAdvanceStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string }) {
-    return this.hrService.updateAdvanceStatus(req.user.tenantId, id, body.status, body.approvedBy);
+    return this.hrService.updateAdvanceStatus(req.user.tenantId, id, body.status, req.user.schoolSlug, body.approvedBy);
   }
 }

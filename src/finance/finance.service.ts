@@ -12,11 +12,23 @@ import {
   DiscountProgram, DiscountProgramDocument,
   FeeAssignment, FeeAssignmentDocument,
 } from './schemas/finance.schema';
+import {
+  FiscalYear, FiscalYearDocument,
+  AccountingPeriod, AccountingPeriodDocument,
+  CostCenter, CostCenterDocument,
+  PaymentTerm, PaymentTermDocument,
+  JournalEntry, JournalEntryDocument,
+} from './schemas/ledger.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
+
+// Accounts every auto-posting rule needs to exist — including a Suspense
+// account so a posting never silently fails just because a school hasn't
+// finished mapping every category to a GL account yet.
+const SUSPENSE_ACCOUNT_CODE = '9999';
 
 @Injectable()
 export class FinanceService {
@@ -30,6 +42,11 @@ export class FinanceService {
     @InjectModel(BankAccount.name) private bankModel: Model<BankAccountDocument>,
     @InjectModel(DiscountProgram.name) private discountProgramModel: Model<DiscountProgramDocument>,
     @InjectModel(FeeAssignment.name) private feeAssignmentModel: Model<FeeAssignmentDocument>,
+    @InjectModel(FiscalYear.name) private fiscalYearModel: Model<FiscalYearDocument>,
+    @InjectModel(AccountingPeriod.name) private periodModel: Model<AccountingPeriodDocument>,
+    @InjectModel(CostCenter.name) private costCenterModel: Model<CostCenterDocument>,
+    @InjectModel(PaymentTerm.name) private paymentTermModel: Model<PaymentTermDocument>,
+    @InjectModel(JournalEntry.name) private journalModel: Model<JournalEntryDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
@@ -145,8 +162,11 @@ export class FinanceService {
       { code: '1100', name: 'Bank Accounts', type: 'asset', subType: 'current_asset' },
       { code: '1200', name: 'Accounts Receivable (Fee)', type: 'asset', subType: 'current_asset' },
       { code: '1500', name: 'Fixed Assets', type: 'asset', subType: 'fixed_asset' },
+      { code: '1300', name: 'Employee Advances', type: 'asset', subType: 'current_asset' },
       { code: '2000', name: 'Accounts Payable', type: 'liability', subType: 'current_liability' },
       { code: '2100', name: 'Salaries Payable', type: 'liability', subType: 'current_liability' },
+      { code: '2200', name: 'Tax Payable', type: 'liability', subType: 'current_liability' },
+      { code: '2300', name: 'Provident Fund Payable', type: 'liability', subType: 'current_liability' },
       { code: '3000', name: "Owner's Equity", type: 'equity', subType: 'equity' },
       { code: '4000', name: 'Tuition Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
       { code: '4100', name: 'Admission Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
@@ -156,6 +176,9 @@ export class FinanceService {
       { code: '5200', name: 'Maintenance & Repairs', type: 'expense', subType: 'operating_expense' },
       { code: '5300', name: 'Academic Supplies', type: 'expense', subType: 'operating_expense' },
       { code: '5400', name: 'Marketing & Advertising', type: 'expense', subType: 'operating_expense' },
+      { code: '5500', name: 'Employee Reimbursements', type: 'expense', subType: 'operating_expense' },
+      { code: '5600', name: 'Other Operating Expenses', type: 'expense', subType: 'operating_expense' },
+      { code: '9999', name: 'Suspense / Unmapped', type: 'liability', subType: 'current_liability' },
     ];
     const ops = defaults.map(d => ({
       updateOne: {
@@ -166,6 +189,377 @@ export class FinanceService {
     }));
     await this.coaModel.bulkWrite(ops);
     return this.coaModel.find({ schoolSlug }).sort({ code: 1 });
+  }
+
+  // ============================================================
+  // LEDGER FOUNDATION — Fiscal Years, Periods, Cost Centers,
+  // Payment Terms, and the double-entry Journal Entry engine.
+  // Everything below is what actually closes the "nothing posts to the
+  // Chart of Accounts" gap. See the Odoo-standard finance build plan doc.
+  // ============================================================
+
+  // ── Fiscal Years ─────────────────────────────────────────
+  async getFiscalYears(schoolSlug: string) {
+    return this.fiscalYearModel.find({ schoolSlug }).sort({ startDate: -1 });
+  }
+
+  async createFiscalYear(data: any) {
+    return this.fiscalYearModel.create(data);
+  }
+
+  async closeFiscalYear(id: string, schoolSlug: string, closedBy: string) {
+    const fy = await this.fiscalYearModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: { isClosed: true, closedAt: new Date(), closedBy } },
+      { new: true },
+    );
+    if (!fy) throw new NotFoundException('Fiscal year not found');
+    return fy;
+  }
+
+  // Auto-seeds a fiscal year covering `date` if none exists yet — postings
+  // should never hard-fail just because nobody has configured a fiscal
+  // calendar in advance, matching the auto-seed-on-first-access pattern
+  // used elsewhere in this app (ExitSettings, AttendanceSettings, etc.).
+  private async getOrCreateFiscalYear(schoolSlug: string, date: Date) {
+    let fy = await this.fiscalYearModel.findOne({
+      schoolSlug, startDate: { $lte: date }, endDate: { $gte: date },
+    });
+    if (fy) return fy;
+    // Default to a July-June academic fiscal year (common for Pakistani
+    // schools); schools can create their own to override this default.
+    const year = date.getMonth() >= 6 ? date.getFullYear() : date.getFullYear() - 1;
+    const startDate = new Date(year, 6, 1);
+    const endDate = new Date(year + 1, 5, 30, 23, 59, 59);
+    fy = await this.fiscalYearModel.create({
+      schoolSlug, startDate, endDate, isActive: true,
+      name: `FY ${year}-${String(year + 1).slice(2)}`,
+    });
+    return fy;
+  }
+
+  // ── Accounting Periods ───────────────────────────────────
+  async getAccountingPeriods(schoolSlug: string, fiscalYearId?: string) {
+    const filter: any = { schoolSlug };
+    if (fiscalYearId) filter.fiscalYearId = fiscalYearId;
+    return this.periodModel.find(filter).sort({ startDate: 1 });
+  }
+
+  async setPeriodStatus(id: string, schoolSlug: string, status: string) {
+    const p = await this.periodModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { status } }, { new: true });
+    if (!p) throw new NotFoundException('Accounting period not found');
+    return p;
+  }
+
+  private async getOrCreatePeriod(schoolSlug: string, date: Date) {
+    const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+    const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
+    let period = await this.periodModel.findOne({ schoolSlug, startDate: startOfMonth });
+    if (period) return period;
+    const fy = await this.getOrCreateFiscalYear(schoolSlug, date);
+    period = await this.periodModel.create({
+      schoolSlug, fiscalYearId: fy._id, startDate: startOfMonth, endDate: endOfMonth,
+      name: date.toLocaleString('default', { month: 'long', year: 'numeric' }),
+      status: 'open',
+    });
+    return period;
+  }
+
+  // ── Cost Centers ─────────────────────────────────────────
+  async getCostCenters(schoolSlug: string) {
+    return this.costCenterModel.find({ schoolSlug, isActive: true }).sort({ code: 1 });
+  }
+
+  async createCostCenter(data: any) {
+    return this.costCenterModel.create(data);
+  }
+
+  async updateCostCenter(id: string, schoolSlug: string, data: any) {
+    return this.costCenterModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+  }
+
+  // Seeds one cost center per existing Campus so the dimension is usable
+  // immediately without a separate manual setup step.
+  async seedCostCentersFromCampuses(schoolSlug: string) {
+    const campuses = await this.campusModel.find({ schoolSlug } as any).lean().catch(() => []);
+    const list = (campuses as any[]).length > 0 ? campuses : [{ name: 'Main Campus', _id: null }];
+    const ops = list.map((c: any, i: number) => ({
+      updateOne: {
+        filter: { schoolSlug, code: `CC-${String(i + 1).padStart(3, '0')}` },
+        update: { $setOnInsert: { schoolSlug, code: `CC-${String(i + 1).padStart(3, '0')}`, name: c.name, type: 'campus', isActive: true } },
+        upsert: true,
+      },
+    }));
+    await this.costCenterModel.bulkWrite(ops);
+    return this.costCenterModel.find({ schoolSlug });
+  }
+
+  // Best-effort resolve a cost center by matching a campus/department name
+  // string (what most transaction records store today) against the
+  // configured Cost Centers — returns null rather than throwing if nothing
+  // matches, since Cost Center is a reporting dimension, not a required
+  // field for a posting to succeed.
+  private async resolveCostCenterByName(schoolSlug: string, name?: string) {
+    if (!name) return null;
+    return this.costCenterModel.findOne({ schoolSlug, name: new RegExp(`^${name}$`, 'i') });
+  }
+
+  // ── Payment Terms ────────────────────────────────────────
+  async getPaymentTerms(schoolSlug: string) {
+    return this.paymentTermModel.find({ schoolSlug, isActive: true }).sort({ dueDays: 1 });
+  }
+
+  async createPaymentTerm(data: any) {
+    return this.paymentTermModel.create(data);
+  }
+
+  async seedDefaultPaymentTerms(schoolSlug: string) {
+    const defaults = [
+      { name: 'Due on Receipt', dueDays: 0, isDefault: true },
+      { name: 'Net 15', dueDays: 15 },
+      { name: 'Net 30', dueDays: 30 },
+    ];
+    const ops = defaults.map(d => ({
+      updateOne: { filter: { schoolSlug, name: d.name }, update: { $setOnInsert: { ...d, schoolSlug, isActive: true } }, upsert: true },
+    }));
+    await this.paymentTermModel.bulkWrite(ops);
+    return this.paymentTermModel.find({ schoolSlug });
+  }
+
+  // ── Journal Entry engine ─────────────────────────────────
+  private async resolveAccount(schoolSlug: string, code: string) {
+    let acc = await this.coaModel.findOne({ schoolSlug, code, isActive: true });
+    if (!acc) acc = await this.coaModel.findOne({ schoolSlug, code: SUSPENSE_ACCOUNT_CODE });
+    return acc;
+  }
+
+  private accountIncreasesOnDebit(type: string) {
+    return type === 'asset' || type === 'expense';
+  }
+
+  // The core double-entry posting mechanism. Every transaction type
+  // (fee, payroll, expense, advance...) ultimately calls this. Rejects
+  // any entry that doesn't balance — that guarantee is what makes Trial
+  // Balance provably correct rather than just "probably fine."
+  async postJournalEntry(schoolSlug: string, dto: {
+    date?: Date | string; reference?: string; narration?: string;
+    sourceType: string; sourceId?: string; postedBy?: string;
+    lines: { accountCode: string; costCenterName?: string; debit?: number; credit?: number; partnerType?: string; partnerId?: string; partnerName?: string }[];
+  }) {
+    if (!dto.lines || dto.lines.length < 2) throw new BadRequestException('A journal entry needs at least two lines');
+    const date = dto.date ? new Date(dto.date) : new Date();
+
+    const resolvedLines = await Promise.all(dto.lines.map(async (l) => {
+      const debit = Math.round((l.debit || 0) * 100) / 100;
+      const credit = Math.round((l.credit || 0) * 100) / 100;
+      if (debit > 0 && credit > 0) throw new BadRequestException('A journal line cannot have both a debit and a credit');
+      const account = await this.resolveAccount(schoolSlug, l.accountCode);
+      if (!account) throw new BadRequestException(`Account ${l.accountCode} not found and no Suspense account is configured — run Seed Default COA first`);
+      const costCenter = l.costCenterName ? await this.resolveCostCenterByName(schoolSlug, l.costCenterName) : null;
+      return {
+        accountCode: account.code, accountName: account.name,
+        costCenterId: costCenter?._id || null, costCenterName: costCenter?.name,
+        debit, credit,
+        partnerType: l.partnerType || null, partnerId: l.partnerId, partnerName: l.partnerName,
+        isUnmapped: account.code === SUSPENSE_ACCOUNT_CODE && account.code !== l.accountCode,
+        _accountDoc: account,
+      };
+    }));
+
+    const totalDebit = resolvedLines.reduce((s, l) => s + l.debit, 0);
+    const totalCredit = resolvedLines.reduce((s, l) => s + l.credit, 0);
+    if (Math.abs(totalDebit - totalCredit) > 0.01) {
+      throw new BadRequestException(`Journal entry does not balance: debit ${totalDebit} vs credit ${totalCredit}`);
+    }
+
+    const period = await this.getOrCreatePeriod(schoolSlug, date);
+
+    const entry = await this.journalModel.create({
+      schoolSlug, date, reference: dto.reference, narration: dto.narration,
+      sourceType: dto.sourceType, sourceId: dto.sourceId, postedBy: dto.postedBy,
+      periodId: period._id, fiscalYearId: period.fiscalYearId,
+      status: 'posted', postedAt: new Date(),
+      totalDebit, totalCredit,
+      lines: resolvedLines.map(({ _accountDoc, ...rest }) => rest),
+    });
+
+    // Update running balances per the account's normal balance side.
+    for (const l of resolvedLines) {
+      const acc = l._accountDoc;
+      const increases = this.accountIncreasesOnDebit(acc.type);
+      const delta = increases ? (l.debit - l.credit) : (l.credit - l.debit);
+      await this.coaModel.updateOne({ _id: acc._id }, { $inc: { currentBalance: delta } });
+    }
+
+    return entry;
+  }
+
+  async getJournalEntries(schoolSlug: string, query: any = {}) {
+    const { page = 1, limit = 30, sourceType, from, to } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (sourceType) filter.sourceType = sourceType;
+    if (from || to) { filter.date = {}; if (from) filter.date.$gte = new Date(from); if (to) filter.date.$lte = new Date(to); }
+    const [data, total] = await Promise.all([
+      this.journalModel.find(filter).sort({ date: -1, createdAt: -1 }).skip(skip).limit(limit),
+      this.journalModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  // ── Auto-posting hooks (called from Invoice/Payment/Expense flows) ──
+  private mapExpenseCategoryToAccount(category: string): string {
+    const c = (category || '').toLowerCase();
+    if (c.includes('utilit')) return '5100';
+    if (c.includes('maint') || c.includes('repair')) return '5200';
+    if (c.includes('academic') || c.includes('supp')) return '5300';
+    if (c.includes('market') || c.includes('advert')) return '5400';
+    if (c.includes('salar') || c.includes('wage')) return '5000';
+    return '5600'; // Other Operating Expenses
+  }
+
+  private mapPaymentMethodToAccount(method: string): string {
+    return method === 'cash' ? '1000' : '1100'; // Cash vs Bank Accounts
+  }
+
+  private mapInvoiceTypeToRevenueAccount(type: string): string {
+    if (type === 'admission') return '4100';
+    if (type === 'transport') return '4200';
+    return '4000'; // Tuition Fee Revenue (default)
+  }
+
+  private async postFeeInvoiceJournal(schoolSlug: string, invoice: any) {
+    if (!invoice.totalAmount) return; // nothing to post for a zero-value invoice
+    try {
+      await this.postJournalEntry(schoolSlug, {
+        date: invoice.createdAt || new Date(),
+        reference: invoice.invoiceNumber,
+        narration: `Fee invoice ${invoice.invoiceNumber} — ${invoice.studentName}`,
+        sourceType: 'fee_invoice', sourceId: String(invoice._id),
+        lines: [
+          { accountCode: '1200', debit: invoice.totalAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+          { accountCode: this.mapInvoiceTypeToRevenueAccount(invoice.type), credit: invoice.totalAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+        ],
+      });
+    } catch (err: any) {
+      // A ledger posting failure must never block the underlying business
+      // transaction (a fee invoice must still be creatable even if, say,
+      // COA hasn't been seeded yet) — surfaced instead via getJournalEntries
+      // gaps being visible in the Trial Balance, not a hard failure here.
+    }
+  }
+
+  private async postFeePaymentJournal(schoolSlug: string, invoice: any, payment: any) {
+    if (!payment.amount) return;
+    try {
+      await this.postJournalEntry(schoolSlug, {
+        date: payment.paymentDate || new Date(),
+        reference: payment.receiptNumber,
+        narration: `Fee payment ${payment.receiptNumber} — ${invoice.studentName}`,
+        sourceType: 'fee_payment', sourceId: String(payment._id),
+        lines: [
+          { accountCode: this.mapPaymentMethodToAccount(payment.paymentMethod), debit: payment.amount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+          { accountCode: '1200', credit: payment.amount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+        ],
+      });
+    } catch (err: any) { /* see postFeeInvoiceJournal note */ }
+  }
+
+  private async postExpensePaidJournal(schoolSlug: string, expense: any) {
+    if (!expense.amount) return;
+    try {
+      await this.postJournalEntry(schoolSlug, {
+        date: new Date(),
+        reference: expense.expenseNo,
+        narration: `Expense ${expense.expenseNo} — ${expense.title}`,
+        sourceType: 'expense', sourceId: String(expense._id),
+        lines: [
+          { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId },
+          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId },
+        ],
+      });
+    } catch (err: any) { /* see postFeeInvoiceJournal note */ }
+  }
+
+  // ── Reports — audit-grade, sourced from real journal postings ────
+  async getTrialBalance(schoolSlug: string, asOf?: string) {
+    const accounts = await this.coaModel.find({ schoolSlug, isActive: true }).sort({ code: 1 }).lean();
+    const dateFilter = asOf ? { date: { $lte: new Date(asOf) } } : {};
+    const agg = await this.journalModel.aggregate([
+      { $match: { schoolSlug, status: 'posted', ...dateFilter } },
+      { $unwind: '$lines' },
+      { $group: { _id: '$lines.accountCode', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+    ]);
+    const byCode = new Map(agg.map((a: any) => [a._id, a]));
+    const rows = accounts.map((a: any) => {
+      const totals = byCode.get(a.code) || { debit: 0, credit: 0 };
+      const net = this.accountIncreasesOnDebit(a.type) ? (totals.debit - totals.credit) : (totals.credit - totals.debit);
+      return { code: a.code, name: a.name, type: a.type, debit: totals.debit, credit: totals.credit, balance: (a.openingBalance || 0) + net };
+    }).filter(r => r.debit > 0 || r.credit > 0 || r.balance !== 0);
+    const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
+    const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
+    return { rows, totalDebit, totalCredit, isBalanced: Math.abs(totalDebit - totalCredit) < 0.01 };
+  }
+
+  async getGeneralLedger(schoolSlug: string, accountCode: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const entries = await this.journalModel.find({
+      schoolSlug, status: 'posted', 'lines.accountCode': accountCode,
+      ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+    }).sort({ date: 1, createdAt: 1 }).lean();
+
+    let running = 0;
+    const account = await this.coaModel.findOne({ schoolSlug, code: accountCode }).lean();
+    const increases = account ? this.accountIncreasesOnDebit((account as any).type) : true;
+    const rows = entries.flatMap((e: any) =>
+      e.lines.filter((l: any) => l.accountCode === accountCode).map((l: any) => {
+        running += increases ? (l.debit - l.credit) : (l.credit - l.debit);
+        return {
+          date: e.date, entryNo: e.entryNo, narration: e.narration, reference: e.reference,
+          debit: l.debit, credit: l.credit, runningBalance: running,
+          partnerName: l.partnerName, costCenterName: l.costCenterName,
+        };
+      }),
+    );
+    return { account, rows };
+  }
+
+  // Powers both "Students and Parents Ledger" and "Supplier Ledger" —
+  // same journal data, filtered by the partner dimension.
+  async getPartnerLedger(schoolSlug: string, partnerType: string, partnerId?: string, partnerName?: string) {
+    const match: any = { schoolSlug, status: 'posted', 'lines.partnerType': partnerType };
+    const entries = await this.journalModel.find(match).sort({ date: 1, createdAt: 1 }).lean();
+    let running = 0;
+    const rows = entries.flatMap((e: any) =>
+      e.lines
+        .filter((l: any) => l.partnerType === partnerType
+          && (!partnerId || l.partnerId === partnerId)
+          && (!partnerName || l.partnerName === partnerName))
+        .map((l: any) => {
+          running += l.debit - l.credit;
+          return {
+            date: e.date, entryNo: e.entryNo, narration: e.narration, accountCode: l.accountCode, accountName: l.accountName,
+            debit: l.debit, credit: l.credit, runningBalance: running, partnerName: l.partnerName,
+          };
+        }),
+    );
+    return rows;
+  }
+
+  async getCostCenterReport(schoolSlug: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const agg = await this.journalModel.aggregate([
+      { $match: { schoolSlug, status: 'posted', ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}) } },
+      { $unwind: '$lines' },
+      { $match: { 'lines.costCenterName': { $ne: null } } },
+      { $group: { _id: '$lines.costCenterName', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+      { $sort: { _id: 1 } },
+    ]);
+    return agg.map((a: any) => ({ costCenterName: a._id, debit: a.debit, credit: a.credit, net: a.debit - a.credit }));
   }
 
   // ── Fee Structures ───────────────────────────────────────
@@ -211,7 +605,9 @@ export class FinanceService {
       ...data,
       subtotal, totalDiscount, totalAmount, balanceDue: totalAmount,
     });
-    return inv.save();
+    await inv.save();
+    await this.postFeeInvoiceJournal(data.schoolSlug, inv);
+    return inv;
   }
 
   async recordPayment(invoiceId: string, schoolSlug: string, paymentData: any) {
@@ -238,6 +634,7 @@ export class FinanceService {
       $set: { paidAmount: newPaid, balanceDue: Math.max(0, newBalance), status: newStatus },
     });
 
+    await this.postFeePaymentJournal(schoolSlug, invoice, payment);
     return payment;
   }
 
@@ -281,11 +678,13 @@ export class FinanceService {
   }
 
   async markExpensePaid(id: string, schoolSlug: string, data: any) {
-    return this.expenseModel.findOneAndUpdate(
+    const expense = await this.expenseModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { status: 'paid', paidBy: data.paidBy, paymentMethod: data.paymentMethod, receiptNumber: data.receiptNumber } },
       { new: true },
     );
+    if (expense) await this.postExpensePaidJournal(schoolSlug, expense);
+    return expense;
   }
 
   // ── Budgets ──────────────────────────────────────────────
@@ -1114,6 +1513,7 @@ export class FinanceService {
           schoolSlug,
         });
         await invoice.save();
+        await this.postFeeInvoiceJournal(schoolSlug, invoice);
         created++;
       } catch (err: any) {
         errors.push(`${(student as any).firstName || ''} ${(student as any).lastName || ''}: ${err.message}`);

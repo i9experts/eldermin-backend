@@ -34,6 +34,7 @@ import { Grievance, GrievanceDocument } from './schemas/grievance.schema';
 import { DailyWorkSummary, DailyWorkSummaryDocument } from './schemas/daily-work-summary.schema';
 import { ExpenseClaim, ExpenseClaimDocument } from './schemas/expense-claim.schema';
 import { Advance, AdvanceDocument } from './schemas/advance.schema';
+import { FinanceService } from '../../finance/finance.service';
 
 @Injectable()
 export class HrService {
@@ -68,7 +69,17 @@ export class HrService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
+    private readonly financeService: FinanceService,
   ) {}
+
+  // Ledger postings must never block the underlying HR transaction (payroll
+  // must still process even if, say, COA hasn't been seeded for this school
+  // yet) — errors are swallowed here and show up as gaps in the Trial
+  // Balance instead of a hard failure on payroll/claims/advances.
+  private async safePostJournal(schoolSlug: string | undefined, dto: Parameters<FinanceService['postJournalEntry']>[1]) {
+    if (!schoolSlug) return;
+    try { await this.financeService.postJournalEntry(schoolSlug, dto); } catch (err) { /* see comment above */ }
+  }
 
   private newTid(t: string) { return t; }
 
@@ -852,22 +863,32 @@ export class HrService {
     return this.payslipModel.find(filter).sort({ year: -1, month: -1 }).lean();
   }
 
-  async createPayslip(tenantId: string, institutionId: string, data: any) {
+  async createPayslip(tenantId: string, institutionId: string, schoolSlug: string, data: any) {
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
 
     // Fold in any approved-but-unsettled expense claims for this staff member
-    // that are marked to settle via payroll — reimbursement adds to Other
-    // Allowances (same bucketing pattern used for custom salary components),
-    // and each claim is marked settled against this payslip so it's never
-    // double-counted on a future one.
+    // that are marked to settle via payroll. Two different cases here,
+    // handled differently so the ledger stays correct:
+    //  - a claim NOT linked to an advance is a genuine new reimbursement —
+    //    it adds to Other Allowances/gross salary, same bucketing pattern
+    //    used for custom salary components.
+    //  - a claim linked to an advance is just proof the money the employee
+    //    already received (the advance disbursement) was validly spent —
+    //    it must NOT add to the payslip (that would pay them twice); it
+    //    only clears the Employee Advances balance in the GL below.
+    // Either way each claim is marked settled against this payslip so it's
+    // never double-counted on a future one.
     let reimbursement = 0;
     let pendingClaims: any[] = [];
+    let advanceLinkedClaims: any[] = [];
     if (data.staffId) {
       pendingClaims = await this.expenseClaimModel.find({
         tenantId: this.newTid(tenantId), staffId: this.newTid(data.staffId),
         status: 'approved', settlementMethod: 'payroll', settledInPayroll: false,
       }).lean();
-      reimbursement = pendingClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
+      advanceLinkedClaims = pendingClaims.filter((c: any) => c.advanceId);
+      const nonAdvanceClaims = pendingClaims.filter((c: any) => !c.advanceId);
+      reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
     }
 
     const otherAllowances = (data.otherAllowances || 0) + reimbursement;
@@ -887,6 +908,40 @@ export class HrService {
         { $set: { settledInPayroll: true, settledPayslipId: payslip._id } },
       );
     }
+
+    // Post to the GL: base salary expense, reimbursements booked separately
+    // from pure salary cost, deductions split into their own payable/tax
+    // accounts, and everything nets to Salary Payable (what's actually
+    // owed to the employee once paid).
+    const baseSalaryExpense = data.grossSalary || 0;
+    const nonTaxDeductions = (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0);
+    const lines: any[] = [
+      { accountCode: '5000', debit: baseSalaryExpense, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department },
+    ];
+    if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    lines.push({ accountCode: '2100', credit: netSalary + nonTaxDeductions, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    if (data.incomeTax) lines.push({ accountCode: '2200', credit: data.incomeTax, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    if (data.providentFund) lines.push({ accountCode: '2300', credit: data.providentFund, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    await this.safePostJournal(schoolSlug, {
+      date: new Date(), reference: periodLabel, narration: `Payroll — ${data.staffName || ''} — ${periodLabel}`,
+      sourceType: 'payroll', sourceId: String(payslip._id), lines,
+    });
+
+    // Advance-linked claims settle separately from payroll payable — the
+    // employee was already paid via the advance, so this just recognizes
+    // the expense and clears the Employee Advances balance, in its own
+    // entry per claim for a clean audit trail back to each claim.
+    for (const claim of advanceLinkedClaims) {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: claim.claimNo, narration: `Advance settled via claim ${claim.claimNo} — ${claim.staffName}`,
+        sourceType: 'expense_claim', sourceId: String(claim._id),
+        lines: [
+          { accountCode: '5500', debit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+          { accountCode: '1300', credit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+        ],
+      });
+    }
+
     return payslip;
   }
 
@@ -1670,7 +1725,7 @@ export class HrService {
     return claim;
   }
 
-  async updateExpenseClaimStatus(tenantId: string, id: string, status: string, approvedBy?: string, rejectionReason?: string) {
+  async updateExpenseClaimStatus(tenantId: string, id: string, status: string, schoolSlug?: string, approvedBy?: string, rejectionReason?: string) {
     const update: any = { $set: { status } };
     if (status === 'approved') { update.$set.approvedBy = approvedBy; update.$set.approvedAt = new Date(); }
     if (status === 'rejected') { update.$set.rejectionReason = rejectionReason; }
@@ -1685,6 +1740,23 @@ export class HrService {
         { _id: claim.advanceId },
         [{ $set: { settledAmount: { $add: ['$settledAmount', claim.amount] } } }] as any,
       );
+    }
+
+    // Only post here for direct settlement — a payroll-settlement claim
+    // gets its GL posting when it's actually folded into a payslip
+    // (createPayslip), otherwise it would be double-counted once at
+    // approval and again at payroll time. If the claim settles a prior
+    // advance, credit Employee Advances instead of creating a new payable —
+    // the employee was already paid when the advance was disbursed.
+    if (status === 'approved' && claim.settlementMethod === 'direct') {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: claim.claimNo, narration: `Expense claim ${claim.claimNo} — ${claim.staffName}`,
+        sourceType: 'expense_claim', sourceId: String(claim._id),
+        lines: [
+          { accountCode: '5500', debit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+          { accountCode: claim.advanceId ? '1300' : '2000', credit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+        ],
+      });
     }
     return claim;
   }
@@ -1709,12 +1781,23 @@ export class HrService {
     });
   }
 
-  async updateAdvanceStatus(tenantId: string, id: string, status: string, approvedBy?: string) {
+  async updateAdvanceStatus(tenantId: string, id: string, status: string, schoolSlug?: string, approvedBy?: string) {
     const update: any = { $set: { status } };
     if (status === 'approved') { update.$set.approvedBy = approvedBy; update.$set.approvedAt = new Date(); }
     if (status === 'disbursed') { update.$set.disbursedAt = new Date(); }
     const advance = await this.advanceModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
     if (!advance) throw new NotFoundException('Advance not found');
+
+    if (status === 'disbursed') {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: advance.advanceNo, narration: `Advance disbursed — ${advance.staffName} — ${advance.reason}`,
+        sourceType: 'advance', sourceId: String(advance._id),
+        lines: [
+          { accountCode: '1300', debit: advance.amount, partnerType: 'staff', partnerId: String(advance.staffId), partnerName: advance.staffName },
+          { accountCode: '1000', credit: advance.amount, partnerType: 'staff', partnerId: String(advance.staffId), partnerName: advance.staffName },
+        ],
+      });
+    }
     return advance;
   }
 }

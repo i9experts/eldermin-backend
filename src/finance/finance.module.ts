@@ -13,6 +13,13 @@ import {
   DiscountProgram, DiscountProgramSchema,
   FeeAssignment, FeeAssignmentSchema,
 } from './schemas/finance.schema';
+import {
+  FiscalYear, FiscalYearSchema,
+  AccountingPeriod, AccountingPeriodSchema,
+  CostCenter, CostCenterSchema,
+  PaymentTerm, PaymentTermSchema,
+  JournalEntry, JournalEntrySchema,
+} from './schemas/ledger.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
@@ -29,6 +36,11 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: BankAccount.name, schema: BankAccountSchema },
       { name: DiscountProgram.name, schema: DiscountProgramSchema },
       { name: FeeAssignment.name, schema: FeeAssignmentSchema },
+      { name: FiscalYear.name, schema: FiscalYearSchema },
+      { name: AccountingPeriod.name, schema: AccountingPeriodSchema },
+      { name: CostCenter.name, schema: CostCenterSchema },
+      { name: PaymentTerm.name, schema: PaymentTermSchema },
+      { name: JournalEntry.name, schema: JournalEntrySchema },
       { name: Student.name, schema: StudentSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },

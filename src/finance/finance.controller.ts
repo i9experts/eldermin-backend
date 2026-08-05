@@ -46,6 +46,90 @@ export class FinanceController {
     return this.service.deleteCOA(id, schoolSlug);
   }
 
+  // ── Fiscal Years ──────────────────────────────────────────
+  @Get('fiscal-years') async getFiscalYears(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getFiscalYears(schoolSlug);
+  }
+  @Post('fiscal-years') async createFiscalYear(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createFiscalYear({ ...dto, schoolSlug });
+  }
+  @Patch('fiscal-years/:id/close') async closeFiscalYear(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.closeFiscalYear(id, schoolSlug, userName);
+  }
+
+  // ── Accounting Periods ────────────────────────────────────
+  @Get('accounting-periods') async getAccountingPeriods(@Request() req: any, @Query('fiscalYearId') fiscalYearId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getAccountingPeriods(schoolSlug, fiscalYearId);
+  }
+  @Patch('accounting-periods/:id/status') async setPeriodStatus(@Param('id') id: string, @Body('status') status: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.setPeriodStatus(id, schoolSlug, status);
+  }
+
+  // ── Cost Centers ───────────────────────────────────────────
+  @Get('cost-centers') async getCostCenters(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCostCenters(schoolSlug);
+  }
+  @Post('cost-centers') async createCostCenter(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCostCenter({ ...dto, schoolSlug });
+  }
+  @Patch('cost-centers/:id') async updateCostCenter(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCostCenter(id, schoolSlug, dto);
+  }
+  @Post('cost-centers/seed') async seedCostCenters(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedCostCentersFromCampuses(schoolSlug);
+  }
+
+  // ── Payment Terms ──────────────────────────────────────────
+  @Get('payment-terms') async getPaymentTerms(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentTerms(schoolSlug);
+  }
+  @Post('payment-terms') async createPaymentTerm(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createPaymentTerm({ ...dto, schoolSlug });
+  }
+  @Post('payment-terms/seed') async seedPaymentTerms(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedDefaultPaymentTerms(schoolSlug);
+  }
+
+  // ── Journal Entries ────────────────────────────────────────
+  @Get('journal-entries') async getJournalEntries(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getJournalEntries(schoolSlug, query);
+  }
+  @Post('journal-entries') async postJournalEntry(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.postJournalEntry(schoolSlug, { ...dto, sourceType: dto.sourceType || 'manual', postedBy: userName });
+  }
+
+  // ── Ledger Reports ─────────────────────────────────────────
+  @Get('reports/trial-balance') async getTrialBalance(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTrialBalance(schoolSlug, asOf);
+  }
+  @Get('reports/general-ledger') async getGeneralLedger(@Request() req: any, @Query('accountCode') accountCode: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGeneralLedger(schoolSlug, accountCode, from, to);
+  }
+  @Get('reports/partner-ledger') async getPartnerLedger(@Request() req: any, @Query('partnerType') partnerType: string, @Query('partnerId') partnerId?: string, @Query('partnerName') partnerName?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPartnerLedger(schoolSlug, partnerType, partnerId, partnerName);
+  }
+  @Get('reports/cost-center') async getCostCenterReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCostCenterReport(schoolSlug, from, to);
+  }
+
   // Fee Structures
   @Get('fee-structures') async getFeeStructures(@Request() req: any, @Query('grade') grade?: string, @Query('year') year?: string) {
     const { schoolSlug } = this.ctx(req);
