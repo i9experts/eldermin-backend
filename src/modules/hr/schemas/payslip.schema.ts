@@ -31,7 +31,7 @@ export class Payslip {
   @Prop({ default: 0 }) presentDays: number;
   @Prop({ default: 0 }) absentDays: number;
   @Prop({ default: 0 }) leaveDays: number;
-  @Prop({ default: 'USD' }) currency: string;
+  @Prop({ default: 'PKR' }) currency: string;
   @Prop({ enum: ['draft','issued','paid'], default: 'draft' }) status: string;
   @Prop() paidAt: Date;
   @Prop() s3Key: string;

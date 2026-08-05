@@ -72,6 +72,22 @@ export class Staff {
   @Prop({ default: 'PKR' })
   salaryCurrency: string;
 
+  // Structured breakdown built from this school's own configured Salary
+  // Components — this is what payroll processing actually reads per
+  // employee, instead of every employee showing the same hardcoded
+  // Basic/HRA/Transport/Medical figures regardless of role or seniority.
+  @Prop({
+    type: [{
+      componentId: { type: Types.ObjectId, ref: 'SalaryComponent' },
+      code: String,
+      name: String,
+      type: { type: String, enum: ['earning', 'deduction'] },
+      amount: Number,
+    }],
+    default: [],
+  })
+  salaryStructure: { componentId: Types.ObjectId; code: string; name: string; type: string; amount: number }[];
+
   @Prop()
   avatarUrl: string;
 

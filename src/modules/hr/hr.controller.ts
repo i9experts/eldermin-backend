@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile, Res, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile, Res, HttpStatus } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
@@ -256,6 +256,33 @@ export class HrController {
 
   @Post('payslips')
   createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), body); }
+
+  // ── SALARY COMPONENTS (payroll configuration root system) ──────────────
+
+  @Get('salary-components')
+  getSalaryComponents(@Request() req) {
+    return this.hrService.getSalaryComponents(req.user.tenantId, req.user.schoolSlug);
+  }
+
+  @Post('salary-components')
+  createSalaryComponent(@Request() req, @Body() body: any) {
+    return this.hrService.createSalaryComponent(req.user.tenantId, req.user.schoolSlug, body);
+  }
+
+  @Patch('salary-components/:id')
+  updateSalaryComponent(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.hrService.updateSalaryComponent(id, req.user.schoolSlug, body);
+  }
+
+  @Delete('salary-components/:id')
+  deleteSalaryComponent(@Request() req, @Param('id') id: string) {
+    return this.hrService.deleteSalaryComponent(id, req.user.schoolSlug);
+  }
+
+  @Patch('staff/:id/salary-structure')
+  setStaffSalaryStructure(@Request() req, @Param('id') id: string, @Body() body: { lines: { componentId: string; amount: number }[] }) {
+    return this.hrService.setStaffSalaryStructure(id, req.user.tenantId, req.user.schoolSlug, body.lines);
+  }
 
   @Get('payslips/:id/pdf')
   async downloadPayslipPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {

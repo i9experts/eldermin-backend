@@ -16,6 +16,7 @@ import { StaffAttendance, StaffAttendanceDocument } from './schemas/staff-attend
 import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
+import { SalaryComponent, SalaryComponentDocument } from './schemas/salary-component.schema';
 import { PerformanceReview, PerformanceReviewDocument } from './schemas/performance-review.schema';
 import { Training, TrainingDocument } from './schemas/training.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
@@ -39,6 +40,7 @@ export class HrService {
     @InjectModel(LeaveBalance.name) private leaveBalanceModel: Model<LeaveBalanceDocument>,
     @InjectModel(PayrollRun.name) private payrollRunModel: Model<PayrollRunDocument>,
     @InjectModel(Payslip.name) private payslipModel: Model<PayslipDocument>,
+    @InjectModel(SalaryComponent.name) private salaryComponentModel: Model<SalaryComponentDocument>,
     @InjectModel(PerformanceReview.name) private performanceModel: Model<PerformanceReviewDocument>,
     @InjectModel(Training.name) private trainingModel: Model<TrainingDocument>,
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
@@ -812,6 +814,87 @@ export class HrService {
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
     });
+  }
+
+  // ── Salary Components (the payroll "root system") ────────────────────
+  // Each school defines its own components — this is what lets different
+  // schools run genuinely different payroll structures instead of every
+  // school being forced into one hardcoded Basic/HRA/Transport/Medical
+  // shape baked into the app.
+  private readonly DEFAULT_SALARY_COMPONENTS = [
+    { name: 'Basic Salary', code: 'BASIC', type: 'earning', calculationType: 'manual', isTaxable: true, displayOrder: 1 },
+    { name: 'House Rent Allowance', code: 'HRA', type: 'earning', calculationType: 'percentage_of_basic', percentageValue: 40, isTaxable: true, displayOrder: 2 },
+    { name: 'Transport Allowance', code: 'TRANSPORT', type: 'earning', calculationType: 'fixed', defaultAmount: 1000, isTaxable: false, displayOrder: 3 },
+    { name: 'Medical Allowance', code: 'MEDICAL', type: 'earning', calculationType: 'fixed', defaultAmount: 500, isTaxable: false, displayOrder: 4 },
+    { name: 'Income Tax', code: 'TAX', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 5 },
+    { name: 'Provident Fund', code: 'PF', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 6 },
+  ];
+
+  async getSalaryComponents(tenantId: string, schoolSlug: string) {
+    const existing = await this.salaryComponentModel.find({ schoolSlug }).sort({ displayOrder: 1 }).lean();
+    if (existing.length > 0) return existing;
+    // First time this school has opened Salary Components — seed sensible,
+    // fully editable/deletable starting defaults rather than showing a
+    // completely blank, intimidating screen. Nothing here is locked in;
+    // every one of these can be renamed, reconfigured, or removed.
+    const seeded = await this.salaryComponentModel.insertMany(
+      this.DEFAULT_SALARY_COMPONENTS.map(c => ({ ...c, tenantId: this.newTid(tenantId), schoolSlug, isActive: true })),
+    );
+    return seeded;
+  }
+
+  async createSalaryComponent(tenantId: string, schoolSlug: string, dto: any) {
+    const code = (dto.code || dto.name || '').toUpperCase().replace(/[^A-Z0-9]/g, '_').slice(0, 30);
+    const existing = await this.salaryComponentModel.findOne({ schoolSlug, code });
+    if (existing) throw new BadRequestException(`A component with code "${code}" already exists`);
+    return this.salaryComponentModel.create({ ...dto, code, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateSalaryComponent(id: string, schoolSlug: string, dto: any) {
+    const component = await this.salaryComponentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!component) throw new NotFoundException('Salary component not found');
+    return component;
+  }
+
+  async deleteSalaryComponent(id: string, schoolSlug: string) {
+    const inUse = await this.staffModel.countDocuments({ schoolSlug: schoolSlug, 'salaryStructure.componentId': this.newTid(id) } as any);
+    if (inUse > 0) {
+      throw new BadRequestException(`This component is assigned to ${inUse} staff member(s) — deactivate it instead of deleting, or remove it from their salary structure first`);
+    }
+    const result = await this.salaryComponentModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Salary component not found');
+    return { message: 'Salary component deleted' };
+  }
+
+  // Sets a specific staff member's actual salary structure — the real
+  // per-employee values (a teacher's Basic differs from an admin's Basic),
+  // built from this school's own configured components rather than a
+  // one-size-fits-all default.
+  async setStaffSalaryStructure(staffId: string, tenantId: string, schoolSlug: string, lines: { componentId: string; amount: number }[]) {
+    const components = await this.salaryComponentModel.find({ schoolSlug, _id: { $in: lines.map(l => this.newTid(l.componentId)) } }).lean();
+    const componentMap = new Map(components.map((c: any) => [String(c._id), c]));
+
+    const basicLine = lines.find(l => componentMap.get(l.componentId)?.code === 'BASIC');
+    const basicAmount = basicLine?.amount || 0;
+
+    const salaryStructure = lines.map(l => {
+      const comp = componentMap.get(l.componentId);
+      if (!comp) return null;
+      const amount = comp.calculationType === 'percentage_of_basic'
+        ? Math.round(basicAmount * ((comp.percentageValue || 0) / 100))
+        : l.amount;
+      return { componentId: comp._id, code: comp.code, name: comp.name, type: comp.type, amount };
+    }).filter(Boolean);
+
+    const grossSalary = salaryStructure.filter((l: any) => l.type === 'earning').reduce((s: number, l: any) => s + (l.amount || 0), 0);
+
+    const staff = await this.staffModel.findOneAndUpdate(
+      { _id: staffId, tenantId: this.newTid(tenantId) },
+      { $set: { salaryStructure, salary: grossSalary } },
+      { new: true },
+    );
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff;
   }
 
   async generatePayslipPdf(payslipId: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
