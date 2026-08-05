@@ -854,13 +854,40 @@ export class HrService {
 
   async createPayslip(tenantId: string, institutionId: string, data: any) {
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
+
+    // Fold in any approved-but-unsettled expense claims for this staff member
+    // that are marked to settle via payroll — reimbursement adds to Other
+    // Allowances (same bucketing pattern used for custom salary components),
+    // and each claim is marked settled against this payslip so it's never
+    // double-counted on a future one.
+    let reimbursement = 0;
+    let pendingClaims: any[] = [];
+    if (data.staffId) {
+      pendingClaims = await this.expenseClaimModel.find({
+        tenantId: this.newTid(tenantId), staffId: this.newTid(data.staffId),
+        status: 'approved', settlementMethod: 'payroll', settledInPayroll: false,
+      }).lean();
+      reimbursement = pendingClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
+    }
+
+    const otherAllowances = (data.otherAllowances || 0) + reimbursement;
     const totalDeductions = (data.incomeTax || 0) + (data.providentFund || 0) + (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0);
-    const netSalary = (data.grossSalary || 0) - totalDeductions;
-    return this.payslipModel.create({
-      ...data, periodLabel, totalDeductions, netSalary,
+    const grossSalary = (data.grossSalary || 0) + reimbursement;
+    const netSalary = grossSalary - totalDeductions;
+
+    const payslip = await this.payslipModel.create({
+      ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
     });
+
+    if (pendingClaims.length > 0) {
+      await this.expenseClaimModel.updateMany(
+        { _id: { $in: pendingClaims.map((c: any) => c._id) } },
+        { $set: { settledInPayroll: true, settledPayslipId: payslip._id } },
+      );
+    }
+    return payslip;
   }
 
   // ── Salary Components (the payroll "root system") ────────────────────
@@ -1499,24 +1526,39 @@ export class HrService {
   // Deliberately narrow first version: status workflow + basic case
   // tracking, not a full investigation toolkit.
 
-  async getGrievances(tenantId: string, filters: { status?: string; staffId?: string } = {}) {
+  // SLA target (days to first resolution) by priority — used to auto-set dueDate on creation.
+  private readonly GRIEVANCE_SLA_DAYS: Record<string, number> = { urgent: 2, high: 5, medium: 10, low: 20 };
+
+  private withOverdue(g: any) {
+    const isOverdue = !!g.dueDate && !['resolved', 'dismissed'].includes(g.status) && new Date(g.dueDate).getTime() < Date.now();
+    return { ...g, isOverdue };
+  }
+
+  async getGrievances(tenantId: string, filters: { status?: string; staffId?: string; category?: string; priority?: string } = {}) {
     const filter: any = { tenantId: this.newTid(tenantId) };
     if (filters.status) filter.status = filters.status;
     if (filters.staffId) filter.raisedByStaffId = this.newTid(filters.staffId);
-    return this.grievanceModel.find(filter).sort({ createdAt: -1 }).lean();
+    if (filters.category) filter.category = filters.category;
+    if (filters.priority) filter.priority = filters.priority;
+    const rows = await this.grievanceModel.find(filter).sort({ createdAt: -1 }).lean();
+    return rows.map((g) => this.withOverdue(g));
   }
 
   async getGrievanceById(tenantId: string, id: string) {
     const g = await this.grievanceModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
     if (!g) throw new NotFoundException('Grievance not found');
-    return g;
+    return this.withOverdue(g);
   }
 
   async createGrievance(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
     const count = await this.grievanceModel.countDocuments({ tenantId: this.newTid(tenantId) });
     const caseNo = `GRV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    const priority = dto.priority || 'medium';
+    const slaDays = this.GRIEVANCE_SLA_DAYS[priority] ?? 10;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + slaDays);
     return this.grievanceModel.create({
-      ...dto, caseNo,
+      ...dto, caseNo, priority, dueDate,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
       schoolSlug,
@@ -1615,6 +1657,17 @@ export class HrService {
       institutionId: this.newTid(institutionId),
       schoolSlug,
     });
+  }
+
+  async addExpenseClaimReceipt(tenantId: string, id: string, file: Express.Multer.File, schoolSlug: string) {
+    const result = await this.uploadService.uploadFile(file, 'expense-receipts', schoolSlug);
+    const claim = await this.expenseClaimModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) },
+      { $push: { receipts: { label: file.originalname, url: result.url, key: result.key, fileName: result.fileName } } },
+      { new: true },
+    );
+    if (!claim) throw new NotFoundException('Expense claim not found');
+    return claim;
   }
 
   async updateExpenseClaimStatus(tenantId: string, id: string, status: string, approvedBy?: string, rejectionReason?: string) {

@@ -460,6 +460,12 @@ export class HrController {
     return this.hrService.updateExpenseClaimStatus(req.user.tenantId, id, body.status, body.approvedBy, body.rejectionReason);
   }
 
+  @Post('expense-claims/:id/receipts')
+  @UseInterceptors(FileInterceptor('file'))
+  addExpenseClaimReceipt(@Request() req, @Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+    return this.hrService.addExpenseClaimReceipt(req.user.tenantId, id, file, req.user.schoolSlug);
+  }
+
   // ── ADVANCES ───────────────────────────────────────────────────────────
 
   @Get('advances')

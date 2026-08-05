@@ -26,6 +26,9 @@ export class Grievance {
   @Prop({ required: true }) description: string;
   @Prop({ default: false }) isConfidential: boolean; // hides raisedByName from anyone but the assigned handler + super-admin
 
+  @Prop({ enum: ['low', 'medium', 'high', 'urgent'], default: 'medium' }) priority: string;
+  @Prop() dueDate: Date; // auto-set from priority on creation (SLA target for first resolution)
+
   @Prop({ type: Types.ObjectId, ref: 'Staff' }) assignedToStaffId: Types.ObjectId;
   @Prop() assignedToName: string;
 
