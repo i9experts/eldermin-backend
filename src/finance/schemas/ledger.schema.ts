@@ -97,7 +97,7 @@ export class JournalLine {
   @Prop({ default: 0 }) credit: number;
   // Subledger dimension — lets Student/Parent Ledger and Supplier Ledger
   // be derived from the same journal data instead of separate tables.
-  @Prop({ enum: ['student', 'family', 'vendor', 'staff', null], default: null }) partnerType: string | null;
+  @Prop({ type: String, enum: ['student', 'family', 'vendor', 'staff', null], default: null }) partnerType: string | null;
   @Prop() partnerId: string;
   @Prop() partnerName: string;
   @Prop({ default: false }) isUnmapped: boolean; // posted to the Suspense account because no real mapping existed yet
