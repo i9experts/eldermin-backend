@@ -215,6 +215,14 @@ export class FinanceController {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.approveBudget(id, schoolSlug, userName);
   }
+  @Get('budgets/summary') async getBudgetSummary(@Request() req: any, @Query('academicYear') ay?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBudgetSummaryAcrossAll(schoolSlug, ay);
+  }
+  @Get('budgets/:id/vs-actual') async getBudgetVsActual(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBudgetVsActual(schoolSlug, id);
+  }
 
   // Bank Accounts
   @Get('bank-accounts') async getBankAccounts(@Request() req: any) {

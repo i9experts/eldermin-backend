@@ -801,6 +801,126 @@ export class FinanceService {
     );
   }
 
+  // Best-effort date range for budget-vs-actual: prefer the linked
+  // FiscalYear (Phase 4 field) if the budget has one set; otherwise try to
+  // derive a July–June range from the academicYear string ("2025-26") using
+  // the same convention as getOrCreateFiscalYear. If academicYear doesn't
+  // parse cleanly, fall back to no date filter at all — an unfiltered
+  // (all-time) actuals number is more honest than a fabricated range that
+  // doesn't reflect this school's real fiscal calendar.
+  private async resolveBudgetDateRange(schoolSlug: string, budget: BudgetDocument): Promise<{ from?: string; to?: string }> {
+    if (budget.fiscalYearId) {
+      const fy = await this.fiscalYearModel.findOne({ _id: budget.fiscalYearId, schoolSlug });
+      if (fy) return { from: fy.startDate.toISOString(), to: fy.endDate.toISOString() };
+    }
+    const m = /^(\d{4})-(\d{2})$/.exec(budget.academicYear || '');
+    if (m) {
+      const startYear = Number(m[1]);
+      const from = new Date(startYear, 6, 1); // Jul 1
+      const to = new Date(startYear + 1, 5, 30, 23, 59, 59); // Jun 30 next year
+      return { from: from.toISOString(), to: to.toISOString() };
+    }
+    return {};
+  }
+
+  // Resolves the cost center a given budget line should be measured
+  // against: the line's own costCenterId/costCenterName take priority (lets
+  // a budget mix cost centers per line), falling back to the parent
+  // Budget's departmentId/campusId (the pre-Phase-4 dimension) so old
+  // budgets still produce a meaningful actual once Cost Centers exist.
+  private async resolveBudgetLineCostCenterName(schoolSlug: string, budget: BudgetDocument, line: any): Promise<string | null> {
+    if (line.costCenterId) {
+      const cc = await this.costCenterModel.findOne({ _id: line.costCenterId, schoolSlug });
+      if (cc) return cc.name;
+    }
+    if (line.costCenterName) {
+      const cc = await this.resolveCostCenterByName(schoolSlug, line.costCenterName);
+      if (cc) return cc.name;
+      return line.costCenterName; // no CostCenter record matches, but still report the intended name
+    }
+    const fallbackName = budget.departmentId || budget.campusId;
+    if (fallbackName) {
+      const cc = await this.resolveCostCenterByName(schoolSlug, fallbackName);
+      if (cc) return cc.name;
+      return fallbackName;
+    }
+    return null;
+  }
+
+  // Core budget-vs-actual computation shared by getBudgetVsActual (per
+  // budget, line-level detail) and getBudgetSummaryAcrossAll (portfolio
+  // totals only) — one aggregation logic, two views on top of it.
+  private async computeBudgetVsActual(schoolSlug: string, budget: BudgetDocument) {
+    const { from, to } = await this.resolveBudgetDateRange(schoolSlug, budget);
+    // getCostCenterReport aggregates real posted journal lines grouped by
+    // costCenterName — this IS the "actual spend" source of truth, never a
+    // placeholder/estimated figure.
+    const actualsByCostCenter = await this.getCostCenterReport(schoolSlug, from, to);
+    const actualsMap = new Map(actualsByCostCenter.map((a: any) => [a.costCenterName, a.net]));
+
+    const lines = await Promise.all((budget.lines || []).map(async (line: any) => {
+      const costCenterName = await this.resolveBudgetLineCostCenterName(schoolSlug, budget, line);
+      const actualAmount = costCenterName && actualsMap.has(costCenterName) ? actualsMap.get(costCenterName) : 0;
+      const allocatedAmount = line.allocatedAmount || 0;
+      const variance = allocatedAmount - actualAmount;
+      const utilizationPct = allocatedAmount > 0 ? Math.round((actualAmount / allocatedAmount) * 1000) / 10 : (actualAmount > 0 ? null : 0);
+      return {
+        category: line.category,
+        costCenterName: costCenterName || 'Unassigned',
+        allocatedAmount,
+        actualAmount,
+        variance,
+        utilizationPct,
+      };
+    }));
+
+    const totalAllocated = lines.reduce((a, l) => a + l.allocatedAmount, 0);
+    const totalActual = lines.reduce((a, l) => a + l.actualAmount, 0);
+    const totalVariance = totalAllocated - totalActual;
+    const totalUtilizationPct = totalAllocated > 0 ? Math.round((totalActual / totalAllocated) * 1000) / 10 : (totalActual > 0 ? null : 0);
+
+    return { from, to, lines, totalAllocated, totalActual, totalVariance, totalUtilizationPct };
+  }
+
+  async getBudgetVsActual(schoolSlug: string, budgetId: string) {
+    const budget = await this.budgetModel.findOne({ _id: budgetId, schoolSlug });
+    if (!budget) throw new NotFoundException('Budget not found');
+    const result = await this.computeBudgetVsActual(schoolSlug, budget);
+    return {
+      budgetId: budget._id,
+      budgetName: budget.name,
+      academicYear: budget.academicYear,
+      status: budget.status,
+      ...result,
+    };
+  }
+
+  // Portfolio view: one row per budget with allocated/actual/variance/
+  // utilization%. Deliberately a straightforward loop over computeBudgetVsActual
+  // rather than a single mega-aggregation pipeline — budgets are a small-N
+  // collection per school, so clarity wins over a premature optimization.
+  async getBudgetSummaryAcrossAll(schoolSlug: string, academicYear?: string) {
+    const filter: any = { schoolSlug };
+    if (academicYear) filter.academicYear = academicYear;
+    else filter.status = { $in: ['approved', 'active'] };
+    const budgets = await this.budgetModel.find(filter).sort({ createdAt: -1 });
+
+    const rows = await Promise.all(budgets.map(async (budget) => {
+      const result = await this.computeBudgetVsActual(schoolSlug, budget);
+      return {
+        budgetId: budget._id,
+        budgetName: budget.name,
+        academicYear: budget.academicYear,
+        status: budget.status,
+        totalAllocated: result.totalAllocated,
+        totalActual: result.totalActual,
+        totalVariance: result.totalVariance,
+        totalUtilizationPct: result.totalUtilizationPct,
+      };
+    }));
+    return rows;
+  }
+
   // ── Bank Accounts ────────────────────────────────────────
   async getBankAccounts(schoolSlug: string) {
     return this.bankModel.find({ schoolSlug, isActive: true }).sort({ isPrimary: -1, bankName: 1 });

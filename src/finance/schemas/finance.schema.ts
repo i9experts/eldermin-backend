@@ -241,6 +241,14 @@ class BudgetLine {
   @Prop({ required: true }) allocatedAmount: number;
   @Prop({ default: 0 }) spentAmount: number;
   @Prop() notes: string;
+  // Phase 4 — optional Cost Center dimension on each budget line, following
+  // the same denormalization convention as JournalLine.costCenterId/Name.
+  // Optional and additive: budgets created before Phase 4 (or by schools
+  // that haven't seeded Cost Centers) have neither set, and budget-vs-actual
+  // then falls back to resolving a cost center by name from this line's
+  // costCenterName, or the parent Budget's departmentId/campusId.
+  @Prop({ type: Types.ObjectId, ref: 'CostCenter', default: null }) costCenterId: Types.ObjectId | null;
+  @Prop() costCenterName: string;
 }
 const BudgetLineSchema = SchemaFactory.createForClass(BudgetLine);
 
@@ -262,6 +270,12 @@ export class Budget {
   @Prop() approvedBy: string;
   @Prop() notes: string;
   @Prop() createdBy: string;
+  // Phase 4 — optional time dimension so budget-vs-actual can derive a real
+  // date range instead of only having a free-text academicYear string.
+  // Optional: existing budgets (and schools that never set up Fiscal Years)
+  // keep working exactly as before via the academicYear fallback.
+  @Prop({ type: Types.ObjectId, ref: 'FiscalYear', default: null }) fiscalYearId: Types.ObjectId | null;
+  @Prop({ enum: ['annual', 'monthly'], default: 'annual' }) periodType: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
