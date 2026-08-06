@@ -538,4 +538,44 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.getTaxSummaryReport(schoolSlug, from, to);
   }
+
+  // ============================================================
+  // PHASE 5 — MULTI-CURRENCY
+  // ============================================================
+
+  // ── Currencies ─────────────────────────────────────────────
+  @Get('currencies') async getCurrencies(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCurrencies(schoolSlug);
+  }
+  @Post('currencies') @HttpCode(HttpStatus.CREATED)
+  async createCurrency(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCurrency({ ...dto, schoolSlug });
+  }
+  @Post('currencies/seed') async seedCurrencies(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedCommonCurrencies(schoolSlug);
+  }
+  @Patch('currencies/:id/set-base') async setBaseCurrency(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.setBaseCurrency(id, schoolSlug);
+  }
+
+  // ── Exchange Rates ─────────────────────────────────────────
+  @Get('exchange-rates') async getExchangeRates(@Request() req: any, @Query('fromCurrency') fromCurrency?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getExchangeRates(schoolSlug, fromCurrency);
+  }
+  @Post('exchange-rates') @HttpCode(HttpStatus.CREATED)
+  async createExchangeRate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createExchangeRate({ ...dto, schoolSlug });
+  }
+
+  // ── FX Exposure Report ─────────────────────────────────────
+  @Get('reports/fx-exposure') async getFxExposure(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getUnrealizedFxExposure(schoolSlug, asOf);
+  }
 }

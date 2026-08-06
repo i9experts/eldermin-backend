@@ -30,6 +30,13 @@ export class ChartOfAccount {
   @Prop({ default: 0 }) currentBalance: number;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ default: false }) isSystem: boolean; // cannot be deleted
+  // Phase 5 — optional foreign-currency designation for this specific
+  // account (e.g. a USD bank account). Nullable/unset means the account is
+  // implicitly in the school's base currency, matching every account that
+  // existed before this phase — Phase 5 does not require tagging every
+  // account, only the ones a school actually wants to hold in a foreign
+  // currency.
+  @Prop() currencyCode: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
@@ -127,6 +134,16 @@ export class Invoice {
   @Prop({ default: 0 }) lateFine: number;
   @Prop() notes: string;
   @Prop() createdBy: string;
+  // Phase 5 — multi-currency (optional/additive). When unset, this invoice
+  // is implicitly in the school's base currency and behaves exactly as
+  // before. When set to a foreign currency, `totalAmount`/`balanceDue`
+  // above stay in that FOREIGN currency (what the family actually owes) —
+  // `exchangeRate` (resolved as of the invoice date) and `baseCurrencyAmount`
+  // (totalAmount * exchangeRate) are what actually post to the ledger,
+  // since the ledger itself stays single-currency (base currency).
+  @Prop() currencyCode: string;
+  @Prop() exchangeRate: number;
+  @Prop() baseCurrencyAmount: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
@@ -170,6 +187,15 @@ export class Payment {
   @Prop({ default: false }) isRefunded: boolean;
   @Prop() refundDate: Date;
   @Prop() refundReason: string;
+  // Phase 5 — multi-currency (optional/additive). Assumed to match the
+  // parent invoice's currencyCode (no cross-currency payment splitting in
+  // Phase 5). `exchangeRate` is resolved AT PAYMENT DATE, which may differ
+  // from the invoice's booked rate — see FinanceService.recordPayment for
+  // the realized FX gain/loss this movement generates. `baseCurrencyAmount`
+  // is the actual base-currency cash value received (amount * exchangeRate).
+  @Prop() currencyCode: string;
+  @Prop() exchangeRate: number;
+  @Prop() baseCurrencyAmount: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
@@ -214,6 +240,14 @@ export class Expense {
   @Prop() campusId: string;
   @Prop() attachmentUrl: string;
   @Prop() submittedBy: string;
+  // Phase 5 — multi-currency (optional/additive). Kept for schema parity
+  // with Invoice/Payment/VendorBill; the simple Expense spend-log doesn't
+  // carry FX gain/loss logic in Phase 5 (that lives on the formal Vendor
+  // Bill / Vendor Payment flow) — set these when a school wants to record
+  // that a particular expense was actually paid in a foreign currency.
+  @Prop() currencyCode: string;
+  @Prop() exchangeRate: number;
+  @Prop() baseCurrencyAmount: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop({ required: true }) academicYear: string;
 }

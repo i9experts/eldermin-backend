@@ -71,6 +71,15 @@ export class VendorBill {
     default: 'draft',
   })
   status: string;
+  // Phase 5 — multi-currency (optional/additive), mirror of Invoice's
+  // fields on the AP side. When unset, this bill is implicitly in the
+  // school's base currency (unchanged behavior). When set,
+  // subtotal/taxAmount/totalAmount/balanceDue above stay in the FOREIGN
+  // currency; `exchangeRate` (as of billDate) and `baseCurrencyAmount`
+  // (totalAmount * exchangeRate) are what post to the ledger.
+  @Prop() currencyCode: string;
+  @Prop() exchangeRate: number;
+  @Prop() baseCurrencyAmount: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const VendorBillSchema = SchemaFactory.createForClass(VendorBill);
@@ -112,6 +121,14 @@ export class VendorPayment {
   // journal posting (Cr Cash for amount-withholdingAmount, Cr Withholding
   // Tax Payable for withholdingAmount).
   @Prop({ default: 0 }) withholdingAmount: number;
+  // Phase 5 — multi-currency (optional/additive), mirror of Payment's
+  // fields on the AP side. Assumed to match the parent bill's
+  // currencyCode. `exchangeRate` is resolved AT PAYMENT DATE, which may
+  // differ from the bill's booked rate — see
+  // FinanceService.recordVendorPayment for the realized FX gain/loss this
+  // movement generates.
+  @Prop() currencyCode: string;
+  @Prop() exchangeRate: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const VendorPaymentSchema = SchemaFactory.createForClass(VendorPayment);

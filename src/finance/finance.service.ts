@@ -30,6 +30,10 @@ import {
   TaxRule, TaxRuleDocument,
   WithholdingTaxCategory, WithholdingTaxCategoryDocument,
 } from './schemas/tax.schema';
+import {
+  Currency, CurrencyDocument,
+  ExchangeRate, ExchangeRateDocument,
+} from './schemas/currency.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
@@ -40,6 +44,15 @@ const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 // account so a posting never silently fails just because a school hasn't
 // finished mapping every category to a GL account yet.
 const SUSPENSE_ACCOUNT_CODE = '9999';
+
+// Phase 5 — multi-currency: single account absorbing realized FX rate
+// movement between a foreign-currency document's booked rate and the rate
+// in effect at settlement. Convention (see recordPayment/recordVendorPayment):
+// modeled as type 'expense' — a DEBIT to this account records a realized
+// loss (increases the expense balance), a CREDIT records a realized gain
+// (decreases it, i.e. a negative expense). Shared by both the AR side
+// (fee payments) and the AP side (vendor payments).
+const FX_GAIN_LOSS_ACCOUNT_CODE = '7000';
 
 @Injectable()
 export class FinanceService {
@@ -65,6 +78,8 @@ export class FinanceService {
     @InjectModel(ItemTaxTemplate.name) private itemTaxTemplateModel: Model<ItemTaxTemplateDocument>,
     @InjectModel(TaxRule.name) private taxRuleModel: Model<TaxRuleDocument>,
     @InjectModel(WithholdingTaxCategory.name) private withholdingCategoryModel: Model<WithholdingTaxCategoryDocument>,
+    @InjectModel(Currency.name) private currencyModel: Model<CurrencyDocument>,
+    @InjectModel(ExchangeRate.name) private exchangeRateModel: Model<ExchangeRateDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
@@ -202,6 +217,9 @@ export class FinanceService {
       { code: '5400', name: 'Marketing & Advertising', type: 'expense', subType: 'operating_expense' },
       { code: '5500', name: 'Employee Reimbursements', type: 'expense', subType: 'operating_expense' },
       { code: '5600', name: 'Other Operating Expenses', type: 'expense', subType: 'operating_expense' },
+      // Phase 5 — multi-currency. See FX_GAIN_LOSS_ACCOUNT_CODE above for
+      // the debit/credit convention.
+      { code: '7000', name: 'Realized Exchange Gain/Loss', type: 'expense', subType: 'other_expense' },
       { code: '9999', name: 'Suspense / Unmapped', type: 'liability', subType: 'current_liability' },
     ];
     const ops = defaults.map(d => ({
@@ -212,7 +230,191 @@ export class FinanceService {
       },
     }));
     await this.coaModel.bulkWrite(ops);
+
+    // Phase 5 — base-currency assumption: every school has always operated
+    // implicitly in PKR. Seeding the COA is the first setup step almost
+    // every school runs, so this is where we make that assumption explicit
+    // and persistent (upsert-only — never overwrites a base currency a
+    // school has already configured via setBaseCurrency).
+    await this.currencyModel.updateOne(
+      { schoolSlug, code: 'PKR' },
+      { $setOnInsert: { schoolSlug, code: 'PKR', name: 'Pakistani Rupee', symbol: '₨', decimalPlaces: 2, isBaseCurrency: true, isActive: true } },
+      { upsert: true },
+    );
+
     return this.coaModel.find({ schoolSlug }).sort({ code: 1 });
+  }
+
+  // ============================================================
+  // MULTI-CURRENCY (Phase 5) — optional, additive currency dimension.
+  // Every school still operates implicitly in PKR unless it explicitly
+  // sets up currencies and rates; nothing here ever throws, so a school
+  // that never touches these features sees zero behavior change. See
+  // claude/finance-module-odoo-standard-build-plan.md.
+  // ============================================================
+
+  // ── Currencies ───────────────────────────────────────────
+  async getCurrencies(schoolSlug: string) {
+    return this.currencyModel.find({ schoolSlug }).sort({ isBaseCurrency: -1, code: 1 });
+  }
+
+  async createCurrency(data: any) {
+    return this.currencyModel.create(data);
+  }
+
+  // Exactly one Currency per school should be the base currency — unset
+  // every other one first, then set the target, so there's never a moment
+  // (or a failure path) where two currencies are simultaneously flagged.
+  async setBaseCurrency(id: string, schoolSlug: string) {
+    const target = await this.currencyModel.findOne({ _id: id, schoolSlug });
+    if (!target) throw new NotFoundException('Currency not found');
+    await this.currencyModel.updateMany({ schoolSlug, _id: { $ne: id } }, { $set: { isBaseCurrency: false } });
+    target.isBaseCurrency = true;
+    target.isActive = true;
+    await target.save();
+    return target;
+  }
+
+  // Falls back to PKR if a school hasn't configured a base currency yet
+  // (e.g. hasn't run Seed Default COA / Seed Common Currencies) — never
+  // throws, since every downstream FX calculation depends on this resolving.
+  private async getBaseCurrencyCode(schoolSlug: string): Promise<string> {
+    try {
+      const base = await this.currencyModel.findOne({ schoolSlug, isBaseCurrency: true });
+      return base?.code || 'PKR';
+    } catch {
+      return 'PKR';
+    }
+  }
+
+  // Upserts PKR (as base) + five common foreign currencies (inactive by
+  // default — a school activates the ones it actually needs), mirroring
+  // the seed-button convention used for Cost Centers / Payment Terms.
+  async seedCommonCurrencies(schoolSlug: string) {
+    const defaults = [
+      { code: 'PKR', name: 'Pakistani Rupee', symbol: '₨', decimalPlaces: 2, isBaseCurrency: true, isActive: true },
+      { code: 'USD', name: 'US Dollar', symbol: '$', decimalPlaces: 2, isBaseCurrency: false, isActive: false },
+      { code: 'GBP', name: 'British Pound', symbol: '£', decimalPlaces: 2, isBaseCurrency: false, isActive: false },
+      { code: 'EUR', name: 'Euro', symbol: '€', decimalPlaces: 2, isBaseCurrency: false, isActive: false },
+      { code: 'SAR', name: 'Saudi Riyal', symbol: 'SAR', decimalPlaces: 2, isBaseCurrency: false, isActive: false },
+      { code: 'AED', name: 'UAE Dirham', symbol: 'AED', decimalPlaces: 2, isBaseCurrency: false, isActive: false },
+    ];
+    const ops = defaults.map(d => ({
+      updateOne: {
+        filter: { schoolSlug, code: d.code },
+        update: { $setOnInsert: { ...d, schoolSlug } },
+        upsert: true,
+      },
+    }));
+    await this.currencyModel.bulkWrite(ops);
+    return this.currencyModel.find({ schoolSlug }).sort({ isBaseCurrency: -1, code: 1 });
+  }
+
+  // ── Exchange Rates ───────────────────────────────────────
+  async getExchangeRates(schoolSlug: string, fromCurrency?: string) {
+    const filter: any = { schoolSlug };
+    if (fromCurrency) filter.fromCurrency = fromCurrency;
+    return this.exchangeRateModel.find(filter).sort({ rateDate: -1, createdAt: -1 }).limit(200);
+  }
+
+  async createExchangeRate(data: any) {
+    return this.exchangeRateModel.create({ ...data, rateDate: new Date(data.rateDate || Date.now()) });
+  }
+
+  // Looks up the most recent ExchangeRate with rateDate <= date (ties
+  // broken by createdAt, i.e. a same-day correction wins). Degrades
+  // gracefully to rate 1.0 — never throws — if fromCurrency is the base
+  // currency itself or no rate has been recorded yet, so a transaction
+  // never gets blocked just because a rate is missing.
+  private async getRateOn(schoolSlug: string, fromCurrency: string, date: Date): Promise<number> {
+    try {
+      if (!fromCurrency) return 1;
+      const base = await this.getBaseCurrencyCode(schoolSlug);
+      if (fromCurrency === base) return 1;
+      const rate = await this.exchangeRateModel
+        .findOne({ schoolSlug, fromCurrency, rateDate: { $lte: date } })
+        .sort({ rateDate: -1, createdAt: -1 });
+      return rate ? rate.rate : 1;
+    } catch {
+      return 1;
+    }
+  }
+
+  // Shared by the AR (recordPayment) and AP (recordVendorPayment) realized
+  // FX postings: given a foreign amount settled, the rate it was originally
+  // booked at, and the rate in effect at settlement, returns the base-
+  // currency value at each rate and the difference between them.
+  // fxDifference > 0 means the foreign currency strengthened against the
+  // base currency since booking (settlement is worth MORE base currency);
+  // fxDifference < 0 means it weakened. Callers interpret the sign
+  // differently depending on whether they're settling a receivable (a
+  // positive difference is a gain) or a payable (a positive difference is
+  // a loss) — see recordPayment / recordVendorPayment.
+  private computeFxDifference(foreignAmount: number, originalRate: number, newRate: number) {
+    const baseAtOriginalRate = Math.round(foreignAmount * (originalRate || 1) * 100) / 100;
+    const baseAtNewRate = Math.round(foreignAmount * (newRate || 1) * 100) / 100;
+    const fxDifference = Math.round((baseAtNewRate - baseAtOriginalRate) * 100) / 100;
+    return { baseAtOriginalRate, baseAtNewRate, fxDifference };
+  }
+
+  // Month/year-end procedure: for every still-open (unpaid/partial)
+  // foreign-currency invoice or vendor bill, revalue the outstanding
+  // balance at today's (or `asOf`'s) rate vs the rate it was booked at, and
+  // report the unrealized gain/loss per document. Nothing here posts to
+  // the ledger — this is a reporting-only exposure snapshot, standard
+  // practice for anyone holding open foreign-currency receivables/payables.
+  async getUnrealizedFxExposure(schoolSlug: string, asOf?: string) {
+    const asOfDate = asOf ? new Date(asOf) : new Date();
+    const baseCurrency = await this.getBaseCurrencyCode(schoolSlug);
+
+    const [openInvoices, openBills] = await Promise.all([
+      this.invoiceModel.find({
+        schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 },
+        currencyCode: { $exists: true, $ne: null },
+      }).lean(),
+      this.vendorBillModel.find({
+        schoolSlug, balanceDue: { $gt: 0 },
+        currencyCode: { $exists: true, $ne: null },
+      }).lean(),
+    ]);
+
+    const rows: any[] = [];
+    let totalUnrealized = 0;
+
+    for (const inv of openInvoices as any[]) {
+      if (!inv.currencyCode || inv.currencyCode === baseCurrency) continue;
+      const bookedRate = inv.exchangeRate || 1;
+      const currentRate = await this.getRateOn(schoolSlug, inv.currencyCode, asOfDate);
+      const bookedBase = Math.round(inv.balanceDue * bookedRate * 100) / 100;
+      const currentBase = Math.round(inv.balanceDue * currentRate * 100) / 100;
+      // Receivable: worth MORE base currency now = a gain.
+      const unrealizedGainLoss = Math.round((currentBase - bookedBase) * 100) / 100;
+      rows.push({
+        type: 'receivable', documentNo: inv.invoiceNumber, partnerName: inv.studentName,
+        currencyCode: inv.currencyCode, foreignBalance: inv.balanceDue,
+        bookedRate, currentRate, bookedBase, currentBase, unrealizedGainLoss,
+      });
+      totalUnrealized += unrealizedGainLoss;
+    }
+
+    for (const bill of openBills as any[]) {
+      if (!bill.currencyCode || bill.currencyCode === baseCurrency) continue;
+      const bookedRate = bill.exchangeRate || 1;
+      const currentRate = await this.getRateOn(schoolSlug, bill.currencyCode, asOfDate);
+      const bookedBase = Math.round(bill.balanceDue * bookedRate * 100) / 100;
+      const currentBase = Math.round(bill.balanceDue * currentRate * 100) / 100;
+      // Payable: owing LESS base currency now = a gain (opposite of AR).
+      const unrealizedGainLoss = Math.round((bookedBase - currentBase) * 100) / 100;
+      rows.push({
+        type: 'payable', documentNo: bill.billNo, partnerName: bill.vendorName,
+        currencyCode: bill.currencyCode, foreignBalance: bill.balanceDue,
+        bookedRate, currentRate, bookedBase, currentBase, unrealizedGainLoss,
+      });
+      totalUnrealized += unrealizedGainLoss;
+    }
+
+    rows.sort((a, b) => a.unrealizedGainLoss - b.unrealizedGainLoss);
+    return { asOf: asOfDate, baseCurrency, rows, totalUnrealized: Math.round(totalUnrealized * 100) / 100 };
   }
 
   // ============================================================
@@ -501,13 +703,24 @@ export class FinanceService {
   private async postFeeInvoiceJournal(schoolSlug: string, invoice: any, taxTemplate?: any) {
     if (!invoice.totalAmount) return; // nothing to post for a zero-value invoice
     try {
-      const taxAmount = Math.round((invoice.totalTax || 0) * 100) / 100;
+      // Phase 5 — multi-currency: the ledger always stays in the school's
+      // base currency. When invoice.baseCurrencyAmount is unset (the
+      // overwhelming common case — no currency configured), postTotal
+      // equals invoice.totalAmount exactly, so this is byte-identical to
+      // pre-Phase-5 behavior. When set (a foreign-currency invoice), the
+      // FOREIGN totalTax is converted at the same booked rate so revenue
+      // and tax scale together with the AR debit.
+      const isForeign = invoice.baseCurrencyAmount != null && invoice.baseCurrencyAmount !== invoice.totalAmount;
+      const postTotal = isForeign ? invoice.baseCurrencyAmount : invoice.totalAmount;
+      const taxAmount = isForeign
+        ? Math.round((invoice.totalTax || 0) * (invoice.exchangeRate || 1) * 100) / 100
+        : Math.round((invoice.totalTax || 0) * 100) / 100;
       // The tax portion must never inflate revenue — the school doesn't
       // keep the tax, it's a pass-through liability — so revenue is
       // recognized net of tax while AR is debited for the tax-inclusive total.
-      const revenueAmount = Math.round((invoice.totalAmount - taxAmount) * 100) / 100;
+      const revenueAmount = Math.round((postTotal - taxAmount) * 100) / 100;
       const lines: any[] = [
-        { accountCode: '1200', debit: invoice.totalAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+        { accountCode: '1200', debit: postTotal, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
         { accountCode: this.mapInvoiceTypeToRevenueAccount(invoice.type), credit: revenueAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
       ];
       if (taxAmount > 0) {
@@ -534,18 +747,41 @@ export class FinanceService {
     }
   }
 
-  private async postFeePaymentJournal(schoolSlug: string, invoice: any, payment: any) {
+  // Phase 5 — `fx` carries the (optional) realized FX gain/loss produced
+  // when a foreign-currency invoice is settled at a rate different from
+  // the one it was booked at. When omitted (the default — a base-currency
+  // payment), cashBaseAmount/arBaseAmount both default to payment.amount
+  // and no FX line is posted, so this is byte-identical to pre-Phase-5
+  // behavior. See recordPayment for how `fx` is computed and a worked
+  // numeric example proving the entry balances in both branches.
+  private async postFeePaymentJournal(
+    schoolSlug: string, invoice: any, payment: any,
+    fx: { cashBaseAmount?: number; arBaseAmount?: number; fxDifference?: number } = {},
+  ) {
     if (!payment.amount) return;
     try {
+      const cashBaseAmount = fx.cashBaseAmount ?? payment.amount;
+      const arBaseAmount = fx.arBaseAmount ?? payment.amount;
+      const fxDifference = fx.fxDifference || 0;
+      const lines: any[] = [
+        { accountCode: this.mapPaymentMethodToAccount(payment.paymentMethod), debit: cashBaseAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+        { accountCode: '1200', credit: arBaseAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+      ];
+      if (fxDifference > 0) {
+        // Foreign currency strengthened vs base since the invoice was
+        // booked — the school received more base-currency value than
+        // expected: a realized gain (credit, per FX_GAIN_LOSS_ACCOUNT_CODE's
+        // convention).
+        lines.push({ accountCode: FX_GAIN_LOSS_ACCOUNT_CODE, credit: fxDifference, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName });
+      } else if (fxDifference < 0) {
+        lines.push({ accountCode: FX_GAIN_LOSS_ACCOUNT_CODE, debit: -fxDifference, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName });
+      }
       await this.postJournalEntry(schoolSlug, {
         date: payment.paymentDate || new Date(),
         reference: payment.receiptNumber,
         narration: `Fee payment ${payment.receiptNumber} — ${invoice.studentName}`,
         sourceType: 'fee_payment', sourceId: String(payment._id),
-        lines: [
-          { accountCode: this.mapPaymentMethodToAccount(payment.paymentMethod), debit: payment.amount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
-          { accountCode: '1200', credit: payment.amount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
-        ],
+        lines,
       });
     } catch (err: any) { /* see postFeeInvoiceJournal note */ }
   }
@@ -694,9 +930,22 @@ export class FinanceService {
     );
     const totalAmount = Math.round((netBeforeTax + totalTax) * 100) / 100;
 
+    // Phase 5 — multi-currency: only resolved when the caller actually
+    // passes a currencyCode different from the school's base currency;
+    // otherwise exchangeRate/baseCurrencyAmount stay undefined and
+    // postFeeInvoiceJournal posts totalAmount exactly as before.
+    let exchangeRate: number | undefined;
+    let baseCurrencyAmount: number | undefined;
+    const baseCurrency = await this.getBaseCurrencyCode(data.schoolSlug);
+    if (data.currencyCode && data.currencyCode !== baseCurrency) {
+      exchangeRate = await this.getRateOn(data.schoolSlug, data.currencyCode, new Date());
+      baseCurrencyAmount = Math.round(totalAmount * exchangeRate * 100) / 100;
+    }
+
     const inv = new this.invoiceModel({
       ...data,
       subtotal, totalDiscount, totalTax, totalAmount, balanceDue: totalAmount,
+      exchangeRate, baseCurrencyAmount,
     });
     await inv.save();
     await this.postFeeInvoiceJournal(data.schoolSlug, inv, taxTemplate);
@@ -717,6 +966,38 @@ export class FinanceService {
       paymentDate: new Date(paymentData.paymentDate || Date.now()),
       schoolSlug,
     });
+
+    // Phase 5 — multi-currency realized FX: payment currency is assumed to
+    // match the invoice's currency (no cross-currency splitting). If the
+    // invoice is in a foreign currency, resolve the rate AT PAYMENT DATE
+    // (which may differ from the invoice's booked rate) and compute the
+    // difference so postFeePaymentJournal can post it as a realized
+    // gain/loss and keep the entry balanced. No-op when the invoice has no
+    // currencyCode (the default) — cashBaseAmount/arBaseAmount/fxDifference
+    // all stay undefined/0, matching pre-Phase-5 behavior exactly.
+    //
+    // Worked example: invoice booked at rate 280 (PKR per USD) for a
+    // $1,000 balance; payment settles the full $1,000 at rate 285.
+    //   arBaseAmount   = 1000 * 280 = 280,000  (clears AR at the booked rate)
+    //   cashBaseAmount = 1000 * 285 = 285,000  (actual cash received)
+    //   fxDifference   = 285,000 - 280,000 = +5,000 (a realized GAIN — the
+    //     receivable turned out to be worth more base currency)
+    //   Entry: Dr Cash 285,000 / Cr AR 280,000 / Cr FX Gain 5,000 — balances.
+    let cashBaseAmount: number | undefined;
+    let arBaseAmount: number | undefined;
+    let fxDifference = 0;
+    const baseCurrency = await this.getBaseCurrencyCode(schoolSlug);
+    if (invoice.currencyCode && invoice.currencyCode !== baseCurrency) {
+      const invoiceRate = invoice.exchangeRate || 1;
+      const paymentRate = await this.getRateOn(schoolSlug, invoice.currencyCode, payment.paymentDate);
+      const diff = this.computeFxDifference(paymentData.amount, invoiceRate, paymentRate);
+      arBaseAmount = diff.baseAtOriginalRate;
+      cashBaseAmount = diff.baseAtNewRate;
+      fxDifference = diff.fxDifference;
+      payment.currencyCode = invoice.currencyCode;
+      payment.exchangeRate = paymentRate;
+      payment.baseCurrencyAmount = cashBaseAmount;
+    }
     await payment.save();
 
     const newPaid = (invoice.paidAmount || 0) + paymentData.amount;
@@ -727,7 +1008,7 @@ export class FinanceService {
       $set: { paidAmount: newPaid, balanceDue: Math.max(0, newBalance), status: newStatus },
     });
 
-    await this.postFeePaymentJournal(schoolSlug, invoice, payment);
+    await this.postFeePaymentJournal(schoolSlug, invoice, payment, { cashBaseAmount, arBaseAmount, fxDifference });
     return payment;
   }
 
@@ -1846,6 +2127,20 @@ export class FinanceService {
       dueDate.setDate(dueDate.getDate() + dueDays);
     }
 
+    // Phase 5 — multi-currency: only resolved when the caller passes a
+    // currencyCode different from the school's base currency; otherwise
+    // exchangeRate/baseCurrencyAmount stay undefined and every line below
+    // posts at scale 1 (i.e. exactly as before Phase 5).
+    let exchangeRate: number | undefined;
+    let baseCurrencyAmount: number | undefined;
+    const baseCurrency = await this.getBaseCurrencyCode(schoolSlug);
+    const isForeign = !!data.currencyCode && data.currencyCode !== baseCurrency;
+    if (isForeign) {
+      exchangeRate = await this.getRateOn(schoolSlug, data.currencyCode, billDate);
+      baseCurrencyAmount = Math.round(totalAmount * exchangeRate * 100) / 100;
+    }
+    const scale = isForeign ? (exchangeRate as number) : 1;
+
     const bill = new this.vendorBillModel({
       ...data,
       vendorName: vendor.name,
@@ -1854,31 +2149,45 @@ export class FinanceService {
       paidAmount: 0, balanceDue: totalAmount,
       status: 'posted',
       schoolSlug,
+      exchangeRate, baseCurrencyAmount,
     });
     await bill.save();
 
     try {
+      // isForeign=false leaves every debit exactly as it was pre-Phase-5
+      // (Number(l.amount||0), no rounding pass) — only the isForeign branch
+      // introduces the currency conversion. The AP credit is always the sum
+      // of the debit lines actually posted (rather than an independently
+      // scaled totalAmount), so the entry balances exactly regardless of
+      // any per-line rounding.
       const journalLines: any[] = lines.map((l: any) => ({
-        accountCode: l.accountCode, debit: Number(l.amount || 0), costCenterName: l.costCenterName,
+        accountCode: l.accountCode,
+        debit: isForeign ? Math.round(Number(l.amount || 0) * scale * 100) / 100 : Number(l.amount || 0),
+        costCenterName: l.costCenterName,
         partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
       }));
       if (explicitTaxAmount > 0) {
         // Legacy Phase 2 behavior: fold the flat tax onto the first line's account.
         journalLines.push({
-          accountCode: lines[0].accountCode, debit: explicitTaxAmount,
+          accountCode: lines[0].accountCode,
+          debit: isForeign ? Math.round(explicitTaxAmount * scale * 100) / 100 : explicitTaxAmount,
           partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
         });
       } else {
         for (const t of lineTaxInfo) {
           journalLines.push({
-            accountCode: t.accountCode, debit: t.taxAmount,
+            accountCode: t.accountCode,
+            debit: isForeign ? Math.round(t.taxAmount * scale * 100) / 100 : t.taxAmount,
             partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
             taxTemplateName: t.taxTemplateName,
           });
         }
       }
+      const creditAmount = isForeign
+        ? Math.round(journalLines.reduce((s, l) => s + (l.debit || 0), 0) * 100) / 100
+        : totalAmount;
       journalLines.push({
-        accountCode: '2000', credit: totalAmount,
+        accountCode: '2000', credit: creditAmount,
         partnerType: 'vendor', partnerId: String(vendor._id), partnerName: vendor.name,
       });
 
@@ -1935,6 +2244,38 @@ export class FinanceService {
       withholdingAmount,
       schoolSlug,
     });
+
+    // Phase 5 — multi-currency realized FX, mirror image of recordPayment's
+    // AR-side logic. If this bill was booked in a foreign currency, resolve
+    // the rate AT PAYMENT DATE and post the difference vs the bill's
+    // booked rate as a realized gain/loss so the entry still balances.
+    // No-op when the bill has no currencyCode (the default).
+    //
+    // Worked example: bill booked at rate 280 (PKR per USD) for a $1,000
+    // liability (no withholding, for simplicity); payment settles the full
+    // $1,000 at rate 285.
+    //   apBaseAmount   = 1000 * 280 = 280,000  (clears AP at the booked rate)
+    //   cashBaseAmount = 1000 * 285 = 285,000  (actual cash paid out)
+    //   fxDifference   = 285,000 - 280,000 = +5,000 — the school had to pay
+    //     out MORE base currency than the liability was carried at: a
+    //     realized LOSS (opposite sign convention from the AR side).
+    //   Entry: Dr AP 280,000 / Dr FX Loss 5,000 / Cr Cash 285,000 — balances.
+    let apBaseAmount: number | undefined;
+    let cashBaseAmount: number | undefined;
+    let withholdingBaseAmount: number | undefined;
+    let fxDifference = 0;
+    const baseCurrency = await this.getBaseCurrencyCode(schoolSlug);
+    if (bill.currencyCode && bill.currencyCode !== baseCurrency) {
+      const billRate = bill.exchangeRate || 1;
+      const paymentRate = await this.getRateOn(schoolSlug, bill.currencyCode, payment.paymentDate);
+      const diff = this.computeFxDifference(amount, billRate, paymentRate);
+      apBaseAmount = diff.baseAtOriginalRate;
+      withholdingBaseAmount = Math.round(withholdingAmount * paymentRate * 100) / 100;
+      cashBaseAmount = Math.round((diff.baseAtNewRate - withholdingBaseAmount) * 100) / 100;
+      fxDifference = diff.fxDifference;
+      payment.currencyCode = bill.currencyCode;
+      payment.exchangeRate = paymentRate;
+    }
     await payment.save();
 
     const newPaid = (bill.paidAmount || 0) + amount;
@@ -1947,15 +2288,20 @@ export class FinanceService {
 
     try {
       const lines: any[] = [
-        { accountCode: '2000', debit: amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
-        { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: cashAmount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+        { accountCode: '2000', debit: apBaseAmount ?? amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+        { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: cashBaseAmount ?? cashAmount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
       ];
       if (withholdingAmount > 0 && withholdingCategory) {
         lines.push({
-          accountCode: withholdingCategory.accountCode, credit: withholdingAmount,
+          accountCode: withholdingCategory.accountCode, credit: withholdingBaseAmount ?? withholdingAmount,
           partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName,
           taxTemplateName: withholdingCategory.name,
         });
+      }
+      if (fxDifference > 0) {
+        lines.push({ accountCode: FX_GAIN_LOSS_ACCOUNT_CODE, debit: fxDifference, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName });
+      } else if (fxDifference < 0) {
+        lines.push({ accountCode: FX_GAIN_LOSS_ACCOUNT_CODE, credit: -fxDifference, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName });
       }
       await this.postJournalEntry(schoolSlug, {
         date: payment.paymentDate, reference: bill.billNo,
