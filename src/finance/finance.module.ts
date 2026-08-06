@@ -39,6 +39,10 @@ import {
   BankStatementLine, BankStatementLineSchema,
   BankReconciliation, BankReconciliationSchema,
 } from './schemas/bank-reconciliation.schema';
+import {
+  SalesCommissionRule, SalesCommissionRuleSchema,
+  CommissionAssignment, CommissionAssignmentSchema,
+} from './schemas/commission.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
@@ -71,6 +75,8 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: ExchangeRate.name, schema: ExchangeRateSchema },
       { name: BankStatementLine.name, schema: BankStatementLineSchema },
       { name: BankReconciliation.name, schema: BankReconciliationSchema },
+      { name: SalesCommissionRule.name, schema: SalesCommissionRuleSchema },
+      { name: CommissionAssignment.name, schema: CommissionAssignmentSchema },
       { name: Student.name, schema: StudentSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },

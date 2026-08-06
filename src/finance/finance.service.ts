@@ -38,6 +38,10 @@ import {
   BankStatementLine, BankStatementLineDocument,
   BankReconciliation, BankReconciliationDocument,
 } from './schemas/bank-reconciliation.schema';
+import {
+  SalesCommissionRule, SalesCommissionRuleDocument,
+  CommissionAssignment, CommissionAssignmentDocument,
+} from './schemas/commission.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
@@ -86,6 +90,8 @@ export class FinanceService {
     @InjectModel(ExchangeRate.name) private exchangeRateModel: Model<ExchangeRateDocument>,
     @InjectModel(BankStatementLine.name) private statementLineModel: Model<BankStatementLineDocument>,
     @InjectModel(BankReconciliation.name) private reconciliationModel: Model<BankReconciliationDocument>,
+    @InjectModel(SalesCommissionRule.name) private commissionRuleModel: Model<SalesCommissionRuleDocument>,
+    @InjectModel(CommissionAssignment.name) private commissionAssignmentModel: Model<CommissionAssignmentDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
@@ -2884,5 +2890,331 @@ export class FinanceService {
       withholdingDeducted: Math.round(withholdingDeducted * 100) / 100,
       breakdown: Array.from(byTemplate.values()).sort((a, b) => b.amount - a.amount),
     };
+  }
+
+  // ============================================================
+  // PHASE 7 — REPORT SUITE (Sales Commission, Payment Summary, Vendor
+  // Contacts, Tax Detail, Profitability suite). Every number below is
+  // computed from real posted JournalEntry/Payment/Vendor data — see
+  // claude/finance-module-odoo-standard-build-plan.md for scope. Trial
+  // Balance and General Ledger shipped in Phase 1; Payment Period and
+  // Customer Credit Balance shipped in Phase 2 (see getPaymentPeriodReport /
+  // getCustomerCreditBalance above) — not duplicated here.
+  // ============================================================
+
+  // ── Sales Commission — rule + assignment setup ────────────
+  async getSalesCommissionRules(schoolSlug: string) {
+    return this.commissionRuleModel.find({ schoolSlug }).sort({ referralSourceName: 1 });
+  }
+  async createSalesCommissionRule(data: any) {
+    const rule = new this.commissionRuleModel(data);
+    return rule.save();
+  }
+  async updateSalesCommissionRule(id: string, schoolSlug: string, data: any) {
+    return this.commissionRuleModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+  }
+  async deleteSalesCommissionRule(id: string, schoolSlug: string) {
+    const rule = await this.commissionRuleModel.findOne({ _id: id, schoolSlug });
+    if (!rule) throw new NotFoundException('Commission rule not found');
+    rule.isActive = false;
+    return rule.save();
+  }
+
+  async getCommissionAssignments(schoolSlug: string) {
+    return this.commissionAssignmentModel.find({ schoolSlug }).sort({ referralSourceName: 1 });
+  }
+  async createCommissionAssignment(data: any) {
+    const assignment = new this.commissionAssignmentModel(data);
+    return assignment.save();
+  }
+  async deleteCommissionAssignment(id: string, schoolSlug: string) {
+    const assignment = await this.commissionAssignmentModel.findOne({ _id: id, schoolSlug });
+    if (!assignment) throw new NotFoundException('Commission assignment not found');
+    return this.commissionAssignmentModel.deleteOne({ _id: id, schoolSlug });
+  }
+
+  // Commission owed by referral source = configured rate applied to real
+  // fee collections (Payment records) from students/families actually
+  // assigned to that referral source. Starts empty until a school
+  // configures at least one rule AND one assignment — no fabricated rows.
+  async getSalesCommissionReport(schoolSlug: string, from?: string, to?: string) {
+    const [rules, assignments] = await Promise.all([
+      this.commissionRuleModel.find({ schoolSlug, isActive: true }).lean(),
+      this.commissionAssignmentModel.find({ schoolSlug }).lean(),
+    ]);
+
+    if (!rules.length) {
+      return { rows: [], totalCommissionOwed: 0, configured: false, assignedCount: assignments.length,
+        note: 'No referral-source commission rules configured yet. Set up a rule (rate % or flat amount per referral source) to start tracking commission owed.' };
+    }
+    if (!assignments.length) {
+      return { rows: [], totalCommissionOwed: 0, configured: true, assignedCount: 0,
+        note: 'Commission rules exist but no family/student has been assigned to a referral source yet. Commission owed will populate once assignments are made.' };
+    }
+
+    const ruleBySource = new Map(rules.map((r: any) => [r.referralSourceName, r]));
+
+    const familyIds = assignments.filter((a: any) => a.targetType === 'family').map((a: any) => a.targetId);
+    const families = familyIds.length
+      ? await this.familyModel.find({ schoolSlug, _id: { $in: familyIds.filter(Types.ObjectId.isValid) } }).lean()
+      : [];
+    const familyStudentMap = new Map(families.map((f: any) => [String(f._id), (f.studentIds || []).map(String)]));
+
+    const bySource = new Map<string, Set<string>>();
+    for (const a of assignments as any[]) {
+      if (!ruleBySource.has(a.referralSourceName)) continue;
+      const set = bySource.get(a.referralSourceName) || new Set<string>();
+      if (a.targetType === 'student') set.add(a.targetId);
+      else if (a.targetType === 'family') for (const sid of familyStudentMap.get(a.targetId) || []) set.add(sid);
+      bySource.set(a.referralSourceName, set);
+    }
+
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+
+    const rows: any[] = [];
+    let totalCommissionOwed = 0;
+    for (const [sourceName, studentIdSet] of bySource) {
+      const rule: any = ruleBySource.get(sourceName);
+      const studentIds = Array.from(studentIdSet).filter(Types.ObjectId.isValid);
+      const collectedAgg = studentIds.length ? await this.paymentModel.aggregate([
+        { $match: { schoolSlug, studentId: { $in: studentIds.map(id => new Types.ObjectId(id)) }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      ]) : [];
+      const totalCollected = collectedAgg[0]?.total || 0;
+      const paymentCount = collectedAgg[0]?.count || 0;
+      const commissionOwed = rule.rateType === 'flat' ? rule.rateValue * paymentCount : totalCollected * (rule.rateValue / 100);
+      totalCommissionOwed += commissionOwed;
+      rows.push({
+        referralSourceName: sourceName, rateType: rule.rateType, rateValue: rule.rateValue,
+        assignedTargetCount: studentIdSet.size, totalCollected, paymentCount,
+        commissionOwed: Math.round(commissionOwed * 100) / 100,
+      });
+    }
+
+    return {
+      rows: rows.sort((a, b) => b.commissionOwed - a.commissionOwed),
+      totalCommissionOwed: Math.round(totalCommissionOwed * 100) / 100,
+      configured: true, assignedCount: assignments.length,
+    };
+  }
+
+  // ── Sales Payment Summary — collections by period/method/collector ──
+  async getPaymentSummaryReport(schoolSlug: string, from?: string, to?: string, groupBy: string = 'month') {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const match: any = { schoolSlug, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) };
+    const dateFormat = groupBy === 'day' ? '%Y-%m-%d' : groupBy === 'week' ? '%G-W%V' : '%Y-%m';
+
+    const [byPeriod, byMethod, byCollector, totalsAgg] = await Promise.all([
+      this.paymentModel.aggregate([
+        { $match: match },
+        { $group: { _id: { $dateToString: { format: dateFormat, date: '$paymentDate' } }, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
+      this.paymentModel.aggregate([
+        { $match: match },
+        { $group: { _id: '$paymentMethod', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        { $sort: { total: -1 } },
+      ]),
+      this.paymentModel.aggregate([
+        { $match: match },
+        { $group: { _id: '$collectedBy', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+        { $sort: { total: -1 } },
+      ]),
+      this.paymentModel.aggregate([
+        { $match: match },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 }, avg: { $avg: '$amount' } } },
+      ]),
+    ]);
+
+    return {
+      groupBy,
+      byPeriod: byPeriod.map((r: any) => ({ period: r._id, total: r.total, count: r.count })),
+      byMethod: byMethod.map((r: any) => ({ paymentMethod: r._id || 'Unspecified', total: r.total, count: r.count })),
+      byCollector: byCollector.map((r: any) => ({ collectedBy: r._id || 'Unspecified', total: r.total, count: r.count })),
+      totals: totalsAgg[0] ? { total: totalsAgg[0].total, count: totalsAgg[0].count, avgPayment: Math.round((totalsAgg[0].avg || 0) * 100) / 100 } : { total: 0, count: 0, avgPayment: 0 },
+    };
+  }
+
+  // ── Address & Contacts — Vendor contact directory (the one contact
+  // list genuinely owned by Finance; Student/Family contacts belong to the
+  // Students module, not duplicated here) ────────────────────
+  async getVendorContactsReport(schoolSlug: string) {
+    return this.vendorModel.find({ schoolSlug, isActive: true })
+      .select('name contactPerson phone email address taxId')
+      .sort({ name: 1 })
+      .lean();
+  }
+
+  // ── Tax Detail Report — every posted journal line that hit a tax
+  // account, in one place, instead of three separate General Ledger runs ──
+  async getTaxDetailReport(schoolSlug: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const TAX_ACCOUNT_CODES = ['2400', '1400', '2500'];
+
+    const entries = await this.journalModel.find({
+      schoolSlug, status: 'posted', 'lines.accountCode': { $in: TAX_ACCOUNT_CODES },
+      ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+    }).sort({ date: 1, createdAt: 1 }).lean();
+
+    const rows: any[] = [];
+    for (const e of entries as any[]) {
+      const taxLines = e.lines.filter((l: any) => TAX_ACCOUNT_CODES.includes(l.accountCode));
+      const otherLines = e.lines.filter((l: any) => !TAX_ACCOUNT_CODES.includes(l.accountCode));
+      // Base amount — derived from the entry's own non-tax lines (real
+      // posted data, not fabricated). Revenue/expense legs of a tax-bearing
+      // posting are conventionally the credit side (fee revenue) or the
+      // debit side (purchase expense); prefer whichever is non-zero.
+      const otherCredit = otherLines.reduce((s: number, l: any) => s + (l.credit || 0), 0);
+      const otherDebit = otherLines.reduce((s: number, l: any) => s + (l.debit || 0), 0);
+      const baseAmount = otherCredit > 0 ? otherCredit : otherDebit;
+      for (const l of taxLines) {
+        rows.push({
+          date: e.date, entryNo: e.entryNo, reference: e.reference, narration: e.narration,
+          accountCode: l.accountCode, accountName: l.accountName,
+          taxTemplateName: l.taxTemplateName || 'Unspecified',
+          baseAmount, debit: l.debit, credit: l.credit,
+          partnerName: l.partnerName || null,
+        });
+      }
+    }
+    const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
+    const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
+    return { from: from ? new Date(from) : null, to: to ? new Date(to) : null, rows, totalDebit, totalCredit };
+  }
+
+  // ── Gross Profit ───────────────────────────────────────────
+  // Domain-specific definition (a school is a services business, not a
+  // manufacturer, so there is no classic COGS split from operating
+  // expenses): Gross Profit = Total Fee Revenue (4000 Tuition, 4100
+  // Admission, 4200 Transport) minus Salaries & Wages (5000) — salary is
+  // the direct cost of delivering the educational service itself. All
+  // other operating expenses (utilities, maintenance, marketing, etc.)
+  // are treated as below-the-line overhead, same as a services P&L would.
+  async getGrossProfit(schoolSlug: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const REVENUE_CODES = ['4000', '4100', '4200'];
+    const SALARY_CODE = '5000';
+
+    const agg = await this.journalModel.aggregate([
+      { $match: { schoolSlug, status: 'posted', ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}) } },
+      { $unwind: '$lines' },
+      { $match: { 'lines.accountCode': { $in: [...REVENUE_CODES, SALARY_CODE] } } },
+      { $group: { _id: '$lines.accountCode', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+    ]);
+
+    let totalRevenue = 0, directCost = 0;
+    const revenueByAccount: any[] = [];
+    for (const row of agg as any[]) {
+      if (REVENUE_CODES.includes(row._id)) {
+        const net = row.credit - row.debit; // revenue increases on credit
+        totalRevenue += net;
+        revenueByAccount.push({ accountCode: row._id, amount: net });
+      } else if (row._id === SALARY_CODE) {
+        directCost = row.debit - row.credit; // expense increases on debit
+      }
+    }
+    const grossProfit = totalRevenue - directCost;
+    return {
+      from: from ? new Date(from) : null, to: to ? new Date(to) : null,
+      totalRevenue: Math.round(totalRevenue * 100) / 100,
+      directCost: Math.round(directCost * 100) / 100,
+      grossProfit: Math.round(grossProfit * 100) / 100,
+      grossMarginPct: totalRevenue > 0 ? Math.round((grossProfit / totalRevenue) * 10000) / 100 : 0,
+      revenueByAccount,
+      definition: 'Total Fee Revenue (Tuition 4000 + Admission 4100 + Transport 4200) minus Salaries & Wages (5000) — the direct cost of delivering the educational service. Other operating expenses are excluded, same as any services-business gross-profit line.',
+    };
+  }
+
+  // ── Profitability Analysis by Cost Center ──────────────────
+  // Net income per campus/department — which one is genuinely profitable
+  // vs. subsidized. Reuses the same journal aggregation as
+  // getCostCenterReport but classifies each account by its COA type so
+  // revenue and expense can be netted per cost center instead of just
+  // debit-credit.
+  async getProfitabilityByCostCenter(schoolSlug: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+
+    const [coas, agg] = await Promise.all([
+      this.coaModel.find({ schoolSlug }).select('code type').lean(),
+      this.journalModel.aggregate([
+        { $match: { schoolSlug, status: 'posted', ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}) } },
+        { $unwind: '$lines' },
+        { $match: { 'lines.costCenterName': { $ne: null } } },
+        { $group: { _id: { costCenterName: '$lines.costCenterName', accountCode: '$lines.accountCode' }, debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+      ]),
+    ]);
+    const typeByCode = new Map(coas.map((c: any) => [c.code, c.type]));
+
+    const byCostCenter = new Map<string, { costCenterName: string; revenue: number; expense: number }>();
+    for (const row of agg as any[]) {
+      const name = row._id.costCenterName;
+      const type = typeByCode.get(row._id.accountCode);
+      if (!byCostCenter.has(name)) byCostCenter.set(name, { costCenterName: name, revenue: 0, expense: 0 });
+      const bucket = byCostCenter.get(name)!;
+      if (type === 'revenue') bucket.revenue += (row.credit - row.debit);
+      else if (type === 'expense') bucket.expense += (row.debit - row.credit);
+    }
+
+    const rows = Array.from(byCostCenter.values()).map(r => ({
+      costCenterName: r.costCenterName,
+      revenue: Math.round(r.revenue * 100) / 100,
+      expense: Math.round(r.expense * 100) / 100,
+      netIncome: Math.round((r.revenue - r.expense) * 100) / 100,
+    })).sort((a, b) => b.netIncome - a.netIncome);
+
+    return { from: from ? new Date(from) : null, to: to ? new Date(to) : null, rows };
+  }
+
+  // ── Trend Reports — trailing 12 months (or since first posting) of
+  // Revenue, Expenses, Net Income, sourced from real JournalEntry postings ──
+  async getMonthlyTrends(schoolSlug: string, months: number = 12) {
+    const since = new Date();
+    since.setMonth(since.getMonth() - (months - 1));
+    since.setDate(1);
+    since.setHours(0, 0, 0, 0);
+
+    const [coas, entries] = await Promise.all([
+      this.coaModel.find({ schoolSlug }).select('code type').lean(),
+      this.journalModel.find({ schoolSlug, status: 'posted', date: { $gte: since } }).select('date lines').lean(),
+    ]);
+    const typeByCode = new Map(coas.map((c: any) => [c.code, c.type]));
+
+    const byMonth = new Map<string, { month: string; revenue: number; expense: number }>();
+    for (const e of entries as any[]) {
+      const d = new Date(e.date);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!byMonth.has(key)) byMonth.set(key, { month: key, revenue: 0, expense: 0 });
+      const bucket = byMonth.get(key)!;
+      for (const l of e.lines || []) {
+        const type = typeByCode.get(l.accountCode);
+        if (type === 'revenue') bucket.revenue += (l.credit - l.debit);
+        else if (type === 'expense') bucket.expense += (l.debit - l.credit);
+      }
+    }
+
+    const rows: any[] = [];
+    const cursor = new Date(since);
+    for (let i = 0; i < months; i++) {
+      const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+      const b = byMonth.get(key) || { month: key, revenue: 0, expense: 0 };
+      rows.push({
+        month: b.month,
+        revenue: Math.round(b.revenue * 100) / 100,
+        expenses: Math.round(b.expense * 100) / 100,
+        netIncome: Math.round((b.revenue - b.expense) * 100) / 100,
+      });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return rows;
   }
 }

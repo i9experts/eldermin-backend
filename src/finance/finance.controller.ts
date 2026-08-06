@@ -626,4 +626,71 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.getUnrealizedFxExposure(schoolSlug, asOf);
   }
+
+  // ============================================================
+  // PHASE 7 — REPORT SUITE
+  // ============================================================
+
+  // ── Sales Commission — rules & assignments (setup) ─────────
+  @Get('commission-rules') async getSalesCommissionRules(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getSalesCommissionRules(schoolSlug);
+  }
+  @Post('commission-rules') @HttpCode(HttpStatus.CREATED)
+  async createSalesCommissionRule(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createSalesCommissionRule({ ...dto, schoolSlug });
+  }
+  @Patch('commission-rules/:id') async updateSalesCommissionRule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateSalesCommissionRule(id, schoolSlug, dto);
+  }
+  @Delete('commission-rules/:id') async deleteSalesCommissionRule(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteSalesCommissionRule(id, schoolSlug);
+  }
+
+  @Get('commission-assignments') async getCommissionAssignments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCommissionAssignments(schoolSlug);
+  }
+  @Post('commission-assignments') @HttpCode(HttpStatus.CREATED)
+  async createCommissionAssignment(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCommissionAssignment({ ...dto, schoolSlug });
+  }
+  @Delete('commission-assignments/:id') async deleteCommissionAssignment(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteCommissionAssignment(id, schoolSlug);
+  }
+
+  // ── Phase 7 Reports ─────────────────────────────────────────
+  @Get('reports/sales-commission') async getSalesCommissionReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getSalesCommissionReport(schoolSlug, from, to);
+  }
+  @Get('reports/payment-summary') async getPaymentSummaryReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string, @Query('groupBy') groupBy?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentSummaryReport(schoolSlug, from, to, groupBy);
+  }
+  @Get('reports/vendor-contacts') async getVendorContactsReport(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendorContactsReport(schoolSlug);
+  }
+  @Get('reports/tax-detail') async getTaxDetailReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxDetailReport(schoolSlug, from, to);
+  }
+  @Get('reports/gross-profit') async getGrossProfit(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGrossProfit(schoolSlug, from, to);
+  }
+  @Get('reports/profitability-by-cost-center') async getProfitabilityByCostCenter(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getProfitabilityByCostCenter(schoolSlug, from, to);
+  }
+  @Get('reports/trends') async getMonthlyTrends(@Request() req: any, @Query('months') months?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getMonthlyTrends(schoolSlug, months ? Number(months) : 12);
+  }
 }
