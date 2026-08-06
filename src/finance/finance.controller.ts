@@ -239,6 +239,54 @@ export class FinanceController {
     return this.service.updateBankBalance(id, schoolSlug, balance);
   }
 
+  // ============================================================
+  // PHASE 6 — BANK RECONCILIATION
+  // ============================================================
+  @Post('bank-accounts/:id/statement-lines/import') @HttpCode(HttpStatus.CREATED)
+  async importBankStatementLines(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.importBankStatementLines(schoolSlug, id, dto.lines || []);
+  }
+  @Get('bank-accounts/:id/statement-lines') async getBankStatementLines(@Param('id') id: string, @Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBankStatementLines(schoolSlug, id, query);
+  }
+  @Get('bank-accounts/:id/unmatched-ledger-lines') async getUnmatchedLedgerLines(@Param('id') id: string, @Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getUnmatchedLedgerLines(schoolSlug, id, from, to);
+  }
+  @Get('bank-accounts/:id/reconciliation-summary') async getReconciliationSummary(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getReconciliationSummary(schoolSlug, id);
+  }
+  @Post('statement-lines/:id/match') async matchStatementLine(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.matchStatementLine(schoolSlug, id, dto.matches || []);
+  }
+  @Post('statement-lines/:id/unmatch') async unmatchStatementLine(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unmatchStatementLine(schoolSlug, id);
+  }
+  @Post('statement-lines/:id/ignore') async ignoreStatementLine(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.ignoreStatementLine(schoolSlug, id);
+  }
+
+  // ── Reconciliation Sessions ────────────────────────────────
+  @Get('bank-accounts/:id/reconciliations') async getReconciliations(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getReconciliations(schoolSlug, id);
+  }
+  @Post('bank-accounts/:id/reconciliations') @HttpCode(HttpStatus.CREATED)
+  async startReconciliation(@Param('id') id: string, @Body('periodEnd') periodEnd: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.startReconciliation(schoolSlug, id, periodEnd);
+  }
+  @Patch('reconciliations/:id/complete') async completeReconciliation(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.completeReconciliation(schoolSlug, id, userName);
+  }
+
   // Reports
   @Get('reports/income-statement') async getIncomeStatement(@Request() req: any, @Query('academicYear') ay: string, @Query('from') from?: string, @Query('to') to?: string) {
     const { schoolSlug } = this.ctx(req);

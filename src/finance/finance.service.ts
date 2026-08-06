@@ -34,6 +34,10 @@ import {
   Currency, CurrencyDocument,
   ExchangeRate, ExchangeRateDocument,
 } from './schemas/currency.schema';
+import {
+  BankStatementLine, BankStatementLineDocument,
+  BankReconciliation, BankReconciliationDocument,
+} from './schemas/bank-reconciliation.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
@@ -80,6 +84,8 @@ export class FinanceService {
     @InjectModel(WithholdingTaxCategory.name) private withholdingCategoryModel: Model<WithholdingTaxCategoryDocument>,
     @InjectModel(Currency.name) private currencyModel: Model<CurrencyDocument>,
     @InjectModel(ExchangeRate.name) private exchangeRateModel: Model<ExchangeRateDocument>,
+    @InjectModel(BankStatementLine.name) private statementLineModel: Model<BankStatementLineDocument>,
+    @InjectModel(BankReconciliation.name) private reconciliationModel: Model<BankReconciliationDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
@@ -570,7 +576,7 @@ export class FinanceService {
   async postJournalEntry(schoolSlug: string, dto: {
     date?: Date | string; reference?: string; narration?: string;
     sourceType: string; sourceId?: string; postedBy?: string;
-    lines: { accountCode: string; costCenterName?: string; debit?: number; credit?: number; partnerType?: string; partnerId?: string; partnerName?: string; taxTemplateName?: string }[];
+    lines: { accountCode: string; costCenterName?: string; debit?: number; credit?: number; partnerType?: string; partnerId?: string; partnerName?: string; taxTemplateName?: string; bankAccountId?: string; bankAccountName?: string }[];
   }) {
     if (!dto.lines || dto.lines.length < 2) throw new BadRequestException('A journal entry needs at least two lines');
     const date = dto.date ? new Date(dto.date) : new Date();
@@ -589,6 +595,9 @@ export class FinanceService {
         partnerType: l.partnerType || null, partnerId: l.partnerId, partnerName: l.partnerName,
         isUnmapped: account.code === SUSPENSE_ACCOUNT_CODE && account.code !== l.accountCode,
         taxTemplateName: l.taxTemplateName,
+        // Phase 6 — optional bank-account link, see JournalLine.bankAccountId.
+        bankAccountId: l.bankAccountId || null,
+        bankAccountName: l.bankAccountName,
         _accountDoc: account,
       };
     }));
@@ -764,7 +773,7 @@ export class FinanceService {
       const arBaseAmount = fx.arBaseAmount ?? payment.amount;
       const fxDifference = fx.fxDifference || 0;
       const lines: any[] = [
-        { accountCode: this.mapPaymentMethodToAccount(payment.paymentMethod), debit: cashBaseAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
+        { accountCode: this.mapPaymentMethodToAccount(payment.paymentMethod), debit: cashBaseAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus, bankAccountId: payment.bankAccountId, bankAccountName: payment.bankAccountName },
         { accountCode: '1200', credit: arBaseAmount, partnerType: 'student', partnerId: String(invoice.studentId || ''), partnerName: invoice.studentName, costCenterName: invoice.campus },
       ];
       if (fxDifference > 0) {
@@ -796,7 +805,7 @@ export class FinanceService {
         sourceType: 'expense', sourceId: String(expense._id),
         lines: [
           { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId },
-          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId },
+          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
         ],
       });
     } catch (err: any) { /* see postFeeInvoiceJournal note */ }
@@ -967,6 +976,16 @@ export class FinanceService {
       schoolSlug,
     });
 
+    // Phase 6 — denormalize the BankAccount name (same convention as
+    // costCenterName/partnerName) when a specific bank account was
+    // provided, so Bank Reconciliation and the receipt UI can display it
+    // without a populate. No-op (and no behavior change) when
+    // bankAccountId is unset, which is the pre-Phase-6 default.
+    if (payment.bankAccountId) {
+      const acc = await this.bankModel.findOne({ _id: payment.bankAccountId, schoolSlug });
+      if (acc) payment.bankAccountName = `${acc.bankName} — ${acc.accountTitle}`;
+    }
+
     // Phase 5 — multi-currency realized FX: payment currency is assumed to
     // match the invoice's currency (no cross-currency splitting). If the
     // invoice is in a foreign currency, resolve the rate AT PAYMENT DATE
@@ -1040,6 +1059,11 @@ export class FinanceService {
       paidTo: data.paidTo || data.vendorName,
       vendorName: data.vendorName || data.paidTo,
     });
+    // Phase 6 — see recordPayment's identical note on bankAccountName denorm.
+    if (exp.bankAccountId) {
+      const acc = await this.bankModel.findOne({ _id: exp.bankAccountId, schoolSlug: data.schoolSlug });
+      if (acc) exp.bankAccountName = `${acc.bankName} — ${acc.accountTitle}`;
+    }
     return exp.save();
   }
 
@@ -1225,6 +1249,239 @@ export class FinanceService {
     return this.bankModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: { currentBalance: balance } }, { new: true },
     );
+  }
+
+  // ============================================================
+  // BANK RECONCILIATION (Phase 6) — bank statement import/entry, matching
+  // against posted Cash/Bank journal lines, reconciliation status per line.
+  // See schemas/bank-reconciliation.schema.ts for the sign convention and
+  // schemas/ledger.schema.ts's JournalLine.bankAccountId for how a posted
+  // line can (optionally) be traced back to a specific BankAccount.
+  //
+  // Matching model (Phase 6 first cut): ONE statement line can match MANY
+  // journal-entry lines (a bank batching several small deposits into one
+  // lump sum is common), so matchStatementLine accepts an array of
+  // { journalEntryId, lineIndex }. It does NOT support the reverse — many
+  // statement lines splitting one journal-entry line — which would need a
+  // partial-match/remaining-amount concept; that's out of scope for this
+  // phase and noted as a known simplification.
+  // ============================================================
+
+  private readonly BANK_GL_ACCOUNT_CODES = ['1000', '1100'];
+
+  // Bulk-import: tags every inserted line with a fresh importBatchId so the
+  // batch is identifiable (and, if a school imports the wrong file,
+  // trivially "undo-able" by filtering on this id) as a group.
+  async importBankStatementLines(schoolSlug: string, bankAccountId: string, lines: any[]) {
+    const bankAccount = await this.bankModel.findOne({ _id: bankAccountId, schoolSlug });
+    if (!bankAccount) throw new NotFoundException('Bank account not found');
+    if (!Array.isArray(lines) || lines.length === 0) throw new BadRequestException('No statement lines to import');
+
+    const importBatchId = new Types.ObjectId().toString();
+    const docs = lines.map((l: any) => ({
+      schoolSlug, bankAccountId, importBatchId,
+      statementDate: new Date(l.statementDate),
+      description: l.description,
+      referenceNumber: l.referenceNumber,
+      amount: Math.round(Number(l.amount || 0) * 100) / 100,
+      runningBalance: l.runningBalance != null ? Number(l.runningBalance) : undefined,
+      status: 'unmatched',
+    }));
+    const inserted = await this.statementLineModel.insertMany(docs);
+    return { importBatchId, count: inserted.length, lines: inserted };
+  }
+
+  async getBankStatementLines(schoolSlug: string, bankAccountId: string, query: { status?: string; from?: string; to?: string } = {}) {
+    const filter: any = { schoolSlug, bankAccountId };
+    if (query.status) filter.status = query.status;
+    if (query.from || query.to) {
+      filter.statementDate = {};
+      if (query.from) filter.statementDate.$gte = new Date(query.from);
+      if (query.to) filter.statementDate.$lte = new Date(query.to);
+    }
+    return this.statementLineModel.find(filter).sort({ statementDate: -1, createdAt: -1 });
+  }
+
+  // The "book side" of reconciliation: posted journal-entry lines that hit
+  // this bank account's GL account and haven't yet been used in a match.
+  // Prefers the new JournalLine.bankAccountId link (Phase 6+ postings) but
+  // falls back to matching on the generic 1000/1100 GL account code alone
+  // for every posting made before this phase existed — otherwise no
+  // historical bank activity would ever show up on this side of the screen.
+  async getUnmatchedLedgerLines(schoolSlug: string, bankAccountId: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+
+    const matchedLineKeys = await this.statementLineModel
+      .find({ schoolSlug, bankAccountId, status: 'matched' })
+      .select('matches')
+      .lean();
+    const usedKeys = new Set<string>();
+    for (const sl of matchedLineKeys as any[]) {
+      for (const m of sl.matches || []) usedKeys.add(`${m.entryId}:${m.lineIndex}`);
+    }
+
+    const entries = await this.journalModel.find({
+      schoolSlug, status: 'posted',
+      'lines.accountCode': { $in: this.BANK_GL_ACCOUNT_CODES },
+      ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+    }).sort({ date: -1, createdAt: -1 }).lean();
+
+    const rows: any[] = [];
+    for (const e of entries as any[]) {
+      e.lines.forEach((l: any, idx: number) => {
+        if (!this.BANK_GL_ACCOUNT_CODES.includes(l.accountCode)) return;
+        // A line explicitly tagged to a DIFFERENT bank account never belongs
+        // on this account's reconciliation screen. A line with no tag at
+        // all is ambiguous (could be any bank account) so it's shown as a
+        // candidate on every bank account's screen until manually matched
+        // or ignored — that's the accepted tradeoff of not requiring every
+        // historical posting to carry a bankAccountId.
+        if (l.bankAccountId && String(l.bankAccountId) !== String(bankAccountId)) return;
+        if (usedKeys.has(`${e._id}:${idx}`)) return;
+        rows.push({
+          entryId: e._id, lineIndex: idx, entryNo: e.entryNo, date: e.date,
+          narration: e.narration, reference: e.reference, sourceType: e.sourceType,
+          accountCode: l.accountCode, debit: l.debit, credit: l.credit,
+          amount: Math.round(((l.debit || 0) - (l.credit || 0)) * 100) / 100,
+          partnerName: l.partnerName, isBankAccountTagged: !!l.bankAccountId,
+        });
+      });
+    }
+    return rows;
+  }
+
+  async matchStatementLine(
+    schoolSlug: string, statementLineId: string,
+    matches: { journalEntryId: string; lineIndex: number }[],
+  ) {
+    const statementLine = await this.statementLineModel.findOne({ _id: statementLineId, schoolSlug });
+    if (!statementLine) throw new NotFoundException('Statement line not found');
+    if (!Array.isArray(matches) || matches.length === 0) throw new BadRequestException('At least one journal line to match against is required');
+
+    const resolvedMatches: any[] = [];
+    let matchedTotal = 0;
+    for (const m of matches) {
+      const entry = await this.journalModel.findOne({ _id: m.journalEntryId, schoolSlug }).lean();
+      if (!entry) throw new NotFoundException(`Journal entry ${m.journalEntryId} not found`);
+      const line = (entry as any).lines?.[m.lineIndex];
+      if (!line) throw new NotFoundException(`Line index ${m.lineIndex} not found on entry ${(entry as any).entryNo}`);
+      const amount = Math.round(((line.debit || 0) - (line.credit || 0)) * 100) / 100;
+      matchedTotal += amount;
+      resolvedMatches.push({
+        entryId: entry._id, lineIndex: m.lineIndex, entryNo: (entry as any).entryNo,
+        narration: (entry as any).narration, date: (entry as any).date, amount,
+      });
+    }
+
+    // Amounts sometimes legitimately won't line up exactly (a bank lumping
+    // several small deposits into one statement line, timing differences,
+    // etc.) — flagged as a warning rather than blocked, per Phase 6 scope.
+    const statementAmountAbs = Math.abs(statementLine.amount);
+    const matchedTotalAbs = Math.abs(matchedTotal);
+    const amountMismatchWarning = Math.abs(statementAmountAbs - matchedTotalAbs) > 0.01
+      ? `Statement amount (${statementLine.amount}) does not exactly match the total of matched journal line(s) (${matchedTotal}).`
+      : null;
+
+    statementLine.status = 'matched';
+    statementLine.matches = resolvedMatches;
+    await statementLine.save();
+
+    return { statementLine, amountMismatchWarning };
+  }
+
+  async unmatchStatementLine(schoolSlug: string, statementLineId: string) {
+    return this.statementLineModel.findOneAndUpdate(
+      { _id: statementLineId, schoolSlug },
+      { $set: { status: 'unmatched', matches: [] } },
+      { new: true },
+    );
+  }
+
+  async ignoreStatementLine(schoolSlug: string, statementLineId: string) {
+    return this.statementLineModel.findOneAndUpdate(
+      { _id: statementLineId, schoolSlug },
+      { $set: { status: 'ignored' } },
+      { new: true },
+    );
+  }
+
+  // Statement balance: the latest statement line's own runningBalance if
+  // one was supplied (the most authoritative source — it's what the bank
+  // itself reported), else falls back to a straight sum of every imported
+  // line's amount for this account. Book balance: sum of posted journal
+  // debits/credits hitting this account's GL code(s), i.e. the same
+  // "asset increases on debit" logic getGeneralLedger already uses.
+  async getReconciliationSummary(schoolSlug: string, bankAccountId: string) {
+    const bankAccount = await this.bankModel.findOne({ _id: bankAccountId, schoolSlug });
+    if (!bankAccount) throw new NotFoundException('Bank account not found');
+
+    const [latestLine, allLines, ledgerAgg] = await Promise.all([
+      this.statementLineModel.findOne({ schoolSlug, bankAccountId }).sort({ statementDate: -1, createdAt: -1 }),
+      this.statementLineModel.find({ schoolSlug, bankAccountId }).lean(),
+      this.journalModel.aggregate([
+        { $match: { schoolSlug, status: 'posted', 'lines.accountCode': { $in: this.BANK_GL_ACCOUNT_CODES } } },
+        { $unwind: '$lines' },
+        { $match: { 'lines.accountCode': { $in: this.BANK_GL_ACCOUNT_CODES }, $or: [{ 'lines.bankAccountId': new Types.ObjectId(bankAccountId) }, { 'lines.bankAccountId': null }] } },
+        { $group: { _id: null, debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+      ]),
+    ]);
+
+    const statementBalance = latestLine?.runningBalance != null
+      ? latestLine.runningBalance
+      : Math.round(allLines.reduce((s: number, l: any) => s + l.amount, 0) * 100) / 100;
+
+    const ledgerTotals = ledgerAgg[0] || { debit: 0, credit: 0 };
+    const bookBalance = Math.round(((bankAccount.openingBalance || 0) + ledgerTotals.debit - ledgerTotals.credit) * 100) / 100;
+
+    const unmatchedStatementLines = allLines.filter((l: any) => l.status === 'unmatched');
+    const unmatchedLedgerLines = await this.getUnmatchedLedgerLines(schoolSlug, bankAccountId);
+
+    const difference = Math.round((statementBalance - bookBalance) * 100) / 100;
+
+    return {
+      bankAccountId, bankName: bankAccount.bankName, accountTitle: bankAccount.accountTitle,
+      statementBalance, bookBalance, difference,
+      isBalanced: Math.abs(difference) < 0.01 && unmatchedStatementLines.length === 0 && unmatchedLedgerLines.length === 0,
+      unmatchedStatementCount: unmatchedStatementLines.length,
+      unmatchedStatementTotal: Math.round(unmatchedStatementLines.reduce((s: number, l: any) => s + l.amount, 0) * 100) / 100,
+      unmatchedLedgerCount: unmatchedLedgerLines.length,
+      unmatchedLedgerTotal: Math.round(unmatchedLedgerLines.reduce((s: number, l: any) => s + l.amount, 0) * 100) / 100,
+    };
+  }
+
+  // ── Reconciliation Sessions ("close out the month") ──────
+  async startReconciliation(schoolSlug: string, bankAccountId: string, periodEnd: string) {
+    const summary = await this.getReconciliationSummary(schoolSlug, bankAccountId);
+    return this.reconciliationModel.create({
+      schoolSlug, bankAccountId, periodEnd: new Date(periodEnd),
+      statementEndingBalance: summary.statementBalance,
+      bookEndingBalance: summary.bookBalance,
+      difference: summary.difference,
+      status: 'in_progress',
+    });
+  }
+
+  async getReconciliations(schoolSlug: string, bankAccountId?: string) {
+    const filter: any = { schoolSlug };
+    if (bankAccountId) filter.bankAccountId = bankAccountId;
+    return this.reconciliationModel.find(filter).sort({ periodEnd: -1 });
+  }
+
+  async completeReconciliation(schoolSlug: string, id: string, completedBy: string) {
+    const recon = await this.reconciliationModel.findOne({ _id: id, schoolSlug });
+    if (!recon) throw new NotFoundException('Reconciliation session not found');
+    // Re-snapshot the balances at completion time rather than trusting the
+    // (possibly stale) figures captured when the session was started.
+    const summary = await this.getReconciliationSummary(schoolSlug, String(recon.bankAccountId));
+    recon.statementEndingBalance = summary.statementBalance;
+    recon.bookEndingBalance = summary.bookBalance;
+    recon.difference = summary.difference;
+    recon.status = 'completed';
+    recon.completedBy = completedBy;
+    recon.completedAt = new Date();
+    return recon.save();
   }
 
   // ── Reports ──────────────────────────────────────────────
@@ -2242,8 +2499,15 @@ export class FinanceService {
       amount, paymentDate: new Date(data.paymentDate || Date.now()),
       paymentMethod: data.paymentMethod, referenceNumber: data.referenceNumber,
       withholdingAmount,
+      bankAccountId: data.bankAccountId,
       schoolSlug,
     });
+
+    // Phase 6 — see recordPayment's identical note on bankAccountName denorm.
+    if (payment.bankAccountId) {
+      const bankAcc = await this.bankModel.findOne({ _id: payment.bankAccountId, schoolSlug });
+      if (bankAcc) payment.bankAccountName = `${bankAcc.bankName} — ${bankAcc.accountTitle}`;
+    }
 
     // Phase 5 — multi-currency realized FX, mirror image of recordPayment's
     // AR-side logic. If this bill was booked in a foreign currency, resolve
@@ -2289,7 +2553,7 @@ export class FinanceService {
     try {
       const lines: any[] = [
         { accountCode: '2000', debit: apBaseAmount ?? amount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
-        { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: cashBaseAmount ?? cashAmount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName },
+        { accountCode: this.mapPaymentMethodToAccount(data.paymentMethod), credit: cashBaseAmount ?? cashAmount, partnerType: 'vendor', partnerId: String(bill.vendorId), partnerName: bill.vendorName, bankAccountId: payment.bankAccountId, bankAccountName: payment.bankAccountName },
       ];
       if (withholdingAmount > 0 && withholdingCategory) {
         lines.push({

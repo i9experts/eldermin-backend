@@ -105,6 +105,16 @@ export class JournalLine {
   // on the tax leg of a posting, so getTaxSummaryReport can group by tax
   // template without a second lookup (same pattern as costCenterName/partnerName).
   @Prop() taxTemplateName: string;
+  // Phase 6 — optional link to the specific BankAccount a Cash/Bank line
+  // actually hit, so Bank Reconciliation can match this line to a real
+  // bank-statement transaction instead of just knowing it hit the generic
+  // 1000/1100 GL account. Unset (the common case, since no pre-Phase-6 UI
+  // ever collected a bankAccountId) means this line simply isn't
+  // auto-linkable and must be matched manually during reconciliation —
+  // no different from how reconciliation works everywhere else when data
+  // is incomplete. See FinanceService.postJournalEntry.
+  @Prop({ type: Types.ObjectId, ref: 'BankAccount', default: null }) bankAccountId: Types.ObjectId | null;
+  @Prop() bankAccountName: string;
 }
 const JournalLineSchema = SchemaFactory.createForClass(JournalLine);
 

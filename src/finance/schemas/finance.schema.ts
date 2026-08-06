@@ -183,6 +183,12 @@ export class Payment {
   @Prop() collectedBy: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) collectedById: Types.ObjectId;
   @Prop() bankAccountId: string;
+  // Phase 6 — denormalized label for the BankAccount above (same convention
+  // as costCenterName/partnerName elsewhere), so a receipt/reconciliation
+  // view can show which specific bank account this hit without a populate.
+  // Optional/additive: unset when bankAccountId is unset (unchanged from
+  // pre-Phase-6 behavior).
+  @Prop() bankAccountName: string;
   @Prop() notes: string;
   @Prop({ default: false }) isRefunded: boolean;
   @Prop() refundDate: Date;
@@ -240,6 +246,12 @@ export class Expense {
   @Prop() campusId: string;
   @Prop() attachmentUrl: string;
   @Prop() submittedBy: string;
+  // Phase 6 — optional link to the specific BankAccount this expense was
+  // actually paid from, so a Cash/Bank posting for the expense can be
+  // matched during Bank Reconciliation. Additive: unset by default, same
+  // as Payment.bankAccountId's convention.
+  @Prop() bankAccountId: string;
+  @Prop() bankAccountName: string;
   // Phase 5 — multi-currency (optional/additive). Kept for schema parity
   // with Invoice/Payment/VendorBill; the simple Expense spend-log doesn't
   // carry FX gain/loss logic in Phase 5 (that lives on the formal Vendor

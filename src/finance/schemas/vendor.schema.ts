@@ -129,6 +129,11 @@ export class VendorPayment {
   // movement generates.
   @Prop() currencyCode: string;
   @Prop() exchangeRate: number;
+  // Phase 6 — optional link to the specific BankAccount this vendor payment
+  // actually went out of, mirroring Payment.bankAccountId/bankAccountName
+  // on the AR side. Additive: unset by default.
+  @Prop() bankAccountId: string;
+  @Prop() bankAccountName: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const VendorPaymentSchema = SchemaFactory.createForClass(VendorPayment);
