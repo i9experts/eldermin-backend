@@ -18,7 +18,14 @@ import {
   CostCenter, CostCenterDocument,
   PaymentTerm, PaymentTermDocument,
   JournalEntry, JournalEntryDocument,
+  OpeningBalance, OpeningBalanceDocument,
 } from './schemas/ledger.schema';
+import {
+  AccountingDimension, AccountingDimensionDocument,
+  DimensionValue, DimensionValueDocument,
+} from './schemas/dimension.schema';
+import { TermsTemplate, TermsTemplateDocument } from './schemas/terms-template.schema';
+import { PaymentGatewayConfig, PaymentGatewayConfigDocument } from './schemas/payment-gateway.schema';
 import {
   Vendor, VendorDocument,
   VendorBill, VendorBillDocument,
@@ -62,6 +69,10 @@ const SUSPENSE_ACCOUNT_CODE = '9999';
 // (fee payments) and the AP side (vendor payments).
 const FX_GAIN_LOSS_ACCOUNT_CODE = '7000';
 
+// Phase 8 — year-end closing: net income/loss for the fiscal year lands
+// here (see closeFiscalYear / computeYearEndClosingLines).
+const RETAINED_EARNINGS_ACCOUNT_CODE = '3100';
+
 @Injectable()
 export class FinanceService {
   constructor(
@@ -96,6 +107,11 @@ export class FinanceService {
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
     @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
+    @InjectModel(OpeningBalance.name) private openingBalanceModel: Model<OpeningBalanceDocument>,
+    @InjectModel(AccountingDimension.name) private dimensionModel: Model<AccountingDimensionDocument>,
+    @InjectModel(DimensionValue.name) private dimensionValueModel: Model<DimensionValueDocument>,
+    @InjectModel(TermsTemplate.name) private termsTemplateModel: Model<TermsTemplateDocument>,
+    @InjectModel(PaymentGatewayConfig.name) private paymentGatewayConfigModel: Model<PaymentGatewayConfigDocument>,
   ) {}
 
   // ── Dashboard ───────────────────────────────────────────
@@ -219,6 +235,9 @@ export class FinanceService {
       { code: '1400', name: 'Input Tax / Purchase Tax Receivable', type: 'asset', subType: 'current_asset' },
       { code: '2500', name: 'Withholding Tax Payable', type: 'liability', subType: 'current_liability' },
       { code: '3000', name: "Owner's Equity", type: 'equity', subType: 'equity' },
+      // Phase 8 — year-end closing posts net income/loss here. Distinct
+      // from 3000 "Owner's Equity" per the build plan.
+      { code: '3100', name: 'Retained Earnings', type: 'equity', subType: 'equity' },
       { code: '4000', name: 'Tuition Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
       { code: '4100', name: 'Admission Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
       { code: '4200', name: 'Transport Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
@@ -445,14 +464,123 @@ export class FinanceService {
     return this.fiscalYearModel.create(data);
   }
 
+  // ── Opening Balances (Phase 8) ────────────────────────────
+  // Per-fiscal-year opening balance, one row per (account, fiscal year) —
+  // see schemas/ledger.schema.ts OpeningBalance for why this is a proper
+  // collection rather than reusing the flat ChartOfAccount.openingBalance
+  // field. Upserted so re-setting the same account/year corrects it
+  // rather than duplicating.
+  async setOpeningBalance(schoolSlug: string, accountCode: string, fiscalYearId: string, amount: number, postedBy?: string) {
+    const account = await this.coaModel.findOne({ schoolSlug, code: accountCode });
+    if (!account) throw new NotFoundException(`Account ${accountCode} not found`);
+    const fy = await this.fiscalYearModel.findOne({ _id: fiscalYearId, schoolSlug });
+    if (!fy) throw new NotFoundException('Fiscal year not found');
+    return this.openingBalanceModel.findOneAndUpdate(
+      { schoolSlug, accountCode, fiscalYearId },
+      { $set: { amount: Math.round((amount || 0) * 100) / 100, accountName: account.name, postedBy } },
+      { new: true, upsert: true },
+    );
+  }
+
+  async getOpeningBalances(schoolSlug: string, fiscalYearId?: string) {
+    const filter: any = { schoolSlug };
+    if (fiscalYearId) filter.fiscalYearId = fiscalYearId;
+    return this.openingBalanceModel.find(filter).sort({ accountCode: 1 });
+  }
+
+  // Phase 8 — computes the closing journal-entry lines for a fiscal year:
+  // Debit every Revenue account for its full-year net-credit balance
+  // (zeroing it), Credit every Expense account for its full-year
+  // net-debit balance (zeroing it), and route the difference (profit or
+  // loss) to Retained Earnings. Returns [] when the year had zero
+  // ledger activity — nothing to close.
+  //
+  // Worked example (see also the Phase 8 close-out report): Tuition
+  // Revenue (4000) has a full-year credit balance of 1,000,000; Salaries
+  // (5000) 600,000 debit; Utilities (5100) 150,000 debit. Net income =
+  // 1,000,000 - 750,000 = 250,000 (profit). Lines:
+  //   Debit  4000  1,000,000
+  //   Credit 5000    600,000
+  //   Credit 5100    150,000
+  //   Credit 3100 (Retained Earnings) 250,000
+  // Total debit = 1,000,000; total credit = 600,000+150,000+250,000 =
+  // 1,000,000 — balances exactly, for both a profit and a loss year
+  // (in a loss year Retained Earnings is instead debited for the loss,
+  // and total debit = totalRevenue + loss = totalExpense = total credit).
+  private async computeYearEndClosingLines(schoolSlug: string, fy: any) {
+    const accounts = await this.coaModel.find({ schoolSlug, isActive: true, type: { $in: ['revenue', 'expense'] } }).lean();
+    const agg = await this.journalModel.aggregate([
+      { $match: { schoolSlug, status: 'posted', date: { $gte: fy.startDate, $lte: fy.endDate } } },
+      { $unwind: '$lines' },
+      { $match: { 'lines.accountCode': { $in: accounts.map((a: any) => a.code) } } },
+      { $group: { _id: '$lines.accountCode', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+    ]);
+    const byCode = new Map(agg.map((a: any) => [a._id, a]));
+
+    const lines: { accountCode: string; debit?: number; credit?: number }[] = [];
+    let totalRevenue = 0;
+    let totalExpense = 0;
+    for (const a of accounts as any[]) {
+      const totals = byCode.get(a.code) || { debit: 0, credit: 0 };
+      if (a.type === 'revenue') {
+        const netCredit = Math.round((totals.credit - totals.debit) * 100) / 100;
+        if (netCredit !== 0) {
+          lines.push({ accountCode: a.code, debit: netCredit > 0 ? netCredit : undefined, credit: netCredit < 0 ? -netCredit : undefined });
+          totalRevenue += netCredit;
+        }
+      } else {
+        const netDebit = Math.round((totals.debit - totals.credit) * 100) / 100;
+        if (netDebit !== 0) {
+          lines.push({ accountCode: a.code, credit: netDebit > 0 ? netDebit : undefined, debit: netDebit < 0 ? -netDebit : undefined });
+          totalExpense += netDebit;
+        }
+      }
+    }
+
+    if (lines.length === 0) return { lines: [], netIncome: 0 };
+
+    const netIncome = Math.round((totalRevenue - totalExpense) * 100) / 100;
+    if (netIncome > 0) {
+      lines.push({ accountCode: RETAINED_EARNINGS_ACCOUNT_CODE, credit: netIncome });
+    } else if (netIncome < 0) {
+      lines.push({ accountCode: RETAINED_EARNINGS_ACCOUNT_CODE, debit: -netIncome });
+    }
+    return { lines, netIncome };
+  }
+
+  // Real year-end closing (Phase 8), not just a flag flip: posts an actual
+  // closing journal entry (sourceType 'year_end_closing') via
+  // postJournalEntry, then locks every AccountingPeriod within the fiscal
+  // year, and only THEN marks the fiscal year isClosed — so a posting
+  // failure never leaves the year marked closed without the entry
+  // existing. Refuses to re-close an already-closed year.
   async closeFiscalYear(id: string, schoolSlug: string, closedBy: string) {
-    const fy = await this.fiscalYearModel.findOneAndUpdate(
+    const fy = await this.fiscalYearModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!fy) throw new NotFoundException('Fiscal year not found');
+    if (fy.isClosed) throw new BadRequestException('This fiscal year is already closed');
+
+    const { lines, netIncome } = await this.computeYearEndClosingLines(schoolSlug, fy);
+
+    if (lines.length > 0) {
+      await this.postJournalEntry(schoolSlug, {
+        date: fy.endDate,
+        reference: `${fy.name} Close`,
+        narration: `Year-end closing — ${fy.name} (${netIncome >= 0 ? 'net profit' : 'net loss'} ${Math.abs(netIncome).toFixed(2)} to Retained Earnings)`,
+        sourceType: 'year_end_closing', sourceId: String(fy._id), postedBy: closedBy,
+        lines,
+      });
+    }
+
+    // Lock every period within this fiscal year so nothing can be
+    // back-posted into a closed year without deliberately reopening a period.
+    await this.periodModel.updateMany({ schoolSlug, fiscalYearId: fy._id }, { $set: { status: 'closed' } });
+
+    const updated = await this.fiscalYearModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { isClosed: true, closedAt: new Date(), closedBy } },
       { new: true },
     );
-    if (!fy) throw new NotFoundException('Fiscal year not found');
-    return fy;
+    return updated;
   }
 
   // Auto-seeds a fiscal year covering `date` if none exists yet — postings
@@ -542,6 +670,47 @@ export class FinanceService {
     return this.costCenterModel.findOne({ schoolSlug, name: new RegExp(`^${name}$`, 'i') });
   }
 
+  // ── Accounting Dimensions (Phase 8) ───────────────────────
+  // Generalized tagging framework, additive alongside Cost Center (which
+  // remains the first-class, most-used dimension). getDimensions/
+  // getDimensionValues/createDimension/createDimensionValue are plain CRUD;
+  // the interesting part is postJournalEntry's passthrough + existence
+  // validation below, and getDimensionReport's aggregation.
+  async getDimensions(schoolSlug: string) {
+    return this.dimensionModel.find({ schoolSlug, isActive: true }).sort({ name: 1 });
+  }
+
+  async createDimension(data: any) {
+    return this.dimensionModel.create(data);
+  }
+
+  async getDimensionValues(schoolSlug: string, dimensionId: string) {
+    return this.dimensionValueModel.find({ schoolSlug, dimensionId, isActive: true }).sort({ code: 1 });
+  }
+
+  async createDimensionValue(data: any) {
+    const dimension = await this.dimensionModel.findOne({ _id: data.dimensionId, schoolSlug: data.schoolSlug });
+    if (!dimension) throw new NotFoundException('Accounting dimension not found');
+    return this.dimensionValueModel.create(data);
+  }
+
+  // Mirrors getCostCenterReport's exact pattern, grouped by dimension value
+  // instead of cost center name.
+  async getDimensionReport(schoolSlug: string, dimensionId: string, from?: string, to?: string) {
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const agg = await this.journalModel.aggregate([
+      { $match: { schoolSlug, status: 'posted', ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}) } },
+      { $unwind: '$lines' },
+      { $unwind: '$lines.dimensions' },
+      { $match: { 'lines.dimensions.dimensionId': new Types.ObjectId(dimensionId) } },
+      { $group: { _id: '$lines.dimensions.valueName', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
+      { $sort: { _id: 1 } },
+    ]);
+    return agg.map((a: any) => ({ valueName: a._id, debit: a.debit, credit: a.credit, net: a.debit - a.credit }));
+  }
+
   // ── Payment Terms ────────────────────────────────────────
   async getPaymentTerms(schoolSlug: string) {
     return this.paymentTermModel.find({ schoolSlug, isActive: true }).sort({ dueDays: 1 });
@@ -582,7 +751,14 @@ export class FinanceService {
   async postJournalEntry(schoolSlug: string, dto: {
     date?: Date | string; reference?: string; narration?: string;
     sourceType: string; sourceId?: string; postedBy?: string;
-    lines: { accountCode: string; costCenterName?: string; debit?: number; credit?: number; partnerType?: string; partnerId?: string; partnerName?: string; taxTemplateName?: string; bankAccountId?: string; bankAccountName?: string }[];
+    lines: {
+      accountCode: string; costCenterName?: string; debit?: number; credit?: number;
+      partnerType?: string; partnerId?: string; partnerName?: string; taxTemplateName?: string;
+      bankAccountId?: string; bankAccountName?: string;
+      // Phase 8 — optional, additive Accounting Dimensions passthrough.
+      // No resolution beyond existence-checking each referenced pair.
+      dimensions?: { dimensionId: string; valueId: string }[];
+    }[];
   }) {
     if (!dto.lines || dto.lines.length < 2) throw new BadRequestException('A journal entry needs at least two lines');
     const date = dto.date ? new Date(dto.date) : new Date();
@@ -594,6 +770,25 @@ export class FinanceService {
       const account = await this.resolveAccount(schoolSlug, l.accountCode);
       if (!account) throw new BadRequestException(`Account ${l.accountCode} not found and no Suspense account is configured — run Seed Default COA first`);
       const costCenter = l.costCenterName ? await this.resolveCostCenterByName(schoolSlug, l.costCenterName) : null;
+
+      // Phase 8 — resolve/validate any dimension tags on this line. A
+      // referenced dimensionId/valueId that doesn't exist is dropped
+      // silently (a reporting dimension must never block a real posting,
+      // same convention as costCenterName above), not thrown — the
+      // absence of a match is indistinguishable from never having sent one.
+      let dimensions: { dimensionId: any; dimensionName: string; valueId: any; valueName: string }[] = [];
+      if (l.dimensions?.length) {
+        dimensions = (await Promise.all(l.dimensions.map(async (d) => {
+          if (!d?.dimensionId || !d?.valueId) return null;
+          const [dim, val] = await Promise.all([
+            this.dimensionModel.findOne({ _id: d.dimensionId, schoolSlug }),
+            this.dimensionValueModel.findOne({ _id: d.valueId, schoolSlug, dimensionId: d.dimensionId }),
+          ]);
+          if (!dim || !val) return null;
+          return { dimensionId: dim._id, dimensionName: dim.name, valueId: val._id, valueName: val.name };
+        }))).filter((d): d is NonNullable<typeof d> => !!d);
+      }
+
       return {
         accountCode: account.code, accountName: account.name,
         costCenterId: costCenter?._id || null, costCenterName: costCenter?.name,
@@ -604,6 +799,8 @@ export class FinanceService {
         // Phase 6 — optional bank-account link, see JournalLine.bankAccountId.
         bankAccountId: l.bankAccountId || null,
         bankAccountName: l.bankAccountName,
+        // Phase 8 — optional, additive dimension tags, see above.
+        dimensions,
         _accountDoc: account,
       };
     }));
@@ -639,7 +836,12 @@ export class FinanceService {
   async getJournalEntries(schoolSlug: string, query: any = {}) {
     const { page = 1, limit = 30, sourceType, from, to } = query;
     const { skip } = paged(page, limit);
-    const filter: any = { schoolSlug };
+    // Phase 8 — templates (isTemplate: true) are a saved shape, never a
+    // real posting, so they're excluded from the normal Journal Entries
+    // list exactly like they're excluded from every balance report
+    // (getTrialBalance/getGeneralLedger/etc. already filter status:
+    // 'posted', and templates are always status: 'draft').
+    const filter: any = { schoolSlug, isTemplate: { $ne: true } };
     if (sourceType) filter.sourceType = sourceType;
     if (from || to) { filter.date = {}; if (from) filter.date.$gte = new Date(from); if (to) filter.date.$lte = new Date(to); }
     const [data, total] = await Promise.all([
@@ -647,6 +849,68 @@ export class FinanceService {
       this.journalModel.countDocuments(filter),
     ]);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  // ── Journal Entry Templates (Phase 8) ─────────────────────
+  // JournalEntry.isTemplate/templateName have existed on the schema since
+  // Phase 1 but were never actually used anywhere until now. A template is
+  // a JournalEntry doc with isTemplate: true, status: 'draft' — it is
+  // never counted in any balance/report aggregation because every report
+  // method filters status: 'posted' (verified across the whole service),
+  // and it's excluded from getJournalEntries above too.
+  async saveAsTemplate(schoolSlug: string, journalEntryId: string, templateName: string) {
+    const source = await this.journalModel.findOne({ _id: journalEntryId, schoolSlug }).lean();
+    if (!source) throw new NotFoundException('Journal entry not found');
+    if (!templateName) throw new BadRequestException('templateName is required');
+    const lines = (source.lines || []).map((l: any) => ({
+      accountCode: l.accountCode, accountName: l.accountName,
+      costCenterId: l.costCenterId, costCenterName: l.costCenterName,
+      debit: l.debit, credit: l.credit,
+      partnerType: l.partnerType, partnerId: l.partnerId, partnerName: l.partnerName,
+      taxTemplateName: l.taxTemplateName,
+      bankAccountId: l.bankAccountId, bankAccountName: l.bankAccountName,
+      dimensions: l.dimensions || [],
+    }));
+    return this.journalModel.create({
+      schoolSlug, date: new Date(), sourceType: 'manual',
+      reference: source.reference, narration: source.narration,
+      isTemplate: true, templateName, status: 'draft',
+      lines, totalDebit: source.totalDebit, totalCredit: source.totalCredit,
+    });
+  }
+
+  async getTemplates(schoolSlug: string) {
+    return this.journalModel.find({ schoolSlug, isTemplate: true }).sort({ templateName: 1 });
+  }
+
+  // Instantiates a new REAL journal entry (posted, isTemplate: false) from
+  // a saved template's line shape — useful for recurring entries like
+  // monthly accruals. `overrides.lines`, if given, fully replaces the
+  // template's lines (e.g. a different month's accrual amount); everything
+  // else about posting (balance check, period resolution, running-balance
+  // updates) goes through the normal postJournalEntry path.
+  async createFromTemplate(schoolSlug: string, templateId: string, date: Date | string, overrides: { narration?: string; reference?: string; lines?: any[] } = {}, postedBy?: string) {
+    const template = await this.journalModel.findOne({ _id: templateId, schoolSlug, isTemplate: true }).lean();
+    if (!template) throw new NotFoundException('Journal entry template not found');
+    const lines = overrides.lines?.length ? overrides.lines : (template.lines || []).map((l: any) => ({
+      accountCode: l.accountCode, costCenterName: l.costCenterName, debit: l.debit, credit: l.credit,
+      partnerType: l.partnerType, partnerId: l.partnerId, partnerName: l.partnerName,
+      taxTemplateName: l.taxTemplateName, bankAccountId: l.bankAccountId, bankAccountName: l.bankAccountName,
+      dimensions: (l.dimensions || []).map((d: any) => ({ dimensionId: String(d.dimensionId), valueId: String(d.valueId) })),
+    }));
+    return this.postJournalEntry(schoolSlug, {
+      date, postedBy,
+      reference: overrides.reference || template.reference,
+      narration: overrides.narration || `${template.narration || ''} (from template: ${template.templateName})`.trim(),
+      sourceType: 'manual', sourceId: String(template._id),
+      lines,
+    });
+  }
+
+  async deleteTemplate(schoolSlug: string, id: string) {
+    const res = await this.journalModel.deleteOne({ _id: id, schoolSlug, isTemplate: true });
+    if (res.deletedCount === 0) throw new NotFoundException('Journal entry template not found');
+    return { success: true };
   }
 
   // ── Auto-posting hooks (called from Invoice/Payment/Expense flows) ──
@@ -827,10 +1091,28 @@ export class FinanceService {
       { $group: { _id: '$lines.accountCode', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
     ]);
     const byCode = new Map(agg.map((a: any) => [a._id, a]));
+
+    // Phase 8 — resolve the fiscal year in scope (the one containing
+    // `asOf`, or else the school's currently active fiscal year) and look
+    // up any per-year OpeningBalance rows for it. When none exist for a
+    // given account (the default for every school that has never used
+    // this feature), fall back to the flat ChartOfAccount.openingBalance
+    // field exactly as before Phase 8 — so behavior is unchanged unless a
+    // school has actually set a per-year opening balance.
+    const fyMatch = asOf
+      ? { schoolSlug, startDate: { $lte: new Date(asOf) }, endDate: { $gte: new Date(asOf) } }
+      : { schoolSlug, isActive: true };
+    const scopedFy = await this.fiscalYearModel.findOne(fyMatch).sort({ startDate: -1 }).lean();
+    const openingBalances = scopedFy
+      ? await this.openingBalanceModel.find({ schoolSlug, fiscalYearId: scopedFy._id }).lean()
+      : [];
+    const obByCode = new Map(openingBalances.map((o: any) => [o.accountCode, o.amount]));
+
     const rows = accounts.map((a: any) => {
       const totals = byCode.get(a.code) || { debit: 0, credit: 0 };
       const net = this.accountIncreasesOnDebit(a.type) ? (totals.debit - totals.credit) : (totals.credit - totals.debit);
-      return { code: a.code, name: a.name, type: a.type, debit: totals.debit, credit: totals.credit, balance: (a.openingBalance || 0) + net };
+      const opening = obByCode.has(a.code) ? obByCode.get(a.code) : (a.openingBalance || 0);
+      return { code: a.code, name: a.name, type: a.type, debit: totals.debit, credit: totals.credit, balance: opening + net };
     }).filter(r => r.debit > 0 || r.credit > 0 || r.balance !== 0);
     const totalDebit = rows.reduce((s, r) => s + r.debit, 0);
     const totalCredit = rows.reduce((s, r) => s + r.credit, 0);
@@ -3216,5 +3498,74 @@ export class FinanceService {
       cursor.setMonth(cursor.getMonth() + 1);
     }
     return rows;
+  }
+
+  // ============================================================
+  // PHASE 8 — Terms & Conditions Templates
+  // Attachable to invoices/fee structures/vendor bills via the optional
+  // termsTemplateId ref (see schemas/finance.schema.ts). Plain CRUD.
+  // ============================================================
+  async getTermsTemplates(schoolSlug: string, appliesTo?: string) {
+    const filter: any = { schoolSlug };
+    if (appliesTo) filter.appliesTo = appliesTo;
+    return this.termsTemplateModel.find(filter).sort({ name: 1 });
+  }
+
+  async createTermsTemplate(data: any) {
+    return this.termsTemplateModel.create(data);
+  }
+
+  async updateTermsTemplate(id: string, schoolSlug: string, data: any) {
+    const t = await this.termsTemplateModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!t) throw new NotFoundException('Terms template not found');
+    return t;
+  }
+
+  async deleteTermsTemplate(id: string, schoolSlug: string) {
+    const res = await this.termsTemplateModel.deleteOne({ _id: id, schoolSlug });
+    if (res.deletedCount === 0) throw new NotFoundException('Terms template not found');
+    return { success: true };
+  }
+
+  // ============================================================
+  // PHASE 8 — Payment Gateway (integration-ready scaffolding only)
+  // No gateway (Stripe/JazzCash/Easypaisa/...) is actually wired up — see
+  // schemas/payment-gateway.schema.ts for why, and the file-level comment
+  // there about credentialsRef NOT being real secret storage.
+  // ============================================================
+  async getPaymentGatewayConfig(schoolSlug: string) {
+    return this.paymentGatewayConfigModel.findOne({ schoolSlug });
+  }
+
+  async upsertPaymentGatewayConfig(schoolSlug: string, data: { provider: string; isActive?: boolean; credentialsRef?: string }) {
+    return this.paymentGatewayConfigModel.findOneAndUpdate(
+      { schoolSlug },
+      { $set: { ...data, schoolSlug } },
+      { new: true, upsert: true },
+    );
+  }
+
+  // Honest placeholder — returns a clear "not configured" response rather
+  // than fabricating a fake live integration. See build plan Phase 8.
+  async createOnlinePaymentIntent(schoolSlug: string, invoiceId: string, amount: number) {
+    const config = await this.paymentGatewayConfigModel.findOne({ schoolSlug, isActive: true });
+    if (!config) {
+      return { configured: false, message: 'No payment gateway is configured for this school yet.' };
+    }
+    // No gateway SDK is actually integrated yet — this documents the seam
+    // for future work (Stripe/JazzCash/Easypaisa/...) without pretending
+    // it's live.
+    return {
+      configured: true,
+      provider: config.provider,
+      message: `A payment gateway (${config.provider}) is marked active but no live integration has been implemented yet — this endpoint is scaffolding for future work.`,
+      invoiceId, amount,
+    };
+  }
+
+  // Wired up but explicitly not implemented — documents the webhook seam
+  // for whichever gateway is chosen in a future phase.
+  async handlePaymentGatewayWebhook(schoolSlug: string, payload: any) {
+    return { received: true, processed: false, message: 'Payment gateway webhook handling is not implemented yet — awaiting gateway selection.' };
   }
 }

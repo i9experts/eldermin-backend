@@ -115,6 +115,19 @@ export class JournalLine {
   // is incomplete. See FinanceService.postJournalEntry.
   @Prop({ type: Types.ObjectId, ref: 'BankAccount', default: null }) bankAccountId: Types.ObjectId | null;
   @Prop() bankAccountName: string;
+  // Phase 8 — generalized Accounting Dimensions, additive infrastructure for
+  // future use alongside (not replacing) Cost Center above. A plain
+  // passthrough array — FinanceService.postJournalEntry only validates that
+  // referenced dimension/value IDs exist, no aggregation logic lives here.
+  // Empty/unset for every pre-Phase-8 entry and for any school that never
+  // configures a dimension beyond Cost Center.
+  @Prop({ type: [{
+    dimensionId: { type: Types.ObjectId, ref: 'AccountingDimension' },
+    dimensionName: String,
+    valueId: { type: Types.ObjectId, ref: 'DimensionValue' },
+    valueName: String,
+  }], default: [] })
+  dimensions: { dimensionId: Types.ObjectId; dimensionName: string; valueId: Types.ObjectId; valueName: string }[];
 }
 const JournalLineSchema = SchemaFactory.createForClass(JournalLine);
 
@@ -128,7 +141,7 @@ export class JournalEntry {
   @Prop() narration: string;
   // Where this entry came from — every auto-posting hook tags its source so
   // a posting can always be traced back to the transaction that caused it.
-  @Prop({ enum: ['fee_invoice', 'fee_payment', 'expense', 'payroll', 'expense_claim', 'advance', 'vendor_bill', 'vendor_payment', 'manual'], required: true })
+  @Prop({ enum: ['fee_invoice', 'fee_payment', 'expense', 'payroll', 'expense_claim', 'advance', 'vendor_bill', 'vendor_payment', 'manual', 'year_end_closing'], required: true })
   sourceType: string;
   @Prop() sourceId: string;
   @Prop({ type: [JournalLineSchema], default: [] }) lines: JournalLine[];
@@ -151,3 +164,31 @@ JournalEntrySchema.pre('validate', function () {
     this.entryNo = `JE-${year}-${rand}`;
   }
 });
+
+// ============================================================
+// OPENING BALANCE — Phase 8. A proper per-fiscal-year ledger of opening
+// balances, one row per (schoolSlug, accountCode, fiscalYearId). Chosen
+// over simply treating ChartOfAccount.openingBalance (Phase 1) as "the
+// balance for whichever year is active" because that flat field can't
+// hold more than one year's history — an audit-grade rebuild should not
+// lose that. FinanceService.getTrialBalance resolves the fiscal year in
+// scope (from `asOf`, or the school's currently active fiscal year) and
+// looks up this collection FIRST; if no row is found for that
+// (account, fiscalYear) pair it falls back to the flat
+// ChartOfAccount.openingBalance field exactly as before Phase 8 — so a
+// school that never sets a per-year opening balance sees zero behavior
+// change (still defaults to 0 via that field's own default).
+// ============================================================
+export type OpeningBalanceDocument = OpeningBalance & Document;
+
+@Schema({ timestamps: true, collection: 'opening_balances' })
+export class OpeningBalance {
+  @Prop({ required: true }) accountCode: string;
+  @Prop() accountName: string;
+  @Prop({ type: Types.ObjectId, ref: 'FiscalYear', required: true }) fiscalYearId: Types.ObjectId;
+  @Prop({ required: true, default: 0 }) amount: number;
+  @Prop() postedBy: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const OpeningBalanceSchema = SchemaFactory.createForClass(OpeningBalance);
+OpeningBalanceSchema.index({ schoolSlug: 1, accountCode: 1, fiscalYearId: 1 }, { unique: true });

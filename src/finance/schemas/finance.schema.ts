@@ -78,6 +78,10 @@ export class FeeStructure {
   @Prop() campus: string;
   @Prop({ default: false }) isTaxable: boolean;
   @Prop({ default: true }) isActive: boolean;
+  // Phase 8 — optional link to a Terms & Conditions template (see
+  // schemas/terms-template.schema.ts). Unset means no T&C attached,
+  // exactly matching every pre-Phase-8 fee structure.
+  @Prop({ type: Types.ObjectId, ref: 'TermsTemplate', default: null }) termsTemplateId: Types.ObjectId | null;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
@@ -144,6 +148,10 @@ export class Invoice {
   @Prop() currencyCode: string;
   @Prop() exchangeRate: number;
   @Prop() baseCurrencyAmount: number;
+  // Phase 8 — optional link to a Terms & Conditions template (see
+  // schemas/terms-template.schema.ts). Unset means no T&C attached,
+  // exactly matching every pre-Phase-8 invoice.
+  @Prop({ type: Types.ObjectId, ref: 'TermsTemplate', default: null }) termsTemplateId: Types.ObjectId | null;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 

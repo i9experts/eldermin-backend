@@ -19,7 +19,14 @@ import {
   CostCenter, CostCenterSchema,
   PaymentTerm, PaymentTermSchema,
   JournalEntry, JournalEntrySchema,
+  OpeningBalance, OpeningBalanceSchema,
 } from './schemas/ledger.schema';
+import {
+  AccountingDimension, AccountingDimensionSchema,
+  DimensionValue, DimensionValueSchema,
+} from './schemas/dimension.schema';
+import { TermsTemplate, TermsTemplateSchema } from './schemas/terms-template.schema';
+import { PaymentGatewayConfig, PaymentGatewayConfigSchema } from './schemas/payment-gateway.schema';
 import {
   Vendor, VendorSchema,
   VendorBill, VendorBillSchema,
@@ -81,6 +88,12 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
       { name: Grade.name, schema: GradeSchema },
+      // Phase 8
+      { name: OpeningBalance.name, schema: OpeningBalanceSchema },
+      { name: AccountingDimension.name, schema: AccountingDimensionSchema },
+      { name: DimensionValue.name, schema: DimensionValueSchema },
+      { name: TermsTemplate.name, schema: TermsTemplateSchema },
+      { name: PaymentGatewayConfig.name, schema: PaymentGatewayConfigSchema },
     ]),
   ],
   controllers: [FinanceController],

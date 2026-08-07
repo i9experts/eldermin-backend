@@ -60,6 +60,16 @@ export class FinanceController {
     return this.service.closeFiscalYear(id, schoolSlug, userName);
   }
 
+  // ── Opening Balances (Phase 8) ─────────────────────────────
+  @Get('opening-balances') async getOpeningBalances(@Request() req: any, @Query('fiscalYearId') fiscalYearId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getOpeningBalances(schoolSlug, fiscalYearId);
+  }
+  @Post('opening-balances') async setOpeningBalance(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.setOpeningBalance(schoolSlug, dto.accountCode, dto.fiscalYearId, Number(dto.amount), userName);
+  }
+
   // ── Accounting Periods ────────────────────────────────────
   @Get('accounting-periods') async getAccountingPeriods(@Request() req: any, @Query('fiscalYearId') fiscalYearId?: string) {
     const { schoolSlug } = this.ctx(req);
@@ -111,6 +121,24 @@ export class FinanceController {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.postJournalEntry(schoolSlug, { ...dto, sourceType: dto.sourceType || 'manual', postedBy: userName });
   }
+  @Post('journal-entries/:id/save-as-template') async saveAsTemplate(@Param('id') id: string, @Body('templateName') templateName: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.saveAsTemplate(schoolSlug, id, templateName);
+  }
+
+  // ── Journal Entry Templates (Phase 8) ──────────────────────
+  @Get('journal-templates') async getTemplates(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTemplates(schoolSlug);
+  }
+  @Post('journal-templates/:id/instantiate') async createFromTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createFromTemplate(schoolSlug, id, dto.date, { narration: dto.narration, reference: dto.reference, lines: dto.lines }, userName);
+  }
+  @Delete('journal-templates/:id') async deleteTemplate(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteTemplate(schoolSlug, id);
+  }
 
   // ── Ledger Reports ─────────────────────────────────────────
   @Get('reports/trial-balance') async getTrialBalance(@Request() req: any, @Query('asOf') asOf?: string) {
@@ -128,6 +156,28 @@ export class FinanceController {
   @Get('reports/cost-center') async getCostCenterReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getCostCenterReport(schoolSlug, from, to);
+  }
+
+  // ── Accounting Dimensions (Phase 8) ────────────────────────
+  @Get('dimensions') async getDimensions(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDimensions(schoolSlug);
+  }
+  @Post('dimensions') async createDimension(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDimension({ ...dto, schoolSlug });
+  }
+  @Get('dimensions/:id/values') async getDimensionValues(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDimensionValues(schoolSlug, id);
+  }
+  @Post('dimensions/:id/values') async createDimensionValue(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDimensionValue({ ...dto, dimensionId: id, schoolSlug });
+  }
+  @Get('reports/dimension') async getDimensionReport(@Request() req: any, @Query('dimensionId') dimensionId: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDimensionReport(schoolSlug, dimensionId, from, to);
   }
 
   // Fee Structures
@@ -692,5 +742,48 @@ export class FinanceController {
   @Get('reports/trends') async getMonthlyTrends(@Request() req: any, @Query('months') months?: string) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getMonthlyTrends(schoolSlug, months ? Number(months) : 12);
+  }
+
+  // ============================================================
+  // PHASE 8 — Terms & Conditions Templates
+  // ============================================================
+  @Get('terms-templates') async getTermsTemplates(@Request() req: any, @Query('appliesTo') appliesTo?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermsTemplates(schoolSlug, appliesTo);
+  }
+  @Post('terms-templates') @HttpCode(HttpStatus.CREATED)
+  async createTermsTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createTermsTemplate({ ...dto, schoolSlug });
+  }
+  @Patch('terms-templates/:id') async updateTermsTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateTermsTemplate(id, schoolSlug, dto);
+  }
+  @Delete('terms-templates/:id') async deleteTermsTemplate(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteTermsTemplate(id, schoolSlug);
+  }
+
+  // ============================================================
+  // PHASE 8 — Payment Gateway (integration-ready scaffolding only — no
+  // live gateway is wired up, see FinanceService for details)
+  // ============================================================
+  @Get('payment-gateway/config') async getPaymentGatewayConfig(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentGatewayConfig(schoolSlug);
+  }
+  @Post('payment-gateway/config') async upsertPaymentGatewayConfig(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.upsertPaymentGatewayConfig(schoolSlug, dto);
+  }
+  @Post('payment-gateway/intent') async createOnlinePaymentIntent(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createOnlinePaymentIntent(schoolSlug, dto.invoiceId, Number(dto.amount));
+  }
+  @Post('payment-gateway/webhook') @HttpCode(HttpStatus.OK)
+  async paymentGatewayWebhook(@Body() payload: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.handlePaymentGatewayWebhook(schoolSlug, payload);
   }
 }
