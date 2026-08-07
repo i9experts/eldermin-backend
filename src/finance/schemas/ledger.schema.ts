@@ -97,7 +97,13 @@ export class JournalLine {
   @Prop({ default: 0 }) credit: number;
   // Subledger dimension — lets Student/Parent Ledger and Supplier Ledger
   // be derived from the same journal data instead of separate tables.
-  @Prop({ type: String, enum: ['student', 'family', 'vendor', 'staff', null], default: null }) partnerType: string | null;
+  // Payment/Receipt Vouchers (see voucher.schema.ts) add 'shareholder' and
+  // 'other' — additive, no existing row ever used either value before.
+  // Voucher party type 'employee' deliberately posts as 'staff' here (not a
+  // separate 'employee' value) so a voucher's subledger entries land in the
+  // SAME running balance as payroll/expense-claim/advance postings, which
+  // have always used 'staff' — see FinanceService.createVoucher.
+  @Prop({ enum: ['student', 'family', 'vendor', 'staff', 'shareholder', 'other', null], default: null }) partnerType: string | null;
   @Prop() partnerId: string;
   @Prop() partnerName: string;
   @Prop({ default: false }) isUnmapped: boolean; // posted to the Suspense account because no real mapping existed yet
@@ -141,7 +147,11 @@ export class JournalEntry {
   @Prop() narration: string;
   // Where this entry came from — every auto-posting hook tags its source so
   // a posting can always be traced back to the transaction that caused it.
-  @Prop({ enum: ['fee_invoice', 'fee_payment', 'expense', 'payroll', 'expense_claim', 'advance', 'vendor_bill', 'vendor_payment', 'manual', 'year_end_closing'], required: true })
+  // 'payment_voucher'/'receipt_voucher' — the client-requested quick-entry
+  // Payment/Receipt Voucher feature (see voucher.schema.ts). A 'transfer'
+  // paymentType voucher also uses 'payment_voucher' (no separate value —
+  // it's still a single-account-pair movement, no different in shape).
+  @Prop({ enum: ['fee_invoice', 'fee_payment', 'expense', 'payroll', 'expense_claim', 'advance', 'vendor_bill', 'vendor_payment', 'manual', 'year_end_closing', 'payment_voucher', 'receipt_voucher'], required: true })
   sourceType: string;
   @Prop() sourceId: string;
   @Prop({ type: [JournalLineSchema], default: [] }) lines: JournalLine[];

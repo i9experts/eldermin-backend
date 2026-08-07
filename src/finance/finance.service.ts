@@ -45,6 +45,7 @@ import {
   BankStatementLine, BankStatementLineDocument,
   BankReconciliation, BankReconciliationDocument,
 } from './schemas/bank-reconciliation.schema';
+import { PaymentVoucher, PaymentVoucherDocument } from './schemas/voucher.schema';
 import {
   SalesCommissionRule, SalesCommissionRuleDocument,
   CommissionAssignment, CommissionAssignmentDocument,
@@ -112,6 +113,7 @@ export class FinanceService {
     @InjectModel(DimensionValue.name) private dimensionValueModel: Model<DimensionValueDocument>,
     @InjectModel(TermsTemplate.name) private termsTemplateModel: Model<TermsTemplateDocument>,
     @InjectModel(PaymentGatewayConfig.name) private paymentGatewayConfigModel: Model<PaymentGatewayConfigDocument>,
+    @InjectModel(PaymentVoucher.name) private voucherModel: Model<PaymentVoucherDocument>,
   ) {}
 
   // ── Dashboard ───────────────────────────────────────────
@@ -3567,5 +3569,297 @@ export class FinanceService {
   // for whichever gateway is chosen in a future phase.
   async handlePaymentGatewayWebhook(schoolSlug: string, payload: any) {
     return { received: true, processed: false, message: 'Payment gateway webhook handling is not implemented yet — awaiting gateway selection.' };
+  }
+
+  // ============================================================
+  // ── Payment / Receipt Vouchers ──
+  // Client-requested "quick entry" feature, modeled on ERPNext's Payment
+  // Entry doctype — ONE unified schema/flow with `paymentType`
+  // (receive|pay|transfer) rather than two separate voucher types, since
+  // the mechanics (party, accounts, tax, cost center, currency) are
+  // identical and only direction/defaults differ. Every voucher posts
+  // through postJournalEntry — the same engine as everything else — so it
+  // is provably balanced and appears in Trial Balance / General Ledger /
+  // Partner Ledger for free.
+  //
+  // Directionality (the crux of the whole feature — verified by hand, see
+  // worked examples in the session report): regardless of paymentType, the
+  // posting is always Dr paidToAccountCode / Cr paidFromAccountCode. Only
+  // the UI's smart DEFAULTS differ by paymentType (Receive defaults
+  // Paid From = a Receivable account, Paid To = Cash/Bank; Pay defaults
+  // Paid From = Cash/Bank, Paid To a Payable/Expense account) — the
+  // backend does not care which literal accounts are chosen, only that the
+  // debit/credit sides are consistently Paid To / Paid From.
+  //
+  // The PARTY (student/family/vendor/employee/shareholder/other) is
+  // attached to whichever side represents them, not whichever side is
+  // cash: for `receive` that's the Paid From line (defaults to their
+  // Receivable balance); for `pay`/`transfer` that's the Paid To line
+  // (defaults to their Payable/expense line). This exactly mirrors
+  // ERPNext's own Payment Entry convention (Party Account = Paid From on
+  // Receive, Paid To on Pay).
+  //
+  // "Branch" (client field #4) and "Cost Center" (client field #9) are the
+  // SAME field here — costCenterId/costCenterName — see voucher.schema.ts.
+  // ============================================================
+
+  // Employee/shareholder/other party types have no backing collection in
+  // this Finance module (HR imports Finance, not the reverse — adding a
+  // reverse import would be circular) — so 'employee' posts to the ledger
+  // as partnerType 'staff' (the same value payroll/expense-claims/advances
+  // already use, so a voucher lands in the SAME running balance as those),
+  // and 'shareholder'/'other' pass through as their own partnerType values
+  // (additive to JournalLine.partnerType — see ledger.schema.ts) purely for
+  // getPartnerLedger continuity; neither is validated against any
+  // collection, since none exists.
+  private voucherPartnerType(partyType: string): string | null {
+    if (partyType === 'employee') return 'staff';
+    if (['student', 'family', 'vendor', 'shareholder', 'other'].includes(partyType)) return partyType;
+    return null;
+  }
+
+  // Resolves/validates partyId → partyName for the party types that DO have
+  // a real backing collection (student/family/vendor); trusts the supplied
+  // partyId/partyName as-is for employee/shareholder/other, exactly as
+  // specified — the frontend sources the employee list from HR's own
+  // service, and there is no Shareholder concept anywhere in this app.
+  private async resolveVoucherParty(schoolSlug: string, partyType: string, partyId?: string, partyName?: string) {
+    if (partyType === 'student') {
+      if (!partyId) throw new BadRequestException('partyId is required for partyType student');
+      const student = await this.studentModel.findOne({ _id: partyId, schoolSlug });
+      if (!student) throw new NotFoundException('Student not found');
+      return { partyId: String(student._id), partyName: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim() };
+    }
+    if (partyType === 'family') {
+      if (!partyId) throw new BadRequestException('partyId is required for partyType family');
+      const family = await this.familyModel.findOne({ _id: partyId, schoolSlug });
+      if (!family) throw new NotFoundException('Family not found');
+      return { partyId: String(family._id), partyName: (family as any).primaryGuardianName || (family as any).familyCode };
+    }
+    if (partyType === 'vendor') {
+      if (!partyId) throw new BadRequestException('partyId is required for partyType vendor');
+      const vendor = await this.vendorModel.findOne({ _id: partyId, schoolSlug });
+      if (!vendor) throw new NotFoundException('Vendor not found');
+      return { partyId: String(vendor._id), partyName: vendor.name };
+    }
+    // employee / shareholder / other — free-text, no collection to validate against.
+    if (!partyName) throw new BadRequestException('partyName is required');
+    return { partyId: partyId || '', partyName };
+  }
+
+  // Thin wrapper around getPartnerLedger returning just the latest running
+  // balance (0 if no history yet) — powers the live "Party Balance" field
+  // in the New Voucher form as the user fills it in, before submission.
+  async getVoucherPartyBalance(schoolSlug: string, partyType: string, partyId?: string, partyName?: string) {
+    const partnerType = this.voucherPartnerType(partyType);
+    if (!partnerType) return { balance: 0 };
+    const rows = await this.getPartnerLedger(schoolSlug, partnerType, partyId || undefined, partyId ? undefined : partyName);
+    const balance = rows.length ? rows[rows.length - 1].runningBalance : 0;
+    return { balance };
+  }
+
+  async getVouchers(schoolSlug: string, query: any = {}) {
+    const { page = 1, limit = 20, paymentType, partyType, from, to } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (paymentType) filter.paymentType = paymentType;
+    if (partyType) filter.partyType = partyType;
+    if (from || to) { filter.postingDate = {}; if (from) filter.postingDate.$gte = new Date(from); if (to) filter.postingDate.$lte = new Date(to); }
+    const [data, total] = await Promise.all([
+      this.voucherModel.find(filter).sort({ postingDate: -1, createdAt: -1 }).skip(skip).limit(limit),
+      this.voucherModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  async getVoucherById(schoolSlug: string, id: string) {
+    const voucher = await this.voucherModel.findOne({ _id: id, schoolSlug });
+    if (!voucher) throw new NotFoundException('Voucher not found');
+    return voucher;
+  }
+
+  async createVoucher(schoolSlug: string, data: any, postedBy?: string) {
+    const paymentType = data.paymentType;
+    if (!['receive', 'pay', 'transfer'].includes(paymentType)) {
+      throw new BadRequestException('paymentType must be receive, pay or transfer');
+    }
+    if (!data.paidFromAccountCode || !data.paidToAccountCode) {
+      throw new BadRequestException('paidFromAccountCode and paidToAccountCode are required');
+    }
+    const paidAmount = Math.round(Number(data.paidAmount) * 100) / 100;
+    if (!paidAmount || paidAmount <= 0) throw new BadRequestException('paidAmount must be greater than 0');
+
+    const postingDate = data.postingDate ? new Date(data.postingDate) : new Date();
+
+    const [paidFromAccount, paidToAccount] = await Promise.all([
+      this.resolveAccount(schoolSlug, data.paidFromAccountCode),
+      this.resolveAccount(schoolSlug, data.paidToAccountCode),
+    ]);
+    if (!paidFromAccount) throw new BadRequestException(`Account ${data.paidFromAccountCode} not found`);
+    if (!paidToAccount) throw new BadRequestException(`Account ${data.paidToAccountCode} not found`);
+
+    const { partyId, partyName } = await this.resolveVoucherParty(schoolSlug, data.partyType, data.partyId, data.partyName);
+    const partnerType = this.voucherPartnerType(data.partyType);
+
+    // Cost Center = Branch (same dimension, see file-level note).
+    let costCenterId: any = null;
+    let costCenterName: string | undefined;
+    if (data.costCenterId) {
+      const cc = await this.costCenterModel.findOne({ _id: data.costCenterId, schoolSlug });
+      if (cc) { costCenterId = cc._id; costCenterName = cc.name; }
+    }
+
+    // Multi-currency (Phase 5) — reuse getRateOn/getBaseCurrencyCode rather
+    // than reinventing FX handling. Base currency in, base currency out.
+    const baseCurrency = await this.getBaseCurrencyCode(schoolSlug);
+    const currencyCode = data.currencyCode || baseCurrency;
+    let exchangeRate = Number(data.exchangeRate) || 0;
+    if (!exchangeRate) {
+      exchangeRate = currencyCode === baseCurrency ? 1 : await this.getRateOn(schoolSlug, currencyCode, postingDate);
+    }
+    const receivedAmount = Math.round(paidAmount * exchangeRate * 100) / 100;
+
+    // Tax (Phase 3) — reuse the existing TaxTemplate shape rather than
+    // reinventing tax computation. See the sign-convention note above the
+    // section header for the worked-out Dr/Cr logic below.
+    let taxTemplate: any = null;
+    let taxAmount = 0;
+    if (data.taxTemplateId) {
+      taxTemplate = await this.taxTemplateModel.findOne({ _id: data.taxTemplateId, schoolSlug, isActive: true });
+      if (taxTemplate) {
+        taxAmount = data.taxAmount != null
+          ? Math.round(Number(data.taxAmount) * 100) / 100
+          : (taxTemplate.computationMethod === 'fixed'
+            ? Math.round((taxTemplate.rate || 0) * 100) / 100
+            : Math.round(receivedAmount * (taxTemplate.rate || 0)) / 100);
+      }
+    }
+
+    // Snapshot the party's running balance BEFORE this posting — a
+    // historical fact about the voucher, not a live-recomputed value (see
+    // voucher.schema.ts's partyBalanceBefore comment).
+    const { balance: partyBalanceBefore } = await this.getVoucherPartyBalance(schoolSlug, data.partyType, partyId || undefined, partyName);
+
+    const isReceive = paymentType === 'receive';
+    const partyAccountCode = isReceive ? paidFromAccount.code : paidToAccount.code;
+    const otherAccountCode = isReceive ? paidToAccount.code : paidFromAccount.code;
+
+    // Tax adds to the cash/bank leg for sales/purchase templates (the
+    // school pays/collects more than the party amount, e.g. a recoverable
+    // input tax on top of a payment); a withholding template instead
+    // deducts from the cash/bank leg (the counterparty is deemed paid/
+    // received in FULL for `receivedAmount` even though less cash actually
+    // moved) — same convention as recordVendorPayment's withholding logic.
+    let cashLegAmount = receivedAmount;
+    if (taxAmount > 0 && taxTemplate) {
+      cashLegAmount = taxTemplate.type === 'withholding' ? receivedAmount - taxAmount : receivedAmount + taxAmount;
+    }
+    const taxAddsToCashLeg = cashLegAmount > receivedAmount;
+
+    const lines: any[] = [];
+    if (isReceive) {
+      // Dr paidTo (cash/bank) / Cr paidFrom (party's receivable) — party
+      // line carries partnerType/partnerId/partnerName so getPartnerLedger
+      // picks it up.
+      lines.push({ accountCode: partyAccountCode, credit: receivedAmount, partnerType, partnerId: partyId, partnerName: partyName, costCenterName });
+      lines.push({ accountCode: otherAccountCode, debit: cashLegAmount, costCenterName });
+      if (taxAmount > 0 && taxTemplate) {
+        lines.push(taxAddsToCashLeg
+          ? { accountCode: taxTemplate.accountCode, credit: taxAmount, taxTemplateName: taxTemplate.name, costCenterName }
+          : { accountCode: taxTemplate.accountCode, debit: taxAmount, taxTemplateName: taxTemplate.name, costCenterName });
+      }
+    } else {
+      // pay / transfer — Dr paidTo (party's payable/expense) / Cr paidFrom
+      // (cash/bank).
+      lines.push({ accountCode: partyAccountCode, debit: receivedAmount, partnerType, partnerId: partyId, partnerName: partyName, costCenterName });
+      lines.push({ accountCode: otherAccountCode, credit: cashLegAmount, costCenterName });
+      if (taxAmount > 0 && taxTemplate) {
+        lines.push(taxAddsToCashLeg
+          ? { accountCode: taxTemplate.accountCode, debit: taxAmount, taxTemplateName: taxTemplate.name, costCenterName }
+          : { accountCode: taxTemplate.accountCode, credit: taxAmount, taxTemplateName: taxTemplate.name, costCenterName });
+      }
+    }
+
+    const sourceType = isReceive ? 'receipt_voucher' : 'payment_voucher';
+
+    const voucher = new this.voucherModel({
+      paymentType,
+      postingDate,
+      costCenterId, costCenterName,
+      partyType: data.partyType, partyId, partyName,
+      paidFromAccountCode: paidFromAccount.code, paidFromAccountName: paidFromAccount.name,
+      paidToAccountCode: paidToAccount.code, paidToAccountName: paidToAccount.name,
+      currencyCode, exchangeRate,
+      paidAmount, receivedAmount,
+      partyBalanceBefore,
+      taxTemplateId: taxTemplate?._id || null, taxTemplateName: taxTemplate?.name, taxAmount,
+      referenceNumber: data.referenceNumber, referenceDate: data.referenceDate ? new Date(data.referenceDate) : undefined,
+      remarks: data.remarks,
+      status: 'posted',
+      postedBy,
+      schoolSlug,
+    });
+
+    // A voucher must never exist without its journal posting (unlike some
+    // other flows in this file that swallow posting errors) — this IS the
+    // posting, not a side effect of one, so a failure here must fail the
+    // whole request.
+    const entry = await this.postJournalEntry(schoolSlug, {
+      date: postingDate,
+      reference: data.referenceNumber,
+      narration: data.remarks || `${paymentType === 'receive' ? 'Receipt' : paymentType === 'pay' ? 'Payment' : 'Transfer'} voucher — ${partyName}`,
+      sourceType,
+      sourceId: String(voucher._id),
+      postedBy,
+      lines,
+    });
+
+    voucher.journalEntryId = entry._id as any;
+    await voucher.save();
+    return voucher;
+  }
+
+  // Reverses the voucher's journal entry (swap every line's debit/credit)
+  // and marks the original entry 'reversed' — the JournalEntry.status enum
+  // has supported 'reversed' since Phase 1. Never deletes anything;
+  // accounting records are only ever reversed, matching every other
+  // cancel-style action in this file.
+  async cancelVoucher(schoolSlug: string, id: string, cancelledBy?: string) {
+    const voucher = await this.voucherModel.findOne({ _id: id, schoolSlug });
+    if (!voucher) throw new NotFoundException('Voucher not found');
+    if (voucher.status === 'cancelled') throw new BadRequestException('Voucher is already cancelled');
+
+    const original = voucher.journalEntryId
+      ? await this.journalModel.findOne({ _id: voucher.journalEntryId, schoolSlug }).lean()
+      : null;
+
+    if (original) {
+      const reversedLines = (original.lines || []).map((l: any) => ({
+        accountCode: l.accountCode,
+        costCenterName: l.costCenterName,
+        debit: l.credit || 0,
+        credit: l.debit || 0,
+        partnerType: l.partnerType, partnerId: l.partnerId, partnerName: l.partnerName,
+        taxTemplateName: l.taxTemplateName,
+        bankAccountId: l.bankAccountId, bankAccountName: l.bankAccountName,
+      }));
+      const reversal = await this.postJournalEntry(schoolSlug, {
+        date: new Date(),
+        reference: voucher.voucherNo,
+        narration: `Reversal of voucher ${voucher.voucherNo}`,
+        sourceType: original.sourceType,
+        sourceId: String(voucher._id),
+        postedBy: cancelledBy,
+        lines: reversedLines,
+      });
+      voucher.reversalJournalEntryId = reversal._id as any;
+      await this.journalModel.updateOne({ _id: original._id }, { $set: { status: 'reversed' } });
+    }
+
+    voucher.status = 'cancelled';
+    voucher.cancelledBy = cancelledBy;
+    voucher.cancelledAt = new Date();
+    await voucher.save();
+    return voucher;
   }
 }

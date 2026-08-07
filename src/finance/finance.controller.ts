@@ -786,4 +786,36 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.handlePaymentGatewayWebhook(schoolSlug, payload);
   }
+
+  // ============================================================
+  // Payment / Receipt Vouchers — client-requested quick-entry feature
+  // (ERPNext "Payment Entry" equivalent). See FinanceService for the
+  // full write-up of the unified receive/pay/transfer model.
+  // ============================================================
+  @Get('vouchers/party-balance') async getVoucherPartyBalance(
+    @Request() req: any,
+    @Query('partyType') partyType: string,
+    @Query('partyId') partyId?: string,
+    @Query('partyName') partyName?: string,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVoucherPartyBalance(schoolSlug, partyType, partyId, partyName);
+  }
+  @Get('vouchers') async getVouchers(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVouchers(schoolSlug, query);
+  }
+  @Get('vouchers/:id') async getVoucherById(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVoucherById(schoolSlug, id);
+  }
+  @Post('vouchers') @HttpCode(HttpStatus.CREATED)
+  async createVoucher(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createVoucher(schoolSlug, dto, userName);
+  }
+  @Post('vouchers/:id/cancel') async cancelVoucher(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.cancelVoucher(schoolSlug, id, userName);
+  }
 }

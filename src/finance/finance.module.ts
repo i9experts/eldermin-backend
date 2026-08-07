@@ -50,6 +50,7 @@ import {
   SalesCommissionRule, SalesCommissionRuleSchema,
   CommissionAssignment, CommissionAssignmentSchema,
 } from './schemas/commission.schema';
+import { PaymentVoucher, PaymentVoucherSchema } from './schemas/voucher.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
@@ -94,6 +95,8 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: DimensionValue.name, schema: DimensionValueSchema },
       { name: TermsTemplate.name, schema: TermsTemplateSchema },
       { name: PaymentGatewayConfig.name, schema: PaymentGatewayConfigSchema },
+      // Payment / Receipt Vouchers
+      { name: PaymentVoucher.name, schema: PaymentVoucherSchema },
     ]),
   ],
   controllers: [FinanceController],
