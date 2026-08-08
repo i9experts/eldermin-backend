@@ -217,17 +217,56 @@ export class FinanceService {
     }
   }
 
+  // Renaming an account's `code` is dangerous here because `code` (not the
+  // Mongo _id) is the foreign key used everywhere else in this module —
+  // every JournalLine.accountCode, every other account's parentCode, and
+  // several hardcoded system codes (SUSPENSE_ACCOUNT_CODE, '1200' for AR,
+  // etc. — see the mapXToAccount helpers). Silently allowing a rename would
+  // orphan historical ledger lines and could break automatic postings. So:
+  // block renaming a system account's code outright, block renaming any
+  // code that already has posted journal lines against it, and otherwise
+  // cascade the rename onto any other account's parentCode that pointed at
+  // the old code, so the tree stays consistent.
   async updateCOA(id: string, schoolSlug: string, data: any) {
     try {
+      const existing = await this.coaModel.findOne({ _id: id, schoolSlug });
+      if (!existing) throw new NotFoundException('Account not found');
+
+      const newCode = data.code;
+      const isRenaming = newCode && newCode !== existing.code;
+      if (isRenaming) {
+        if (existing.isSystem) {
+          throw new BadRequestException(
+            `"${existing.code}" is a system account used by automatic postings and can't be renamed. Update the name/description instead, or deactivate it and create a new account.`,
+          );
+        }
+        const hasPostings = await this.journalModel.exists({
+          schoolSlug, status: 'posted', 'lines.accountCode': existing.code,
+        });
+        if (hasPostings) {
+          throw new BadRequestException(
+            `Account "${existing.code}" already has posted journal entries — renaming its code would break the ledger trail. Deactivate it and create a new account instead.`,
+          );
+        }
+      }
+
       const acc = await this.coaModel.findOneAndUpdate(
         { _id: id, schoolSlug },
         { $set: data },
         { new: true, runValidators: true, context: 'query' },
       );
       if (!acc) throw new NotFoundException('Account not found');
+
+      if (isRenaming) {
+        await this.coaModel.updateMany(
+          { schoolSlug, parentCode: existing.code },
+          { $set: { parentCode: newCode } },
+        );
+      }
+
       return acc;
     } catch (err: any) {
-      if (err instanceof NotFoundException) throw err;
+      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
       throw this.translateCOAError(err, data.code);
     }
   }
