@@ -420,9 +420,21 @@ export class PdfService {
     @InjectModel('Campus') private campusModel: Model<any>,
   ) {}
 
-  private async htmlToPdf(html: string): Promise<Buffer> {
-    const browser = await puppeteer.launch({
+  /**
+   * Puppeteer's own bundled Chromium download is skipped in this project's
+   * Docker image (see Dockerfile — it doesn't run on Alpine's musl libc
+   * anyway) in favor of Alpine's own `chromium` package, exposed via
+   * PUPPETEER_EXECUTABLE_PATH. Every launch() call must pass that through
+   * explicitly — Puppeteer does not automatically pick it up on its own at
+   * runtime, only at its own install-time download step. Locally (outside
+   * that Docker image) the env var is unset, so this falls back to
+   * Puppeteer's normal bundled-Chromium resolution, matching prior
+   * behavior for local development.
+   */
+  private launchBrowser() {
+    return puppeteer.launch({
       headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -430,6 +442,10 @@ export class PdfService {
         '--disable-gpu',
       ],
     });
+  }
+
+  private async htmlToPdf(html: string): Promise<Buffer> {
+    const browser = await this.launchBrowser();
     try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'load' });
@@ -453,15 +469,7 @@ export class PdfService {
     html: string,
     options: puppeteer.PDFOptions,
   ): Promise<Buffer> {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
+    const browser = await this.launchBrowser();
     try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'load' });

@@ -11,6 +11,8 @@ import { RegisterDto, SaveStepDto } from './dto/onboarding.dto';
 import { BankAccount, BankAccountDocument } from '../finance/schemas/finance.schema';
 import { Campus, CampusDocument, Grade, GradeDocument, AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { ModulesService } from '../modules/modules.service';
+import { ReportTemplate, ReportTemplateDocument } from '../modules/report-templates/schemas/report-template.schema';
+import { defaultReportTemplates } from '../modules/report-templates/default-templates';
 
 @Injectable()
 export class OnboardingService {
@@ -24,6 +26,7 @@ export class OnboardingService {
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
     @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
+    @InjectModel(ReportTemplate.name) private reportTemplateModel: Model<ReportTemplateDocument>,
     private jwtService: JwtService,
     private modulesService: ModulesService,
   ) {}
@@ -320,6 +323,18 @@ export class OnboardingService {
       { schoolSlug, userId },
       { $set: { isComplete: true } },
     );
+
+    // Every school should land on an active account with a working Fee
+    // Receipt and Payment Voucher already in "Report Templates" under
+    // Intelligence, not an empty list they have to build from scratch on
+    // day one. Idempotent per type, so re-running onboarding (or this
+    // being called twice) never creates duplicates.
+    for (const template of defaultReportTemplates(schoolSlug)) {
+      const existing = await this.reportTemplateModel.findOne({
+        schoolSlug, type: template.type, isDefault: true,
+      });
+      if (!existing) await this.reportTemplateModel.create(template);
+    }
 
     return {
       success: true,
