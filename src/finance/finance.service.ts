@@ -202,13 +202,45 @@ export class FinanceService {
     return this.coaModel.find(filter).sort({ code: 1 });
   }
 
+  // Both create/update translate Mongoose's raw errors (validation failures,
+  // duplicate-key on the schoolSlug+code unique index) into clean,
+  // client-facing 400s instead of letting them bubble up as an opaque
+  // 500 "Internal server error" — the exact bug reported against the
+  // Chart of Accounts "Add Account" form (an invalid `type` value was
+  // silently causing a raw validation exception with no useful message).
   async createCOA(data: any) {
-    const acc = new this.coaModel(data);
-    return acc.save();
+    try {
+      const acc = new this.coaModel(data);
+      return await acc.save();
+    } catch (err: any) {
+      throw this.translateCOAError(err, data.code);
+    }
   }
 
   async updateCOA(id: string, schoolSlug: string, data: any) {
-    return this.coaModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    try {
+      const acc = await this.coaModel.findOneAndUpdate(
+        { _id: id, schoolSlug },
+        { $set: data },
+        { new: true, runValidators: true, context: 'query' },
+      );
+      if (!acc) throw new NotFoundException('Account not found');
+      return acc;
+    } catch (err: any) {
+      if (err instanceof NotFoundException) throw err;
+      throw this.translateCOAError(err, data.code);
+    }
+  }
+
+  private translateCOAError(err: any, code?: string): Error {
+    if (err.code === 11000) {
+      return new BadRequestException(`Account code "${code || ''}" already exists — choose a different code.`);
+    }
+    if (err.name === 'ValidationError') {
+      const firstIssue = Object.values(err.errors || {})[0] as any;
+      return new BadRequestException(firstIssue?.message || 'Invalid account data.');
+    }
+    return err;
   }
 
   async deleteCOA(id: string, schoolSlug: string) {
