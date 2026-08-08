@@ -54,11 +54,18 @@ export function defaultReportTemplates(schoolSlug: string) {
           order: 1,
           visible: true,
           config: {
+            // Field names here must match what generateFeeReceipt() in
+            // pdf.service.ts actually populates on a real payment (student
+            // name/grade/section, admissionNumber, guardianName - not the
+            // "rollNumber"/"fatherName" this used to say, which don't exist
+            // on the real Payment/Student data and would always render
+            // blank on an actual receipt).
             fields: [
               { label: 'Student Name', field: 'studentName' },
               { label: 'Class', field: 'grade' },
-              { label: 'GR No', field: 'rollNumber' },
-              { label: "Father's Name", field: 'fatherName' },
+              { label: 'Section', field: 'section' },
+              { label: 'GR No', field: 'admissionNumber' },
+              { label: 'Guardian', field: 'guardianName' },
             ],
           },
         },
@@ -82,9 +89,11 @@ export function defaultReportTemplates(schoolSlug: string) {
           visible: true,
           config: {
             fields: [
+              { label: 'Against Invoice', field: 'invoiceNumber' },
               { label: 'Payment Method', field: 'paymentMethod' },
-              { label: 'Reference', field: 'transactionRef' },
+              { label: 'Reference / Cheque #', field: 'transactionId' },
               { label: 'Payment Date', field: 'paymentDate' },
+              { label: 'Total Received (PKR)', field: 'amount' },
             ],
           },
         },
@@ -174,6 +183,145 @@ export function defaultReportTemplates(schoolSlug: string) {
           visible: true,
           config: {
             labels: ['Prepared By', 'Checked By', 'Approved By'],
+          },
+        },
+      ],
+      footer: {
+        showPageNumber: false,
+        showPrintDate: true,
+        leftText: '',
+        centerText: '',
+        rightText: '',
+        showSignatureLines: false,
+        signatureLabels: [],
+        showStampArea: true,
+        borderTop: true,
+      },
+      page: {
+        size: 'A4',
+        orientation: 'portrait',
+        marginTop: 15,
+        marginBottom: 15,
+        marginLeft: 15,
+        marginRight: 15,
+        watermark: { show: false, text: '', opacity: 0.08 },
+      },
+    },
+    {
+      // Field names here match what generateReportCard() in pdf.service.ts
+      // actually populates for a real student (studentName/grade/section/
+      // rollNumber/dob/attendance, a `subjects` array, computed
+      // totalMarks/totalObtained/overallPct/overallGrade, an optional
+      // `tarbiyah` behaviour-trait array, and free-text `remarks`).
+      schoolSlug,
+      name: 'Standard Result Card',
+      type: 'result_card',
+      isDefault: true,
+      isActive: true,
+      letterhead: {
+        showLogo: true,
+        logoPosition: 'center',
+        logoSize: 'medium',
+        schoolName: { show: true, fontSize: 22, bold: true, color: '#0C447C' },
+        schoolAddress: { show: true, fontSize: 11 },
+        schoolPhone: { show: false },
+        schoolEmail: { show: false },
+        schoolWebsite: { show: false },
+        tagline: { show: false, text: '' },
+        borderStyle: 'double',
+        backgroundColor: '#ffffff',
+        primaryColor: '#0C447C',
+        accentColor: '#EF9F27',
+      },
+      header: {
+        title: { show: true, text: 'Result Card', fontSize: 18, alignment: 'center' },
+        subtitle: { show: false, text: '' },
+        showDocumentNumber: false,
+        showDate: true,
+        showAcademicYear: true,
+        customFields: [
+          { label: 'Term', field: 'term', position: 'left' },
+        ],
+      },
+      sections: [
+        {
+          id: 'student-info',
+          type: 'key_value',
+          order: 1,
+          visible: true,
+          config: {
+            fields: [
+              { label: 'Student Name', field: 'studentName' },
+              { label: 'Class', field: 'grade' },
+              { label: 'Section', field: 'section' },
+              { label: 'Roll No', field: 'rollNumber' },
+              { label: 'Date of Birth', field: 'dob' },
+              { label: 'Attendance', field: 'attendance' },
+            ],
+          },
+        },
+        {
+          id: 'marks-table',
+          type: 'table',
+          order: 2,
+          visible: true,
+          config: {
+            dataKey: 'subjects',
+            columns: [
+              { label: 'Subject', field: 'subjectName' },
+              { label: 'Total Marks', field: 'totalMarks' },
+              { label: 'Obtained Marks', field: 'obtainedMarks' },
+            ],
+          },
+        },
+        {
+          id: 'result-summary',
+          type: 'key_value',
+          order: 3,
+          visible: true,
+          config: {
+            fields: [
+              { label: 'Total Marks', field: 'totalMarks' },
+              { label: 'Marks Obtained', field: 'totalObtained' },
+              { label: 'Percentage', field: 'overallPct' },
+              { label: 'Grade', field: 'overallGrade' },
+            ],
+          },
+        },
+        {
+          id: 'tarbiyah-table',
+          type: 'table',
+          order: 4,
+          visible: true,
+          config: {
+            dataKey: 'tarbiyah',
+            columns: [
+              { label: 'Tarbiyah / Behaviour Trait', field: 'trait' },
+              { label: 'Score', field: 'score' },
+            ],
+          },
+        },
+        {
+          id: 'remarks',
+          type: 'text',
+          order: 5,
+          visible: true,
+          config: {
+            content: 'Remarks: {{remarks}}',
+            fontSize: 12,
+            bold: false,
+            italic: true,
+            color: '#3D5A7A',
+            alignment: 'left',
+          },
+        },
+        {
+          id: 'signatures',
+          type: 'signature_block',
+          order: 6,
+          visible: true,
+          config: {
+            labels: ['Class Teacher', 'Principal'],
           },
         },
       ],
