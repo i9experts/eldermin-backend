@@ -249,7 +249,7 @@ export class EceService {
   async createPortfolioEntry(schoolSlug: string, dto: any) {
     const entry = await this.portfolioModel.create({ ...dto, schoolSlug });
     if (dto.isVisibleToFamily) {
-      await this.notifyFamily(dto.studentId, entry.title, entry.narrative);
+      await this.notifyFamily(dto.studentId, entry.title, entry.narrative, entry.tryThisAtHome);
     }
     return entry;
   }
@@ -262,7 +262,7 @@ export class EceService {
     );
     if (!entry) throw new NotFoundException('Portfolio entry not found');
     if (isVisibleToFamily) {
-      const notified = await this.notifyFamily(String(entry.studentId), entry.title, entry.narrative);
+      const notified = await this.notifyFamily(String(entry.studentId), entry.title, entry.narrative, entry.tryThisAtHome);
       return { ...entry.toObject(), familyNotified: notified };
     }
     return { ...entry.toObject(), familyNotified: false };
@@ -274,7 +274,7 @@ export class EceService {
   // connected (WhatsAppService already exists as an honest stub for
   // exactly that, see src/email/whatsapp.service.ts), but there is
   // nothing to wire in until then.
-  private async notifyFamily(studentId: string, title: string, narrative: string): Promise<boolean> {
+  private async notifyFamily(studentId: string, title: string, narrative: string, tryThisAtHome?: string): Promise<boolean> {
     const student: any = await this.studentModel.findById(studentId).lean();
     if (!student?.guardians?.length) return false;
     const guardian = student.guardians.find((g: any) => g.isPrimary && g.email) || student.guardians.find((g: any) => g.email);
@@ -288,6 +288,12 @@ export class EceService {
           <p>Hi ${guardian.name},</p>
           <p><strong>${title}</strong></p>
           <p>${narrative}</p>
+          ${tryThisAtHome ? `
+            <div style="background:#EBF2FA;border-radius:8px;padding:12px;margin-top:12px;">
+              <p style="margin:0;font-weight:600;color:#0C447C;">Try This at Home</p>
+              <p style="margin:4px 0 0;">${tryThisAtHome}</p>
+            </div>
+          ` : ''}
           <p style="color:#888;font-size:12px;">Shared from ${student.firstName}'s Early Years learning journey.</p>
         `,
       });

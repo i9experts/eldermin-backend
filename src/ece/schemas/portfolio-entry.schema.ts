@@ -13,6 +13,11 @@ export class ECEPortfolioEntry {
   @Prop({ required: true }) narrative: string;
   @Prop({ type: [ECEEvidenceItemSchema], default: [] }) evidence: ECEEvidenceItem[];
   @Prop({ default: false }) isVisibleToFamily: boolean;
+  // "Try This at Home" - a concrete, actionable suggestion for the family,
+  // sent in the same notification as the entry itself rather than as a
+  // separate system, since it's fundamentally the same share-and-notify
+  // flow with one extra piece of content.
+  @Prop() tryThisAtHome: string;
   @Prop({
     type: { text: String, respondedAt: Date, respondedBy: String },
     default: null,

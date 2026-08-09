@@ -104,6 +104,7 @@ export class CreatePortfolioEntryDto {
   @IsString() narrative: string;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => EvidenceItemDto) evidence?: EvidenceItemDto[];
   @IsOptional() @IsBoolean() isVisibleToFamily?: boolean;
+  @IsOptional() @IsString() tryThisAtHome?: string;
 }
 
 export class FamilyResponseDto {
