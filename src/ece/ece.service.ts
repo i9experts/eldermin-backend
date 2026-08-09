@@ -9,6 +9,8 @@ import { ECEDevelopmentProfile, ECEDevelopmentProfileDocument } from './schemas/
 import { ECEPortfolioEntry, ECEPortfolioEntryDocument } from './schemas/portfolio-entry.schema';
 import { LearningExperience, LearningExperienceDocument } from './schemas/learning-experience.schema';
 import { ECEWeeklyPlan, ECEWeeklyPlanDocument } from './schemas/weekly-plan.schema';
+import { ECEEnvironmentArea, ECEEnvironmentAreaDocument } from './schemas/environment-area.schema';
+import { ECEFrameworkMapping, ECEFrameworkMappingDocument } from './schemas/framework-mapping.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { EmailService } from '../email/email.service';
@@ -37,6 +39,8 @@ export class EceService {
     @InjectModel(ECEPortfolioEntry.name) private portfolioModel: Model<ECEPortfolioEntryDocument>,
     @InjectModel(LearningExperience.name) private experienceModel: Model<LearningExperienceDocument>,
     @InjectModel(ECEWeeklyPlan.name) private weeklyPlanModel: Model<ECEWeeklyPlanDocument>,
+    @InjectModel(ECEEnvironmentArea.name) private environmentAreaModel: Model<ECEEnvironmentAreaDocument>,
+    @InjectModel(ECEFrameworkMapping.name) private frameworkMappingModel: Model<ECEFrameworkMappingDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private emailService: EmailService,
@@ -369,6 +373,82 @@ export class EceService {
       { upsert: true, new: true },
     );
     return plan;
+  }
+
+  // ── Environment / Provision Areas ──────────────────────────
+  // ECE educators don't only plan lessons - they plan environments.
+  // Same seeded-then-customize pattern as everything else in this module.
+  async getEnvironmentAreas(schoolSlug: string) {
+    return this.environmentAreaModel.find({ schoolSlug, isActive: true }).lean();
+  }
+
+  async createEnvironmentArea(schoolSlug: string, dto: any) {
+    return this.environmentAreaModel.create({ ...dto, schoolSlug });
+  }
+
+  async updateEnvironmentArea(schoolSlug: string, id: string, dto: any) {
+    const area = await this.environmentAreaModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!area) throw new NotFoundException('Environment area not found');
+    return area;
+  }
+
+  async logSafetyCheck(schoolSlug: string, id: string, checkedBy: string) {
+    const area = await this.environmentAreaModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: { lastSafetyCheckDate: new Date(), lastSafetyCheckBy: checkedBy } },
+      { new: true },
+    );
+    if (!area) throw new NotFoundException('Environment area not found');
+    return area;
+  }
+
+  async addEnvironmentObservation(schoolSlug: string, id: string, note: string) {
+    const area = await this.environmentAreaModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $push: { teacherObservations: `${new Date().toLocaleDateString()}: ${note}` } },
+      { new: true },
+    );
+    if (!area) throw new NotFoundException('Environment area not found');
+    return area;
+  }
+
+  async seedDefaultEnvironmentAreas(schoolSlug: string) {
+    const existing = await this.environmentAreaModel.countDocuments({ schoolSlug });
+    if (existing > 0) return { message: 'Environment areas already exist - seed skipped', created: 0 };
+
+    const defaults = [
+      'Practical Life Area', 'Sensorial Area', 'Language Area', 'Maths Area', 'Reading Corner',
+      'Construction', 'Role Play', 'Creative Area', 'Outdoor Area', 'Quiet Area',
+    ];
+    for (const name of defaults) {
+      await this.environmentAreaModel.create({ schoolSlug, name });
+    }
+    return { message: `Seeded ${defaults.length} environment areas`, created: defaults.length };
+  }
+
+  // ── Framework Mapping ───────────────────────────────────────
+  // The join layer that lets each framework a school runs label and
+  // group the same canonical Skill differently, without ever duplicating
+  // the Skill itself (PRD §6.2). Built in V1, unused until now - this
+  // closes that gap.
+  async getFrameworkMappings(schoolSlug: string, frameworkId: string) {
+    return this.frameworkMappingModel.find({ schoolSlug, frameworkId: new Types.ObjectId(frameworkId) }).lean();
+  }
+
+  async createFrameworkMapping(schoolSlug: string, dto: any) {
+    return this.frameworkMappingModel.create({ ...dto, schoolSlug });
+  }
+
+  async updateFrameworkMapping(schoolSlug: string, id: string, dto: any) {
+    const mapping = await this.frameworkMappingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!mapping) throw new NotFoundException('Framework mapping not found');
+    return mapping;
+  }
+
+  async deleteFrameworkMapping(schoolSlug: string, id: string) {
+    const mapping = await this.frameworkMappingModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!mapping) throw new NotFoundException('Framework mapping not found');
+    return { message: 'Mapping removed' };
   }
 
   // ── Children roster (real Student records filtered to Early Years -

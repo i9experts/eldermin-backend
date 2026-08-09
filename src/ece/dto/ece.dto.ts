@@ -152,3 +152,39 @@ export class UpsertWeeklyPlanDto {
   @IsOptional() @IsString() sectionName?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => PlannedExperienceDto) plannedExperiences: PlannedExperienceDto[];
 }
+
+// ── Environment / Provision Areas ────────────────────────────
+export class CreateEnvironmentAreaDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() gradeLevel?: string;
+  @IsOptional() @IsString() sectionName?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) resources?: string[];
+  @IsOptional() @IsString() currentProvocation?: string;
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) targetDomainIds?: string[];
+}
+export class UpdateEnvironmentAreaDto {
+  @IsOptional() @IsString() name?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) resources?: string[];
+  @IsOptional() @IsString() currentProvocation?: string;
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) targetDomainIds?: string[];
+  @IsOptional() @IsString() rotationDate?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+export class LogSafetyCheckDto {
+  @IsString() checkedBy: string;
+}
+export class AddObservationNoteDto {
+  @IsString() note: string;
+}
+
+// ── Framework Mapping ─────────────────────────────────────────
+export class CreateFrameworkMappingDto {
+  @IsMongoId() frameworkId: string;
+  @IsMongoId() skillId: string;
+  @IsString() displayDomainName: string;
+  @IsString() displaySkillName: string;
+}
+export class UpdateFrameworkMappingDto {
+  @IsOptional() @IsString() displayDomainName?: string;
+  @IsOptional() @IsString() displaySkillName?: string;
+}

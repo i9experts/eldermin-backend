@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Put, Patch, Body, Param, Query, Request, Res, HttpCode, HttpStatus,
+  Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Request, Res, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { EceService } from './ece.service';
@@ -9,6 +9,8 @@ import {
   CreateObservationDto, QuickObserveDto, ObservationQueryDto,
   CreatePortfolioEntryDto, FamilyResponseDto,
   CreateLearningExperienceDto, UpdateLearningExperienceDto, UpsertWeeklyPlanDto,
+  CreateEnvironmentAreaDto, UpdateEnvironmentAreaDto, LogSafetyCheckDto, AddObservationNoteDto,
+  CreateFrameworkMappingDto, UpdateFrameworkMappingDto,
 } from './dto/ece.dto';
 
 @Controller('ece')
@@ -195,6 +197,58 @@ export class EceController {
   upsertWeeklyPlan(@Request() req: any, @Body() dto: UpsertWeeklyPlanDto) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.upsertWeeklyPlan(schoolSlug, userName, dto);
+  }
+
+  // ── Environment / Provision Areas ──────────────────────────
+  @Get('environment-areas')
+  getEnvironmentAreas(@Request() req: any) {
+    return this.service.getEnvironmentAreas(this.ctx(req).schoolSlug);
+  }
+
+  @Post('environment-areas') @HttpCode(HttpStatus.CREATED)
+  createEnvironmentArea(@Request() req: any, @Body() dto: CreateEnvironmentAreaDto) {
+    return this.service.createEnvironmentArea(this.ctx(req).schoolSlug, dto);
+  }
+
+  @Post('environment-areas/seed-default') @HttpCode(HttpStatus.OK)
+  seedDefaultEnvironmentAreas(@Request() req: any) {
+    return this.service.seedDefaultEnvironmentAreas(this.ctx(req).schoolSlug);
+  }
+
+  @Put('environment-areas/:id')
+  updateEnvironmentArea(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateEnvironmentAreaDto) {
+    return this.service.updateEnvironmentArea(this.ctx(req).schoolSlug, id, dto);
+  }
+
+  @Patch('environment-areas/:id/safety-check')
+  logSafetyCheck(@Request() req: any, @Param('id') id: string, @Body() dto: LogSafetyCheckDto) {
+    return this.service.logSafetyCheck(this.ctx(req).schoolSlug, id, dto.checkedBy);
+  }
+
+  @Patch('environment-areas/:id/observation')
+  addEnvironmentObservation(@Request() req: any, @Param('id') id: string, @Body() dto: AddObservationNoteDto) {
+    return this.service.addEnvironmentObservation(this.ctx(req).schoolSlug, id, dto.note);
+  }
+
+  // ── Framework Mapping ───────────────────────────────────────
+  @Get('framework-mappings')
+  getFrameworkMappings(@Request() req: any, @Query('frameworkId') frameworkId: string) {
+    return this.service.getFrameworkMappings(this.ctx(req).schoolSlug, frameworkId);
+  }
+
+  @Post('framework-mappings') @HttpCode(HttpStatus.CREATED)
+  createFrameworkMapping(@Request() req: any, @Body() dto: CreateFrameworkMappingDto) {
+    return this.service.createFrameworkMapping(this.ctx(req).schoolSlug, dto);
+  }
+
+  @Put('framework-mappings/:id')
+  updateFrameworkMapping(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateFrameworkMappingDto) {
+    return this.service.updateFrameworkMapping(this.ctx(req).schoolSlug, id, dto);
+  }
+
+  @Delete('framework-mappings/:id')
+  deleteFrameworkMapping(@Request() req: any, @Param('id') id: string) {
+    return this.service.deleteFrameworkMapping(this.ctx(req).schoolSlug, id);
   }
 
   // ── Dashboard ──────────────────────────────────────────────
