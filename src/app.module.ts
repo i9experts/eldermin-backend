@@ -34,6 +34,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { AuditLogModule } from './common/audit-log.module';
 import { SyllabusModule } from './syllabus/syllabus.module';
+import { EceModule } from './ece/ece.module';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { SyllabusModule } from './syllabus/syllabus.module';
     RolesModule,
     AuditLogModule,
     SyllabusModule,
+    EceModule,
   ],
   controllers: [AppController],
   providers: [

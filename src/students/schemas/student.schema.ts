@@ -155,6 +155,14 @@ export class Student {
   // ── Multi-tenancy ──────────────────────────────────────────
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop() campusId: string;
+
+  // ── Programme type ──────────────────────────────────────────
+  // Distinguishes Early Years children from K-12 students on the SAME
+  // collection - deliberately not a separate "Child" entity, since that
+  // would fragment guardian/fee/attendance/document data exactly the way
+  // the old Syllabus system was split into two disconnected collections
+  // (a mistake this platform already made and fixed once this year).
+  @Prop({ enum: ['k12', 'early-years'], default: 'k12' }) programType: string;
 }
 
 export const StudentSchema = SchemaFactory.createForClass(Student);
