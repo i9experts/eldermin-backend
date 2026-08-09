@@ -7,6 +7,7 @@ import { ECEObservation, ECEObservationDocument } from './schemas/observation.sc
 import { ECEDevelopmentProfile, ECEDevelopmentProfileDocument } from './schemas/development-profile.schema';
 import { ECEPortfolioEntry, ECEPortfolioEntryDocument } from './schemas/portfolio-entry.schema';
 import { LearningExperience, LearningExperienceDocument } from './schemas/learning-experience.schema';
+import { ECEWeeklyPlan, ECEWeeklyPlanDocument } from './schemas/weekly-plan.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { EmailService } from '../email/email.service';
@@ -34,6 +35,7 @@ export class EceService {
     @InjectModel(ECEDevelopmentProfile.name) private profileModel: Model<ECEDevelopmentProfileDocument>,
     @InjectModel(ECEPortfolioEntry.name) private portfolioModel: Model<ECEPortfolioEntryDocument>,
     @InjectModel(LearningExperience.name) private experienceModel: Model<LearningExperienceDocument>,
+    @InjectModel(ECEWeeklyPlan.name) private weeklyPlanModel: Model<ECEWeeklyPlanDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private emailService: EmailService,
@@ -328,6 +330,38 @@ export class EceService {
     const exp = await this.experienceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
     if (!exp) throw new NotFoundException('Learning experience not found');
     return { message: 'Experience archived' };
+  }
+
+  // ── Weekly Provision Plan ───────────────────────────────────
+  async getWeeklyPlan(schoolSlug: string, gradeLevel: string, sectionName: string | undefined, weekStartDate: string) {
+    const plan = await this.weeklyPlanModel
+      .findOne({ schoolSlug, gradeLevel, sectionName: sectionName || undefined, weekStartDate: new Date(weekStartDate) })
+      .populate('plannedExperiences.experienceId')
+      .lean();
+    return plan || { schoolSlug, gradeLevel, sectionName, weekStartDate, plannedExperiences: [] };
+  }
+
+  async upsertWeeklyPlan(schoolSlug: string, createdBy: string, dto: any) {
+    const filter = {
+      schoolSlug, gradeLevel: dto.gradeLevel, sectionName: dto.sectionName || undefined,
+      weekStartDate: new Date(dto.weekStartDate),
+    };
+    const existing = await this.weeklyPlanModel.findOne(filter).lean();
+    const existingExperienceIds = new Set((existing?.plannedExperiences || []).map((p: any) => String(p.experienceId)));
+    const newlyAddedIds = dto.plannedExperiences
+      .map((p: any) => p.experienceId)
+      .filter((id: string) => !existingExperienceIds.has(id));
+
+    if (newlyAddedIds.length > 0) {
+      await this.experienceModel.updateMany({ _id: { $in: newlyAddedIds } }, { $inc: { timesUsed: 1 } });
+    }
+
+    const plan = await this.weeklyPlanModel.findOneAndUpdate(
+      filter,
+      { $set: { plannedExperiences: dto.plannedExperiences, createdBy } },
+      { upsert: true, new: true },
+    );
+    return plan;
   }
 
   // ── Children roster (real Student records filtered to Early Years -

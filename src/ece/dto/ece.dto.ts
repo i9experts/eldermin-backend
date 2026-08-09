@@ -138,3 +138,16 @@ export class UpdateLearningExperienceDto {
   @IsOptional() @ValidateNested() @Type(() => DifferentiationDto) differentiation?: DifferentiationDto;
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
+
+// ── Weekly Provision Plan ────────────────────────────────────
+export class PlannedExperienceDto {
+  @IsNumber() day: number;
+  @IsMongoId() experienceId: string;
+  @IsOptional() @IsString() notes?: string;
+}
+export class UpsertWeeklyPlanDto {
+  @IsString() weekStartDate: string;
+  @IsString() gradeLevel: string;
+  @IsOptional() @IsString() sectionName?: string;
+  @IsArray() @ValidateNested({ each: true }) @Type(() => PlannedExperienceDto) plannedExperiences: PlannedExperienceDto[];
+}

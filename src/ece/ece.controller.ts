@@ -7,7 +7,7 @@ import {
   CreateSkillDto, UpdateSkillDto, CreateIndicatorDto, CreateAgeBandDto,
   CreateObservationDto, QuickObserveDto, ObservationQueryDto,
   CreatePortfolioEntryDto, FamilyResponseDto,
-  CreateLearningExperienceDto, UpdateLearningExperienceDto,
+  CreateLearningExperienceDto, UpdateLearningExperienceDto, UpsertWeeklyPlanDto,
 } from './dto/ece.dto';
 
 @Controller('ece')
@@ -165,6 +165,23 @@ export class EceController {
   @Put('experiences/:id')
   updateExperience(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateLearningExperienceDto) {
     return this.service.updateExperience(this.ctx(req).schoolSlug, id, dto);
+  }
+
+  // ── Weekly Provision Plan ──────────────────────────────────
+  @Get('weekly-plan')
+  getWeeklyPlan(
+    @Request() req: any,
+    @Query('gradeLevel') gradeLevel: string,
+    @Query('sectionName') sectionName: string,
+    @Query('weekStartDate') weekStartDate: string,
+  ) {
+    return this.service.getWeeklyPlan(this.ctx(req).schoolSlug, gradeLevel, sectionName, weekStartDate);
+  }
+
+  @Put('weekly-plan') @HttpCode(HttpStatus.OK)
+  upsertWeeklyPlan(@Request() req: any, @Body() dto: UpsertWeeklyPlanDto) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.upsertWeeklyPlan(schoolSlug, userName, dto);
   }
 
   // ── Dashboard ──────────────────────────────────────────────
