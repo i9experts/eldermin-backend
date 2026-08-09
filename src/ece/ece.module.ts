@@ -8,11 +8,13 @@ import { ECEDevelopmentProfile, ECEDevelopmentProfileSchema } from './schemas/de
 import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from './schemas/portfolio-entry.schema';
 import { StudentAttendance, StudentAttendanceSchema } from '../students/schemas/student-supporting.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { EmailModule } from '../email/email.module';
 import { EceService } from './ece.service';
 import { EceController } from './ece.controller';
 
 @Module({
   imports: [
+    EmailModule,
     MongooseModule.forFeature([
       { name: ECEFramework.name, schema: ECEFrameworkSchema },
       { name: ECEDomain.name, schema: ECEDomainSchema },

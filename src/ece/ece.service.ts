@@ -8,6 +8,7 @@ import { ECEDevelopmentProfile, ECEDevelopmentProfileDocument } from './schemas/
 import { ECEPortfolioEntry, ECEPortfolioEntryDocument } from './schemas/portfolio-entry.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { EmailService } from '../email/email.service';
 
 const DEFAULT_DOMAINS: { name: string; canonicalKey: string; skills: string[] }[] = [
   { name: 'Physical Development', canonicalKey: 'physical', skills: ['Gross Motor Control', 'Fine Motor Control', 'Self-Care'] },
@@ -33,6 +34,7 @@ export class EceService {
     @InjectModel(ECEPortfolioEntry.name) private portfolioModel: Model<ECEPortfolioEntryDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    private emailService: EmailService,
   ) {}
 
   // ── Framework ──────────────────────────────────────────────
@@ -241,7 +243,11 @@ export class EceService {
   }
 
   async createPortfolioEntry(schoolSlug: string, dto: any) {
-    return this.portfolioModel.create({ ...dto, schoolSlug });
+    const entry = await this.portfolioModel.create({ ...dto, schoolSlug });
+    if (dto.isVisibleToFamily) {
+      await this.notifyFamily(dto.studentId, entry.title, entry.narrative);
+    }
+    return entry;
   }
 
   async shareEntry(schoolSlug: string, id: string, isVisibleToFamily: boolean) {
@@ -251,7 +257,40 @@ export class EceService {
       { new: true },
     );
     if (!entry) throw new NotFoundException('Portfolio entry not found');
-    return entry;
+    if (isVisibleToFamily) {
+      const notified = await this.notifyFamily(String(entry.studentId), entry.title, entry.narrative);
+      return { ...entry.toObject(), familyNotified: notified };
+    }
+    return { ...entry.toObject(), familyNotified: false };
+  }
+
+  // Real notification via the working Email channel (SES) - honestly
+  // reports whether it actually sent rather than assuming success.
+  // WhatsApp can be added the same way once a real WABA account is
+  // connected (WhatsAppService already exists as an honest stub for
+  // exactly that, see src/email/whatsapp.service.ts), but there is
+  // nothing to wire in until then.
+  private async notifyFamily(studentId: string, title: string, narrative: string): Promise<boolean> {
+    const student: any = await this.studentModel.findById(studentId).lean();
+    if (!student?.guardians?.length) return false;
+    const guardian = student.guardians.find((g: any) => g.isPrimary && g.email) || student.guardians.find((g: any) => g.email);
+    if (!guardian?.email) return false;
+
+    try {
+      await this.emailService.sendEmail({
+        to: guardian.email,
+        subject: `Today I Discovered… — ${student.firstName}`,
+        html: `
+          <p>Hi ${guardian.name},</p>
+          <p><strong>${title}</strong></p>
+          <p>${narrative}</p>
+          <p style="color:#888;font-size:12px;">Shared from ${student.firstName}'s Early Years learning journey.</p>
+        `,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async respondToEntry(schoolSlug: string, id: string, text: string, respondedBy: string) {
