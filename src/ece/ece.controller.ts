@@ -1,6 +1,7 @@
 import {
-  Controller, Get, Post, Put, Patch, Body, Param, Query, Request, HttpCode, HttpStatus,
+  Controller, Get, Post, Put, Patch, Body, Param, Query, Request, Res, HttpCode, HttpStatus,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { EceService } from './ece.service';
 import {
   CreateFrameworkDto, UpdateFrameworkDto, CreateDomainDto, UpdateDomainDto,
@@ -133,6 +134,18 @@ export class EceController {
   @Get('students/:studentId/portfolio')
   getPortfolio(@Request() req: any, @Param('studentId') studentId: string) {
     return this.service.getPortfolio(this.ctx(req).schoolSlug, studentId);
+  }
+
+  @Get('students/:studentId/learning-journey-pdf')
+  async getLearningJourneyPdf(@Request() req: any, @Param('studentId') studentId: string, @Res() res: Response) {
+    const { schoolSlug, academicYear } = this.ctx(req);
+    const pdf = await this.service.generateLearningJourneyPdf(schoolSlug, studentId, academicYear);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="learning-journey-${studentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
   }
 
   @Post('portfolio') @HttpCode(HttpStatus.CREATED)

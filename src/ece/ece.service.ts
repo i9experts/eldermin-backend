@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { ECEFramework, ECEFrameworkDocument } from './schemas/framework.schema';
 import { ECEDomain, ECEDomainDocument, ECESkill, ECESkillDocument, ECEIndicator, ECEIndicatorDocument, ECEAgeBand, ECEAgeBandDocument } from './schemas/ontology.schema';
 import { ECEObservation, ECEObservationDocument } from './schemas/observation.schema';
@@ -417,5 +418,110 @@ export class EceService {
       observationsToday,
       notObservedInLast7Days: notObservedRecently,
     };
+  }
+
+  // ── "My Learning Journey" year-end portfolio PDF ────────────
+  // Built with pdf-lib rather than the Puppeteer/Report-Template engine -
+  // deliberately self-contained rather than coupling this module to
+  // actively-evolving shared infrastructure, matching the same
+  // Railway-safe, no-Chrome-dependency pattern already proven for every
+  // other PDF in this app before Puppeteer was fixed. Photo embedding is
+  // a known, deliberate V2 gap - narrative and evidence captions render;
+  // images themselves don't yet.
+  private wrapText(text: string, font: any, size: number, maxWidth: number): string[] {
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const trial = current ? `${current} ${word}` : word;
+      if (font.widthOfTextAtSize(trial, size) > maxWidth && current) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = trial;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
+  async generateLearningJourneyPdf(schoolSlug: string, studentId: string, academicYear: string): Promise<Buffer> {
+    const student: any = await this.studentModel.findOne({ _id: studentId, schoolSlug }).lean();
+    if (!student) throw new NotFoundException('Student not found');
+
+    const domains = await this.domainModel.find({ schoolSlug, isActive: true }).sort({ order: 1 }).lean();
+    const profile = await this.getProfile(schoolSlug, studentId, academicYear);
+    const domainSummaries: any[] = (profile as any).domainSummaries || [];
+    const domainMap = new Map(domains.map((d: any) => [String(d._id), d.name]));
+
+    const entries = await this.portfolioModel
+      .find({ schoolSlug, studentId: new Types.ObjectId(studentId), isVisibleToFamily: true })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.05, 0.27, 0.49);
+    const gray = rgb(0.45, 0.45, 0.45);
+    const black = rgb(0.1, 0.1, 0.1);
+    const pageW = 595, pageH = 842, margin = 50;
+
+    // Cover page
+    const cover = pdfDoc.addPage([pageW, pageH]);
+    cover.drawText('My Learning Journey', { x: margin, y: pageH - 200, size: 28, font: bold, color: navy });
+    cover.drawText(`${student.firstName} ${student.lastName}`, { x: margin, y: pageH - 240, size: 18, font: bold, color: black });
+    cover.drawText(`${student.currentGrade || ''}${student.currentSection ? ' - ' + student.currentSection : ''}`, { x: margin, y: pageH - 265, size: 12, font, color: gray });
+    cover.drawText(`Academic Year ${academicYear}`, { x: margin, y: pageH - 285, size: 12, font, color: gray });
+
+    // Development summary page
+    const summaryPage = pdfDoc.addPage([pageW, pageH]);
+    summaryPage.drawText('Development Summary', { x: margin, y: pageH - margin, size: 18, font: bold, color: navy });
+    let y = pageH - margin - 40;
+    for (const domain of domains as any[]) {
+      const summary = domainSummaries.find((s: any) => String(s.domainId) === String(domain._id));
+      summaryPage.drawText(domain.name, { x: margin, y, size: 11, font: bold, color: black });
+      summaryPage.drawText(
+        summary ? `${summary.currentLevel} (${summary.evidenceCount} observation${summary.evidenceCount !== 1 ? 's' : ''})` : 'Not yet observed',
+        { x: margin + 220, y, size: 11, font, color: summary ? navy : gray },
+      );
+      y -= 24;
+    }
+
+    // Portfolio entries
+    if (entries.length === 0) {
+      const empty = pdfDoc.addPage([pageW, pageH]);
+      empty.drawText('No shared portfolio entries yet for this academic year.', { x: margin, y: pageH - margin - 40, size: 12, font, color: gray });
+    }
+
+    let page = pdfDoc.addPage([pageW, pageH]);
+    page.drawText('Learning Journey', { x: margin, y: pageH - margin, size: 18, font: bold, color: navy });
+    y = pageH - margin - 45;
+
+    for (const entry of entries as any[]) {
+      const blockLines = [
+        { text: entry.title, font: bold, size: 13, color: black },
+        { text: new Date(entry.createdAt).toLocaleDateString(), font, size: 9, color: gray },
+        ...this.wrapText(entry.narrative, font, 11, pageW - margin * 2).map((l) => ({ text: l, font, size: 11, color: black })),
+        ...(entry.tryThisAtHome
+          ? [{ text: 'Try This at Home: ' + entry.tryThisAtHome, font, size: 10, color: navy }]
+          : []),
+      ];
+      const blockHeight = blockLines.length * 16 + 20;
+
+      if (y - blockHeight < margin) {
+        page = pdfDoc.addPage([pageW, pageH]);
+        y = pageH - margin;
+      }
+
+      for (const line of blockLines) {
+        page.drawText(line.text, { x: margin, y, size: line.size, font: line.font, color: line.color });
+        y -= 16;
+      }
+      y -= 14; // gap between entries
+    }
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 }
