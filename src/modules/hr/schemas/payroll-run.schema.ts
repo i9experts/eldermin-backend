@@ -14,7 +14,7 @@ export class PayrollRun {
   @Prop({ default: 0 }) totalGrossSalary: number;
   @Prop({ default: 0 }) totalDeductions: number;
   @Prop({ default: 0 }) totalNetSalary: number;
-  @Prop({ default: 'USD' }) currency: string;
+  @Prop({ default: 'PKR' }) currency: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) processedBy: Types.ObjectId;
   @Prop() processedAt: Date;
   @Prop({ type: Types.ObjectId, ref: 'User' }) approvedBy: Types.ObjectId;

@@ -46,6 +46,140 @@ export class FinanceController {
     return this.service.deleteCOA(id, schoolSlug);
   }
 
+  // ── Fiscal Years ──────────────────────────────────────────
+  @Get('fiscal-years') async getFiscalYears(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getFiscalYears(schoolSlug);
+  }
+  @Post('fiscal-years') async createFiscalYear(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createFiscalYear({ ...dto, schoolSlug });
+  }
+  @Patch('fiscal-years/:id/close') async closeFiscalYear(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.closeFiscalYear(id, schoolSlug, userName);
+  }
+
+  // ── Opening Balances (Phase 8) ─────────────────────────────
+  @Get('opening-balances') async getOpeningBalances(@Request() req: any, @Query('fiscalYearId') fiscalYearId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getOpeningBalances(schoolSlug, fiscalYearId);
+  }
+  @Post('opening-balances') async setOpeningBalance(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.setOpeningBalance(schoolSlug, dto.accountCode, dto.fiscalYearId, Number(dto.amount), userName);
+  }
+
+  // ── Accounting Periods ────────────────────────────────────
+  @Get('accounting-periods') async getAccountingPeriods(@Request() req: any, @Query('fiscalYearId') fiscalYearId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getAccountingPeriods(schoolSlug, fiscalYearId);
+  }
+  @Patch('accounting-periods/:id/status') async setPeriodStatus(@Param('id') id: string, @Body('status') status: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.setPeriodStatus(id, schoolSlug, status);
+  }
+
+  // ── Cost Centers ───────────────────────────────────────────
+  @Get('cost-centers') async getCostCenters(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCostCenters(schoolSlug);
+  }
+  @Post('cost-centers') async createCostCenter(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCostCenter({ ...dto, schoolSlug });
+  }
+  @Patch('cost-centers/:id') async updateCostCenter(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCostCenter(id, schoolSlug, dto);
+  }
+  @Post('cost-centers/seed') async seedCostCenters(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedCostCentersFromCampuses(schoolSlug);
+  }
+
+  // ── Payment Terms ──────────────────────────────────────────
+  @Get('payment-terms') async getPaymentTerms(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentTerms(schoolSlug);
+  }
+  @Post('payment-terms') async createPaymentTerm(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createPaymentTerm({ ...dto, schoolSlug });
+  }
+  @Post('payment-terms/seed') async seedPaymentTerms(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedDefaultPaymentTerms(schoolSlug);
+  }
+
+  // ── Journal Entries ────────────────────────────────────────
+  @Get('journal-entries') async getJournalEntries(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getJournalEntries(schoolSlug, query);
+  }
+  @Post('journal-entries') async postJournalEntry(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.postJournalEntry(schoolSlug, { ...dto, sourceType: dto.sourceType || 'manual', postedBy: userName });
+  }
+  @Post('journal-entries/:id/save-as-template') async saveAsTemplate(@Param('id') id: string, @Body('templateName') templateName: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.saveAsTemplate(schoolSlug, id, templateName);
+  }
+
+  // ── Journal Entry Templates (Phase 8) ──────────────────────
+  @Get('journal-templates') async getTemplates(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTemplates(schoolSlug);
+  }
+  @Post('journal-templates/:id/instantiate') async createFromTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createFromTemplate(schoolSlug, id, dto.date, { narration: dto.narration, reference: dto.reference, lines: dto.lines }, userName);
+  }
+  @Delete('journal-templates/:id') async deleteTemplate(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteTemplate(schoolSlug, id);
+  }
+
+  // ── Ledger Reports ─────────────────────────────────────────
+  @Get('reports/trial-balance') async getTrialBalance(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTrialBalance(schoolSlug, asOf);
+  }
+  @Get('reports/general-ledger') async getGeneralLedger(@Request() req: any, @Query('accountCode') accountCode: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGeneralLedger(schoolSlug, accountCode, from, to);
+  }
+  @Get('reports/partner-ledger') async getPartnerLedger(@Request() req: any, @Query('partnerType') partnerType: string, @Query('partnerId') partnerId?: string, @Query('partnerName') partnerName?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPartnerLedger(schoolSlug, partnerType, partnerId, partnerName);
+  }
+  @Get('reports/cost-center') async getCostCenterReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCostCenterReport(schoolSlug, from, to);
+  }
+
+  // ── Accounting Dimensions (Phase 8) ────────────────────────
+  @Get('dimensions') async getDimensions(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDimensions(schoolSlug);
+  }
+  @Post('dimensions') async createDimension(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDimension({ ...dto, schoolSlug });
+  }
+  @Get('dimensions/:id/values') async getDimensionValues(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDimensionValues(schoolSlug, id);
+  }
+  @Post('dimensions/:id/values') async createDimensionValue(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createDimensionValue({ ...dto, dimensionId: id, schoolSlug });
+  }
+  @Get('reports/dimension') async getDimensionReport(@Request() req: any, @Query('dimensionId') dimensionId: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDimensionReport(schoolSlug, dimensionId, from, to);
+  }
+
   // Fee Structures
   @Get('fee-structures') async getFeeStructures(@Request() req: any, @Query('grade') grade?: string, @Query('year') year?: string) {
     const { schoolSlug } = this.ctx(req);
@@ -131,6 +265,14 @@ export class FinanceController {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.approveBudget(id, schoolSlug, userName);
   }
+  @Get('budgets/summary') async getBudgetSummary(@Request() req: any, @Query('academicYear') ay?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBudgetSummaryAcrossAll(schoolSlug, ay);
+  }
+  @Get('budgets/:id/vs-actual') async getBudgetVsActual(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBudgetVsActual(schoolSlug, id);
+  }
 
   // Bank Accounts
   @Get('bank-accounts') async getBankAccounts(@Request() req: any) {
@@ -145,6 +287,54 @@ export class FinanceController {
   @Patch('bank-accounts/:id/balance') async updateBalance(@Param('id') id: string, @Body('balance') balance: number, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateBankBalance(id, schoolSlug, balance);
+  }
+
+  // ============================================================
+  // PHASE 6 — BANK RECONCILIATION
+  // ============================================================
+  @Post('bank-accounts/:id/statement-lines/import') @HttpCode(HttpStatus.CREATED)
+  async importBankStatementLines(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.importBankStatementLines(schoolSlug, id, dto.lines || []);
+  }
+  @Get('bank-accounts/:id/statement-lines') async getBankStatementLines(@Param('id') id: string, @Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBankStatementLines(schoolSlug, id, query);
+  }
+  @Get('bank-accounts/:id/unmatched-ledger-lines') async getUnmatchedLedgerLines(@Param('id') id: string, @Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getUnmatchedLedgerLines(schoolSlug, id, from, to);
+  }
+  @Get('bank-accounts/:id/reconciliation-summary') async getReconciliationSummary(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getReconciliationSummary(schoolSlug, id);
+  }
+  @Post('statement-lines/:id/match') async matchStatementLine(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.matchStatementLine(schoolSlug, id, dto.matches || []);
+  }
+  @Post('statement-lines/:id/unmatch') async unmatchStatementLine(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unmatchStatementLine(schoolSlug, id);
+  }
+  @Post('statement-lines/:id/ignore') async ignoreStatementLine(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.ignoreStatementLine(schoolSlug, id);
+  }
+
+  // ── Reconciliation Sessions ────────────────────────────────
+  @Get('bank-accounts/:id/reconciliations') async getReconciliations(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getReconciliations(schoolSlug, id);
+  }
+  @Post('bank-accounts/:id/reconciliations') @HttpCode(HttpStatus.CREATED)
+  async startReconciliation(@Param('id') id: string, @Body('periodEnd') periodEnd: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.startReconciliation(schoolSlug, id, periodEnd);
+  }
+  @Patch('reconciliations/:id/complete') async completeReconciliation(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.completeReconciliation(schoolSlug, id, userName);
   }
 
   // Reports
@@ -316,5 +506,316 @@ export class FinanceController {
       scopeValue: dto.scopeValue,
       createdBy: userName,
     });
+  }
+
+  // ============================================================
+  // PHASE 2 — VENDOR MASTER / ACCOUNTS PAYABLE
+  // ============================================================
+
+  // ── Vendors ───────────────────────────────────────────────
+  @Get('vendors') async getVendors(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendors(schoolSlug);
+  }
+  @Post('vendors') @HttpCode(HttpStatus.CREATED)
+  async createVendor(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createVendor({ ...dto, schoolSlug });
+  }
+  @Patch('vendors/:id') async updateVendor(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateVendor(id, schoolSlug, dto);
+  }
+
+  // ── Vendor Bills ──────────────────────────────────────────
+  @Get('vendor-bills') async getVendorBills(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendorBills(schoolSlug, query);
+  }
+  @Post('vendor-bills') @HttpCode(HttpStatus.CREATED)
+  async createVendorBill(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createVendorBill({ ...dto, schoolSlug });
+  }
+  @Post('vendor-bills/:id/payments') @HttpCode(HttpStatus.CREATED)
+  async recordVendorPayment(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.recordVendorPayment(id, schoolSlug, dto);
+  }
+
+  // ── Vendor Payments ───────────────────────────────────────
+  @Get('vendor-payments') async getVendorPayments(@Request() req: any, @Query('vendorId') vendorId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendorPayments(schoolSlug, vendorId);
+  }
+
+  // ── AR / AP / Credit / Payment-period reports ────────────
+  @Get('reports/ar-aging') async getArAging(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getArAging(schoolSlug, asOf);
+  }
+  @Get('reports/ap-aging') async getApAging(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getApAging(schoolSlug, asOf);
+  }
+  @Get('reports/customer-credit-balance') async getCustomerCreditBalance(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCustomerCreditBalance(schoolSlug);
+  }
+  @Get('reports/payment-period') async getPaymentPeriodReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentPeriodReport(schoolSlug, from, to);
+  }
+
+  // ============================================================
+  // PHASE 3 — TAX ENGINE
+  // ============================================================
+
+  // ── Tax Templates ─────────────────────────────────────────
+  @Get('tax-templates') async getTaxTemplates(@Request() req: any, @Query('type') type?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxTemplates(schoolSlug, type);
+  }
+  @Post('tax-templates') @HttpCode(HttpStatus.CREATED)
+  async createTaxTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createTaxTemplate({ ...dto, schoolSlug });
+  }
+  @Patch('tax-templates/:id') async updateTaxTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateTaxTemplate(id, schoolSlug, dto);
+  }
+
+  // ── Item Tax Templates ────────────────────────────────────
+  @Get('item-tax-templates') async getItemTaxTemplates(@Request() req: any, @Query('direction') direction?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getItemTaxTemplates(schoolSlug, direction);
+  }
+  @Post('item-tax-templates') @HttpCode(HttpStatus.CREATED)
+  async createItemTaxTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createItemTaxTemplate({ ...dto, schoolSlug });
+  }
+  @Patch('item-tax-templates/:id') async updateItemTaxTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateItemTaxTemplate(id, schoolSlug, dto);
+  }
+
+  // ── Tax Rules ──────────────────────────────────────────────
+  @Get('tax-rules') async getTaxRules(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxRules(schoolSlug);
+  }
+  @Post('tax-rules') @HttpCode(HttpStatus.CREATED)
+  async createTaxRule(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createTaxRule({ ...dto, schoolSlug });
+  }
+  @Patch('tax-rules/:id') async updateTaxRule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateTaxRule(id, schoolSlug, dto);
+  }
+
+  // ── Withholding Tax Categories ─────────────────────────────
+  @Get('withholding-categories') async getWithholdingCategories(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getWithholdingCategories(schoolSlug);
+  }
+  @Post('withholding-categories') @HttpCode(HttpStatus.CREATED)
+  async createWithholdingCategory(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createWithholdingCategory({ ...dto, schoolSlug });
+  }
+  @Patch('withholding-categories/:id') async updateWithholdingCategory(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateWithholdingCategory(id, schoolSlug, dto);
+  }
+
+  // ── Tax Summary Report ────────────────────────────────────
+  @Get('reports/tax-summary') async getTaxSummaryReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxSummaryReport(schoolSlug, from, to);
+  }
+
+  // ============================================================
+  // PHASE 5 — MULTI-CURRENCY
+  // ============================================================
+
+  // ── Currencies ─────────────────────────────────────────────
+  @Get('currencies') async getCurrencies(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCurrencies(schoolSlug);
+  }
+  @Post('currencies') @HttpCode(HttpStatus.CREATED)
+  async createCurrency(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCurrency({ ...dto, schoolSlug });
+  }
+  @Post('currencies/seed') async seedCurrencies(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedCommonCurrencies(schoolSlug);
+  }
+  @Patch('currencies/:id/set-base') async setBaseCurrency(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.setBaseCurrency(id, schoolSlug);
+  }
+
+  // ── Exchange Rates ─────────────────────────────────────────
+  @Get('exchange-rates') async getExchangeRates(@Request() req: any, @Query('fromCurrency') fromCurrency?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getExchangeRates(schoolSlug, fromCurrency);
+  }
+  @Post('exchange-rates') @HttpCode(HttpStatus.CREATED)
+  async createExchangeRate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createExchangeRate({ ...dto, schoolSlug });
+  }
+
+  // ── FX Exposure Report ─────────────────────────────────────
+  @Get('reports/fx-exposure') async getFxExposure(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getUnrealizedFxExposure(schoolSlug, asOf);
+  }
+
+  // ============================================================
+  // PHASE 7 — REPORT SUITE
+  // ============================================================
+
+  // ── Sales Commission — rules & assignments (setup) ─────────
+  @Get('commission-rules') async getSalesCommissionRules(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getSalesCommissionRules(schoolSlug);
+  }
+  @Post('commission-rules') @HttpCode(HttpStatus.CREATED)
+  async createSalesCommissionRule(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createSalesCommissionRule({ ...dto, schoolSlug });
+  }
+  @Patch('commission-rules/:id') async updateSalesCommissionRule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateSalesCommissionRule(id, schoolSlug, dto);
+  }
+  @Delete('commission-rules/:id') async deleteSalesCommissionRule(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteSalesCommissionRule(id, schoolSlug);
+  }
+
+  @Get('commission-assignments') async getCommissionAssignments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCommissionAssignments(schoolSlug);
+  }
+  @Post('commission-assignments') @HttpCode(HttpStatus.CREATED)
+  async createCommissionAssignment(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCommissionAssignment({ ...dto, schoolSlug });
+  }
+  @Delete('commission-assignments/:id') async deleteCommissionAssignment(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteCommissionAssignment(id, schoolSlug);
+  }
+
+  // ── Phase 7 Reports ─────────────────────────────────────────
+  @Get('reports/sales-commission') async getSalesCommissionReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getSalesCommissionReport(schoolSlug, from, to);
+  }
+  @Get('reports/payment-summary') async getPaymentSummaryReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string, @Query('groupBy') groupBy?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentSummaryReport(schoolSlug, from, to, groupBy);
+  }
+  @Get('reports/vendor-contacts') async getVendorContactsReport(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVendorContactsReport(schoolSlug);
+  }
+  @Get('reports/tax-detail') async getTaxDetailReport(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTaxDetailReport(schoolSlug, from, to);
+  }
+  @Get('reports/gross-profit') async getGrossProfit(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGrossProfit(schoolSlug, from, to);
+  }
+  @Get('reports/profitability-by-cost-center') async getProfitabilityByCostCenter(@Request() req: any, @Query('from') from?: string, @Query('to') to?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getProfitabilityByCostCenter(schoolSlug, from, to);
+  }
+  @Get('reports/trends') async getMonthlyTrends(@Request() req: any, @Query('months') months?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getMonthlyTrends(schoolSlug, months ? Number(months) : 12);
+  }
+
+  // ============================================================
+  // PHASE 8 — Terms & Conditions Templates
+  // ============================================================
+  @Get('terms-templates') async getTermsTemplates(@Request() req: any, @Query('appliesTo') appliesTo?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermsTemplates(schoolSlug, appliesTo);
+  }
+  @Post('terms-templates') @HttpCode(HttpStatus.CREATED)
+  async createTermsTemplate(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createTermsTemplate({ ...dto, schoolSlug });
+  }
+  @Patch('terms-templates/:id') async updateTermsTemplate(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateTermsTemplate(id, schoolSlug, dto);
+  }
+  @Delete('terms-templates/:id') async deleteTermsTemplate(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteTermsTemplate(id, schoolSlug);
+  }
+
+  // ============================================================
+  // PHASE 8 — Payment Gateway (integration-ready scaffolding only — no
+  // live gateway is wired up, see FinanceService for details)
+  // ============================================================
+  @Get('payment-gateway/config') async getPaymentGatewayConfig(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPaymentGatewayConfig(schoolSlug);
+  }
+  @Post('payment-gateway/config') async upsertPaymentGatewayConfig(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.upsertPaymentGatewayConfig(schoolSlug, dto);
+  }
+  @Post('payment-gateway/intent') async createOnlinePaymentIntent(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createOnlinePaymentIntent(schoolSlug, dto.invoiceId, Number(dto.amount));
+  }
+  @Post('payment-gateway/webhook') @HttpCode(HttpStatus.OK)
+  async paymentGatewayWebhook(@Body() payload: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.handlePaymentGatewayWebhook(schoolSlug, payload);
+  }
+
+  // ============================================================
+  // Payment / Receipt Vouchers — client-requested quick-entry feature
+  // (ERPNext "Payment Entry" equivalent). See FinanceService for the
+  // full write-up of the unified receive/pay/transfer model.
+  // ============================================================
+  @Get('vouchers/party-balance') async getVoucherPartyBalance(
+    @Request() req: any,
+    @Query('partyType') partyType: string,
+    @Query('partyId') partyId?: string,
+    @Query('partyName') partyName?: string,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVoucherPartyBalance(schoolSlug, partyType, partyId, partyName);
+  }
+  @Get('vouchers') async getVouchers(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVouchers(schoolSlug, query);
+  }
+  @Get('vouchers/:id') async getVoucherById(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVoucherById(schoolSlug, id);
+  }
+  @Post('vouchers') @HttpCode(HttpStatus.CREATED)
+  async createVoucher(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createVoucher(schoolSlug, dto, userName);
+  }
+  @Post('vouchers/:id/cancel') async cancelVoucher(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.cancelVoucher(schoolSlug, id, userName);
   }
 }

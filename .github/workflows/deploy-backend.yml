@@ -24,7 +24,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd /root/eldermin-backend
-            git pull origin master
+            git pull origin main
             npm ci --production=false
             npm run build
             pm2 restart eldermin-backend --update-env

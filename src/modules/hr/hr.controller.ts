@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile, Res, HttpStatus } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { HrService } from './hr.service';
 
 @Controller('hr')
@@ -37,13 +38,19 @@ export class HrController {
   updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
 
   @Get('staff/:id/attendance')
-  getStaffAttendanceById() { return []; }
+  getStaffAttendanceById(@Request() req, @Param('id') id: string) {
+    return this.hrService.getStaffAttendance(req.user.tenantId, { staffId: id });
+  }
 
   @Get('staff/:id/leave')
-  getStaffLeave() { return []; }
+  getStaffLeave(@Request() req, @Param('id') id: string) {
+    return this.hrService.getLeaveApplications(req.user.tenantId, { staffId: id });
+  }
 
   @Get('staff/:id/payslips')
-  getStaffPayslips() { return []; }
+  getStaffPayslips(@Request() req, @Param('id') id: string) {
+    return this.hrService.getPayslips(req.user.tenantId, { staffId: id });
+  }
 
   @Post('staff/:id/photo')
   @UseInterceptors(FileInterceptor('photo'))
@@ -178,7 +185,7 @@ export class HrController {
 
   @Post('attendance/import')
   @UseInterceptors(FileInterceptor('file'))
-  importAttendance(@Request() req, @UploadedFile() file: Express.Multer.File) { return this.hrService.importAttendanceCsv(req.user.tenantId, this.iid(req), file); }
+  importAttendance(@Request() req, @UploadedFile() file: Express.Multer.File) { return this.hrService.importAttendanceCsv(req.user.tenantId, this.iid(req), file, req.user.schoolSlug); }
 
   // ── LEAVE ─────────────────────────────────────────────────────────────
 
@@ -248,7 +255,45 @@ export class HrController {
   getPayslips(@Request() req, @Query() q: any) { return this.hrService.getPayslips(req.user.tenantId, q); }
 
   @Post('payslips')
-  createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), body); }
+  createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  // ── SALARY COMPONENTS (payroll configuration root system) ──────────────
+
+  @Get('salary-components')
+  getSalaryComponents(@Request() req) {
+    return this.hrService.getSalaryComponents(req.user.tenantId, req.user.schoolSlug);
+  }
+
+  @Post('salary-components')
+  createSalaryComponent(@Request() req, @Body() body: any) {
+    return this.hrService.createSalaryComponent(req.user.tenantId, req.user.schoolSlug, body);
+  }
+
+  @Patch('salary-components/:id')
+  updateSalaryComponent(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.hrService.updateSalaryComponent(id, req.user.schoolSlug, body);
+  }
+
+  @Delete('salary-components/:id')
+  deleteSalaryComponent(@Request() req, @Param('id') id: string) {
+    return this.hrService.deleteSalaryComponent(id, req.user.schoolSlug);
+  }
+
+  @Patch('staff/:id/salary-structure')
+  setStaffSalaryStructure(@Request() req, @Param('id') id: string, @Body() body: { lines: { componentId: string; amount: number }[] }) {
+    return this.hrService.setStaffSalaryStructure(id, req.user.tenantId, req.user.schoolSlug, body.lines);
+  }
+
+  @Get('payslips/:id/pdf')
+  async downloadPayslipPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
+    const pdf = await this.hrService.generatePayslipPdf(id, req.user.tenantId, req.user.schoolSlug);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="payslip-${id}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
 
   // ── PERFORMANCE ───────────────────────────────────────────────────────
 
@@ -295,11 +340,142 @@ export class HrController {
   getExitRecords(@Request() req) { return this.hrService.getExitRecords(req.user.tenantId); }
 
   @Post('exit')
-  createExitRecord(@Request() req, @Body() body: any) { return this.hrService.createExitRecord(req.user.tenantId, this.iid(req), body, req.user.userId); }
+  createExitRecord(@Request() req, @Body() body: any) { return this.hrService.createExitRecord(req.user.tenantId, this.iid(req), body, req.user.userId, req.user.schoolSlug); }
 
   @Patch('exit/:id')
   updateExitRecord(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateExitRecord(req.user.tenantId, id, body); }
 
   @Patch('exit/:id/clearance/:index')
   updateClearance(@Request() req, @Param('id') id: string, @Param('index') idx: string, @Body() body: { isDone: boolean; clearedBy: string }) { return this.hrService.updateClearanceItem(req.user.tenantId, id, parseInt(idx), body.isDone, body.clearedBy); }
+
+  @Get('exit-settings')
+  getExitSettings(@Request() req) { return this.hrService.getExitSettings(req.user.tenantId, req.user.schoolSlug); }
+
+  @Patch('exit-settings')
+  updateExitSettings(@Request() req, @Body() body: any) { return this.hrService.updateExitSettings(req.user.tenantId, req.user.schoolSlug, body); }
+
+  // ── HIRING SETTINGS ──────────────────────────────────────────────────
+
+  @Get('hiring-settings')
+  getHiringSettings(@Request() req) { return this.hrService.getHiringSettings(req.user.tenantId, req.user.schoolSlug); }
+
+  @Patch('hiring-settings')
+  updateHiringSettings(@Request() req, @Body() body: any) { return this.hrService.updateHiringSettings(req.user.tenantId, req.user.schoolSlug, body); }
+
+  // ── ATTENDANCE SETTINGS ──────────────────────────────────────────────
+
+  @Get('attendance-settings')
+  getAttendanceSettings(@Request() req) { return this.hrService.getAttendanceSettings(req.user.tenantId, req.user.schoolSlug); }
+
+  @Patch('attendance-settings')
+  updateAttendanceSettings(@Request() req, @Body() body: any) { return this.hrService.updateAttendanceSettings(req.user.tenantId, req.user.schoolSlug, body); }
+
+  // ── SHIFTS ─────────────────────────────────────────────────────────────
+
+  @Get('shifts')
+  getShifts(@Request() req) { return this.hrService.getShifts(req.user.tenantId, req.user.schoolSlug); }
+
+  @Post('shifts')
+  createShift(@Request() req, @Body() body: any) { return this.hrService.createShift(req.user.tenantId, req.user.schoolSlug, body); }
+
+  @Patch('shifts/:id')
+  updateShift(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateShift(id, req.user.schoolSlug, body); }
+
+  @Delete('shifts/:id')
+  deleteShift(@Request() req, @Param('id') id: string) { return this.hrService.deleteShift(id, req.user.schoolSlug); }
+
+  @Patch('staff/:id/shift')
+  assignStaffShift(@Request() req, @Param('id') id: string, @Body() body: { shiftId: string | null }) {
+    return this.hrService.assignStaffShift(id, req.user.tenantId, body.shiftId);
+  }
+
+  // ── REMINDERS (holidays + upcoming) ───────────────────────────────────
+
+  @Get('holidays')
+  getHolidays(@Request() req) { return this.hrService.getHolidays(req.user.tenantId, req.user.schoolSlug); }
+
+  @Post('holidays')
+  createHoliday(@Request() req, @Body() body: any) { return this.hrService.createHoliday(req.user.tenantId, req.user.schoolSlug, body); }
+
+  @Patch('holidays/:id')
+  updateHoliday(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateHoliday(id, req.user.schoolSlug, body); }
+
+  @Delete('holidays/:id')
+  deleteHoliday(@Request() req, @Param('id') id: string) { return this.hrService.deleteHoliday(id, req.user.schoolSlug); }
+
+  @Get('reminders/upcoming')
+  getUpcomingReminders(@Request() req, @Query('days') days?: string) {
+    return this.hrService.getUpcomingReminders(req.user.tenantId, req.user.schoolSlug, days ? parseInt(days) : 30);
+  }
+
+  // ── GRIEVANCE ──────────────────────────────────────────────────────────
+
+  @Get('grievances')
+  getGrievances(@Request() req, @Query() query: any) { return this.hrService.getGrievances(req.user.tenantId, query); }
+
+  @Get('grievances/:id')
+  getGrievanceById(@Request() req, @Param('id') id: string) { return this.hrService.getGrievanceById(req.user.tenantId, id); }
+
+  @Post('grievances')
+  createGrievance(@Request() req, @Body() body: any) { return this.hrService.createGrievance(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  @Patch('grievances/:id/status')
+  updateGrievanceStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string; byName: string }) {
+    return this.hrService.updateGrievanceStatus(req.user.tenantId, id, body.status, body.note, body.byName);
+  }
+
+  @Patch('grievances/:id/assign')
+  assignGrievance(@Request() req, @Param('id') id: string, @Body() body: { assignedToStaffId: string; assignedToName: string }) {
+    return this.hrService.assignGrievance(req.user.tenantId, id, body.assignedToStaffId, body.assignedToName);
+  }
+
+  // ── DAILY WORK SUMMARY ─────────────────────────────────────────────────
+
+  @Get('daily-summaries')
+  getDailyWorkSummaries(@Request() req, @Query() query: any) { return this.hrService.getDailyWorkSummaries(req.user.tenantId, query); }
+
+  @Post('daily-summaries')
+  upsertDailyWorkSummary(@Request() req, @Body() body: any) { return this.hrService.upsertDailyWorkSummary(req.user.tenantId, req.user.schoolSlug, body); }
+
+  @Patch('daily-summaries/:id/acknowledge')
+  acknowledgeDailyWorkSummary(@Request() req, @Param('id') id: string, @Body() body: { byName: string }) {
+    return this.hrService.acknowledgeDailyWorkSummary(req.user.tenantId, id, body.byName);
+  }
+
+  @Get('daily-summaries/rollup')
+  getDailyWorkSummaryRollup(@Request() req, @Query('date') date: string) {
+    return this.hrService.getDailyWorkSummaryRollup(req.user.tenantId, req.user.schoolSlug, date || new Date().toISOString().split('T')[0]);
+  }
+
+  // ── EXPENSE CLAIMS ─────────────────────────────────────────────────────
+
+  @Get('expense-claims')
+  getExpenseClaims(@Request() req, @Query() query: any) { return this.hrService.getExpenseClaims(req.user.tenantId, query); }
+
+  @Post('expense-claims')
+  createExpenseClaim(@Request() req, @Body() body: any) { return this.hrService.createExpenseClaim(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  @Patch('expense-claims/:id/status')
+  updateExpenseClaimStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string; rejectionReason?: string }) {
+    return this.hrService.updateExpenseClaimStatus(req.user.tenantId, id, body.status, req.user.schoolSlug, body.approvedBy, body.rejectionReason);
+  }
+
+  @Post('expense-claims/:id/receipts')
+  @UseInterceptors(FileInterceptor('file'))
+  addExpenseClaimReceipt(@Request() req, @Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+    return this.hrService.addExpenseClaimReceipt(req.user.tenantId, id, file, req.user.schoolSlug);
+  }
+
+  // ── ADVANCES ───────────────────────────────────────────────────────────
+
+  @Get('advances')
+  getAdvances(@Request() req, @Query() query: any) { return this.hrService.getAdvances(req.user.tenantId, query); }
+
+  @Post('advances')
+  createAdvance(@Request() req, @Body() body: any) { return this.hrService.createAdvance(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+
+  @Patch('advances/:id/status')
+  updateAdvanceStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string }) {
+    return this.hrService.updateAdvanceStatus(req.user.tenantId, id, body.status, req.user.schoolSlug, body.approvedBy);
+  }
 }

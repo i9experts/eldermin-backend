@@ -420,9 +420,21 @@ export class PdfService {
     @InjectModel('Campus') private campusModel: Model<any>,
   ) {}
 
-  private async htmlToPdf(html: string): Promise<Buffer> {
-    const browser = await puppeteer.launch({
+  /**
+   * Puppeteer's own bundled Chromium download is skipped in this project's
+   * Docker image (see Dockerfile — it doesn't run on Alpine's musl libc
+   * anyway) in favor of Alpine's own `chromium` package, exposed via
+   * PUPPETEER_EXECUTABLE_PATH. Every launch() call must pass that through
+   * explicitly — Puppeteer does not automatically pick it up on its own at
+   * runtime, only at its own install-time download step. Locally (outside
+   * that Docker image) the env var is unset, so this falls back to
+   * Puppeteer's normal bundled-Chromium resolution, matching prior
+   * behavior for local development.
+   */
+  private launchBrowser() {
+    return puppeteer.launch({
       headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -430,6 +442,10 @@ export class PdfService {
         '--disable-gpu',
       ],
     });
+  }
+
+  private async htmlToPdf(html: string): Promise<Buffer> {
+    const browser = await this.launchBrowser();
     try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'load' });
@@ -453,15 +469,7 @@ export class PdfService {
     html: string,
     options: puppeteer.PDFOptions,
   ): Promise<Buffer> {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
+    const browser = await this.launchBrowser();
     try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: 'load' });
@@ -566,8 +574,21 @@ export class PdfService {
       remarks: (behaviour as any)?.teacherRemarks || '',
     };
 
-    const html = REPORT_CARD_TEMPLATE(data);
-    const pdf = await this.htmlToPdf(html);
+    // Same reasoning as generateFeeReceipt above: route through the
+    // school's actual custom "Result Card" template so branding/layout
+    // choices made in the Report Templates designer show up on real report
+    // cards, instead of always using this fixed HTML template regardless
+    // of what a school designed. Falls back to the original fixed layout
+    // if the template-driven render fails for any reason - a report card
+    // going home to a parent must never simply error out.
+    let pdf: Buffer;
+    try {
+      pdf = await this.renderTemplateDrivenPdf(schoolSlug, 'result_card', data);
+    } catch (err: any) {
+      this.logger.warn(`Template-based report card render failed for student ${dto.studentId}, falling back to standard layout: ${err?.message}`);
+      const html = REPORT_CARD_TEMPLATE(data);
+      pdf = await this.htmlToPdf(html);
+    }
 
     await this.logPdf({
       schoolSlug,
@@ -1291,11 +1312,20 @@ export class PdfService {
    * Composes a full HTML document (letterhead + header + sorted visible
    * sections + footer) driven by a ReportTemplate and renders it to PDF.
    */
-  async generateFromTemplate(
+  /**
+   * The actual template-driven render, with no logging of its own — callers
+   * decide how to log (see generateFromTemplate below for the generic case,
+   * and generateFeeReceipt/generateReportCard further down for cases that
+   * log against a more meaningful reference, like the source payment, than
+   * the template itself). Split out so those callers can also wrap this in
+   * a try/catch and fall back to a known-good hardcoded layout if a
+   * school's custom template render fails for any reason — a fee receipt
+   * or report card must never simply fail to generate.
+   */
+  private async renderTemplateDrivenPdf(
     schoolSlug: string,
     type: string,
     data: any,
-    userId: string,
     templateId?: string,
   ): Promise<Buffer> {
     const school = await this.getSchool(schoolSlug);
@@ -1333,13 +1363,24 @@ ${css}
 </html>`;
 
     const page = template.page || {};
-    const pdf = await this.htmlToPdfWithOptions(html, {
+    return this.htmlToPdfWithOptions(html, {
       width: `${widthMm}mm`,
       height: `${heightMm}mm`,
       landscape: page.orientation === 'landscape',
       printBackground: true,
       margin: { top: '0', right: '0', bottom: '0', left: '0' },
     });
+  }
+
+  async generateFromTemplate(
+    schoolSlug: string,
+    type: string,
+    data: any,
+    userId: string,
+    templateId?: string,
+  ): Promise<Buffer> {
+    const template = await this.getTemplateForType(schoolSlug, type, templateId);
+    const pdf = await this.renderTemplateDrivenPdf(schoolSlug, type, data, templateId);
 
     await this.logPdf({
       schoolSlug,
@@ -1404,7 +1445,23 @@ ${css}
       collectedBy: payment.collectedBy || '',
     };
 
-    const pdf = await this.renderReceiptPdf(data);
+    // Route through the school's actual custom Fee Receipt template (the
+    // same "Report Templates" designer used for vouchers) so a school's
+    // branding/letterhead/layout choices actually show up on the receipt a
+    // parent takes home - previously this always ignored templates
+    // entirely (dto.templateId was accepted but never read) and rendered a
+    // fixed pdf-lib layout no matter what was designed. A receipt is too
+    // important to ever simply fail, though, so if the template-driven
+    // render throws for any reason, fall back to that same known-good
+    // fixed layout rather than surfacing an error to whoever just took a
+    // parent's payment.
+    let pdf: Buffer;
+    try {
+      pdf = await this.renderTemplateDrivenPdf(schoolSlug, 'fee_receipt', data, dto.templateId);
+    } catch (err: any) {
+      this.logger.warn(`Template-based fee receipt render failed for payment ${dto.paymentId}, falling back to standard layout: ${err?.message}`);
+      pdf = await this.renderReceiptPdf(data);
+    }
 
     await this.logPdf({
       schoolSlug,

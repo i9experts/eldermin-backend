@@ -16,12 +16,25 @@ import { StaffAttendance, StaffAttendanceDocument } from './schemas/staff-attend
 import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
+import { SalaryComponent, SalaryComponentDocument } from './schemas/salary-component.schema';
 import { PerformanceReview, PerformanceReviewDocument } from './schemas/performance-review.schema';
 import { Training, TrainingDocument } from './schemas/training.schema';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { School, SchoolDocument } from '../../organization/schemas/organization.schema';
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicyDocument } from './schemas/leave-policy.schema';
 import { BiometricConfig, BiometricConfigDocument } from './schemas/biometric-config.schema';
+import { Holiday, HolidayDocument } from './schemas/holiday.schema';
+import { ExitSettings, ExitSettingsDocument } from './schemas/exit-settings.schema';
+import { HiringSettings, HiringSettingsDocument } from './schemas/hiring-settings.schema';
+import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
+import { Shift, ShiftDocument } from './schemas/shift.schema';
+import { Grievance, GrievanceDocument } from './schemas/grievance.schema';
+import { DailyWorkSummary, DailyWorkSummaryDocument } from './schemas/daily-work-summary.schema';
+import { ExpenseClaim, ExpenseClaimDocument } from './schemas/expense-claim.schema';
+import { Advance, AdvanceDocument } from './schemas/advance.schema';
+import { FinanceService } from '../../finance/finance.service';
 
 @Injectable()
 export class HrService {
@@ -37,15 +50,36 @@ export class HrService {
     @InjectModel(LeaveBalance.name) private leaveBalanceModel: Model<LeaveBalanceDocument>,
     @InjectModel(PayrollRun.name) private payrollRunModel: Model<PayrollRunDocument>,
     @InjectModel(Payslip.name) private payslipModel: Model<PayslipDocument>,
+    @InjectModel(SalaryComponent.name) private salaryComponentModel: Model<SalaryComponentDocument>,
     @InjectModel(PerformanceReview.name) private performanceModel: Model<PerformanceReviewDocument>,
     @InjectModel(Training.name) private trainingModel: Model<TrainingDocument>,
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
     @InjectModel(BiometricConfig.name) private biometricConfigModel: Model<BiometricConfigDocument>,
+    @InjectModel(Holiday.name) private holidayModel: Model<HolidayDocument>,
+    @InjectModel(ExitSettings.name) private exitSettingsModel: Model<ExitSettingsDocument>,
+    @InjectModel(HiringSettings.name) private hiringSettingsModel: Model<HiringSettingsDocument>,
+    @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
+    @InjectModel(Shift.name) private shiftModel: Model<ShiftDocument>,
+    @InjectModel(Grievance.name) private grievanceModel: Model<GrievanceDocument>,
+    @InjectModel(DailyWorkSummary.name) private dailyWorkSummaryModel: Model<DailyWorkSummaryDocument>,
+    @InjectModel(ExpenseClaim.name) private expenseClaimModel: Model<ExpenseClaimDocument>,
+    @InjectModel(Advance.name) private advanceModel: Model<AdvanceDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
+    private readonly financeService: FinanceService,
   ) {}
+
+  // Ledger postings must never block the underlying HR transaction (payroll
+  // must still process even if, say, COA hasn't been seeded for this school
+  // yet) — errors are swallowed here and show up as gaps in the Trial
+  // Balance instead of a hard failure on payroll/claims/advances.
+  private async safePostJournal(schoolSlug: string | undefined, dto: Parameters<FinanceService['postJournalEntry']>[1]) {
+    if (!schoolSlug) return;
+    try { await this.financeService.postJournalEntry(schoolSlug, dto); } catch (err) { /* see comment above */ }
+  }
 
   private newTid(t: string) { return t; }
 
@@ -226,7 +260,7 @@ export class HrService {
     const filter: any = { tenantId: this.newTid(tenantId) };
     if (query.staffId) filter.staffId = this.newTid(query.staffId);
     if (query.status) filter.status = query.status;
-    return this.leaveApplicationModel.find(filter).sort({ createdAt: -1 }).lean();
+    return this.leaveApplicationModel.find(filter).populate('approvedBy', 'profile email').sort({ createdAt: -1 }).lean();
   }
 
   async submitLeaveApplication(tenantId: string, data: any) {
@@ -632,7 +666,7 @@ export class HrService {
     };
   }
 
-  async importAttendanceCsv(tenantId: string, institutionId: string, file: Express.Multer.File) {
+  async importAttendanceCsv(tenantId: string, institutionId: string, file: Express.Multer.File, schoolSlug?: string) {
     if (!file) throw new BadRequestException('No file uploaded');
     const text = file.buffer.toString('utf-8');
     const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
@@ -648,8 +682,20 @@ export class HrService {
       throw new BadRequestException('CSV must include staffId/employeeId and date columns');
     }
 
-    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId').lean();
+    // When the CSV has no explicit status column, derive present/late/half_day
+    // from the actual check-in time against the staff member's assigned
+    // shift (falling back to the school's default shift, then to the
+    // school-wide AttendanceSettings if no shifts are configured at all)
+    // instead of defaulting every row to 'present' regardless of when
+    // someone actually checked in.
+    const attendanceSettings = schoolSlug ? await this.getAttendanceSettings(tenantId, schoolSlug) : null;
+    const shifts = schoolSlug ? await this.shiftModel.find({ schoolSlug, isActive: true }).lean() : [];
+    const shiftById = new Map(shifts.map((s: any) => [String(s._id), s]));
+    const defaultShift = shifts.find((s: any) => s.isDefault) || null;
+
+    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId shiftId').lean();
     const employeeIdMap = new Map(staffList.map(s => [s.employeeId, s._id.toString()]));
+    const staffShiftMap = new Map(staffList.map((s: any) => [String(s._id), s.shiftId ? String(s.shiftId) : null]));
 
     const ops: any[] = [];
     const skipped: number[] = [];
@@ -659,6 +705,23 @@ export class HrService {
       const staffId = Types.ObjectId.isValid(rawId) ? rawId : employeeIdMap.get(rawId);
       const date = cols[dateCol];
       if (!staffId || !date) { skipped.push(i + 1); continue; }
+      const checkInTime = checkInCol !== -1 ? cols[checkInCol] || '' : '';
+      let status = 'present';
+      if (statusCol !== -1) {
+        status = cols[statusCol] || 'present';
+      } else if (attendanceSettings || shifts.length) {
+        const assignedShiftId = staffShiftMap.get(String(staffId));
+        const shift = (assignedShiftId && shiftById.get(assignedShiftId)) || defaultShift;
+        const rule = shift
+          ? {
+              standardCheckInTime: shift.startTime,
+              graceMinutes: shift.graceMinutes,
+              lateThresholdMinutes: shift.lateThresholdMinutes,
+              halfDayCutoffTime: shift.halfDayCutoffTime || attendanceSettings?.halfDayCutoffTime,
+            }
+          : attendanceSettings;
+        status = rule ? this.computeAttendanceStatus(checkInTime, rule) : 'present';
+      }
       ops.push({
         updateOne: {
           filter: { tenantId: this.newTid(tenantId), staffId: this.newTid(staffId), date: new Date(date) },
@@ -668,9 +731,9 @@ export class HrService {
               institutionId: this.newTid(institutionId),
               staffId: this.newTid(staffId),
               date: new Date(date),
-              checkInTime: checkInCol !== -1 ? cols[checkInCol] || '' : '',
+              checkInTime,
               checkOutTime: checkOutCol !== -1 ? cols[checkOutCol] || '' : '',
-              status: statusCol !== -1 ? cols[statusCol] || 'present' : 'present',
+              status,
             },
           },
           upsert: true,
@@ -800,15 +863,270 @@ export class HrService {
     return this.payslipModel.find(filter).sort({ year: -1, month: -1 }).lean();
   }
 
-  async createPayslip(tenantId: string, institutionId: string, data: any) {
+  async createPayslip(tenantId: string, institutionId: string, schoolSlug: string, data: any) {
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
+
+    // Fold in any approved-but-unsettled expense claims for this staff member
+    // that are marked to settle via payroll. Two different cases here,
+    // handled differently so the ledger stays correct:
+    //  - a claim NOT linked to an advance is a genuine new reimbursement —
+    //    it adds to Other Allowances/gross salary, same bucketing pattern
+    //    used for custom salary components.
+    //  - a claim linked to an advance is just proof the money the employee
+    //    already received (the advance disbursement) was validly spent —
+    //    it must NOT add to the payslip (that would pay them twice); it
+    //    only clears the Employee Advances balance in the GL below.
+    // Either way each claim is marked settled against this payslip so it's
+    // never double-counted on a future one.
+    let reimbursement = 0;
+    let pendingClaims: any[] = [];
+    let advanceLinkedClaims: any[] = [];
+    if (data.staffId) {
+      pendingClaims = await this.expenseClaimModel.find({
+        tenantId: this.newTid(tenantId), staffId: this.newTid(data.staffId),
+        status: 'approved', settlementMethod: 'payroll', settledInPayroll: false,
+      }).lean();
+      advanceLinkedClaims = pendingClaims.filter((c: any) => c.advanceId);
+      const nonAdvanceClaims = pendingClaims.filter((c: any) => !c.advanceId);
+      reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
+    }
+
+    const otherAllowances = (data.otherAllowances || 0) + reimbursement;
     const totalDeductions = (data.incomeTax || 0) + (data.providentFund || 0) + (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0);
-    const netSalary = (data.grossSalary || 0) - totalDeductions;
-    return this.payslipModel.create({
-      ...data, periodLabel, totalDeductions, netSalary,
+    const grossSalary = (data.grossSalary || 0) + reimbursement;
+    const netSalary = grossSalary - totalDeductions;
+
+    const payslip = await this.payslipModel.create({
+      ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
     });
+
+    if (pendingClaims.length > 0) {
+      await this.expenseClaimModel.updateMany(
+        { _id: { $in: pendingClaims.map((c: any) => c._id) } },
+        { $set: { settledInPayroll: true, settledPayslipId: payslip._id } },
+      );
+    }
+
+    // Post to the GL: base salary expense, reimbursements booked separately
+    // from pure salary cost, deductions split into their own payable/tax
+    // accounts, and everything nets to Salary Payable (what's actually
+    // owed to the employee once paid).
+    const baseSalaryExpense = data.grossSalary || 0;
+    const nonTaxDeductions = (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0);
+    const lines: any[] = [
+      { accountCode: '5000', debit: baseSalaryExpense, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department },
+    ];
+    if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    lines.push({ accountCode: '2100', credit: netSalary + nonTaxDeductions, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    if (data.incomeTax) lines.push({ accountCode: '2200', credit: data.incomeTax, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    if (data.providentFund) lines.push({ accountCode: '2300', credit: data.providentFund, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    await this.safePostJournal(schoolSlug, {
+      date: new Date(), reference: periodLabel, narration: `Payroll — ${data.staffName || ''} — ${periodLabel}`,
+      sourceType: 'payroll', sourceId: String(payslip._id), lines,
+    });
+
+    // Advance-linked claims settle separately from payroll payable — the
+    // employee was already paid via the advance, so this just recognizes
+    // the expense and clears the Employee Advances balance, in its own
+    // entry per claim for a clean audit trail back to each claim.
+    for (const claim of advanceLinkedClaims) {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: claim.claimNo, narration: `Advance settled via claim ${claim.claimNo} — ${claim.staffName}`,
+        sourceType: 'expense_claim', sourceId: String(claim._id),
+        lines: [
+          { accountCode: '5500', debit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+          { accountCode: '1300', credit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+        ],
+      });
+    }
+
+    return payslip;
+  }
+
+  // ── Salary Components (the payroll "root system") ────────────────────
+  // Each school defines its own components — this is what lets different
+  // schools run genuinely different payroll structures instead of every
+  // school being forced into one hardcoded Basic/HRA/Transport/Medical
+  // shape baked into the app.
+  private readonly DEFAULT_SALARY_COMPONENTS = [
+    { name: 'Basic Salary', code: 'BASIC', type: 'earning', calculationType: 'manual', isTaxable: true, displayOrder: 1 },
+    { name: 'House Rent Allowance', code: 'HRA', type: 'earning', calculationType: 'percentage_of_basic', percentageValue: 40, isTaxable: true, displayOrder: 2 },
+    { name: 'Transport Allowance', code: 'TRANSPORT', type: 'earning', calculationType: 'fixed', defaultAmount: 1000, isTaxable: false, displayOrder: 3 },
+    { name: 'Medical Allowance', code: 'MEDICAL', type: 'earning', calculationType: 'fixed', defaultAmount: 500, isTaxable: false, displayOrder: 4 },
+    { name: 'Income Tax', code: 'TAX', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 5 },
+    { name: 'Provident Fund', code: 'PF', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 6 },
+  ];
+
+  async getSalaryComponents(tenantId: string, schoolSlug: string) {
+    const existing = await this.salaryComponentModel.find({ schoolSlug }).sort({ displayOrder: 1 }).lean();
+    if (existing.length > 0) return existing;
+    // First time this school has opened Salary Components — seed sensible,
+    // fully editable/deletable starting defaults rather than showing a
+    // completely blank, intimidating screen. Nothing here is locked in;
+    // every one of these can be renamed, reconfigured, or removed.
+    const seeded = await this.salaryComponentModel.insertMany(
+      this.DEFAULT_SALARY_COMPONENTS.map(c => ({ ...c, tenantId: this.newTid(tenantId), schoolSlug, isActive: true })),
+    );
+    return seeded;
+  }
+
+  async createSalaryComponent(tenantId: string, schoolSlug: string, dto: any) {
+    const code = (dto.code || dto.name || '').toUpperCase().replace(/[^A-Z0-9]/g, '_').slice(0, 30);
+    const existing = await this.salaryComponentModel.findOne({ schoolSlug, code });
+    if (existing) throw new BadRequestException(`A component with code "${code}" already exists`);
+    return this.salaryComponentModel.create({ ...dto, code, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateSalaryComponent(id: string, schoolSlug: string, dto: any) {
+    const component = await this.salaryComponentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!component) throw new NotFoundException('Salary component not found');
+    return component;
+  }
+
+  async deleteSalaryComponent(id: string, schoolSlug: string) {
+    const inUse = await this.staffModel.countDocuments({ schoolSlug: schoolSlug, 'salaryStructure.componentId': this.newTid(id) } as any);
+    if (inUse > 0) {
+      throw new BadRequestException(`This component is assigned to ${inUse} staff member(s) — deactivate it instead of deleting, or remove it from their salary structure first`);
+    }
+    const result = await this.salaryComponentModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Salary component not found');
+    return { message: 'Salary component deleted' };
+  }
+
+  // Sets a specific staff member's actual salary structure — the real
+  // per-employee values (a teacher's Basic differs from an admin's Basic),
+  // built from this school's own configured components rather than a
+  // one-size-fits-all default.
+  async setStaffSalaryStructure(staffId: string, tenantId: string, schoolSlug: string, lines: { componentId: string; amount: number }[]) {
+    const components = await this.salaryComponentModel.find({ schoolSlug, _id: { $in: lines.map(l => this.newTid(l.componentId)) } }).lean();
+    const componentMap = new Map(components.map((c: any) => [String(c._id), c]));
+
+    const basicLine = lines.find(l => componentMap.get(l.componentId)?.code === 'BASIC');
+    const basicAmount = basicLine?.amount || 0;
+
+    const salaryStructure = lines.map(l => {
+      const comp = componentMap.get(l.componentId);
+      if (!comp) return null;
+      const amount = comp.calculationType === 'percentage_of_basic'
+        ? Math.round(basicAmount * ((comp.percentageValue || 0) / 100))
+        : l.amount;
+      return { componentId: comp._id, code: comp.code, name: comp.name, type: comp.type, amount };
+    }).filter(Boolean);
+
+    const grossSalary = salaryStructure.filter((l: any) => l.type === 'earning').reduce((s: number, l: any) => s + (l.amount || 0), 0);
+
+    const staff = await this.staffModel.findOneAndUpdate(
+      { _id: staffId, tenantId: this.newTid(tenantId) },
+      { $set: { salaryStructure, salary: grossSalary } },
+      { new: true },
+    );
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff;
+  }
+
+  async generatePayslipPdf(payslipId: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
+    const payslip = await this.payslipModel.findOne({ _id: payslipId, tenantId: this.newTid(tenantId) }).lean();
+    if (!payslip) throw new NotFoundException('Payslip not found');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || 'Eldermin School';
+
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([595, 842]); // A4
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const navy = rgb(0.11, 0.23, 0.37);
+    const gray = rgb(0.42, 0.45, 0.5);
+    const lightGray = rgb(0.95, 0.96, 0.97);
+    let y = 800;
+
+    const drawText = (text: string, x: number, yPos: number, opts: { size?: number; f?: any; color?: any } = {}) => {
+      page.drawText(text ?? '', { x, y: yPos, size: opts.size ?? 10, font: opts.f ?? font, color: opts.color ?? rgb(0.15, 0.15, 0.18) });
+    };
+    const fmt = (n: number) => `${payslip.currency || 'PKR'} ${Number(n || 0).toLocaleString()}`;
+
+    // Header
+    page.drawRectangle({ x: 0, y: 792, width: 595, height: 50, color: navy });
+    drawText(schoolName, 40, 812, { size: 16, f: bold, color: rgb(1, 1, 1) });
+    drawText('PAYSLIP', 480, 812, { size: 14, f: bold, color: rgb(1, 1, 1) });
+    y = 765;
+
+    drawText(payslip.periodLabel || `${payslip.month}/${payslip.year}`, 40, y, { size: 12, f: bold, color: navy });
+    y -= 25;
+
+    // Employee details block
+    page.drawRectangle({ x: 40, y: y - 55, width: 515, height: 60, color: lightGray });
+    drawText('Employee Name', 50, y - 12, { size: 8, color: gray });
+    drawText(payslip.staffName || '—', 50, y - 26, { size: 11, f: bold });
+    drawText('Employee ID', 220, y - 12, { size: 8, color: gray });
+    drawText(payslip.employeeId || '—', 220, y - 26, { size: 11, f: bold });
+    drawText('Designation', 350, y - 12, { size: 8, color: gray });
+    drawText(payslip.designation || '—', 350, y - 26, { size: 11, f: bold });
+    drawText('Department', 50, y - 44, { size: 8, color: gray });
+    drawText(payslip.department || '—', 50, y - 56, { size: 10 });
+    drawText('Status', 350, y - 44, { size: 8, color: gray });
+    drawText((payslip.status || 'draft').toUpperCase(), 350, y - 56, { size: 10, f: bold });
+    y -= 85;
+
+    // Earnings / Deductions two-column table
+    const colWidth = 250;
+    drawText('EARNINGS', 40, y, { size: 10, f: bold, color: navy });
+    drawText('DEDUCTIONS', 40 + colWidth + 25, y, { size: 10, f: bold, color: navy });
+    y -= 5;
+    page.drawLine({ start: { x: 40, y }, end: { x: 40 + colWidth, y }, thickness: 0.5, color: gray });
+    page.drawLine({ start: { x: 40 + colWidth + 25, y }, end: { x: 595 - 40, y }, thickness: 0.5, color: gray });
+    y -= 18;
+
+    const earnings = [
+      ['Basic Salary', payslip.basicSalary], ['HRA', payslip.hra],
+      ['Transport Allowance', payslip.transportAllowance], ['Medical Allowance', payslip.medicalAllowance],
+      ['Other Allowances', payslip.otherAllowances],
+    ];
+    const deductions = [
+      ['Income Tax', payslip.incomeTax], ['Provident Fund', payslip.providentFund],
+      ['Loan Deduction', payslip.loanDeduction], ['Leave Deduction', payslip.leaveDeduction],
+      ['Other Deductions', payslip.otherDeductions],
+    ];
+    let ey = y, dy = y;
+    for (const [label, amt] of earnings) {
+      if (!amt) continue;
+      drawText(label as string, 40, ey, { size: 9 });
+      drawText(fmt(amt as number), 40 + colWidth - 70, ey, { size: 9 });
+      ey -= 16;
+    }
+    for (const [label, amt] of deductions) {
+      if (!amt) continue;
+      drawText(label as string, 40 + colWidth + 25, dy, { size: 9 });
+      drawText(fmt(amt as number), 595 - 110, dy, { size: 9 });
+      dy -= 16;
+    }
+    y = Math.min(ey, dy) - 10;
+    page.drawLine({ start: { x: 40, y }, end: { x: 40 + colWidth, y }, thickness: 0.5, color: gray });
+    page.drawLine({ start: { x: 40 + colWidth + 25, y }, end: { x: 595 - 40, y }, thickness: 0.5, color: gray });
+    y -= 16;
+    drawText('Gross Salary', 40, y, { size: 9, f: bold });
+    drawText(fmt(payslip.grossSalary), 40 + colWidth - 70, y, { size: 9, f: bold });
+    drawText('Total Deductions', 40 + colWidth + 25, y, { size: 9, f: bold });
+    drawText(fmt(payslip.totalDeductions), 595 - 110, y, { size: 9, f: bold });
+    y -= 40;
+
+    // Net Salary highlight
+    page.drawRectangle({ x: 40, y: y - 30, width: 515, height: 40, color: navy });
+    drawText('NET SALARY', 55, y - 15, { size: 12, f: bold, color: rgb(1, 1, 1) });
+    drawText(fmt(payslip.netSalary), 420, y - 15, { size: 14, f: bold, color: rgb(1, 1, 1) });
+    y -= 65;
+
+    // Attendance summary
+    drawText('Attendance Summary', 40, y, { size: 10, f: bold, color: navy });
+    y -= 18;
+    drawText(`Present: ${payslip.presentDays ?? 0}  ·  Absent: ${payslip.absentDays ?? 0}  ·  Leave: ${payslip.leaveDays ?? 0}`, 40, y, { size: 9, color: gray });
+    y -= 40;
+
+    drawText('This is a system-generated payslip and does not require a signature.', 40, 40, { size: 7, color: gray });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 
   async getPayrollStats(tenantId: string) {
@@ -928,22 +1246,25 @@ export class HrService {
     return this.exitRecordModel.find({ tenantId: this.newTid(tenantId) }).sort({ createdAt: -1 }).lean();
   }
 
-  async createExitRecord(tenantId: string, institutionId: string, data: any, userId: string) {
-    const clearanceChecklist = [
-      { department: 'IT', item: 'Return laptop/equipment', isDone: false },
-      { department: 'IT', item: 'Disable system access', isDone: false },
-      { department: 'IT', item: 'Handover email account', isDone: false },
-      { department: 'Library', item: 'Return library books/materials', isDone: false },
-      { department: 'Finance', item: 'Clear outstanding dues', isDone: false },
-      { department: 'Finance', item: 'Final salary processed', isDone: false },
-      { department: 'HR', item: 'Return ID card', isDone: false },
-      { department: 'HR', item: 'Complete exit interview', isDone: false },
-      { department: 'HR', item: 'Issue experience letter', isDone: false },
-      { department: 'Academic', item: 'Handover classes/subjects', isDone: false },
-      { department: 'Academic', item: 'Submit lesson plans/records', isDone: false },
-    ];
+  async createExitRecord(tenantId: string, institutionId: string, data: any, userId: string, schoolSlug?: string) {
+    // Clearance checklist and notice period now come from this school's own
+    // configured Exit Settings (falling back to the same sensible defaults
+    // every record used to get hardcoded to) rather than one fixed list for
+    // every school and every employee type.
+    const settings = schoolSlug ? await this.getExitSettings(tenantId, schoolSlug) : null;
+    const templateChecklist = settings?.clearanceChecklistTemplate?.length
+      ? settings.clearanceChecklistTemplate
+      : this.DEFAULT_CLEARANCE_CHECKLIST;
+    const clearanceChecklist = templateChecklist.map((c: any) => ({ department: c.department, item: c.item, isDone: false }));
+
+    let noticePeriodDays = data.noticePeriodDays;
+    if (noticePeriodDays === undefined || noticePeriodDays === null) {
+      const byType = settings?.noticePeriodDaysByEmploymentType || {};
+      noticePeriodDays = byType[data.employmentType] ?? settings?.defaultNoticePeriodDays ?? 30;
+    }
+
     return this.exitRecordModel.create({
-      ...data, clearanceChecklist,
+      ...data, clearanceChecklist, noticePeriodDays,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
       processedBy: this.newTid(userId),
@@ -1046,5 +1367,437 @@ export class HrService {
       ),
     );
     return { created: results.filter(r => r.status === 'fulfilled').length };
+  }
+
+  // ── REMINDERS (holidays + upcoming birthdays/anniversaries) ───────────
+
+  async getHolidays(tenantId: string, schoolSlug: string) {
+    return this.holidayModel.find({ schoolSlug }).sort({ date: 1 }).lean();
+  }
+
+  async createHoliday(tenantId: string, schoolSlug: string, dto: any) {
+    return this.holidayModel.create({ ...dto, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateHoliday(id: string, schoolSlug: string, dto: any) {
+    const holiday = await this.holidayModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!holiday) throw new NotFoundException('Holiday not found');
+    return holiday;
+  }
+
+  async deleteHoliday(id: string, schoolSlug: string) {
+    const result = await this.holidayModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Holiday not found');
+    return { message: 'Holiday deleted' };
+  }
+
+  // Upcoming birthdays, work anniversaries, and holidays in the next `withinDays`
+  // days — computed live from Staff.dateOfBirth / Staff.dateOfJoining rather than
+  // needing a separate record per person per year.
+  async getUpcomingReminders(tenantId: string, schoolSlug: string, withinDays = 30) {
+    const tid = this.newTid(tenantId);
+    const staffList = await this.staffModel
+      .find({ tenantId: tid, isActive: true }, { firstName: 1, lastName: 1, dateOfBirth: 1, dateOfJoining: 1, department: 1 })
+      .lean();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const nextOccurrence = (date: Date) => {
+      const d = new Date(date);
+      const next = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+      if (next < today) next.setFullYear(today.getFullYear() + 1);
+      return next;
+    };
+    const daysUntil = (d: Date) => Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    const birthdays: any[] = [];
+    const anniversaries: any[] = [];
+    for (const s of staffList) {
+      const name = `${s.firstName} ${s.lastName}`;
+      if (s.dateOfBirth) {
+        const next = nextOccurrence(s.dateOfBirth);
+        const inDays = daysUntil(next);
+        if (inDays <= withinDays) birthdays.push({ staffId: s._id, name, department: s.department, date: next, inDays, type: 'birthday' });
+      }
+      if (s.dateOfJoining) {
+        const next = nextOccurrence(s.dateOfJoining);
+        const inDays = daysUntil(next);
+        const years = next.getFullYear() - new Date(s.dateOfJoining).getFullYear();
+        if (inDays <= withinDays && years > 0) anniversaries.push({ staffId: s._id, name, department: s.department, date: next, inDays, years, type: 'anniversary' });
+      }
+    }
+
+    const holidays = await this.holidayModel
+      .find({ schoolSlug, date: { $gte: today, $lte: new Date(today.getTime() + withinDays * 24 * 60 * 60 * 1000) } })
+      .sort({ date: 1 })
+      .lean();
+
+    return {
+      birthdays: birthdays.sort((a, b) => a.inDays - b.inDays),
+      anniversaries: anniversaries.sort((a, b) => a.inDays - b.inDays),
+      holidays: holidays.map(h => ({ ...h, type: 'holiday', inDays: daysUntil(new Date(h.date)) })),
+    };
+  }
+
+  // ── EXIT SETTINGS ──────────────────────────────────────────────────────
+
+  private readonly DEFAULT_CLEARANCE_CHECKLIST = [
+    { department: 'IT', item: 'Return laptop/equipment' },
+    { department: 'IT', item: 'Disable system access' },
+    { department: 'IT', item: 'Handover email account' },
+    { department: 'Library', item: 'Return library books/materials' },
+    { department: 'Finance', item: 'Clear outstanding dues' },
+    { department: 'Finance', item: 'Final salary processed' },
+    { department: 'HR', item: 'Return ID card' },
+    { department: 'HR', item: 'Complete exit interview' },
+    { department: 'HR', item: 'Issue experience letter' },
+    { department: 'Academic', item: 'Handover classes/subjects' },
+    { department: 'Academic', item: 'Submit lesson plans/records' },
+  ];
+  private readonly DEFAULT_EXIT_INTERVIEW_QUESTIONS = [
+    'What is your primary reason for leaving?',
+    'How would you rate your overall experience working here?',
+    'Did you feel supported by your manager and colleagues?',
+    'What could we have done differently to retain you?',
+    'Would you consider working here again in the future?',
+  ];
+
+  async getExitSettings(tenantId: string, schoolSlug: string) {
+    const existing = await this.exitSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    // Seed with the same sensible defaults every exit record used to get hardcoded —
+    // fully editable from here on, nothing locked in.
+    return this.exitSettingsModel.create({
+      tenantId: this.newTid(tenantId),
+      schoolSlug,
+      defaultNoticePeriodDays: 30,
+      noticePeriodDaysByEmploymentType: { permanent: 30, contract: 15, probation: 7, part_time: 7 },
+      clearanceChecklistTemplate: this.DEFAULT_CLEARANCE_CHECKLIST,
+      exitInterviewQuestions: this.DEFAULT_EXIT_INTERVIEW_QUESTIONS,
+    });
+  }
+
+  async updateExitSettings(tenantId: string, schoolSlug: string, dto: any) {
+    await this.getExitSettings(tenantId, schoolSlug); // ensure a doc exists to update
+    return this.exitSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── HIRING SETTINGS ────────────────────────────────────────────────────
+
+  async getHiringSettings(tenantId: string, schoolSlug: string) {
+    const existing = await this.hiringSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    return this.hiringSettingsModel.create({ tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateHiringSettings(tenantId: string, schoolSlug: string, dto: any) {
+    await this.getHiringSettings(tenantId, schoolSlug);
+    return this.hiringSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── ATTENDANCE SETTINGS ────────────────────────────────────────────────
+
+  async getAttendanceSettings(tenantId: string, schoolSlug: string) {
+    const existing = await this.attendanceSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    return this.attendanceSettingsModel.create({ tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateAttendanceSettings(tenantId: string, schoolSlug: string, dto: any) {
+    await this.getAttendanceSettings(tenantId, schoolSlug);
+    return this.attendanceSettingsModel.findOneAndUpdate({ schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  // ── SHIFTS ───────────────────────────────────────────────────────────
+  // Shift definitions are the real dependency underneath accurate attendance:
+  // a single school-wide "standard check-in time" breaks down the moment a
+  // school has staff on different schedules (admin vs teaching, or rotating
+  // duty shifts at a boarding school). Staff get assigned a shift; attendance
+  // status is computed against THEIR shift, falling back to whichever shift
+  // is marked as the school's default, then to AttendanceSettings if no
+  // shifts are configured at all.
+
+  async getShifts(tenantId: string, schoolSlug: string) {
+    return this.shiftModel.find({ schoolSlug }).sort({ isDefault: -1, name: 1 }).lean();
+  }
+
+  async createShift(tenantId: string, schoolSlug: string, dto: any) {
+    if (dto.isDefault) await this.shiftModel.updateMany({ schoolSlug }, { $set: { isDefault: false } });
+    return this.shiftModel.create({ ...dto, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateShift(id: string, schoolSlug: string, dto: any) {
+    if (dto.isDefault) await this.shiftModel.updateMany({ schoolSlug, _id: { $ne: id } }, { $set: { isDefault: false } });
+    const shift = await this.shiftModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!shift) throw new NotFoundException('Shift not found');
+    return shift;
+  }
+
+  async deleteShift(id: string, schoolSlug: string) {
+    const inUse = await this.staffModel.countDocuments({ schoolSlug, shiftId: this.newTid(id) } as any);
+    if (inUse > 0) {
+      throw new BadRequestException(`This shift is assigned to ${inUse} staff member(s) — reassign them first or deactivate the shift instead of deleting it`);
+    }
+    const result = await this.shiftModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Shift not found');
+    return { message: 'Shift deleted' };
+  }
+
+  async assignStaffShift(staffId: string, tenantId: string, shiftId: string | null) {
+    const staff = await this.staffModel.findOneAndUpdate(
+      { _id: staffId, tenantId: this.newTid(tenantId) },
+      { $set: { shiftId: shiftId ? this.newTid(shiftId) : null } },
+      { new: true },
+    );
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff;
+  }
+
+  // Computes present/late/half_day from a raw "HH:mm" check-in time using the
+  // school's configured grace period and half-day cutoff, instead of every
+  // imported row silently defaulting to 'present' regardless of when someone
+  // actually checked in.
+  private computeAttendanceStatus(checkInTime: string, settings: any): string {
+    if (!checkInTime) return 'absent';
+    const toMinutes = (hhmm: string) => {
+      const [h, m] = hhmm.split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+    const checkInMins = toMinutes(checkInTime);
+    const standardMins = toMinutes(settings.standardCheckInTime || '08:00');
+    const halfDayCutoffMins = toMinutes(settings.halfDayCutoffTime || '13:00');
+    const graceMins = settings.graceMinutes ?? 15;
+    const lateThresholdMins = settings.lateThresholdMinutes ?? 60;
+
+    if (checkInMins >= halfDayCutoffMins) return 'half_day';
+    const lateBy = checkInMins - standardMins;
+    if (lateBy <= graceMins) return 'present';
+    if (lateBy <= graceMins + lateThresholdMins) return 'late';
+    return 'half_day';
+  }
+
+  // ── GRIEVANCE ────────────────────────────────────────────────────────
+  // Deliberately narrow first version: status workflow + basic case
+  // tracking, not a full investigation toolkit.
+
+  // SLA target (days to first resolution) by priority — used to auto-set dueDate on creation.
+  private readonly GRIEVANCE_SLA_DAYS: Record<string, number> = { urgent: 2, high: 5, medium: 10, low: 20 };
+
+  private withOverdue(g: any) {
+    const isOverdue = !!g.dueDate && !['resolved', 'dismissed'].includes(g.status) && new Date(g.dueDate).getTime() < Date.now();
+    return { ...g, isOverdue };
+  }
+
+  async getGrievances(tenantId: string, filters: { status?: string; staffId?: string; category?: string; priority?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.status) filter.status = filters.status;
+    if (filters.staffId) filter.raisedByStaffId = this.newTid(filters.staffId);
+    if (filters.category) filter.category = filters.category;
+    if (filters.priority) filter.priority = filters.priority;
+    const rows = await this.grievanceModel.find(filter).sort({ createdAt: -1 }).lean();
+    return rows.map((g) => this.withOverdue(g));
+  }
+
+  async getGrievanceById(tenantId: string, id: string) {
+    const g = await this.grievanceModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
+    if (!g) throw new NotFoundException('Grievance not found');
+    return this.withOverdue(g);
+  }
+
+  async createGrievance(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
+    const count = await this.grievanceModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const caseNo = `GRV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    const priority = dto.priority || 'medium';
+    const slaDays = this.GRIEVANCE_SLA_DAYS[priority] ?? 10;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + slaDays);
+    return this.grievanceModel.create({
+      ...dto, caseNo, priority, dueDate,
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+      timeline: [{ note: 'Grievance submitted', byName: dto.raisedByName || 'Staff', status: 'submitted', at: new Date() }],
+    });
+  }
+
+  async updateGrievanceStatus(tenantId: string, id: string, status: string, note: string, byName: string) {
+    const update: any = {
+      $set: { status },
+      $push: { timeline: { note: note || `Status changed to ${status}`, byName: byName || 'HR', status, at: new Date() } },
+    };
+    if (status === 'resolved') { update.$set.resolvedAt = new Date(); }
+    const g = await this.grievanceModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
+    if (!g) throw new NotFoundException('Grievance not found');
+    return g;
+  }
+
+  async assignGrievance(tenantId: string, id: string, assignedToStaffId: string, assignedToName: string) {
+    const g = await this.grievanceModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) },
+      {
+        $set: { assignedToStaffId: this.newTid(assignedToStaffId), assignedToName, status: 'investigating' },
+        $push: { timeline: { note: `Assigned to ${assignedToName}`, byName: 'HR', status: 'investigating', at: new Date() } },
+      },
+      { new: true },
+    );
+    if (!g) throw new NotFoundException('Grievance not found');
+    return g;
+  }
+
+  // ── DAILY WORK SUMMARY ───────────────────────────────────────────────
+  // Intentionally a lightweight accountability log, not a task tracker.
+
+  async getDailyWorkSummaries(tenantId: string, filters: { staffId?: string; date?: string; from?: string; to?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    if (filters.date) filter.date = new Date(filters.date);
+    else if (filters.from || filters.to) {
+      filter.date = {};
+      if (filters.from) filter.date.$gte = new Date(filters.from);
+      if (filters.to) filter.date.$lte = new Date(filters.to);
+    }
+    return this.dailyWorkSummaryModel.find(filter).sort({ date: -1 }).lean();
+  }
+
+  async upsertDailyWorkSummary(tenantId: string, schoolSlug: string, dto: any) {
+    const date = new Date(dto.date);
+    date.setHours(0, 0, 0, 0);
+    return this.dailyWorkSummaryModel.findOneAndUpdate(
+      { tenantId: this.newTid(tenantId), staffId: this.newTid(dto.staffId), date },
+      { $set: { ...dto, date, tenantId: this.newTid(tenantId), schoolSlug, acknowledged: false } },
+      { upsert: true, new: true },
+    );
+  }
+
+  async acknowledgeDailyWorkSummary(tenantId: string, id: string, byName: string) {
+    const s = await this.dailyWorkSummaryModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) },
+      { $set: { acknowledged: true, acknowledgedBy: byName, acknowledgedAt: new Date() } },
+      { new: true },
+    );
+    if (!s) throw new NotFoundException('Daily work summary not found');
+    return s;
+  }
+
+  // Manager rollup for a given day: who submitted, and who's missing.
+  async getDailyWorkSummaryRollup(tenantId: string, schoolSlug: string, dateStr: string) {
+    const date = new Date(dateStr);
+    date.setHours(0, 0, 0, 0);
+    const [staffList, submitted] = await Promise.all([
+      this.staffModel.find({ tenantId: this.newTid(tenantId), isActive: true }, { firstName: 1, lastName: 1, department: 1 }).lean(),
+      this.dailyWorkSummaryModel.find({ tenantId: this.newTid(tenantId), date }).lean(),
+    ]);
+    const submittedStaffIds = new Set(submitted.map((s: any) => String(s.staffId)));
+    const missing = staffList.filter((s: any) => !submittedStaffIds.has(String(s._id)))
+      .map((s: any) => ({ staffId: s._id, name: `${s.firstName} ${s.lastName}`, department: s.department }));
+    return { submitted, missing, totalStaff: staffList.length };
+  }
+
+  // ── EXPENSE CLAIMS ───────────────────────────────────────────────────
+
+  async getExpenseClaims(tenantId: string, filters: { status?: string; staffId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.status) filter.status = filters.status;
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    return this.expenseClaimModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createExpenseClaim(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
+    const count = await this.expenseClaimModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const claimNo = `EXP-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.expenseClaimModel.create({
+      ...dto, claimNo,
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+    });
+  }
+
+  async addExpenseClaimReceipt(tenantId: string, id: string, file: Express.Multer.File, schoolSlug: string) {
+    const result = await this.uploadService.uploadFile(file, 'expense-receipts', schoolSlug);
+    const claim = await this.expenseClaimModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) },
+      { $push: { receipts: { label: file.originalname, url: result.url, key: result.key, fileName: result.fileName } } },
+      { new: true },
+    );
+    if (!claim) throw new NotFoundException('Expense claim not found');
+    return claim;
+  }
+
+  async updateExpenseClaimStatus(tenantId: string, id: string, status: string, schoolSlug?: string, approvedBy?: string, rejectionReason?: string) {
+    const update: any = { $set: { status } };
+    if (status === 'approved') { update.$set.approvedBy = approvedBy; update.$set.approvedAt = new Date(); }
+    if (status === 'rejected') { update.$set.rejectionReason = rejectionReason; }
+
+    const claim = await this.expenseClaimModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
+    if (!claim) throw new NotFoundException('Expense claim not found');
+
+    // If this claim settles an advance, roll the amount into the advance's
+    // settled total once approved.
+    if (status === 'approved' && claim.advanceId) {
+      await this.advanceModel.updateOne(
+        { _id: claim.advanceId },
+        [{ $set: { settledAmount: { $add: ['$settledAmount', claim.amount] } } }] as any,
+      );
+    }
+
+    // Only post here for direct settlement — a payroll-settlement claim
+    // gets its GL posting when it's actually folded into a payslip
+    // (createPayslip), otherwise it would be double-counted once at
+    // approval and again at payroll time. If the claim settles a prior
+    // advance, credit Employee Advances instead of creating a new payable —
+    // the employee was already paid when the advance was disbursed.
+    if (status === 'approved' && claim.settlementMethod === 'direct') {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: claim.claimNo, narration: `Expense claim ${claim.claimNo} — ${claim.staffName}`,
+        sourceType: 'expense_claim', sourceId: String(claim._id),
+        lines: [
+          { accountCode: '5500', debit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+          { accountCode: claim.advanceId ? '1300' : '2000', credit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+        ],
+      });
+    }
+    return claim;
+  }
+
+  // ── ADVANCES ─────────────────────────────────────────────────────────
+
+  async getAdvances(tenantId: string, filters: { status?: string; staffId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.status) filter.status = filters.status;
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    return this.advanceModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createAdvance(tenantId: string, institutionId: string, schoolSlug: string, dto: any) {
+    const count = await this.advanceModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const advanceNo = `ADV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.advanceModel.create({
+      ...dto, advanceNo,
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+    });
+  }
+
+  async updateAdvanceStatus(tenantId: string, id: string, status: string, schoolSlug?: string, approvedBy?: string) {
+    const update: any = { $set: { status } };
+    if (status === 'approved') { update.$set.approvedBy = approvedBy; update.$set.approvedAt = new Date(); }
+    if (status === 'disbursed') { update.$set.disbursedAt = new Date(); }
+    const advance = await this.advanceModel.findOneAndUpdate({ _id: id, tenantId: this.newTid(tenantId) }, update, { new: true });
+    if (!advance) throw new NotFoundException('Advance not found');
+
+    if (status === 'disbursed') {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: advance.advanceNo, narration: `Advance disbursed — ${advance.staffName} — ${advance.reason}`,
+        sourceType: 'advance', sourceId: String(advance._id),
+        lines: [
+          { accountCode: '1300', debit: advance.amount, partnerType: 'staff', partnerId: String(advance.staffId), partnerName: advance.staffName },
+          { accountCode: '1000', credit: advance.amount, partnerType: 'staff', partnerId: String(advance.staffId), partnerName: advance.staffName },
+        ],
+      });
+    }
+    return advance;
   }
 }

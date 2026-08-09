@@ -3,7 +3,7 @@
 // Eldermin ERP | NestJS
 // ============================================================
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ReportTemplate, ReportTemplateDocument } from './schemas/report-template.schema';
@@ -43,30 +43,58 @@ export class ReportTemplatesService {
     return template;
   }
 
+  // Section `config` and various nested enum fields (borderStyle,
+  // logoPosition, section.type, etc.) aren't validated by the DTO — only
+  // the top-level `type` is. A malformed payload (e.g. from a future UI
+  // change, a hand-crafted API call, or bad data surviving a `duplicate()`)
+  // would otherwise throw a raw Mongoose ValidationError straight through
+  // as an opaque 500, the same class of bug that was previously found and
+  // fixed on Chart of Accounts. Wrapping create/update in the same
+  // translate-to-400 pattern keeps that fix consistent across modules.
   async create(schoolSlug: string, dto: CreateReportTemplateDto) {
-    if (dto.isDefault) {
-      await this.reportTemplateModel.updateMany(
-        { schoolSlug, type: dto.type, isDefault: true },
-        { $set: { isDefault: false } },
-      );
+    try {
+      if (dto.isDefault) {
+        await this.reportTemplateModel.updateMany(
+          { schoolSlug, type: dto.type, isDefault: true },
+          { $set: { isDefault: false } },
+        );
+      }
+      return await this.reportTemplateModel.create({ ...dto, schoolSlug });
+    } catch (err: any) {
+      throw this.translateError(err);
     }
-    return this.reportTemplateModel.create({ ...dto, schoolSlug });
   }
 
   async update(id: string, schoolSlug: string, dto: UpdateReportTemplateDto) {
-    const existing = await this.reportTemplateModel.findOne({ _id: id, schoolSlug });
-    if (!existing) throw new NotFoundException('Report template not found');
+    try {
+      const existing = await this.reportTemplateModel.findOne({ _id: id, schoolSlug });
+      if (!existing) throw new NotFoundException('Report template not found');
 
-    if (dto.isDefault) {
-      await this.reportTemplateModel.updateMany(
-        { schoolSlug, type: dto.type || existing.type, isDefault: true, _id: { $ne: id } },
-        { $set: { isDefault: false } },
-      );
+      if (dto.isDefault) {
+        await this.reportTemplateModel.updateMany(
+          { schoolSlug, type: dto.type || existing.type, isDefault: true, _id: { $ne: id } },
+          { $set: { isDefault: false } },
+        );
+      }
+
+      Object.assign(existing, dto);
+      await existing.save();
+      return existing.toObject();
+    } catch (err: any) {
+      if (err instanceof NotFoundException) throw err;
+      throw this.translateError(err);
     }
+  }
 
-    Object.assign(existing, dto);
-    await existing.save();
-    return existing.toObject();
+  private translateError(err: any): Error {
+    if (err.name === 'ValidationError') {
+      const firstIssue = Object.values(err.errors || {})[0] as any;
+      return new BadRequestException(firstIssue?.message || 'Invalid report template data.');
+    }
+    if (err.code === 11000) {
+      return new BadRequestException('A template with conflicting unique fields already exists.');
+    }
+    return err;
   }
 
   async remove(id: string, schoolSlug: string) {
