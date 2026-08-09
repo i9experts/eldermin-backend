@@ -103,7 +103,7 @@ export class JournalLine {
   // separate 'employee' value) so a voucher's subledger entries land in the
   // SAME running balance as payroll/expense-claim/advance postings, which
   // have always used 'staff' — see FinanceService.createVoucher.
-  @Prop({ enum: ['student', 'family', 'vendor', 'staff', 'shareholder', 'other', null], default: null }) partnerType: string | null;
+  @Prop({ type: String, enum: ['student', 'family', 'vendor', 'staff', 'shareholder', 'other', null], default: null }) partnerType: string | null;
   @Prop() partnerId: string;
   @Prop() partnerName: string;
   @Prop({ default: false }) isUnmapped: boolean; // posted to the Suspense account because no real mapping existed yet
