@@ -1,7 +1,7 @@
 import {
   Controller, Get, Post, Put, Patch, Body, Param, Query, Request, Res, HttpCode, HttpStatus,
 } from '@nestjs/common';
-import { Response } from 'express';
+import type { Response } from 'express';
 import { EceService } from './ece.service';
 import {
   CreateFrameworkDto, UpdateFrameworkDto, CreateDomainDto, UpdateDomainDto,
