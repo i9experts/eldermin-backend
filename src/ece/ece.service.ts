@@ -6,6 +6,7 @@ import { ECEDomain, ECEDomainDocument, ECESkill, ECESkillDocument, ECEIndicator,
 import { ECEObservation, ECEObservationDocument } from './schemas/observation.schema';
 import { ECEDevelopmentProfile, ECEDevelopmentProfileDocument } from './schemas/development-profile.schema';
 import { ECEPortfolioEntry, ECEPortfolioEntryDocument } from './schemas/portfolio-entry.schema';
+import { LearningExperience, LearningExperienceDocument } from './schemas/learning-experience.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { EmailService } from '../email/email.service';
@@ -32,6 +33,7 @@ export class EceService {
     @InjectModel(ECEObservation.name) private observationModel: Model<ECEObservationDocument>,
     @InjectModel(ECEDevelopmentProfile.name) private profileModel: Model<ECEDevelopmentProfileDocument>,
     @InjectModel(ECEPortfolioEntry.name) private portfolioModel: Model<ECEPortfolioEntryDocument>,
+    @InjectModel(LearningExperience.name) private experienceModel: Model<LearningExperienceDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private emailService: EmailService,
@@ -301,6 +303,31 @@ export class EceService {
     );
     if (!entry) throw new NotFoundException('Portfolio entry not found');
     return entry;
+  }
+
+  // ── Learning Experience Library ────────────────────────────
+  // Every activity is reusable rather than re-typed from scratch each
+  // time - the institutional knowledge base the PRD calls for.
+  async getExperiences(schoolSlug: string, domainId?: string) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (domainId) filter.domainIds = new Types.ObjectId(domainId);
+    return this.experienceModel.find(filter).sort({ timesUsed: -1, title: 1 }).lean();
+  }
+
+  async createExperience(schoolSlug: string, createdBy: string, dto: any) {
+    return this.experienceModel.create({ ...dto, schoolSlug, createdBy });
+  }
+
+  async updateExperience(schoolSlug: string, id: string, dto: any) {
+    const exp = await this.experienceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!exp) throw new NotFoundException('Learning experience not found');
+    return exp;
+  }
+
+  async deleteExperience(schoolSlug: string, id: string) {
+    const exp = await this.experienceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    if (!exp) throw new NotFoundException('Learning experience not found');
+    return { message: 'Experience archived' };
   }
 
   // ── Children roster (real Student records filtered to Early Years -

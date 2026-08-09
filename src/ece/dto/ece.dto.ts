@@ -110,3 +110,31 @@ export class FamilyResponseDto {
   @IsString() text: string;
   @IsString() respondedBy: string;
 }
+
+// ── Learning Experience ─────────────────────────────────────
+export class DifferentiationDto {
+  @IsOptional() @IsString() support?: string;
+  @IsOptional() @IsString() core?: string;
+  @IsOptional() @IsString() extension?: string;
+}
+export class CreateLearningExperienceDto {
+  @IsString() title: string;
+  @IsOptional() @IsString() ageRangeLabel?: string;
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) domainIds?: string[];
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) skillIds?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) resources?: string[];
+  @IsOptional() @IsString() learningIntent?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) observationOpportunities?: string[];
+  @IsOptional() @ValidateNested() @Type(() => DifferentiationDto) differentiation?: DifferentiationDto;
+}
+export class UpdateLearningExperienceDto {
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() ageRangeLabel?: string;
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) domainIds?: string[];
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) skillIds?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) resources?: string[];
+  @IsOptional() @IsString() learningIntent?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) observationOpportunities?: string[];
+  @IsOptional() @ValidateNested() @Type(() => DifferentiationDto) differentiation?: DifferentiationDto;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}

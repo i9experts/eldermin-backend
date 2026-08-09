@@ -7,6 +7,7 @@ import {
   CreateSkillDto, UpdateSkillDto, CreateIndicatorDto, CreateAgeBandDto,
   CreateObservationDto, QuickObserveDto, ObservationQueryDto,
   CreatePortfolioEntryDto, FamilyResponseDto,
+  CreateLearningExperienceDto, UpdateLearningExperienceDto,
 } from './dto/ece.dto';
 
 @Controller('ece')
@@ -147,6 +148,23 @@ export class EceController {
   @Patch('portfolio/:id/respond')
   respondToEntry(@Request() req: any, @Param('id') id: string, @Body() dto: FamilyResponseDto) {
     return this.service.respondToEntry(this.ctx(req).schoolSlug, id, dto.text, dto.respondedBy);
+  }
+
+  // ── Learning Experiences ───────────────────────────────────
+  @Get('experiences')
+  getExperiences(@Request() req: any, @Query('domainId') domainId?: string) {
+    return this.service.getExperiences(this.ctx(req).schoolSlug, domainId);
+  }
+
+  @Post('experiences') @HttpCode(HttpStatus.CREATED)
+  createExperience(@Request() req: any, @Body() dto: CreateLearningExperienceDto) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createExperience(schoolSlug, userName, dto);
+  }
+
+  @Put('experiences/:id')
+  updateExperience(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateLearningExperienceDto) {
+    return this.service.updateExperience(this.ctx(req).schoolSlug, id, dto);
   }
 
   // ── Dashboard ──────────────────────────────────────────────

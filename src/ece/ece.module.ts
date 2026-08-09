@@ -6,6 +6,7 @@ import { ECEFrameworkMapping, ECEFrameworkMappingSchema } from './schemas/framew
 import { ECEObservation, ECEObservationSchema } from './schemas/observation.schema';
 import { ECEDevelopmentProfile, ECEDevelopmentProfileSchema } from './schemas/development-profile.schema';
 import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from './schemas/portfolio-entry.schema';
+import { LearningExperience, LearningExperienceSchema } from './schemas/learning-experience.schema';
 import { StudentAttendance, StudentAttendanceSchema } from '../students/schemas/student-supporting.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { EmailModule } from '../email/email.module';
@@ -25,6 +26,7 @@ import { EceController } from './ece.controller';
       { name: ECEObservation.name, schema: ECEObservationSchema },
       { name: ECEDevelopmentProfile.name, schema: ECEDevelopmentProfileSchema },
       { name: ECEPortfolioEntry.name, schema: ECEPortfolioEntrySchema },
+      { name: LearningExperience.name, schema: LearningExperienceSchema },
       // Reusing the real Student/StudentAttendance schemas rather than a
       // parallel "Child" entity - the single most important guardrail in
       // the Early Years PRD. Same safe cross-module Mongoose pattern
