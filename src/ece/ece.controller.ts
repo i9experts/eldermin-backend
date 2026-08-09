@@ -150,6 +150,11 @@ export class EceController {
   }
 
   // ── Dashboard ──────────────────────────────────────────────
+  @Get('children')
+  getChildren(@Request() req: any) {
+    return this.service.getChildren(this.ctx(req).schoolSlug);
+  }
+
   @Get('dashboard')
   getDashboard(@Request() req: any) {
     const { schoolSlug, userId } = this.ctx(req);

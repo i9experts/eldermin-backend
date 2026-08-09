@@ -264,6 +264,17 @@ export class EceService {
     return entry;
   }
 
+  // ── Children roster (real Student records filtered to Early Years -
+  // deliberately self-contained here rather than modifying the actively
+  // developed Students module for one narrow filter) ──────────
+  async getChildren(schoolSlug: string) {
+    return this.studentModel
+      .find({ schoolSlug, programType: 'early-years', status: { $ne: 'inactive' } })
+      .select('firstName lastName photo dateOfBirth currentGrade currentSection studentId')
+      .sort({ firstName: 1 })
+      .lean();
+  }
+
   // ── Teacher Dashboard (every count here is a real query - no
   // fabricated or hardcoded stat) ─────────────────────────────
   async getTeacherDashboard(schoolSlug: string, observedById: string) {

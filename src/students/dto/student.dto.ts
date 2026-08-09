@@ -93,6 +93,12 @@ export class CreateStudentDto {
   @IsOptional() @IsBoolean() transportRequired?: boolean;
   @IsOptional() @IsString() transportRoute?: string;
 
+  // Programme type - distinguishes Early Years children from K-12 on the
+  // same Student record. Not present here would mean the global
+  // ValidationPipe's whitelist:true silently strips it from every
+  // create/update request before it reaches the service.
+  @IsOptional() @IsEnum(['k12', 'early-years']) programType?: string;
+
   // Injected
   schoolSlug?: string;
   campusId?: string;
