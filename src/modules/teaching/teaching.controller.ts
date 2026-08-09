@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { TeachingService } from './teaching.service';
 
@@ -59,6 +59,37 @@ export class TeachingController {
 
   @Patch('timetable/:id')
   updateTimetable(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateTimetable(req.user.tenantId, id, body); }
+
+  // ── ROOMS ──────────────────────────────────────────────────────────────────────
+
+  @Get('rooms')
+  getRooms(@Request() req, @Query('campusId') campusId?: string) { return this.teachingService.getRooms(req.user.tenantId, campusId); }
+
+  @Post('rooms')
+  createRoom(@Request() req, @Body() body: any) { return this.teachingService.createRoom(req.user.tenantId, req.user.institutionId, body); }
+
+  @Patch('rooms/:id')
+  updateRoom(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateRoom(req.user.tenantId, id, body); }
+
+  @Delete('rooms/:id')
+  deleteRoom(@Request() req, @Param('id') id: string) { return this.teachingService.deleteRoom(req.user.tenantId, id); }
+
+  // ── PERIOD TEMPLATES ───────────────────────────────────────────────────────────
+
+  @Get('period-templates')
+  getPeriodTemplates(@Request() req) { return this.teachingService.getPeriodTemplates(req.user.tenantId); }
+
+  @Post('period-templates')
+  createPeriodTemplate(@Request() req, @Body() body: any) { return this.teachingService.createPeriodTemplate(req.user.tenantId, req.user.institutionId, body); }
+
+  @Post('period-templates/seed-default')
+  seedDefaultPeriodTemplate(@Request() req) { return this.teachingService.seedDefaultPeriodTemplate(req.user.tenantId, req.user.institutionId); }
+
+  @Patch('period-templates/:id')
+  updatePeriodTemplate(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updatePeriodTemplate(req.user.tenantId, id, body); }
+
+  @Delete('period-templates/:id')
+  deletePeriodTemplate(@Request() req, @Param('id') id: string) { return this.teachingService.deletePeriodTemplate(req.user.tenantId, id); }
 
   // Syllabus tracking endpoints have moved to the new unified /syllabus
   // module - the frontend now calls that directly.
