@@ -68,45 +68,8 @@ export class AcademicsController {
     return this.academicsService.addSLO(req.user.tenantId, id, body);
   }
 
-  // ─── SYLLABUS ─────────────────────────────────────────────────────────────────
-
-  @Get('syllabus')
-  getSyllabi(@Request() req, @Query() q: any) {
-    return this.academicsService.getSyllabi(req.user.tenantId, q);
-  }
-
-  @Post('syllabus')
-  createSyllabus(@Request() req, @Body() body: any) {
-    return this.academicsService.createSyllabus(
-      req.user.tenantId, req.user.institutionId, body, req.user.userId,
-    );
-  }
-
-  @Get('syllabus/:id')
-  getSyllabusById(@Request() req, @Param('id') id: string) {
-    return this.academicsService.getSyllabusById(req.user.tenantId, id);
-  }
-
-  @Patch('syllabus/:id')
-  updateSyllabus(@Request() req, @Param('id') id: string, @Body() body: any) {
-    return this.academicsService.updateSyllabus(req.user.tenantId, id, body);
-  }
-
-  @Post('syllabus/:id/unit')
-  addUnit(@Request() req, @Param('id') id: string, @Body() body: any) {
-    return this.academicsService.addUnit(req.user.tenantId, id, body);
-  }
-
-  @Patch('syllabus/:id/approve')
-  approveSyllabus(
-    @Request() req,
-    @Param('id') id: string,
-    @Body() body: { approverName: string },
-  ) {
-    return this.academicsService.approveSyllabus(
-      req.user.tenantId, id, body.approverName ?? req.user.email,
-    );
-  }
+  // Syllabus endpoints have moved to the new unified /syllabus module -
+  // the frontend now calls that directly instead of /academics/syllabus.
 
   // ─── LIBRARY — BOOKS ──────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import { AcademicsController } from './academics.controller';
 import { AcademicsService } from './academics.service';
 import { Subject, SubjectSchema } from './schemas/subject.schema';
 import { Curriculum, CurriculumSchema } from './schemas/curriculum.schema';
-import { Syllabus, SyllabusSchema } from './schemas/syllabus.schema';
+import { Syllabus, SyllabusSchema } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookSchema } from './schemas/book.schema';
 import { BookIssue, BookIssueSchema } from './schemas/book-issue.schema';
 

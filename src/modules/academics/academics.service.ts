@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Subject, SubjectDocument } from './schemas/subject.schema';
 import { Curriculum, CurriculumDocument } from './schemas/curriculum.schema';
-import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
+import { Syllabus, SyllabusDocument } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookDocument } from './schemas/book.schema';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
 
@@ -163,79 +163,11 @@ export class AcademicsService {
     return doc;
   }
 
-  // ─── SYLLABUS ─────────────────────────────────────────────────────────────────
-
-  async getSyllabi(tenantId: string, query: any = {}) {
-    const filter: any = { tenantId: this.tid(tenantId) };
-    if (query.gradeLevel)        filter.gradeLevel = query.gradeLevel;
-    if (query.subjectName)       filter.subjectName = { $regex: query.subjectName, $options: 'i' };
-    if (query.status)            filter.status = query.status;
-    if (query.framework)         filter.framework = query.framework;
-    if (query.academicYearLabel) filter.academicYearLabel = query.academicYearLabel;
-    return this.syllabusModel.find(filter).sort({ gradeLevel: 1, subjectName: 1 }).lean();
-  }
-
-  async getSyllabusById(tenantId: string, id: string) {
-    const doc = await this.syllabusModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
-    if (!doc) throw new NotFoundException('Syllabus not found');
-    return doc;
-  }
-
-  async createSyllabus(tenantId: string, institutionId: string, data: any, userId: string) {
-    try {
-      const totalWeeks   = (data.units || []).reduce((s: number, u: any) => s + (u.weeks || 0), 0);
-      const totalPeriods = (data.units || []).reduce((s: number, u: any) => s + (u.periods || 0), 0);
-      return await this.syllabusModel.create({
-        ...data,
-        totalWeeks:    data.totalWeeks   || totalWeeks,
-        totalPeriods:  data.totalPeriods || totalPeriods,
-        subjectId:     data.subjectId ? this.oid(data.subjectId) : undefined,
-        tenantId:      this.tid(tenantId),
-        institutionId: this.oid(institutionId),
-        createdBy:     this.oid(userId),
-      });
-    } catch (e: any) { throw new BadRequestException(e.message); }
-  }
-
-  async updateSyllabus(tenantId: string, id: string, data: any) {
-    const update: any = { ...data };
-    if (data.units) {
-      update.totalWeeks   = data.units.reduce((s: number, u: any) => s + (u.weeks || 0), 0);
-      update.totalPeriods = data.units.reduce((s: number, u: any) => s + (u.periods || 0), 0);
-    }
-    const doc = await this.syllabusModel
-      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: update }, { new: true })
-      .lean();
-    if (!doc) throw new NotFoundException('Syllabus not found');
-    return doc;
-  }
-
-  async addUnit(tenantId: string, id: string, unit: any) {
-    const doc = await this.syllabusModel
-      .findOneAndUpdate(
-        { _id: id, tenantId: this.tid(tenantId) },
-        {
-          $push: { units: unit },
-          $inc:  { totalWeeks: unit.weeks || 0, totalPeriods: unit.periods || 0 },
-        },
-        { new: true },
-      )
-      .lean();
-    if (!doc) throw new NotFoundException('Syllabus not found');
-    return doc;
-  }
-
-  async approveSyllabus(tenantId: string, id: string, approverName: string) {
-    const doc = await this.syllabusModel
-      .findOneAndUpdate(
-        { _id: id, tenantId: this.tid(tenantId) },
-        { $set: { status: 'approved', approvedBy: approverName, approvedAt: new Date() } },
-        { new: true },
-      )
-      .lean();
-    if (!doc) throw new NotFoundException('Syllabus not found');
-    return doc;
-  }
+  // Syllabus CRUD/tracking/approval has moved entirely to the new unified
+  // SyllabusModule (src/syllabus/) - this used to be a parallel,
+  // design-only system with no tracking, disconnected from Teaching
+  // Management's separate SyllabusCoverage collection. The dashboard count
+  // above still reads the same underlying (now-shared) collection.
 
   // ─── LIBRARY — STATS ──────────────────────────────────────────────────────────
 

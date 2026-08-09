@@ -60,16 +60,8 @@ export class TeachingController {
   @Patch('timetable/:id')
   updateTimetable(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateTimetable(req.user.tenantId, id, body); }
 
-  // ── SYLLABUS ──────────────────────────────────────────────────────────────────
-
-  @Patch('syllabus/:id/chapter/:index')
-  updateChapter(@Request() req, @Param('id') id: string, @Param('index') idx: string, @Body() body: any) { return this.teachingService.updateChapterCoverage(req.user.tenantId, id, parseInt(idx), body); }
-
-  @Get('syllabus')
-  getSyllabus(@Request() req, @Query() q: any) { return this.teachingService.getSyllabusCoverage(req.user.tenantId, q); }
-
-  @Post('syllabus')
-  upsertSyllabus(@Request() req, @Body() body: any) { return this.teachingService.upsertSyllabusCoverage(req.user.tenantId, req.user.institutionId, body); }
+  // Syllabus tracking endpoints have moved to the new unified /syllabus
+  // module - the frontend now calls that directly.
 
   // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 

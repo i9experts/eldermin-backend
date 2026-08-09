@@ -4,7 +4,6 @@ import { Model, Types } from 'mongoose';
 import { TeacherProfile, TeacherProfileDocument } from './schemas/teacher-profile.schema';
 import { LessonPlan, LessonPlanDocument } from './schemas/lesson-plan.schema';
 import { Timetable, TimetableDocument } from './schemas/timetable.schema';
-import { SyllabusCoverage, SyllabusCoverageDocument } from './schemas/syllabus-coverage.schema';
 import { Assignment, AssignmentDocument } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.schema';
 
@@ -14,7 +13,6 @@ export class TeachingService {
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(LessonPlan.name) private lessonPlanModel: Model<LessonPlanDocument>,
     @InjectModel(Timetable.name) private timetableModel: Model<TimetableDocument>,
-    @InjectModel(SyllabusCoverage.name) private syllabusModel: Model<SyllabusCoverageDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(BehaviourNote.name) private behaviourModel: Model<BehaviourNoteDocument>,
   ) {}
@@ -189,62 +187,10 @@ export class TeachingService {
     }).lean();
   }
 
-  // ── SYLLABUS ──────────────────────────────────────────────────────────────────
-
-  async getSyllabusCoverage(tenantId: string, query: any = {}) {
-    const filter: any = { tenantId: this.tid(tenantId) };
-    if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
-    if (query.subject) filter.subject = query.subject;
-    if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
-    return this.syllabusModel.find(filter).lean();
-  }
-
-  async upsertSyllabusCoverage(tenantId: string, institutionId: string, data: any) {
-    const { teacherId, subject, gradeLevel, academicYearId } = data;
-    return this.syllabusModel.findOneAndUpdate(
-      {
-        tenantId: this.tid(tenantId),
-        teacherId: new Types.ObjectId(teacherId),
-        subject,
-        gradeLevel,
-        academicYearId: new Types.ObjectId(academicYearId),
-      },
-      {
-        $set: {
-          ...data,
-          tenantId: this.tid(tenantId),
-          institutionId: new Types.ObjectId(institutionId),
-          lastUpdatedAt: new Date(),
-        },
-      },
-      { upsert: true, new: true },
-    ).lean();
-  }
-
-  async updateChapterCoverage(tenantId: string, id: string, chapterIndex: number, data: any) {
-    const coverage = await this.syllabusModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
-    if (!coverage) throw new NotFoundException('Coverage record not found');
-
-    const field = `chapters.${chapterIndex}`;
-    const update: any = { [`${field}.isCovered`]: data.isCovered };
-    if (data.isCovered) update[`${field}.coveredDate`] = new Date();
-    if (data.notes) update[`${field}.notes`] = data.notes;
-
-    const updated = await this.syllabusModel.findByIdAndUpdate(
-      id, { $set: update }, { new: true },
-    ).lean();
-
-    const covered = (updated as any).chapters.filter((c: any) => c.isCovered).length;
-    const total = (updated as any).chapters.length;
-    const pct = total > 0 ? Math.round((covered / total) * 100) : 0;
-    const trackStatus = pct === 100 ? 'completed' : pct >= 60 ? 'on_track' : pct > 0 ? 'behind' : 'not_started';
-
-    return this.syllabusModel.findByIdAndUpdate(
-      id,
-      { $set: { coveredTopics: covered, totalTopics: total, coveragePct: pct, trackStatus } },
-      { new: true },
-    ).lean();
-  }
+  // Syllabus tracking has moved entirely to the new unified SyllabusModule
+  // (src/syllabus/) - this used to be a parallel, tracking-only collection
+  // completely disconnected from the design-side data in the old Academics
+  // Syllabus collection. The frontend now calls /syllabus directly.
 
   // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 
