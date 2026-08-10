@@ -178,3 +178,9 @@ export class ReportCardQueryDto extends PaginationDto {
   @IsOptional() @IsString() academicYear?: string;
   @IsOptional() @IsBoolean() @Type(() => Boolean) published?: boolean;
 }
+
+export class ClassifyBloomsLevelDto {
+  @IsString() questionText: string;
+  @IsString() questionType: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) options?: string[];
+}

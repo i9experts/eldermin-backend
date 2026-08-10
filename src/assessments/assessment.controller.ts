@@ -12,7 +12,7 @@ import {
   CreateQuestionDto, QuestionQueryDto,
   BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
-  PublishResultDto, ReportCardQueryDto,
+  PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
 } from './dto/assessment.dto';
 
 @Controller('assessments')
@@ -167,6 +167,11 @@ export class AssessmentController {
   async deleteQuestion(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteQuestion(id, schoolSlug);
+  }
+
+  @Post('questions/ai-classify-blooms') @HttpCode(HttpStatus.OK)
+  async classifyBloomsLevel(@Body() dto: ClassifyBloomsLevelDto) {
+    return this.service.classifyBloomsLevel(dto.questionText, dto.questionType, dto.options);
   }
 
   @Post('marks/bulk')

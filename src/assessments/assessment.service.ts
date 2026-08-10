@@ -2,7 +2,8 @@
 // ASSESSMENT SERVICE — Eldermin ERP | NestJS
 // ============================================================
 
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -47,7 +48,83 @@ export class AssessmentService {
     @InjectModel(Question.name) private questionModel: Model<QuestionDocument>,
     @InjectModel(MarkEntry.name) private markModel: Model<MarkEntryDocument>,
     @InjectModel(ReportCard.name) private reportCardModel: Model<ReportCardDocument>,
+    private configService: ConfigService,
   ) {}
+
+  // ============================================================
+  // AI BLOOM'S LEVEL CLASSIFICATION
+  // Assists a teacher's judgement, never replaces it - the suggested
+  // level and reasoning are returned for the teacher to accept or
+  // override; nothing is written to the database by this method itself.
+  // Same secure server-side proxy pattern already used by
+  // AnalyticsService and the ECE AI Observation Assistant - the API key
+  // never reaches the browser.
+  // ============================================================
+  private async callClaude(systemPrompt: string, userMessage: string, maxTokens: number): Promise<string> {
+    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
+    if (!apiKey) throw new InternalServerErrorException('AI assistance is not configured on this server.');
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+        }),
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the AI assistance service.');
+    }
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      throw new BadGatewayException(`AI request failed (${response.status}): ${errBody.slice(0, 200)}`);
+    }
+
+    const result = await response.json();
+    const textBlock = (result?.content || []).find((b: any) => b.type === 'text');
+    return textBlock?.text || '';
+  }
+
+  async classifyBloomsLevel(questionText: string, questionType: string, options?: string[]) {
+    const systemPrompt = `You classify exam/quiz questions against Bloom's Taxonomy for a K-12 school assessment system.
+Return ONLY a JSON object, no markdown, no preamble:
+{
+  "bloomsLevel": one of "remember" | "understand" | "apply" | "analyze" | "evaluate" | "create",
+  "reasoning": string (1-2 sentences explaining why this level fits, referencing the actual cognitive demand of the question)
+}
+Bloom's levels, from lowest to highest cognitive demand:
+- remember: recall facts, terms, basic concepts (e.g. "What is the capital of France?")
+- understand: explain ideas or concepts (e.g. "Explain why plants need sunlight.")
+- apply: use information in a new situation (e.g. "Calculate the area of this triangle.")
+- analyze: draw connections, compare/contrast, break into parts (e.g. "Compare the causes of two historical events.")
+- evaluate: justify a decision or judgement (e.g. "Which solution is more effective, and why?")
+- create: produce new or original work (e.g. "Design an experiment to test this hypothesis.")
+You are assisting a teacher's professional judgement, not replacing it - classify based on the actual cognitive demand of THIS question, not the subject matter alone.`;
+
+    const userMessage = `Question type: ${questionType}\nQuestion: "${questionText}"${options?.length ? `\nOptions: ${JSON.stringify(options)}` : ''}`;
+    const text = await this.callClaude(systemPrompt, userMessage, 200);
+
+    try {
+      const clean = text.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(clean);
+      const validLevels = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create'];
+      if (!validLevels.includes(parsed.bloomsLevel)) {
+        return { bloomsLevel: null, reasoning: null, note: 'Could not determine a confident classification for this question.' };
+      }
+      return { bloomsLevel: parsed.bloomsLevel, reasoning: parsed.reasoning || null };
+    } catch {
+      return { bloomsLevel: null, reasoning: null, note: 'Could not parse a classification this time - try rephrasing the question or set it manually.' };
+    }
+  }
 
   // ============================================================
   // DASHBOARD
