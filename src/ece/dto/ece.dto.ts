@@ -188,3 +188,26 @@ export class UpdateFrameworkMappingDto {
   @IsOptional() @IsString() displayDomainName?: string;
   @IsOptional() @IsString() displaySkillName?: string;
 }
+
+// ── Montessori ────────────────────────────────────────────────
+export class CreateMontessoriMaterialDto {
+  @IsString() name: string;
+  @IsEnum(['practical_life', 'sensorial', 'language', 'mathematics', 'culture']) area: string;
+  @IsOptional() @IsString() ageRangeLabel?: string;
+  @IsOptional() @IsString() prerequisites?: string;
+  @IsOptional() @IsString() directAim?: string;
+  @IsOptional() @IsString() indirectAim?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) presentationSteps?: string[];
+  @IsOptional() @IsString() controlOfError?: string;
+  @IsOptional() @IsArray() @IsString({ each: true }) pointsOfInterest?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) vocabulary?: string[];
+  @IsOptional() @IsArray() @IsString({ each: true }) extensions?: string[];
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) linkedSkillIds?: string[];
+}
+
+export class UpsertWorkRecordDto {
+  @IsMongoId() studentId: string;
+  @IsMongoId() materialId: string;
+  @IsEnum(['presented', 'practising', 'repeated_independently', 'needs_representation', 'mastered', 'ready_for_extension']) status: string;
+  @IsOptional() @IsString() note?: string;
+}

@@ -11,6 +11,7 @@ import {
   CreateLearningExperienceDto, UpdateLearningExperienceDto, UpsertWeeklyPlanDto,
   CreateEnvironmentAreaDto, UpdateEnvironmentAreaDto, LogSafetyCheckDto, AddObservationNoteDto,
   CreateFrameworkMappingDto, UpdateFrameworkMappingDto,
+  CreateMontessoriMaterialDto, UpsertWorkRecordDto,
 } from './dto/ece.dto';
 
 @Controller('ece')
@@ -249,6 +250,33 @@ export class EceController {
   @Delete('framework-mappings/:id')
   deleteFrameworkMapping(@Request() req: any, @Param('id') id: string) {
     return this.service.deleteFrameworkMapping(this.ctx(req).schoolSlug, id);
+  }
+
+  // ── Montessori ──────────────────────────────────────────────
+  @Get('montessori/materials')
+  getMontessoriMaterials(@Request() req: any, @Query('area') area?: string) {
+    return this.service.getMontessoriMaterials(this.ctx(req).schoolSlug, area);
+  }
+
+  @Post('montessori/materials') @HttpCode(HttpStatus.CREATED)
+  createMontessoriMaterial(@Request() req: any, @Body() dto: CreateMontessoriMaterialDto) {
+    return this.service.createMontessoriMaterial(this.ctx(req).schoolSlug, dto);
+  }
+
+  @Post('montessori/materials/seed-classics') @HttpCode(HttpStatus.OK)
+  seedClassicMontessoriMaterials(@Request() req: any) {
+    return this.service.seedClassicMontessoriMaterials(this.ctx(req).schoolSlug);
+  }
+
+  @Get('montessori/work-records/:studentId')
+  getWorkRecords(@Request() req: any, @Param('studentId') studentId: string) {
+    return this.service.getWorkRecords(this.ctx(req).schoolSlug, studentId);
+  }
+
+  @Put('montessori/work-records') @HttpCode(HttpStatus.OK)
+  upsertWorkRecord(@Request() req: any, @Body() dto: UpsertWorkRecordDto) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.upsertWorkRecord(schoolSlug, userName, dto);
   }
 
   // ── Dashboard ──────────────────────────────────────────────

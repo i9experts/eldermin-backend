@@ -11,6 +11,8 @@ import { LearningExperience, LearningExperienceDocument } from './schemas/learni
 import { ECEWeeklyPlan, ECEWeeklyPlanDocument } from './schemas/weekly-plan.schema';
 import { ECEEnvironmentArea, ECEEnvironmentAreaDocument } from './schemas/environment-area.schema';
 import { ECEFrameworkMapping, ECEFrameworkMappingDocument } from './schemas/framework-mapping.schema';
+import { MontessoriMaterial, MontessoriMaterialDocument } from './schemas/montessori-material.schema';
+import { MontessoriWorkRecord, MontessoriWorkRecordDocument } from './schemas/montessori-work-record.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { EmailService } from '../email/email.service';
@@ -41,6 +43,8 @@ export class EceService {
     @InjectModel(ECEWeeklyPlan.name) private weeklyPlanModel: Model<ECEWeeklyPlanDocument>,
     @InjectModel(ECEEnvironmentArea.name) private environmentAreaModel: Model<ECEEnvironmentAreaDocument>,
     @InjectModel(ECEFrameworkMapping.name) private frameworkMappingModel: Model<ECEFrameworkMappingDocument>,
+    @InjectModel(MontessoriMaterial.name) private montessoriMaterialModel: Model<MontessoriMaterialDocument>,
+    @InjectModel(MontessoriWorkRecord.name) private workRecordModel: Model<MontessoriWorkRecordDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private emailService: EmailService,
@@ -449,6 +453,68 @@ export class EceService {
     const mapping = await this.frameworkMappingModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!mapping) throw new NotFoundException('Framework mapping not found');
     return { message: 'Mapping removed' };
+  }
+
+  // ── Montessori Materials & Work Records ────────────────────
+  async getMontessoriMaterials(schoolSlug: string, area?: string) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (area) filter.area = area;
+    return this.montessoriMaterialModel.find(filter).sort({ area: 1, name: 1 }).lean();
+  }
+
+  async createMontessoriMaterial(schoolSlug: string, dto: any) {
+    return this.montessoriMaterialModel.create({ ...dto, schoolSlug });
+  }
+
+  async seedClassicMontessoriMaterials(schoolSlug: string) {
+    const existing = await this.montessoriMaterialModel.countDocuments({ schoolSlug });
+    if (existing > 0) return { message: 'Materials already exist - seed skipped', created: 0 };
+
+    const classics = [
+      { name: 'Pink Tower', area: 'sensorial', ageRangeLabel: '2.5-4', directAim: 'Visual discrimination of dimension', indirectAim: 'Mathematical preparation', controlOfError: 'Visual - a cube out of sequence is immediately obvious' },
+      { name: 'Brown Stair', area: 'sensorial', ageRangeLabel: '3-4', directAim: 'Visual discrimination of thickness', indirectAim: 'Mathematical preparation', controlOfError: 'Visual and muscular' },
+      { name: 'Knobbed Cylinders', area: 'sensorial', ageRangeLabel: '2.5-3.5', directAim: 'Visual discrimination of size, development of fine motor pincer grip', indirectAim: 'Preparation for writing', controlOfError: 'Each cylinder has exactly one correct hole' },
+      { name: 'Sandpaper Letters', area: 'language', ageRangeLabel: '3.5-5', directAim: 'Muscular memory of letter shapes, sound-symbol association', indirectAim: 'Preparation for writing and reading', controlOfError: 'Texture guides the finger along the correct stroke' },
+      { name: 'Number Rods', area: 'mathematics', ageRangeLabel: '3.5-5', directAim: 'Association of quantity with length, counting 1-10', indirectAim: 'Preparation for arithmetic', controlOfError: 'Visual - rods placed in sequence form a clear staircase' },
+      { name: 'Golden Beads', area: 'mathematics', ageRangeLabel: '4-6', directAim: 'Understanding of the decimal system (units, tens, hundreds, thousands)', indirectAim: 'Preparation for the four operations', controlOfError: 'Physical quantity makes an incorrect exchange obvious' },
+    ];
+    for (const m of classics) {
+      await this.montessoriMaterialModel.create({ ...m, schoolSlug });
+    }
+    return { message: `Seeded ${classics.length} classic materials`, created: classics.length };
+  }
+
+  async getWorkRecords(schoolSlug: string, studentId: string) {
+    return this.workRecordModel.find({ schoolSlug, studentId: new Types.ObjectId(studentId) }).populate('materialId').lean();
+  }
+
+  // Upserts (one record per child+material) - logging a presentation for
+  // a material a child has already started just advances/updates the
+  // same record and increments practiceCount, rather than creating
+  // duplicate rows every time a Directress logs the same material again.
+  async upsertWorkRecord(schoolSlug: string, presentedBy: string, dto: any) {
+    const existing = await this.workRecordModel.findOne({
+      schoolSlug, studentId: new Types.ObjectId(dto.studentId), materialId: new Types.ObjectId(dto.materialId),
+    });
+
+    if (existing) {
+      existing.status = dto.status;
+      existing.practiceCount += 1;
+      if (dto.note) existing.observationNotes.push(`${new Date().toLocaleDateString()}: ${dto.note}`);
+      await existing.save();
+      return existing;
+    }
+
+    return this.workRecordModel.create({
+      schoolSlug,
+      studentId: dto.studentId,
+      materialId: dto.materialId,
+      status: dto.status,
+      presentationDate: new Date(),
+      practiceCount: 1,
+      observationNotes: dto.note ? [`${new Date().toLocaleDateString()}: ${dto.note}`] : [],
+      presentedBy,
+    });
   }
 
   // ── Children roster (real Student records filtered to Early Years -
