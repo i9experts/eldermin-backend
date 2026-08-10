@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -48,6 +49,7 @@ export class EceService {
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private emailService: EmailService,
+    private configService: ConfigService,
   ) {}
 
   // ── Framework ──────────────────────────────────────────────
@@ -515,6 +517,118 @@ export class EceService {
       observationNotes: dto.note ? [`${new Date().toLocaleDateString()}: ${dto.note}`] : [],
       presentedBy,
     });
+  }
+
+  // ── AI Observation Assistant & Quality Checker ──────────────
+  // AI assists professional judgement, never replaces it - both methods
+  // return suggestions the teacher must explicitly Accept/Edit/Reject;
+  // neither one writes anything to the database itself. Same secure
+  // server-side proxy pattern already used by AnalyticsService - the API
+  // key never reaches the browser.
+  private async callClaude(systemPrompt: string, userMessage: string, maxTokens: number): Promise<string> {
+    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
+    if (!apiKey) throw new InternalServerErrorException('AI assistance is not configured on this server.');
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+        }),
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the AI assistance service.');
+    }
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      throw new BadGatewayException(`AI request failed (${response.status}): ${errBody.slice(0, 200)}`);
+    }
+
+    const result = await response.json();
+    const textBlock = (result?.content || []).find((b: any) => b.type === 'text');
+    return textBlock?.text || '';
+  }
+
+  async suggestObservationMappings(schoolSlug: string, narrative: string) {
+    const domains = await this.domainModel.find({ schoolSlug, isActive: true }).lean();
+    const skills = await this.skillModel.find({ schoolSlug, isActive: true }).lean();
+    const domainNameById = new Map(domains.map((d: any) => [String(d._id), d.name]));
+
+    // The model is given the REAL skill list and instructed to only
+    // return skillIds from it - never allowed to invent a skill that
+    // doesn't exist in this school's actual ontology.
+    const skillCatalog = skills.map((s: any) => ({
+      skillId: String(s._id), skillName: s.name, domainName: domainNameById.get(String(s.domainId)) || 'Unknown',
+    }));
+
+    if (skillCatalog.length === 0) {
+      return { suggestions: [], suggestedNextStep: null, note: 'No skills configured yet for this school - add some in Settings first.' };
+    }
+
+    const systemPrompt = `You are assisting an Early Years educator in mapping a real classroom observation to their school's developmental skill catalog.
+Return ONLY a JSON object, no markdown, no preamble:
+{
+  "suggestions": [{ "skillId": string (MUST be one of the provided skillIds, never invented), "reasoning": string (1 sentence, why this skill fits) }],
+  "suggestedNextStep": string or null (a concrete, specific activity to offer next based on what was observed)
+}
+Suggest at most 4 skills. Only suggest skills that are genuinely, specifically evidenced by the observation - do not pad the list. If nothing in the catalog fits well, return an empty suggestions array rather than forcing a weak match.
+You are assisting professional judgement, not replacing it - the educator will review, edit, and decide, so favor precision over volume.`;
+
+    const userMessage = `Skill catalog:\n${JSON.stringify(skillCatalog)}\n\nObservation:\n"${narrative}"`;
+    const text = await this.callClaude(systemPrompt, userMessage, 600);
+
+    try {
+      const clean = text.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(clean);
+      const validSkillIds = new Set(skillCatalog.map((s) => s.skillId));
+      // Defensive re-validation - even though the prompt instructs the
+      // model to only use real skillIds, never trust an LLM's output as
+      // structurally guaranteed. Anything not in the real catalog is
+      // dropped rather than surfaced.
+      const suggestions = (parsed.suggestions || [])
+        .filter((s: any) => validSkillIds.has(s.skillId))
+        .map((s: any) => {
+          const catalogEntry = skillCatalog.find((c) => c.skillId === s.skillId)!;
+          return { skillId: s.skillId, skillName: catalogEntry.skillName, domainName: catalogEntry.domainName, reasoning: s.reasoning };
+        });
+      return { suggestions, suggestedNextStep: parsed.suggestedNextStep || null };
+    } catch {
+      return { suggestions: [], suggestedNextStep: null, note: 'Could not parse a suggestion this time - try rephrasing or map manually.' };
+    }
+  }
+
+  async checkObservationQuality(narrative: string) {
+    if (!narrative || narrative.trim().length < 3) {
+      return { isVague: false, feedback: null };
+    }
+
+    const systemPrompt = `You review Early Childhood Education observation notes for specificity, the way NAEYC-aligned practice expects: authentic, concrete, evidence-based documentation rather than vague summary judgements.
+Return ONLY a JSON object, no markdown, no preamble:
+{
+  "isVague": boolean,
+  "feedback": string or null (if vague: a short, specific, constructive prompt asking what the child actually did - never harsh, never a lecture),
+  "example": string or null (if vague: ONE brief example of what a more specific version might look like, invented as illustration only - not a claim about what actually happened)
+}
+Vague examples: "Ahmed was good today", "Fatima did well", "Great session". Specific examples: "Fatima independently counted eight beads and matched them with numeral 8", "Ahmed used a tripod grip independently while cutting along a curved line".
+Be lenient - only flag genuinely vague notes, not notes that are simply brief but concrete.`;
+
+    const text = await this.callClaude(systemPrompt, `Observation note:\n"${narrative}"`, 250);
+    try {
+      const clean = text.replace(/```json|```/g, '').trim();
+      return JSON.parse(clean);
+    } catch {
+      return { isVague: false, feedback: null };
+    }
   }
 
   // ── Children roster (real Student records filtered to Early Years -

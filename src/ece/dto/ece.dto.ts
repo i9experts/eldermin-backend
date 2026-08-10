@@ -211,3 +211,11 @@ export class UpsertWorkRecordDto {
   @IsEnum(['presented', 'practising', 'repeated_independently', 'needs_representation', 'mastered', 'ready_for_extension']) status: string;
   @IsOptional() @IsString() note?: string;
 }
+
+// ── AI Assistance ─────────────────────────────────────────────
+export class SuggestMappingsDto {
+  @IsString() narrative: string;
+}
+export class CheckQualityDto {
+  @IsString() narrative: string;
+}

@@ -12,6 +12,7 @@ import {
   CreateEnvironmentAreaDto, UpdateEnvironmentAreaDto, LogSafetyCheckDto, AddObservationNoteDto,
   CreateFrameworkMappingDto, UpdateFrameworkMappingDto,
   CreateMontessoriMaterialDto, UpsertWorkRecordDto,
+  SuggestMappingsDto, CheckQualityDto,
 } from './dto/ece.dto';
 
 @Controller('ece')
@@ -277,6 +278,17 @@ export class EceController {
   upsertWorkRecord(@Request() req: any, @Body() dto: UpsertWorkRecordDto) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.upsertWorkRecord(schoolSlug, userName, dto);
+  }
+
+  // ── AI Assistance ───────────────────────────────────────────
+  @Post('ai/suggest-mappings') @HttpCode(HttpStatus.OK)
+  suggestMappings(@Request() req: any, @Body() dto: SuggestMappingsDto) {
+    return this.service.suggestObservationMappings(this.ctx(req).schoolSlug, dto.narrative);
+  }
+
+  @Post('ai/check-quality') @HttpCode(HttpStatus.OK)
+  checkQuality(@Body() dto: CheckQualityDto) {
+    return this.service.checkObservationQuality(dto.narrative);
   }
 
   // ── Dashboard ──────────────────────────────────────────────
