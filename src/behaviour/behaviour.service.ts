@@ -3,7 +3,7 @@
 // Eldermin ERP | NestJS + MongoDB
 // ============================================================
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -15,14 +15,22 @@ import {
   BehaviourContract, BehaviourContractDocument,
   TARBIYAH_TRAITS,
 } from './schemas/behaviour.schema';
+import {
+  CharacterProgramSettings, CharacterProgramSettingsDocument,
+} from './schemas/character-program-settings.schema';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
-const getTarbiyahRating = (avg: number): string => {
-  if (avg >= 4.5) return 'excellent';
-  if (avg >= 3.5) return 'good';
-  if (avg >= 2.5) return 'satisfactory';
-  if (avg >= 1.5) return 'needs_improvement';
+// Percentage-based rather than a raw 1-5 average, so this works
+// correctly regardless of a school's actual configured rating scale.
+// Thresholds match the original 1-5 assumption exactly (4.5/5=90%,
+// 3.5/5=70%, 2.5/5=50%, 1.5/5=30%) - identical behavior for schools on
+// the default scale, correct generalization for any other.
+const getTarbiyahRating = (pct: number): string => {
+  if (pct >= 90) return 'excellent';
+  if (pct >= 70) return 'good';
+  if (pct >= 50) return 'satisfactory';
+  if (pct >= 30) return 'needs_improvement';
   return 'critical';
 };
 
@@ -34,6 +42,7 @@ export class BehaviourService {
     @InjectModel(CounsellingSession.name) private counsellingModel: Model<CounsellingSessionDocument>,
     @InjectModel(Intervention.name) private interventionModel: Model<InterventionDocument>,
     @InjectModel(BehaviourContract.name) private contractModel: Model<BehaviourContractDocument>,
+    @InjectModel(CharacterProgramSettings.name) private characterSettingsModel: Model<CharacterProgramSettingsDocument>,
   ) {}
 
   // ============================================================
@@ -244,21 +253,60 @@ export class BehaviourService {
   }
 
   // ============================================================
+  // CHARACTER PROGRAMME SETTINGS
+  // Real, school-editable display name / characteristics / rating scale
+  // - a school can run their own distinct character-building programme
+  // without it looking like a re-skin of the built-in Tarbiyah defaults.
+  // ============================================================
+  async getCharacterSettings(schoolSlug: string) {
+    const existing = await this.characterSettingsModel.findOne({ schoolSlug }).lean();
+    if (existing) return existing;
+    // Backward-compatible default: existing schools see the exact same
+    // Tarbiyah traits and 1-5 scale they've always had, until they
+    // explicitly customize it.
+    return {
+      schoolSlug,
+      moduleDisplayName: 'Tarbiyah',
+      characteristics: TARBIYAH_TRAITS,
+      ratingScale: { min: 1, max: 5, labels: [] },
+    };
+  }
+
+  async updateCharacterSettings(schoolSlug: string, dto: any) {
+    return this.characterSettingsModel.findOneAndUpdate(
+      { schoolSlug },
+      { $set: dto },
+      { upsert: true, new: true },
+    );
+  }
+
+  // ============================================================
   // TARBIYAH ASSESSMENTS
   // ============================================================
-  async createTarbiyahAssessment(data: any) {
+  async createTarbiyahAssessment(schoolSlug: string, data: any) {
+    const settings = await this.getCharacterSettings(schoolSlug);
+    const { min, max } = settings.ratingScale;
     const traits = data.traits || [];
+
+    for (const t of traits) {
+      if (t.score < min || t.score > max) {
+        throw new BadRequestException(`Score for "${t.traitKey}" must be between ${min} and ${max} (this school's configured scale)`);
+      }
+    }
+
     const avgScore = traits.length > 0
       ? traits.reduce((a: number, t: any) => a + t.score, 0) / traits.length : 0;
-    const overallPercentage = (avgScore / 5) * 100;
+    const range = max - min || 1;
+    const overallPercentage = ((avgScore - min) / range) * 100;
 
     const assessment = new this.tarbiyahModel({
       ...data,
+      schoolSlug,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       assessmentDate: new Date(data.assessmentDate),
       overallScore: parseFloat(avgScore.toFixed(2)),
       overallPercentage: parseFloat(overallPercentage.toFixed(1)),
-      overallRating: getTarbiyahRating(avgScore),
+      overallRating: getTarbiyahRating(overallPercentage),
     });
     return assessment.save();
   }
@@ -314,6 +362,22 @@ export class BehaviourService {
   }
 
   async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any) {
+    if (data.traits) {
+      const settings = await this.getCharacterSettings(schoolSlug);
+      const { min, max } = settings.ratingScale;
+      for (const t of data.traits) {
+        if (t.score < min || t.score > max) {
+          throw new BadRequestException(`Score for "${t.traitKey}" must be between ${min} and ${max} (this school's configured scale)`);
+        }
+      }
+      const avgScore = data.traits.length > 0
+        ? data.traits.reduce((a: number, t: any) => a + t.score, 0) / data.traits.length : 0;
+      const range = max - min || 1;
+      const overallPercentage = ((avgScore - min) / range) * 100;
+      data.overallScore = parseFloat(avgScore.toFixed(2));
+      data.overallPercentage = parseFloat(overallPercentage.toFixed(1));
+      data.overallRating = getTarbiyahRating(overallPercentage);
+    }
     return this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
   }
 

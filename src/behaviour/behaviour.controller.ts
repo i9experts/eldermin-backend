@@ -107,11 +107,23 @@ export class BehaviourController {
   @HttpCode(HttpStatus.CREATED)
   async createTarbiyah(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, academicYear, userName } = this.ctx(req);
-    return this.service.createTarbiyahAssessment({
+    return this.service.createTarbiyahAssessment(schoolSlug, {
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       assessedBy: dto.assessedBy || userName,
     });
+  }
+
+  @Get('character-settings')
+  async getCharacterSettings(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCharacterSettings(schoolSlug);
+  }
+
+  @Put('character-settings')
+  async updateCharacterSettings(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCharacterSettings(schoolSlug, dto);
   }
 
   @Put('tarbiyah/:id')

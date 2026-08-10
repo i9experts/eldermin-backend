@@ -131,7 +131,11 @@ export const TARBIYAH_TRAITS = [
 @Schema({ _id: false })
 class TraitScore {
   @Prop({ required: true }) traitKey: string;
-  @Prop({ required: true, min: 1, max: 5 }) score: number; // 1-5 scale
+  // No hardcoded min/max here anymore - a school's rating scale is now
+  // real, configurable data (CharacterProgramSettings), not a fixed 1-5.
+  // Real bounds-checking against the school's actual configured scale
+  // happens in BehaviourService.createTarbiyahAssessment/update.
+  @Prop({ required: true }) score: number;
   @Prop() observation: string;
 }
 const TraitScoreSchema = SchemaFactory.createForClass(TraitScore);

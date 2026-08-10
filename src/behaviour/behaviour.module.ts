@@ -9,6 +9,9 @@ import {
   Intervention, InterventionSchema,
   BehaviourContract, BehaviourContractSchema,
 } from './schemas/behaviour.schema';
+import {
+  CharacterProgramSettings, CharacterProgramSettingsSchema,
+} from './schemas/character-program-settings.schema';
 
 @Module({
   imports: [
@@ -18,6 +21,7 @@ import {
       { name: CounsellingSession.name, schema: CounsellingSessionSchema },
       { name: Intervention.name, schema: InterventionSchema },
       { name: BehaviourContract.name, schema: BehaviourContractSchema },
+      { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },
     ]),
   ],
   controllers: [BehaviourController],
