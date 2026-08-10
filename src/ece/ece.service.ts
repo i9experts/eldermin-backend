@@ -604,4 +604,85 @@ export class EceService {
     const bytes = await pdfDoc.save();
     return Buffer.from(bytes);
   }
+
+  // ── Coordinator / Principal Insights ────────────────────────
+  // The one dashboard nobody above a single teacher has had until now.
+  // Deliberately scoped to what's genuinely computable from real data -
+  // "Evidence Quality" (is a narrative actually specific vs vague) is NOT
+  // included here, since judging that honestly needs the AI Quality
+  // Checker from the V2.5 roadmap, not a keyword heuristic pretending to
+  // be real analysis.
+  async getCoordinatorInsights(schoolSlug: string) {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now); sevenDaysAgo.setDate(now.getDate() - 7);
+    const thirtyDaysAgo = new Date(now); thirtyDaysAgo.setDate(now.getDate() - 30);
+
+    const children = await this.studentModel
+      .find({ schoolSlug, programType: 'early-years', status: { $ne: 'inactive' } })
+      .select('_id firstName lastName currentGrade currentSection')
+      .lean();
+    const childIds = children.map((c: any) => c._id);
+    const totalChildren = children.length;
+
+    // ── Observation coverage ──
+    const observedLast7 = await this.observationModel.distinct('studentId', { schoolSlug, createdAt: { $gte: sevenDaysAgo } });
+    const observedLast30 = await this.observationModel.distinct('studentId', { schoolSlug, createdAt: { $gte: thirtyDaysAgo } });
+    const observedLast7Set = new Set(observedLast7.map(String));
+    const neverObserved7 = children.filter((c: any) => !observedLast7Set.has(String(c._id)));
+
+    // ── Domain coverage - are children getting balanced attention across
+    // domains, or is one domain doing all the work? ──
+    const domains = await this.domainModel.find({ schoolSlug, isActive: true }).sort({ order: 1 }).lean();
+    const recentObservations = await this.observationModel
+      .find({ schoolSlug, createdAt: { $gte: thirtyDaysAgo } })
+      .select('skillMappings')
+      .lean();
+    const skillIds = [...new Set(recentObservations.flatMap((o: any) => o.skillMappings.map((m: any) => String(m.skillId))))];
+    const skills = await this.skillModel.find({ _id: { $in: skillIds } }).lean();
+    const skillToDomain = new Map(skills.map((s: any) => [String(s._id), String(s.domainId)]));
+    const domainCounts = new Map<string, number>();
+    for (const obs of recentObservations as any[]) {
+      for (const m of obs.skillMappings) {
+        const domainId = skillToDomain.get(String(m.skillId));
+        if (domainId) domainCounts.set(domainId, (domainCounts.get(domainId) || 0) + 1);
+      }
+    }
+    const domainCoverage = domains.map((d: any) => ({
+      domainId: d._id, domainName: d.name, observationCount: domainCounts.get(String(d._id)) || 0,
+    }));
+
+    // ── Environment quality - which areas are stale ──
+    const areas = await this.environmentAreaModel.find({ schoolSlug, isActive: true }).lean();
+    const staleAreas = areas.filter((a: any) => {
+      const rotationStale = !a.rotationDate || (now.getTime() - new Date(a.rotationDate).getTime()) / 86400000 > 21;
+      const safetyStale = !a.lastSafetyCheckDate || (now.getTime() - new Date(a.lastSafetyCheckDate).getTime()) / 86400000 > 30;
+      return rotationStale || safetyStale;
+    }).map((a: any) => ({ _id: a._id, name: a.name }));
+
+    // ── Family engagement - of what's shared, how much gets a response? ──
+    const sharedCount = await this.portfolioModel.countDocuments({ schoolSlug, isVisibleToFamily: true });
+    const respondedCount = await this.portfolioModel.countDocuments({ schoolSlug, isVisibleToFamily: true, familyResponse: { $ne: null } });
+
+    // ── Educator workload - who's actively observing, who's behind ──
+    const workloadAgg = await this.observationModel.aggregate([
+      { $match: { schoolSlug, createdAt: { $gte: sevenDaysAgo } } },
+      { $group: { _id: '$observedBy', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+
+    return {
+      totalChildren,
+      observedLast7Days: observedLast7.length,
+      observedLast30Days: observedLast30.length,
+      neverObservedLast7Days: neverObserved7.map((c: any) => ({ _id: c._id, name: `${c.firstName} ${c.lastName}` })),
+      domainCoverage,
+      staleEnvironmentAreas: staleAreas,
+      familyEngagement: {
+        sharedCount,
+        respondedCount,
+        responseRate: sharedCount > 0 ? Math.round((respondedCount / sharedCount) * 100) : null,
+      },
+      educatorWorkload: workloadAgg.map((w: any) => ({ teacherName: w._id, observationsLast7Days: w.count })),
+    };
+  }
 }

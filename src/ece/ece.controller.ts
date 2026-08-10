@@ -262,4 +262,9 @@ export class EceController {
     const { schoolSlug, userId } = this.ctx(req);
     return this.service.getTeacherDashboard(schoolSlug, userId);
   }
+
+  @Get('coordinator/coverage')
+  getCoordinatorInsights(@Request() req: any) {
+    return this.service.getCoordinatorInsights(this.ctx(req).schoolSlug);
+  }
 }
