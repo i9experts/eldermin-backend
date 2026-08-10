@@ -65,6 +65,11 @@ export class EceController {
     return this.service.seedDefaultDomains(this.ctx(req).schoolSlug);
   }
 
+  @Post('domains/seed-pakistan-snc') @HttpCode(HttpStatus.OK)
+  seedPakistanNationalCurriculum(@Request() req: any) {
+    return this.service.seedPakistanNationalCurriculum(this.ctx(req).schoolSlug);
+  }
+
   // ── Skills ─────────────────────────────────────────────────
   @Get('skills')
   getSkills(@Request() req: any, @Query('domainId') domainId?: string) {

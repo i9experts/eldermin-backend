@@ -14,6 +14,7 @@ import { ECEEnvironmentArea, ECEEnvironmentAreaDocument } from './schemas/enviro
 import { ECEFrameworkMapping, ECEFrameworkMappingDocument } from './schemas/framework-mapping.schema';
 import { MontessoriMaterial, MontessoriMaterialDocument } from './schemas/montessori-material.schema';
 import { MontessoriWorkRecord, MontessoriWorkRecordDocument } from './schemas/montessori-work-record.schema';
+import { SNC_ECE_PAKISTAN } from './seed-data/snc-ece-pakistan.data';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { EmailService } from '../email/email.service';
@@ -108,6 +109,72 @@ export class EceService {
       }
     }
     return { message: `Seeded ${DEFAULT_DOMAINS.length} domains and ${created} skills`, created };
+  }
+
+  // Seeds Pakistan's real, official Single National Curriculum for ECE
+  // (SNC-ECE) as a 'national' Framework - 7 real Key Learning Areas, 26
+  // real Strands, 219 real coded Learning Outcomes with age-band
+  // differentiation where the source curriculum itself distinguishes
+  // them. This creates its OWN domains/skills alongside whatever else a
+  // school already has (e.g. Montessori) rather than trying to merge
+  // into a possibly-different existing ontology - a school running both
+  // is a real, valid outcome matching the PRD's "Hybrid" framework
+  // concept, not a bug.
+  async seedPakistanNationalCurriculum(schoolSlug: string) {
+    const existingFramework = await this.frameworkModel.findOne({ schoolSlug, type: 'national', name: /SNC/i });
+    if (existingFramework) return { message: 'Pakistan SNC-ECE curriculum already seeded - skipped', created: 0 };
+
+    const framework = await this.frameworkModel.create({
+      schoolSlug,
+      name: 'Pakistan National Curriculum (SNC) - ECE',
+      type: 'national',
+    });
+
+    const ageBandByLabel = new Map<string, Types.ObjectId>();
+    const bandDefs = [
+      { label: '3-4 years', minMonths: 36, maxMonths: 48, order: 0 },
+      { label: '4-5 years', minMonths: 48, maxMonths: 60, order: 1 },
+    ];
+    for (const b of bandDefs) {
+      let band = await this.ageBandModel.findOne({ schoolSlug, label: b.label });
+      if (!band) band = await this.ageBandModel.create({ schoolSlug, ...b });
+      ageBandByLabel.set(b.label, band._id as Types.ObjectId);
+    }
+
+    let domainCount = 0, skillCount = 0, indicatorCount = 0;
+    for (let di = 0; di < SNC_ECE_PAKISTAN.domains.length; di++) {
+      const domainSeed = SNC_ECE_PAKISTAN.domains[di];
+      const domain = await this.domainModel.create({
+        schoolSlug, name: domainSeed.name, canonicalKey: `snc.${domainSeed.canonicalKey}`, order: di,
+      });
+      domainCount++;
+
+      for (const skillSeed of domainSeed.skills) {
+        const skill = await this.skillModel.create({
+          schoolSlug,
+          domainId: domain._id,
+          name: skillSeed.name,
+          subDomainName: skillSeed.subDomainName,
+          canonicalKey: `snc.${skillSeed.canonicalKey}`,
+        });
+        skillCount++;
+
+        for (const indicatorSeed of skillSeed.indicators) {
+          await this.indicatorModel.create({
+            schoolSlug,
+            skillId: skill._id,
+            text: indicatorSeed.text,
+            ageBandId: indicatorSeed.ageBand ? ageBandByLabel.get(indicatorSeed.ageBand) : undefined,
+          });
+          indicatorCount++;
+        }
+      }
+    }
+
+    return {
+      message: `Seeded Pakistan SNC-ECE: ${domainCount} domains, ${skillCount} strands, ${indicatorCount} learning outcomes`,
+      frameworkId: framework._id, domainCount, skillCount, indicatorCount,
+    };
   }
 
   async getSkills(schoolSlug: string, domainId?: string) {
