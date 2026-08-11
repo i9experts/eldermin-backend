@@ -114,10 +114,37 @@ export class Campus {
   @Prop() capacity: number;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Optional - most schools have zero or one cluster and never touch
+  // this. Real value only for multi-campus networks/trusts grouping
+  // many campuses into supervised regions (e.g. a 200-campus rural
+  // network where Supervisors oversee one cluster each).
+  @Prop({ type: Types.ObjectId, ref: 'Cluster', default: null }) clusterId: Types.ObjectId | null;
 }
 
 export const CampusSchema = SchemaFactory.createForClass(Campus);
 CampusSchema.index({ schoolSlug: 1, isActive: 1 });
+CampusSchema.index({ schoolSlug: 1, clusterId: 1 });
+
+// ============================================================
+// CLUSTER — groups multiple campuses into a supervised region.
+// Real, schoolSlug-scoped entity (matching Campus's own convention,
+// since a Cluster directly groups Campuses) - most single-campus or
+// small multi-campus schools will never create one; this exists for
+// large networks/trusts that genuinely need a layer above Campus.
+// ============================================================
+export type ClusterDocument = Cluster & Document;
+
+@Schema({ timestamps: true, collection: 'clusters' })
+export class Cluster {
+  @Prop({ required: true, index: true }) schoolSlug: string;
+  @Prop({ required: true }) name: string; // e.g. "Multan North Cluster"
+  @Prop() region: string; // e.g. "Punjab - South"
+  @Prop() description: string;
+  @Prop({ default: true }) isActive: boolean;
+}
+
+export const ClusterSchema = SchemaFactory.createForClass(Cluster);
+ClusterSchema.index({ schoolSlug: 1, isActive: 1 });
 
 // ============================================================
 // ACADEMIC YEAR

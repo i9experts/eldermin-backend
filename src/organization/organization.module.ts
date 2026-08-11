@@ -7,6 +7,7 @@ import { InstitutionSetupService } from './institution-setup.service';
 import {
   School, SchoolSchema,
   Campus, CampusSchema,
+  Cluster, ClusterSchema,
   AcademicYear, AcademicYearSchema,
   Grade, GradeSchema,
   Department, DepartmentSchema,
@@ -21,6 +22,7 @@ import {
 } from './schemas/institution-setup.schema';
 import { GroupInstitution, GroupInstitutionSchema } from './schemas/group-institution.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { StudentAttendance, StudentAttendanceSchema, StudentFee, StudentFeeSchema } from '../students/schemas/student-supporting.schema';
 import { UploadModule } from '../upload/upload.module';
 import { EmailModule } from '../email/email.module';
 
@@ -31,6 +33,7 @@ import { EmailModule } from '../email/email.module';
     MongooseModule.forFeature([
       { name: School.name, schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },
+      { name: Cluster.name, schema: ClusterSchema },
       { name: AcademicYear.name, schema: AcademicYearSchema },
       { name: Grade.name, schema: GradeSchema },
       { name: Department.name, schema: DepartmentSchema },
@@ -42,6 +45,8 @@ import { EmailModule } from '../email/email.module';
       { name: AuthorityDelegation.name, schema: AuthorityDelegationSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: Student.name, schema: StudentSchema },
+      { name: StudentAttendance.name, schema: StudentAttendanceSchema },
+      { name: StudentFee.name, schema: StudentFeeSchema },
     ]),
   ],
   controllers: [OrganizationController, InstitutionSetupController],

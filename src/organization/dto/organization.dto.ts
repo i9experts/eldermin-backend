@@ -44,6 +44,13 @@ export class CreateCampusDto {
   schoolSlug?: string;
 }
 
+export class CreateClusterDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() region?: string;
+  @IsOptional() @IsString() description?: string;
+  schoolSlug?: string;
+}
+
 export class CreateAcademicYearDto {
   @IsString() name: string;
   @IsDateString() startDate: string;

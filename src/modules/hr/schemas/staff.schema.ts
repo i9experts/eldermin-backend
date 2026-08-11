@@ -202,8 +202,22 @@ export class Staff {
     default: [],
   })
   documents: Record<string, any>[];
+
+  // Optional - which Clusters (real Cluster entities, referenced by
+  // ObjectId regardless of Staff's own tenantId/institutionId
+  // convention vs Cluster's schoolSlug convention) this staff member
+  // supervises. Empty for the vast majority of staff; real for
+  // Supervisor/Regional Educator roles in large multi-campus networks.
+  @Prop({ type: [Types.ObjectId], ref: 'Cluster', default: [] })
+  supervisedClusterIds: Types.ObjectId[];
+
+  // true for Board-level staff who see every cluster/campus aggregated,
+  // regardless of any specific cluster assignment above.
+  @Prop({ default: false })
+  isBoardLevel: boolean;
 }
 
 export const StaffSchema = SchemaFactory.createForClass(Staff);
 StaffSchema.index({ tenantId: 1, employeeId: 1 }, { unique: true });
 StaffSchema.index({ tenantId: 1, email: 1 }, { sparse: true });
+StaffSchema.index({ supervisedClusterIds: 1 });

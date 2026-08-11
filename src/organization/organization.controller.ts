@@ -8,7 +8,7 @@ import { OrganizationService } from './organization.service';
 import {
   UpdateSchoolDto, CreateCampusDto, CreateAcademicYearDto,
   CreateGradeDto, CreateDepartmentDto, CreateDesignationDto,
-  CreateGroupInstitutionDto,
+  CreateGroupInstitutionDto, CreateClusterDto,
 } from './dto/organization.dto';
 
 @Controller('organization')
@@ -67,6 +67,40 @@ export class OrganizationController {
   @Delete('campuses/:id') async deleteCampus(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteCampus(id, schoolSlug);
+  }
+
+  @Patch('campuses/:id/cluster')
+  async assignCampusToCluster(@Param('id') id: string, @Body('clusterId') clusterId: string | null, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.assignCampusToCluster(id, schoolSlug, clusterId);
+  }
+
+  // Clusters
+  @Get('clusters') async getClusters(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getClusters(schoolSlug);
+  }
+
+  @Post('clusters') @HttpCode(HttpStatus.CREATED)
+  async createCluster(@Body() dto: CreateClusterDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCluster(schoolSlug, dto);
+  }
+
+  @Put('clusters/:id') async updateCluster(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCluster(id, schoolSlug, dto);
+  }
+
+  @Delete('clusters/:id') async deleteCluster(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteCluster(id, schoolSlug);
+  }
+
+  @Get('clusters/dashboard')
+  async getClusterDashboard(@Request() req: any, @Query('clusterIds') clusterIds?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getClusterDashboard(schoolSlug, clusterIds ? clusterIds.split(',') : undefined);
   }
 
   // Academic Years

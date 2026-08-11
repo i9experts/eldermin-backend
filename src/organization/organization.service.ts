@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import {
   School, SchoolDocument,
   Campus, CampusDocument,
+  Cluster, ClusterDocument,
   AcademicYear, AcademicYearDocument,
   Grade, GradeDocument,
   Department, DepartmentDocument,
@@ -16,6 +17,7 @@ import {
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { UploadService } from '../upload/upload.service';
 
 @Injectable()
@@ -29,6 +31,9 @@ export class OrganizationService {
     @InjectModel(Designation.name) private designModel: Model<DesignationDocument>,
     @InjectModel(GroupInstitution.name) private groupInstitutionModel: Model<GroupInstitutionDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(Cluster.name) private clusterModel: Model<ClusterDocument>,
+    @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
+    @InjectModel(StudentFee.name) private feeModel: Model<StudentFeeDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -116,6 +121,113 @@ export class OrganizationService {
   async deleteCampus(id: string, schoolSlug: string) {
     await this.campusModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
     return { message: 'Campus deactivated' };
+  }
+
+  // ── Cluster (groups multiple Campuses into a supervised region) ──
+  // Real, optional entity - most schools never touch this. Exists for
+  // large multi-campus networks/trusts (e.g. a 200-campus rural network)
+  // that genuinely need a layer above Campus for supervision and
+  // regional reporting.
+  async getClusters(schoolSlug: string) {
+    const clusters = await this.clusterModel.find({ schoolSlug, isActive: true }).sort({ name: 1 }).lean();
+    if (clusters.length === 0) return clusters;
+
+    const campusCounts = await this.campusModel.aggregate([
+      { $match: { schoolSlug, isActive: true, clusterId: { $ne: null } } },
+      { $group: { _id: '$clusterId', count: { $sum: 1 } } },
+    ]);
+    const countMap = new Map(campusCounts.map((c: any) => [String(c._id), c.count]));
+
+    return clusters.map((c: any) => ({ ...c, campusCount: countMap.get(String(c._id)) || 0 }));
+  }
+
+  async createCluster(schoolSlug: string, dto: any) {
+    const cluster = new this.clusterModel({ ...dto, schoolSlug });
+    return cluster.save();
+  }
+
+  async updateCluster(id: string, schoolSlug: string, dto: any) {
+    const cluster = await this.clusterModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!cluster) throw new NotFoundException('Cluster not found');
+    return cluster;
+  }
+
+  async deleteCluster(id: string, schoolSlug: string) {
+    const inUse = await this.campusModel.countDocuments({ schoolSlug, clusterId: id, isActive: true });
+    if (inUse > 0) throw new BadRequestException(`${inUse} campus(es) are still assigned to this cluster - reassign them first`);
+    await this.clusterModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    return { message: 'Cluster deactivated' };
+  }
+
+  async assignCampusToCluster(campusId: string, schoolSlug: string, clusterId: string | null) {
+    const campus = await this.campusModel.findOneAndUpdate(
+      { _id: campusId, schoolSlug }, { $set: { clusterId } }, { new: true },
+    );
+    if (!campus) throw new NotFoundException('Campus not found');
+    return campus;
+  }
+
+  // Real Cluster/Region aggregate dashboard. Optionally scoped to a
+  // specific set of clusterIds (a Supervisor sees only their own
+  // cluster(s); Board/Regional sees every real cluster with no filter -
+  // that scoping decision is made by the controller/caller, this method
+  // just honors whatever cluster list it's given).
+  async getClusterDashboard(schoolSlug: string, clusterIds?: string[]) {
+    const clusterFilter: any = { schoolSlug, isActive: true };
+    if (clusterIds?.length) clusterFilter._id = { $in: clusterIds };
+    const clusters = await this.clusterModel.find(clusterFilter).lean();
+
+    const campusFilter: any = { schoolSlug, isActive: true };
+    if (clusterIds?.length) campusFilter.clusterId = { $in: clusterIds };
+    const campuses = await this.campusModel.find(campusFilter).select('_id name clusterId').lean();
+    const campusIds = campuses.map((c: any) => String(c._id));
+    const campusToCluster = new Map(campuses.map((c: any) => [String(c._id), c.clusterId ? String(c.clusterId) : null]));
+
+    const [studentCounts, attendanceToday, feeStats] = await Promise.all([
+      this.studentModel.aggregate([
+        { $match: { schoolSlug, status: 'active', campusId: { $in: campusIds } } },
+        { $group: { _id: '$campusId', count: { $sum: 1 } } },
+      ]),
+      this.attendanceModel.aggregate([
+        {
+          $match: {
+            schoolSlug,
+            date: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) },
+            status: { $in: ['present', 'late', 'half_day'] },
+          },
+        },
+        { $group: { _id: null, count: { $sum: 1 } } },
+      ]),
+      this.feeModel.aggregate([
+        { $match: { schoolSlug } },
+        { $group: { _id: null, totalDue: { $sum: '$amount' }, totalCollected: { $sum: '$paidAmount' } } },
+      ]),
+    ]);
+
+    const studentsByCampus = new Map(studentCounts.map((s: any) => [String(s._id), s.count]));
+
+    // Roll student counts up from Campus -> Cluster
+    const clusterStats = clusters.map((cl: any) => {
+      const clusterCampusIds = campuses.filter((c: any) => String(c.clusterId) === String(cl._id)).map((c: any) => String(c._id));
+      const studentCount = clusterCampusIds.reduce((sum, cid) => sum + (studentsByCampus.get(cid) || 0), 0);
+      return {
+        clusterId: cl._id, name: cl.name, region: cl.region,
+        campusCount: clusterCampusIds.length, studentCount,
+      };
+    });
+
+    const unclusteredCampusIds = campuses.filter((c: any) => !c.clusterId).map((c: any) => String(c._id));
+    const unclusteredStudentCount = unclusteredCampusIds.reduce((sum, cid) => sum + (studentsByCampus.get(cid) || 0), 0);
+
+    return {
+      totalClusters: clusters.length,
+      totalCampuses: campuses.length,
+      totalStudents: campusIds.reduce((sum, cid) => sum + (studentsByCampus.get(cid) || 0), 0),
+      presentToday: attendanceToday[0]?.count || 0,
+      feeCollectionRate: feeStats[0]?.totalDue > 0 ? Math.round((feeStats[0].totalCollected / feeStats[0].totalDue) * 100) : null,
+      clusters: clusterStats,
+      unclusteredCampuses: unclusteredCampusIds.length > 0 ? { campusCount: unclusteredCampusIds.length, studentCount: unclusteredStudentCount } : null,
+    };
   }
 
   // ── Academic Years ────────────────────────────────────────
