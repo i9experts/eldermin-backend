@@ -184,3 +184,23 @@ export class ClassifyBloomsLevelDto {
   @IsString() questionType: string;
   @IsOptional() @IsArray() @IsString({ each: true }) options?: string[];
 }
+
+// ── Exam Paper ────────────────────────────────────────────────
+export class PaperSectionDto {
+  @IsString() title: string;
+  @IsOptional() @IsString() instructions?: string;
+  @IsArray() @IsMongoId({ each: true }) questionIds: string[];
+}
+export class CreateExamPaperDto {
+  @IsString() title: string;
+  @IsString() subject: string;
+  @IsString() grade: string;
+  @IsOptional() @IsString() section?: string;
+  @IsString() academicYear: string;
+  @IsOptional() @IsString() term?: string;
+  @IsEnum(['english', 'urdu', 'arabic']) language: string;
+  @IsNumber() duration: number;
+  @IsOptional() @IsString() generalInstructions?: string;
+  @IsArray() @ValidateNested({ each: true }) @Type(() => PaperSectionDto) sections: PaperSectionDto[];
+}
+export class UpdateExamPaperDto extends PartialType(CreateExamPaperDto) {}

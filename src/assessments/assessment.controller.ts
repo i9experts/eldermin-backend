@@ -4,8 +4,9 @@
 
 import {
   Controller, Get, Post, Put, Patch, Delete,
-  Body, Param, Query, Request, HttpCode, HttpStatus,
+  Body, Param, Query, Request, Res, HttpCode, HttpStatus,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AssessmentService } from './assessment.service';
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
@@ -13,6 +14,7 @@ import {
   BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
   PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  CreateExamPaperDto, UpdateExamPaperDto,
 } from './dto/assessment.dto';
 
 @Controller('assessments')
@@ -172,6 +174,45 @@ export class AssessmentController {
   @Post('questions/ai-classify-blooms') @HttpCode(HttpStatus.OK)
   async classifyBloomsLevel(@Body() dto: ClassifyBloomsLevelDto) {
     return this.service.classifyBloomsLevel(dto.questionText, dto.questionType, dto.options);
+  }
+
+  // ── Exam Papers ──────────────────────────────────────────────
+  @Get('papers') async getExamPapers(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getExamPapers(schoolSlug, query);
+  }
+
+  @Get('papers/:id') async getExamPaperById(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getExamPaperById(id, schoolSlug);
+  }
+
+  @Post('papers') @HttpCode(HttpStatus.CREATED)
+  async createExamPaper(@Body() dto: CreateExamPaperDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createExamPaper(schoolSlug, userName, dto);
+  }
+
+  @Put('papers/:id') async updateExamPaper(@Param('id') id: string, @Body() dto: UpdateExamPaperDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateExamPaper(id, schoolSlug, dto);
+  }
+
+  @Delete('papers/:id') async deleteExamPaper(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteExamPaper(id, schoolSlug);
+  }
+
+  @Get('papers/:id/pdf')
+  async downloadExamPaperPdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const pdf = await this.service.generateExamPaperPdf(id, schoolSlug);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="exam-paper-${id}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
   }
 
   @Post('marks/bulk')

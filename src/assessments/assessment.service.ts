@@ -6,6 +6,9 @@ import { Injectable, NotFoundException, BadRequestException, BadGatewayException
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as QRCode from 'qrcode';
+import { randomBytes } from 'crypto';
+import { PdfService } from '../pdf/pdf.service';
 
 import {
   Assessment, AssessmentDocument,
@@ -13,6 +16,7 @@ import {
   MarkEntry, MarkEntryDocument,
   ReportCard, ReportCardDocument,
 } from './schemas/assessment.schema';
+import { ExamPaper, ExamPaperDocument } from './schemas/exam-paper.schema';
 
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
@@ -48,7 +52,9 @@ export class AssessmentService {
     @InjectModel(Question.name) private questionModel: Model<QuestionDocument>,
     @InjectModel(MarkEntry.name) private markModel: Model<MarkEntryDocument>,
     @InjectModel(ReportCard.name) private reportCardModel: Model<ReportCardDocument>,
+    @InjectModel(ExamPaper.name) private examPaperModel: Model<ExamPaperDocument>,
     private configService: ConfigService,
+    private pdfService: PdfService,
   ) {}
 
   // ============================================================
@@ -124,6 +130,204 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     } catch {
       return { bloomsLevel: null, reasoning: null, note: 'Could not parse a classification this time - try rephrasing the question or set it manually.' };
     }
+  }
+
+  // ============================================================
+  // EXAM PAPER GENERATION
+  // Compiles real Question Bank items into a formatted, printable paper.
+  // Urdu/Arabic route through real HTML+Puppeteer rendering (proper RTL
+  // and script shaping - pdf-lib genuinely cannot do this correctly, it
+  // just places raw glyphs with no ligature/joining support), not the
+  // lightweight pdf-lib pipeline used for receipts/challans.
+  //
+  // Deliberately NOT in scope here: OMR/scan-based auto-grading of
+  // answer sheets. That's a real, separate computer-vision undertaking
+  // (needs an OMR SDK or custom vision logic, standardized alignment
+  // markers, real scanner hardware) - this feature only generates and
+  // formats the paper with a real QR code for identification.
+  // ============================================================
+
+  private generatePaperCode(): string {
+    const rand = randomBytes(3).toString('hex').toUpperCase();
+    const stamp = Date.now().toString(36).toUpperCase();
+    return `PAPER-${stamp}-${rand}`;
+  }
+
+  async createExamPaper(schoolSlug: string, createdBy: string, dto: any) {
+    const paper = new this.examPaperModel({ ...dto, schoolSlug, createdBy, paperCode: this.generatePaperCode() });
+    return paper.save();
+  }
+
+  async getExamPapers(schoolSlug: string, query: any) {
+    const filter: any = { schoolSlug };
+    if (query.subject) filter.subject = query.subject;
+    if (query.grade) filter.grade = query.grade;
+    const papers = await this.examPaperModel.find(filter).sort({ createdAt: -1 }).lean();
+    // Real total marks per paper (sum of actual question marks), not a
+    // separately-stored number that could silently drift out of sync
+    // with the questions actually in the paper.
+    const allQuestionIds = [...new Set(papers.flatMap((p: any) => p.sections.flatMap((s: any) => s.questionIds.map(String))))];
+    const questions = await this.questionModel.find({ _id: { $in: allQuestionIds } }).select('marks').lean();
+    const marksById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
+    return papers.map((p: any) => ({
+      ...p,
+      totalMarks: p.sections.reduce((sum: number, s: any) => sum + s.questionIds.reduce((s2: number, qid: any) => s2 + (marksById.get(String(qid)) || 0), 0), 0),
+      questionCount: p.sections.reduce((sum: number, s: any) => sum + s.questionIds.length, 0),
+    }));
+  }
+
+  async getExamPaperById(id: string, schoolSlug: string) {
+    const paper: any = await this.examPaperModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!paper) throw new NotFoundException('Exam paper not found');
+    const allQuestionIds = paper.sections.flatMap((s: any) => s.questionIds);
+    const questions = await this.questionModel.find({ _id: { $in: allQuestionIds } }).lean();
+    const questionMap = new Map(questions.map((q: any) => [String(q._id), q]));
+    return {
+      ...paper,
+      sections: paper.sections.map((s: any) => ({
+        ...s,
+        questions: s.questionIds.map((qid: any) => questionMap.get(String(qid))).filter(Boolean),
+      })),
+    };
+  }
+
+  async updateExamPaper(id: string, schoolSlug: string, dto: any) {
+    const paper = await this.examPaperModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!paper) throw new NotFoundException('Exam paper not found');
+    return paper;
+  }
+
+  async deleteExamPaper(id: string, schoolSlug: string) {
+    const res = await this.examPaperModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!res) throw new NotFoundException('Exam paper not found');
+    return { message: 'Exam paper deleted' };
+  }
+
+  private readonly LANGUAGE_CONFIG: Record<string, { dir: string; lang: string; font: string; labels: Record<string, string> }> = {
+    english: {
+      dir: 'ltr', lang: 'en', font: "'Times New Roman', Georgia, serif",
+      labels: { instructions: 'Instructions', duration: 'Time Allowed', marks: 'Total Marks', name: 'Name', roll: 'Roll No', section: 'Section' },
+    },
+    urdu: {
+      // Noto Sans Arabic renders Urdu's Perso-Arabic script correctly and
+      // legibly, though in a Naskh style rather than the traditional
+      // Nastaliq calligraphic style Urdu readers often expect - a real,
+      // honest limitation of what's readily available as a redistributable
+      // font in this environment, not a rendering bug.
+      dir: 'rtl', lang: 'ur', font: "'Noto Sans Arabic', 'Noto Naskh Arabic', sans-serif",
+      labels: { instructions: 'ہدایات', duration: 'وقت', marks: 'کل نمبر', name: 'نام', roll: 'رول نمبر', section: 'سیکشن' },
+    },
+    arabic: {
+      dir: 'rtl', lang: 'ar', font: "'Noto Sans Arabic', 'Noto Naskh Arabic', sans-serif",
+      labels: { instructions: 'التعليمات', duration: 'الوقت المحدد', marks: 'الدرجة الكلية', name: 'الاسم', roll: 'رقم القيد', section: 'الشعبة' },
+    },
+  };
+
+  async generateExamPaperPdf(id: string, schoolSlug: string): Promise<Buffer> {
+    const paper: any = await this.getExamPaperById(id, schoolSlug);
+    const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
+
+    const totalMarks = paper.sections.reduce((sum: number, s: any) => sum + s.questions.reduce((s2: number, q: any) => s2 + (q.marks || 0), 0), 0);
+    const qrDataUrl = await QRCode.toDataURL(paper.paperCode, { width: 90, margin: 0 });
+
+    // Fire-and-forget usage tracking - never block PDF delivery on this.
+    const allQuestionIds = paper.sections.flatMap((s: any) => s.questions.map((q: any) => q._id));
+    this.questionModel.updateMany({ _id: { $in: allQuestionIds } }, { $inc: { usageCount: 1 } }).catch(() => {});
+
+    let questionNumber = 0;
+    const sectionsHtml = paper.sections.map((section: any) => `
+      <div class="section">
+        <h3 class="section-title">${this.escapeHtml(section.title)}</h3>
+        ${section.instructions ? `<p class="section-instructions">${this.escapeHtml(section.instructions)}</p>` : ''}
+        ${section.questions.map((q: any) => {
+          questionNumber++;
+          const optionsHtml = q.type === 'mcq' && q.options?.length
+            ? `<div class="options">${q.options.map((o: any, i: number) => `
+                <div class="option"><span class="opt-marker">${cfg.dir === 'rtl' ? this.arabicIndicNumeral(i) : String.fromCharCode(65 + i)}</span> ${this.escapeHtml(o.text)}</div>
+              `).join('')}</div>`
+            : `<div class="answer-space"></div>`;
+          return `
+            <div class="question">
+              <div class="question-row">
+                <span class="q-number">${questionNumber}.</span>
+                <span class="q-text">${this.escapeHtml(q.questionText)}</span>
+                <span class="q-marks">[${q.marks}]</span>
+              </div>
+              ${optionsHtml}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html dir="${cfg.dir}" lang="${cfg.lang}">
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { margin: 15mm 12mm; }
+          body { font-family: ${cfg.font}; color: #111; font-size: 13px; line-height: 1.6; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0C447C; padding-bottom: 10px; margin-bottom: 14px; }
+          .header-main h1 { font-size: 18px; color: #0C447C; margin: 0 0 4px; }
+          .header-main p { margin: 2px 0; font-size: 12px; }
+          .header-meta { text-align: center; font-size: 10px; }
+          .header-meta img { display: block; margin: 0 auto 4px; }
+          .top-fields { display: flex; gap: 24px; margin-bottom: 14px; font-size: 12px; }
+          .top-fields span { border-bottom: 1px solid #999; padding-bottom: 2px; min-width: 120px; display: inline-block; }
+          .instructions-box { border: 1px solid #ccc; border-radius: 4px; padding: 8px 12px; margin-bottom: 16px; font-size: 12px; background: #f9f9f9; }
+          .section { margin-bottom: 18px; }
+          .section-title { font-size: 14px; background: #0C447C; color: white; padding: 5px 10px; border-radius: 3px; margin-bottom: 8px; }
+          .section-instructions { font-size: 11px; color: #555; margin: 0 0 8px; font-style: italic; }
+          .question { margin-bottom: 12px; }
+          .question-row { display: flex; align-items: baseline; gap: 8px; }
+          .q-number { font-weight: bold; flex-shrink: 0; }
+          .q-text { flex: 1; }
+          .q-marks { font-weight: bold; flex-shrink: 0; }
+          .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+          .opt-marker { font-weight: bold; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 6px; }
+          .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="header-main">
+            <h1>${this.escapeHtml(paper.title)}</h1>
+            <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+            <p>${cfg.labels.duration}: ${paper.duration} ${paper.language === 'english' ? 'minutes' : ''} &nbsp;|&nbsp; ${cfg.labels.marks}: ${totalMarks}</p>
+          </div>
+          <div class="header-meta">
+            <img src="${qrDataUrl}" width="70" height="70" />
+            <p>${paper.paperCode}</p>
+          </div>
+        </div>
+        <div class="top-fields">
+          <div>${cfg.labels.name}: <span>&nbsp;</span></div>
+          <div>${cfg.labels.roll}: <span>&nbsp;</span></div>
+        </div>
+        ${paper.generalInstructions ? `<div class="instructions-box"><strong>${cfg.labels.instructions}:</strong> ${this.escapeHtml(paper.generalInstructions)}</div>` : ''}
+        ${sectionsHtml}
+      </body>
+      </html>
+    `;
+
+    return this.pdfService.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '15mm', right: '12mm', bottom: '15mm', left: '12mm' },
+    });
+  }
+
+  private escapeHtml(text: string): string {
+    if (!text) return '';
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  private arabicIndicNumeral(index: number): string {
+    // Options lettered with real Arabic-Indic numerals for RTL papers
+    // (١، ٢، ٣...) rather than forcing Latin A/B/C/D into an RTL layout.
+    const numerals = ['١', '٢', '٣', '٤', '٥', '٦'];
+    return numerals[index] || String(index + 1);
   }
 
   // ============================================================

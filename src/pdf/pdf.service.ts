@@ -465,7 +465,7 @@ export class PdfService {
    * used by template-driven rendering so page size/orientation/margins
    * configured on a ReportTemplate are respected.
    */
-  private async htmlToPdfWithOptions(
+  async htmlToPdfWithOptions(
     html: string,
     options: puppeteer.PDFOptions,
   ): Promise<Buffer> {
