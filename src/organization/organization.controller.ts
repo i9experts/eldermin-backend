@@ -19,6 +19,8 @@ export class OrganizationController {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       userName: req?.user?.name || 'Admin',
+      supervisedClusterIds: req?.user?.supervisedClusterIds as string[] | undefined,
+      isBoardLevel: !!req?.user?.isBoardLevel,
     };
   }
 
@@ -77,8 +79,13 @@ export class OrganizationController {
 
   // Clusters
   @Get('clusters') async getClusters(@Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getClusters(schoolSlug);
+    const { schoolSlug, supervisedClusterIds, isBoardLevel } = this.ctx(req);
+    const clusters = await this.service.getClusters(schoolSlug);
+    if (!isBoardLevel && supervisedClusterIds?.length) {
+      const allowed = new Set(supervisedClusterIds);
+      return clusters.filter((c: any) => allowed.has(String(c._id)));
+    }
+    return clusters;
   }
 
   @Post('clusters') @HttpCode(HttpStatus.CREATED)
@@ -99,8 +106,16 @@ export class OrganizationController {
 
   @Get('clusters/dashboard')
   async getClusterDashboard(@Request() req: any, @Query('clusterIds') clusterIds?: string) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getClusterDashboard(schoolSlug, clusterIds ? clusterIds.split(',') : undefined);
+    const { schoolSlug, supervisedClusterIds, isBoardLevel } = this.ctx(req);
+    // Explicit query param wins (lets Board/Regional users deliberately
+    // narrow the view). Otherwise: a real Supervisor assignment scopes
+    // them to only their own cluster(s); Board-level or unassigned staff
+    // (the vast majority - this field is empty for almost everyone) see
+    // every cluster with no filter at all.
+    const effectiveClusterIds = clusterIds
+      ? clusterIds.split(',')
+      : (!isBoardLevel && supervisedClusterIds?.length ? supervisedClusterIds : undefined);
+    return this.service.getClusterDashboard(schoolSlug, effectiveClusterIds);
   }
 
   // Academic Years

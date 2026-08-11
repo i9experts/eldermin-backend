@@ -6,6 +6,7 @@ import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
+import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
@@ -15,6 +16,7 @@ export class AuthService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -58,6 +60,14 @@ export class AuthService {
     const schoolSlug = tenant?.slug || slugToUse || null;
     const permissions = await this.rolesService.getPermissionsForUser(user._id.toString());
 
+    // Cluster/region scoping (large multi-campus networks only) - most
+    // users have no Staff record with this set, in which case both
+    // fields are simply absent from the token and every existing
+    // permission check continues to work exactly as before.
+    const staffRecord = await this.staffModel.findOne({ userId: user._id }).select('supervisedClusterIds isBoardLevel').lean();
+    const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
+    const isBoardLevel = staffRecord?.isBoardLevel || undefined;
+
     const payload = {
       sub: user._id.toString(),
       tenantId,
@@ -66,6 +76,8 @@ export class AuthService {
       name,
       schoolSlug,
       activeModules,
+      supervisedClusterIds,
+      isBoardLevel,
     };
 
     return {

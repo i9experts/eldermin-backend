@@ -23,6 +23,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       schoolSlug: payload.schoolSlug,
       activeModules: payload.activeModules || [],
       campusId: payload.campusId,
+      supervisedClusterIds: payload.supervisedClusterIds,
+      isBoardLevel: payload.isBoardLevel || false,
     };
   }
 }

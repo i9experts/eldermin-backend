@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
+import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
 import { EmailModule } from '../../email/email.module';
@@ -29,6 +30,7 @@ import { EmailModule } from '../../email/email.module';
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: Tenant.name, schema: TenantSchema },
+      { name: Staff.name, schema: StaffSchema },
     ]),
   ],
   controllers: [AuthController],
