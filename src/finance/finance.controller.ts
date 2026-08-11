@@ -37,6 +37,10 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.seedDefaultCOA(schoolSlug);
   }
+  @Post('coa/bulk-import') async bulkImportCOA(@Body() dto: { rows: any[] }, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.bulkImportCOA(schoolSlug, dto?.rows || []);
+  }
   @Patch('coa/:id') async updateCOA(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateCOA(id, schoolSlug, dto);

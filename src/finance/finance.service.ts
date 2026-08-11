@@ -210,11 +210,38 @@ export class FinanceService {
   // silently causing a raw validation exception with no useful message).
   async createCOA(data: any) {
     try {
+      if (data.parentCode) {
+        if (data.parentCode === data.code) {
+          throw new BadRequestException('An account cannot be its own parent.');
+        }
+        const parentExists = await this.coaModel.exists({ schoolSlug: data.schoolSlug, code: data.parentCode });
+        if (!parentExists) {
+          throw new BadRequestException(`Parent account "${data.parentCode}" does not exist.`);
+        }
+      }
       const acc = new this.coaModel(data);
       return await acc.save();
     } catch (err: any) {
+      if (err instanceof BadRequestException) throw err;
       throw this.translateCOAError(err, data.code);
     }
+  }
+
+  // Walks the parentCode chain starting at `startCode` to see whether it
+  // ever leads back to `code` — used to reject a parentCode assignment that
+  // would create a circular hierarchy (e.g. A's parent is B, and someone
+  // tries to set B's parent to A). Caps the walk at the total account count
+  // as a defensive bound against any pre-existing bad data forming a loop.
+  private async wouldCreateCycle(schoolSlug: string, code: string, startParentCode: string): Promise<boolean> {
+    let current = startParentCode;
+    const accounts = await this.coaModel.find({ schoolSlug }, { code: 1, parentCode: 1 }).lean();
+    const byCode = new Map<string, string | undefined>(accounts.map((a: any) => [a.code, a.parentCode]));
+    let guard = accounts.length + 1;
+    while (current && guard-- > 0) {
+      if (current === code) return true;
+      current = byCode.get(current);
+    }
+    return false;
   }
 
   // Renaming an account's `code` is dangerous here because `code` (not the
@@ -231,6 +258,28 @@ export class FinanceService {
     try {
       const existing = await this.coaModel.findOne({ _id: id, schoolSlug });
       if (!existing) throw new NotFoundException('Account not found');
+
+      // `currentBalance` is a derived, ledger-maintained figure (see postToLedger
+      // below) — it must never be settable from the Add/Edit Account form, even
+      // though the form's payload shape overlaps with create. Without this guard,
+      // editing an account's name/description silently zeroes or overwrites its
+      // live running balance. `schoolSlug` is likewise never client-editable.
+      const { currentBalance: _ignoredBalance, schoolSlug: _ignoredSlug, ...safeData } = data;
+      data = safeData;
+
+      if (data.parentCode && data.parentCode !== existing.parentCode) {
+        if (data.parentCode === existing.code) {
+          throw new BadRequestException('An account cannot be its own parent.');
+        }
+        const parentExists = await this.coaModel.exists({ schoolSlug, code: data.parentCode });
+        if (!parentExists) {
+          throw new BadRequestException(`Parent account "${data.parentCode}" does not exist.`);
+        }
+        const cycle = await this.wouldCreateCycle(schoolSlug, existing.code, data.parentCode);
+        if (cycle) {
+          throw new BadRequestException(`Setting parent to "${data.parentCode}" would create a circular hierarchy.`);
+        }
+      }
 
       const newCode = data.code;
       const isRenaming = newCode && newCode !== existing.code;
@@ -279,6 +328,9 @@ export class FinanceService {
       const firstIssue = Object.values(err.errors || {})[0] as any;
       return new BadRequestException(firstIssue?.message || 'Invalid account data.');
     }
+    if (err.name === 'CastError') {
+      return new BadRequestException('Invalid account reference or field value.');
+    }
     return err;
   }
 
@@ -286,6 +338,17 @@ export class FinanceService {
     const acc = await this.coaModel.findOne({ _id: id, schoolSlug });
     if (!acc) throw new NotFoundException('Account not found');
     if (acc.isSystem) throw new BadRequestException('System accounts cannot be deleted');
+    // Deactivating a parent while its children stay active would orphan them
+    // in the UI's hierarchy view and in any report that walks parentCode —
+    // require the children to be reassigned or deactivated first.
+    const activeChildren = await this.coaModel.countDocuments({
+      schoolSlug, parentCode: acc.code, isActive: { $ne: false },
+    });
+    if (activeChildren > 0) {
+      throw new BadRequestException(
+        `"${acc.code}" has ${activeChildren} active sub-account(s). Reassign or deactivate them first.`,
+      );
+    }
     acc.isActive = false;
     return acc.save();
   }
@@ -347,6 +410,105 @@ export class FinanceService {
     );
 
     return this.coaModel.find({ schoolSlug }).sort({ code: 1 });
+  }
+
+  // CSV bulk import for the Chart of Accounts. Validates every row up front
+  // (including cross-row parentCode cycles, since a CSV can introduce a loop
+  // that no single-row check would catch) before writing anything, then
+  // upserts by `code`: existing accounts are updated (name/description/type/
+  // subType/parentCode/isActive) without ever touching currentBalance, and
+  // new accounts are created. Returns a per-row result so the UI can show
+  // exactly which rows succeeded, which were updates vs creates, and why any
+  // row failed.
+  async bulkImportCOA(schoolSlug: string, rows: any[]) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new BadRequestException('No rows to import.');
+    }
+
+    const existing = await this.coaModel.find({ schoolSlug }).lean();
+    const parentByCode = new Map<string, string | undefined>(
+      existing.map((a: any) => [a.code, a.parentCode]),
+    );
+    for (const r of rows) {
+      if (r && r.code) parentByCode.set(r.code, r.parentCode || undefined);
+    }
+    const chainHasCycle = (code: string): boolean => {
+      let current = parentByCode.get(code);
+      let guard = parentByCode.size + 1;
+      while (current && guard-- > 0) {
+        if (current === code) return true;
+        current = parentByCode.get(current);
+      }
+      return false;
+    };
+
+    const validTypes = ['asset', 'liability', 'equity', 'revenue', 'expense'];
+    const results: Array<{ row: number; code?: string; status: 'created' | 'updated' | 'error'; message?: string }> = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i] || {};
+      const code = String(raw.code || '').trim();
+      const name = String(raw.name || '').trim();
+      const type = String(raw.type || '').trim().toLowerCase();
+      const parentCode = raw.parentCode ? String(raw.parentCode).trim() : undefined;
+
+      try {
+        if (!code || !name) {
+          throw new Error('Both "code" and "name" are required.');
+        }
+        if (!validTypes.includes(type)) {
+          throw new Error(`"type" must be one of: ${validTypes.join(', ')}.`);
+        }
+        if (parentCode === code) {
+          throw new Error('An account cannot be its own parent.');
+        }
+        if (parentCode && !parentByCode.has(parentCode)) {
+          throw new Error(`Parent account "${parentCode}" does not exist (not found in this file or the existing chart).`);
+        }
+        if (parentCode && chainHasCycle(code)) {
+          throw new Error(`Parent "${parentCode}" would create a circular hierarchy for "${code}".`);
+        }
+
+        const existingAcc = await this.coaModel.findOne({ schoolSlug, code });
+        const payload: any = {
+          name,
+          type,
+          schoolSlug,
+        };
+        if (raw.description !== undefined) payload.description = String(raw.description);
+        if (raw.subType) payload.subType = String(raw.subType).trim();
+        if (parentCode !== undefined) payload.parentCode = parentCode;
+        if (raw.isActive !== undefined) {
+          payload.isActive = raw.isActive === false || raw.isActive === 'false' || raw.isActive === '0' ? false : true;
+        }
+
+        if (existingAcc) {
+          // Never let a bulk import change a system account's type, and never
+          // touch currentBalance — same rule as the single-row edit path.
+          if (existingAcc.isSystem) delete payload.type;
+          await this.coaModel.updateOne({ _id: existingAcc._id }, { $set: payload });
+          results.push({ row: i + 1, code, status: 'updated' });
+        } else {
+          payload.code = code;
+          if (raw.openingBalance !== undefined && !isNaN(Number(raw.openingBalance))) {
+            payload.openingBalance = Number(raw.openingBalance);
+            payload.currentBalance = Number(raw.openingBalance);
+          }
+          await this.coaModel.create(payload);
+          results.push({ row: i + 1, code, status: 'created' });
+        }
+      } catch (err: any) {
+        results.push({ row: i + 1, code: code || undefined, status: 'error', message: err?.message || 'Import failed.' });
+      }
+    }
+
+    return {
+      total: rows.length,
+      created: results.filter(r => r.status === 'created').length,
+      updated: results.filter(r => r.status === 'updated').length,
+      failed: results.filter(r => r.status === 'error').length,
+      results,
+    };
   }
 
   // ============================================================
