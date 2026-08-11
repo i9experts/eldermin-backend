@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as QRCode from 'qrcode';
+import * as bwipjs from 'bwip-js';
 import { randomBytes } from 'crypto';
 import { PdfService } from '../pdf/pdf.service';
 
@@ -230,6 +231,22 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const totalMarks = paper.sections.reduce((sum: number, s: any) => sum + s.questions.reduce((s2: number, q: any) => s2 + (q.marks || 0), 0), 0);
     const qrDataUrl = await QRCode.toDataURL(paper.paperCode, { width: 90, margin: 0 });
 
+    // Real Code128 barcode alongside the QR code - the original request
+    // specifically named "Barcodes", and while a QR code is the more
+    // capable, modern choice for identification (more data, more robust
+    // to print-quality issues), a school's EXISTING scanning hardware may
+    // only read traditional 1D barcodes, so both are generated from the
+    // same underlying paperCode rather than choosing one over the other.
+    let barcodeDataUrl = '';
+    try {
+      const barcodeBuffer = await bwipjs.toBuffer({
+        bcid: 'code128', text: paper.paperCode, scale: 2, height: 10, includetext: false,
+      });
+      barcodeDataUrl = `data:image/png;base64,${barcodeBuffer.toString('base64')}`;
+    } catch {
+      barcodeDataUrl = ''; // non-fatal - the QR code alone still identifies the paper
+    }
+
     // Fire-and-forget usage tracking - never block PDF delivery on this.
     const allQuestionIds = paper.sections.flatMap((s: any) => s.questions.map((q: any) => q._id));
     this.questionModel.updateMany({ _id: { $in: allQuestionIds } }, { $inc: { usageCount: 1 } }).catch(() => {});
@@ -298,6 +315,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           </div>
           <div class="header-meta">
             <img src="${qrDataUrl}" width="70" height="70" />
+            ${barcodeDataUrl ? `<img src="${barcodeDataUrl}" style="width:100px; height:auto; margin-top:4px;" />` : ''}
             <p>${paper.paperCode}</p>
           </div>
         </div>
