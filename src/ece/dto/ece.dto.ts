@@ -219,3 +219,69 @@ export class SuggestMappingsDto {
 export class CheckQualityDto {
   @IsString() narrative: string;
 }
+
+// ── Care & Wellbeing ──────────────────────────────────────────
+export class MealRecordDto {
+  @IsEnum(['breakfast', 'lunch', 'snack']) type: string;
+  @IsEnum(['all', 'most', 'some', 'none', 'refused']) amountEaten: string;
+  @IsOptional() @IsString() notes?: string;
+}
+export class NapRecordDto {
+  @IsOptional() @IsString() startTime?: string;
+  @IsOptional() @IsString() endTime?: string;
+  @IsOptional() @IsEnum(['restful', 'restless', 'none']) quality?: string;
+}
+export class ToiletingRecordDto {
+  @IsString() time: string;
+  @IsEnum(['wet', 'dry', 'bm', 'accident']) type: string;
+  @IsOptional() @IsString() notes?: string;
+}
+export class MedicationRecordDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() dose?: string;
+  @IsString() time: string;
+  @IsString() givenBy: string;
+}
+export class MinorInjuryRecordDto {
+  @IsString() description: string;
+  @IsOptional() @IsString() bodyPart?: string;
+  @IsString() time: string;
+  @IsOptional() @IsString() firstAidGiven?: string;
+  @IsOptional() @IsBoolean() parentNotified?: boolean;
+}
+export class CreateCareRecordDto {
+  @IsMongoId() studentId: string;
+  @IsString() date: string;
+  @IsOptional() @IsEnum(['happy', 'calm', 'upset', 'tired', 'unwell']) arrivalMood?: string;
+  @IsOptional() @IsEnum(['happy', 'calm', 'upset', 'tired', 'unwell']) departureMood?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MealRecordDto) meals?: MealRecordDto[];
+  @IsOptional() @IsEnum(['good', 'adequate', 'low']) waterIntake?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => NapRecordDto) naps?: NapRecordDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ToiletingRecordDto) toileting?: ToiletingRecordDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MedicationRecordDto) medicationGiven?: MedicationRecordDto[];
+  @IsOptional() @IsString() healthObservation?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MinorInjuryRecordDto) minorInjuries?: MinorInjuryRecordDto[];
+  @IsOptional() @IsString() comfortingNotes?: string;
+}
+
+// ── Inclusion & Additional Support ─────────────────────────────
+export class CreateSupportCaseDto {
+  @IsMongoId() studentId: string;
+  @IsEnum(['communication', 'motor_development', 'sensory_needs', 'social_interaction', 'attention', 'emotional_regulation', 'self_care', 'other']) area: string;
+  @IsString() initialConcern: string;
+  @IsOptional() @IsArray() @IsMongoId({ each: true }) linkedObservationIds?: string[];
+}
+export class AddSupportStrategyDto {
+  @IsString() description: string;
+  @IsOptional() @IsString() reviewDate?: string;
+}
+export class AddSupportReviewDto {
+  @IsString() reviewedBy: string;
+  @IsString() notes: string;
+  @IsOptional() @IsEnum(['continue', 'adjust_strategy', 'close', 'refer_external']) recommendation?: string;
+}
+export class UpdateSupportCaseDto {
+  @IsOptional() @IsEnum(['open', 'monitoring', 'external_referral_discussed', 'closed']) status?: string;
+  @IsOptional() @IsString() externalProfessionalNotes?: string;
+  @IsOptional() @IsBoolean() familyInformed?: boolean;
+}

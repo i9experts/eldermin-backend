@@ -13,6 +13,7 @@ import {
   CreateFrameworkMappingDto, UpdateFrameworkMappingDto,
   CreateMontessoriMaterialDto, UpsertWorkRecordDto,
   SuggestMappingsDto, CheckQualityDto,
+  CreateCareRecordDto, CreateSupportCaseDto, AddSupportStrategyDto, AddSupportReviewDto, UpdateSupportCaseDto,
 } from './dto/ece.dto';
 
 @Controller('ece')
@@ -294,6 +295,60 @@ export class EceController {
   @Post('ai/check-quality') @HttpCode(HttpStatus.OK)
   checkQuality(@Body() dto: CheckQualityDto) {
     return this.service.checkObservationQuality(dto.narrative);
+  }
+
+  // ── Care & Wellbeing ────────────────────────────────────────
+  @Get('care-records/:studentId')
+  getCareRecords(@Request() req: any, @Param('studentId') studentId: string, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.getCareRecords(this.ctx(req).schoolSlug, studentId, from, to);
+  }
+
+  @Post('care-records') @HttpCode(HttpStatus.CREATED)
+  createCareRecord(@Request() req: any, @Body() dto: CreateCareRecordDto) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createCareRecord(schoolSlug, userName, dto);
+  }
+
+  @Put('care-records/:id')
+  updateCareRecord(@Request() req: any, @Param('id') id: string, @Body() dto: any) {
+    return this.service.updateCareRecord(id, this.ctx(req).schoolSlug, dto);
+  }
+
+  @Get('students/:studentId/allergies')
+  getStudentAllergies(@Request() req: any, @Param('studentId') studentId: string) {
+    return this.service.getStudentAllergies(this.ctx(req).schoolSlug, studentId);
+  }
+
+  // ── Inclusion & Additional Support ─────────────────────────
+  @Get('support-cases')
+  getSupportCases(@Request() req: any, @Query('studentId') studentId?: string, @Query('status') status?: string) {
+    return this.service.getSupportCases(this.ctx(req).schoolSlug, studentId, status);
+  }
+
+  @Get('support-cases/:id')
+  getSupportCaseById(@Request() req: any, @Param('id') id: string) {
+    return this.service.getSupportCaseById(id, this.ctx(req).schoolSlug);
+  }
+
+  @Post('support-cases') @HttpCode(HttpStatus.CREATED)
+  createSupportCase(@Request() req: any, @Body() dto: CreateSupportCaseDto) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createSupportCase(schoolSlug, userName, dto);
+  }
+
+  @Post('support-cases/:id/strategies') @HttpCode(HttpStatus.CREATED)
+  addSupportStrategy(@Request() req: any, @Param('id') id: string, @Body() dto: AddSupportStrategyDto) {
+    return this.service.addSupportStrategy(id, this.ctx(req).schoolSlug, dto);
+  }
+
+  @Post('support-cases/:id/reviews') @HttpCode(HttpStatus.CREATED)
+  addSupportReview(@Request() req: any, @Param('id') id: string, @Body() dto: AddSupportReviewDto) {
+    return this.service.addSupportReview(id, this.ctx(req).schoolSlug, dto);
+  }
+
+  @Put('support-cases/:id')
+  updateSupportCase(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateSupportCaseDto) {
+    return this.service.updateSupportCase(id, this.ctx(req).schoolSlug, dto);
   }
 
   // ── Dashboard ──────────────────────────────────────────────

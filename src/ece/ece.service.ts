@@ -14,6 +14,8 @@ import { ECEEnvironmentArea, ECEEnvironmentAreaDocument } from './schemas/enviro
 import { ECEFrameworkMapping, ECEFrameworkMappingDocument } from './schemas/framework-mapping.schema';
 import { MontessoriMaterial, MontessoriMaterialDocument } from './schemas/montessori-material.schema';
 import { MontessoriWorkRecord, MontessoriWorkRecordDocument } from './schemas/montessori-work-record.schema';
+import { ECECareRecord, ECECareRecordDocument } from './schemas/care-record.schema';
+import { ECESupportCase, ECESupportCaseDocument } from './schemas/support-case.schema';
 import { SNC_ECE_PAKISTAN } from './seed-data/snc-ece-pakistan.data';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
@@ -47,6 +49,8 @@ export class EceService {
     @InjectModel(ECEFrameworkMapping.name) private frameworkMappingModel: Model<ECEFrameworkMappingDocument>,
     @InjectModel(MontessoriMaterial.name) private montessoriMaterialModel: Model<MontessoriMaterialDocument>,
     @InjectModel(MontessoriWorkRecord.name) private workRecordModel: Model<MontessoriWorkRecordDocument>,
+    @InjectModel(ECECareRecord.name) private careRecordModel: Model<ECECareRecordDocument>,
+    @InjectModel(ECESupportCase.name) private supportCaseModel: Model<ECESupportCaseDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private emailService: EmailService,
@@ -696,6 +700,96 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
     } catch {
       return { isVague: false, feedback: null };
     }
+  }
+
+  // ── Care & Wellbeing (V3) ────────────────────────────────────
+  // Deliberately a separate collection and separate concern from
+  // ECEObservation - see care-record.schema.ts. Allergy data is never
+  // duplicated here; it's read live from the real Student.allergies
+  // field so it can never silently drift out of sync.
+  async getCareRecords(schoolSlug: string, studentId: string, from?: string, to?: string) {
+    const filter: any = { schoolSlug, studentId: new Types.ObjectId(studentId) };
+    if (from || to) {
+      filter.date = {};
+      if (from) filter.date.$gte = new Date(from);
+      if (to) filter.date.$lte = new Date(to);
+    }
+    return this.careRecordModel.find(filter).sort({ date: -1 }).lean();
+  }
+
+  async createCareRecord(schoolSlug: string, recordedBy: string, dto: any) {
+    return this.careRecordModel.create({ ...dto, schoolSlug, recordedBy, date: new Date(dto.date) });
+  }
+
+  async updateCareRecord(id: string, schoolSlug: string, dto: any) {
+    const record = await this.careRecordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!record) throw new NotFoundException('Care record not found');
+    return record;
+  }
+
+  // Real allergy lookup - the one place this module ever surfaces
+  // allergy information, always read live from the actual Student
+  // record, never a second stored copy.
+  async getStudentAllergies(schoolSlug: string, studentId: string) {
+    const student: any = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('allergies').lean();
+    return { allergies: student?.allergies || [] };
+  }
+
+  // ── Inclusion & Additional Support (V3) ─────────────────────
+  // Concern -> Observation -> Strategy -> Review. Eldermin never
+  // diagnoses - see support-case.schema.ts for the full reasoning. Every
+  // status and field here is worded as a pattern requiring educator
+  // review, never a clinical claim.
+  async getSupportCases(schoolSlug: string, studentId?: string, status?: string) {
+    const filter: any = { schoolSlug };
+    if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    if (status) filter.status = status;
+    return this.supportCaseModel.find(filter).sort({ raisedDate: -1 }).lean();
+  }
+
+  async getSupportCaseById(id: string, schoolSlug: string) {
+    const supportCase: any = await this.supportCaseModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!supportCase) throw new NotFoundException('Support case not found');
+    if (supportCase.linkedObservationIds?.length) {
+      const observations = await this.observationModel.find({ _id: { $in: supportCase.linkedObservationIds } }).lean();
+      return { ...supportCase, linkedObservations: observations };
+    }
+    return { ...supportCase, linkedObservations: [] };
+  }
+
+  async createSupportCase(schoolSlug: string, raisedBy: string, dto: any) {
+    return this.supportCaseModel.create({
+      ...dto, schoolSlug, raisedBy, raisedDate: new Date(), status: 'open',
+    });
+  }
+
+  async addSupportStrategy(id: string, schoolSlug: string, dto: any) {
+    const supportCase = await this.supportCaseModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      {
+        $push: { strategies: { description: dto.description, startDate: new Date(), reviewDate: dto.reviewDate ? new Date(dto.reviewDate) : undefined, status: 'planned' } },
+        $set: { status: 'monitoring' },
+      },
+      { new: true },
+    );
+    if (!supportCase) throw new NotFoundException('Support case not found');
+    return supportCase;
+  }
+
+  async addSupportReview(id: string, schoolSlug: string, dto: any) {
+    const supportCase = await this.supportCaseModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $push: { reviews: { date: new Date(), reviewedBy: dto.reviewedBy, notes: dto.notes, recommendation: dto.recommendation } } },
+      { new: true },
+    );
+    if (!supportCase) throw new NotFoundException('Support case not found');
+    return supportCase;
+  }
+
+  async updateSupportCase(id: string, schoolSlug: string, dto: any) {
+    const supportCase = await this.supportCaseModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!supportCase) throw new NotFoundException('Support case not found');
+    return supportCase;
   }
 
   // ── Children roster (real Student records filtered to Early Years -

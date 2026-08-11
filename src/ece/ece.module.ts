@@ -11,6 +11,8 @@ import { ECEWeeklyPlan, ECEWeeklyPlanSchema } from './schemas/weekly-plan.schema
 import { ECEEnvironmentArea, ECEEnvironmentAreaSchema } from './schemas/environment-area.schema';
 import { MontessoriMaterial, MontessoriMaterialSchema } from './schemas/montessori-material.schema';
 import { MontessoriWorkRecord, MontessoriWorkRecordSchema } from './schemas/montessori-work-record.schema';
+import { ECECareRecord, ECECareRecordSchema } from './schemas/care-record.schema';
+import { ECESupportCase, ECESupportCaseSchema } from './schemas/support-case.schema';
 import { StudentAttendance, StudentAttendanceSchema } from '../students/schemas/student-supporting.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { EmailModule } from '../email/email.module';
@@ -35,6 +37,8 @@ import { EceController } from './ece.controller';
       { name: ECEEnvironmentArea.name, schema: ECEEnvironmentAreaSchema },
       { name: MontessoriMaterial.name, schema: MontessoriMaterialSchema },
       { name: MontessoriWorkRecord.name, schema: MontessoriWorkRecordSchema },
+      { name: ECECareRecord.name, schema: ECECareRecordSchema },
+      { name: ECESupportCase.name, schema: ECESupportCaseSchema },
       // Reusing the real Student/StudentAttendance schemas rather than a
       // parallel "Child" entity - the single most important guardrail in
       // the Early Years PRD. Same safe cross-module Mongoose pattern
