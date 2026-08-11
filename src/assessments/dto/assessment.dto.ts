@@ -204,3 +204,16 @@ export class CreateExamPaperDto {
   @IsArray() @ValidateNested({ each: true }) @Type(() => PaperSectionDto) sections: PaperSectionDto[];
 }
 export class UpdateExamPaperDto extends PartialType(CreateExamPaperDto) {}
+
+// ── OMR ───────────────────────────────────────────────────────
+export class GenerateOMRSheetsDto {
+  @IsMongoId() examPaperId: string;
+  @IsArray() @IsMongoId({ each: true }) studentIds: string[];
+}
+export class ConfirmOMRAnswerDto {
+  @IsNumber() questionNumber: number;
+  @IsOptional() @IsString() confirmedOption?: string;
+}
+export class ConfirmOMRSheetDto {
+  @IsArray() @ValidateNested({ each: true }) @Type(() => ConfirmOMRAnswerDto) answers: ConfirmOMRAnswerDto[];
+}

@@ -5,7 +5,9 @@
 import {
   Controller, Get, Post, Put, Patch, Delete,
   Body, Param, Query, Request, Res, HttpCode, HttpStatus,
+  UseInterceptors, UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { AssessmentService } from './assessment.service';
 import {
@@ -15,6 +17,7 @@ import {
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
   PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
   CreateExamPaperDto, UpdateExamPaperDto,
+  GenerateOMRSheetsDto, ConfirmOMRSheetDto,
 } from './dto/assessment.dto';
 
 @Controller('assessments')
@@ -213,6 +216,43 @@ export class AssessmentController {
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);
+  }
+
+  // ── OMR ──────────────────────────────────────────────────────
+  @Post('omr/sheets') @HttpCode(HttpStatus.CREATED)
+  async generateOMRSheets(@Body() dto: GenerateOMRSheetsDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.generateOMRSheets(schoolSlug, dto.examPaperId, dto.studentIds);
+  }
+
+  @Get('omr/sheets') async getOMRSheetsForPaper(@Query('examPaperId') examPaperId: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getOMRSheetsForPaper(schoolSlug, examPaperId);
+  }
+
+  @Get('omr/sheets/:id/pdf')
+  async downloadOMRSheetPdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const pdf = await this.service.generateOMRSheetPdf(id, schoolSlug);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="omr-sheet-${id}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('omr/sheets/:id/upload') @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadOMRSheetPhoto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.uploadOMRSheetPhoto(id, schoolSlug, file);
+  }
+
+  @Post('omr/sheets/:id/confirm') @HttpCode(HttpStatus.OK)
+  async confirmOMRSheet(@Param('id') id: string, @Body() dto: ConfirmOMRSheetDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.confirmOMRSheet(id, schoolSlug, userName, dto.answers);
   }
 
   @Post('marks/bulk')

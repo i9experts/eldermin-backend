@@ -85,6 +85,19 @@ export class UploadService {
     await this.s3.send(command);
   }
 
+  // Fetches a previously-uploaded file's raw bytes back, given its S3
+  // key - used where the backend itself needs to process an upload
+  // (e.g. OMR image analysis), rather than just serving it to a browser.
+  async getFileBuffer(key: string): Promise<Buffer> {
+    const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    const response = await this.s3.send(command);
+    const chunks: Buffer[] = [];
+    for await (const chunk of response.Body as any) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
   async getSignedUrl(key: string, expiresIn = 3600): Promise<string> {
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
     return getSignedUrl(this.s3, command, { expiresIn });

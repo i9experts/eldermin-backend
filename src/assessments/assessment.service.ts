@@ -18,6 +18,10 @@ import {
   ReportCard, ReportCardDocument,
 } from './schemas/assessment.schema';
 import { ExamPaper, ExamPaperDocument } from './schemas/exam-paper.schema';
+import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-sheet.schema';
+import { detectOMRAnswers } from './omr-detection.util';
+import { UploadService } from '../upload/upload.service';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
 
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
@@ -54,8 +58,11 @@ export class AssessmentService {
     @InjectModel(MarkEntry.name) private markModel: Model<MarkEntryDocument>,
     @InjectModel(ReportCard.name) private reportCardModel: Model<ReportCardDocument>,
     @InjectModel(ExamPaper.name) private examPaperModel: Model<ExamPaperDocument>,
+    @InjectModel(OMRAnswerSheet.name) private omrSheetModel: Model<OMRAnswerSheetDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private configService: ConfigService,
     private pdfService: PdfService,
+    private uploadService: UploadService,
   ) {}
 
   // ============================================================
@@ -346,6 +353,244 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // (١، ٢، ٣...) rather than forcing Latin A/B/C/D into an RTL layout.
     const numerals = ['١', '٢', '٣', '٤', '٥', '٦'];
     return numerals[index] || String(index + 1);
+  }
+
+  // ============================================================
+  // OMR (bubble-sheet scan checking) - MCQ only.
+  // Real, working detection algorithm (see omr-detection.util.ts), but
+  // NOT yet verified against real photographed sheets - no sample
+  // images were available while building this. Expect real-world
+  // threshold tuning to be needed. Detection output is never treated as
+  // final - every sheet requires a human confirmation pass before a
+  // score is computed.
+  // ============================================================
+
+  private computeOMRLayout(questionCount: number) {
+    const pageWidthMm = 210, pageHeightMm = 297;
+    const markerMargin = 15;
+    const markers = [
+      { xMm: markerMargin, yMm: markerMargin },                       // top-left
+      { xMm: pageWidthMm - markerMargin, yMm: markerMargin },         // top-right
+      { xMm: markerMargin, yMm: pageHeightMm - markerMargin },        // bottom-left
+      { xMm: pageWidthMm - markerMargin, yMm: pageHeightMm - markerMargin }, // bottom-right
+    ];
+
+    // Two columns once there are enough questions to need them, so a
+    // realistic paper (30-50 MCQs) still fits on one A4 sheet.
+    const useTwoColumns = questionCount > 25;
+    const perColumn = useTwoColumns ? Math.ceil(questionCount / 2) : questionCount;
+    const rowStartYMm = 55;
+    const rowHeightMm = 9;
+    const col1XMm = 25;
+    const col2XMm = pageWidthMm / 2 + 10;
+    const optionSpacingMm = 12;
+
+    const questions: { questionNumber: number; bubbles: { label: string; xMm: number; yMm: number }[] }[] = [];
+    for (let i = 0; i < questionCount; i++) {
+      const qNum = i + 1;
+      const col = useTwoColumns && i >= perColumn ? 1 : 0;
+      const rowInCol = col === 0 ? i : i - perColumn;
+      const baseX = col === 0 ? col1XMm : col2XMm;
+      const baseY = rowStartYMm + rowInCol * rowHeightMm;
+      const bubbles = ['A', 'B', 'C', 'D'].map((label, idx) => ({
+        label, xMm: baseX + 12 + idx * optionSpacingMm, yMm: baseY,
+      }));
+      questions.push({ questionNumber: qNum, bubbles });
+    }
+
+    return { pageWidthMm, pageHeightMm, markers, questions, bubbleRadiusMm: 3 };
+  }
+
+  private generateSheetCode(): string {
+    const rand = randomBytes(3).toString('hex').toUpperCase();
+    const stamp = Date.now().toString(36).toUpperCase();
+    return `OMR-${stamp}-${rand}`;
+  }
+
+  async generateOMRSheets(schoolSlug: string, examPaperId: string, studentIds: string[]) {
+    const paper = await this.examPaperModel.findOne({ _id: examPaperId, schoolSlug });
+    if (!paper) throw new NotFoundException('Exam paper not found');
+
+    // MCQ-only questions actually determine the bubble grid - count them
+    // for real rather than assuming every question in the paper is MCQ.
+    const allQuestionIds = paper.sections.flatMap((s: any) => s.questionIds);
+    const mcqCount = await this.questionModel.countDocuments({ _id: { $in: allQuestionIds }, type: 'mcq' });
+    if (mcqCount === 0) throw new BadRequestException('This paper has no MCQ questions - OMR sheets only make sense for MCQ-based papers');
+
+    if (!paper.omrLayout) {
+      paper.omrLayout = this.computeOMRLayout(mcqCount) as any;
+      await paper.save();
+    }
+
+    const sheets: any[] = [];
+    for (const studentId of studentIds) {
+      const existing = await this.omrSheetModel.findOne({ schoolSlug, examPaperId, studentId });
+      if (existing) { sheets.push(existing); continue; }
+      const sheet = await this.omrSheetModel.create({
+        schoolSlug, examPaperId, studentId, sheetCode: this.generateSheetCode(), status: 'pending_capture',
+      });
+      sheets.push(sheet);
+    }
+    return sheets;
+  }
+
+  async getOMRSheetsForPaper(schoolSlug: string, examPaperId: string) {
+    const sheets = await this.omrSheetModel.find({ schoolSlug, examPaperId }).lean();
+    const studentIds = sheets.map((s: any) => s.studentId);
+    const students = await this.studentModel.find({ _id: { $in: studentIds } }).select('firstName lastName studentId').lean();
+    const studentMap = new Map(students.map((s: any) => [String(s._id), s]));
+    return sheets.map((s: any) => ({ ...s, student: studentMap.get(String(s.studentId)) }));
+  }
+
+  async generateOMRSheetPdf(sheetId: string, schoolSlug: string): Promise<Buffer> {
+    const sheet: any = await this.omrSheetModel.findOne({ _id: sheetId, schoolSlug }).lean();
+    if (!sheet) throw new NotFoundException('OMR sheet not found');
+    const paper: any = await this.examPaperModel.findOne({ _id: sheet.examPaperId, schoolSlug }).lean();
+    if (!paper?.omrLayout) throw new BadRequestException('This paper has no OMR layout generated yet');
+    const student: any = await this.studentModel.findById(sheet.studentId).lean();
+
+    const qrDataUrl = await QRCode.toDataURL(sheet.sheetCode, { width: 80, margin: 0 });
+    const layout = paper.omrLayout;
+    const markerSizeMm = 8;
+
+    const markersHtml = layout.markers.map((m: any) => `
+      <div style="position:absolute; left:${m.xMm - markerSizeMm / 2}mm; top:${m.yMm - markerSizeMm / 2}mm; width:${markerSizeMm}mm; height:${markerSizeMm}mm; background:#000;"></div>
+    `).join('');
+
+    const bubblesHtml = layout.questions.map((q: any) => `
+      <div style="position:absolute; left:${q.bubbles[0].xMm - 8}mm; top:${q.bubbles[0].yMm - 2.5}mm; font-size:9px; font-weight:bold;">${q.questionNumber}.</div>
+      ${q.bubbles.map((b: any) => `
+        <div style="position:absolute; left:${b.xMm - layout.bubbleRadiusMm}mm; top:${b.yMm - layout.bubbleRadiusMm}mm;
+          width:${layout.bubbleRadiusMm * 2}mm; height:${layout.bubbleRadiusMm * 2}mm; border:0.4mm solid #000; border-radius:50%;
+          display:flex; align-items:center; justify-content:center; font-size:6px;">${b.label}</div>
+      `).join('')}
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { margin: 0; size: ${layout.pageWidthMm}mm ${layout.pageHeightMm}mm; }
+          body { margin: 0; font-family: Arial, sans-serif; position: relative; width: ${layout.pageWidthMm}mm; height: ${layout.pageHeightMm}mm; }
+          .header { position: absolute; left: 30mm; top: 20mm; right: 30mm; }
+          .header h1 { font-size: 14px; margin: 0 0 4px; }
+          .header p { font-size: 10px; margin: 2px 0; }
+          .qr { position: absolute; right: 30mm; top: 18mm; }
+          .instructions { position: absolute; left: 25mm; top: 42mm; font-size: 8px; color: #444; }
+        </style>
+      </head>
+      <body>
+        ${markersHtml}
+        <div class="header">
+          <h1>${this.escapeHtml(paper.title)} — OMR Answer Sheet</h1>
+          <p><strong>${student ? `${student.firstName} ${student.lastName}` : ''}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+          <p>Sheet Code: ${sheet.sheetCode}</p>
+        </div>
+        <div class="qr"><img src="${qrDataUrl}" width="60" height="60" /></div>
+        <div class="instructions">Fill each bubble completely using a dark pen or pencil. Do not fold this sheet.</div>
+        ${bubblesHtml}
+      </body>
+      </html>
+    `;
+
+    return this.pdfService.htmlToPdfWithOptions(html, { width: `${layout.pageWidthMm}mm`, height: `${layout.pageHeightMm}mm`, printBackground: true, margin: { top: '0', right: '0', bottom: '0', left: '0' } });
+  }
+
+  async uploadOMRSheetPhoto(sheetId: string, schoolSlug: string, file: Express.Multer.File) {
+    const sheet = await this.omrSheetModel.findOne({ _id: sheetId, schoolSlug });
+    if (!sheet) throw new NotFoundException('OMR sheet not found');
+
+    const uploaded = await this.uploadService.uploadFile(file, 'omr-sheets', schoolSlug);
+    sheet.uploadedImageUrl = uploaded.url;
+    sheet.status = 'uploaded';
+    await sheet.save();
+
+    // Run detection immediately - fire-and-forget from the caller's
+    // perspective isn't appropriate here since the result determines
+    // the response, so this is awaited, not queued.
+    return this.processOMRSheet(sheetId, schoolSlug, uploaded.key);
+  }
+
+  async processOMRSheet(sheetId: string, schoolSlug: string, imageKey: string) {
+    const sheet = await this.omrSheetModel.findOne({ _id: sheetId, schoolSlug });
+    if (!sheet) throw new NotFoundException('OMR sheet not found');
+    const paper: any = await this.examPaperModel.findOne({ _id: sheet.examPaperId, schoolSlug }).lean();
+    if (!paper?.omrLayout) throw new BadRequestException('This paper has no OMR layout');
+
+    let imageBuffer: Buffer;
+    try {
+      imageBuffer = await this.uploadService.getFileBuffer(imageKey);
+    } catch (err: any) {
+      sheet.status = 'uploaded';
+      sheet.processingError = `Could not retrieve the uploaded image: ${err.message}`;
+      await sheet.save();
+      return sheet;
+    }
+
+    const detection = await detectOMRAnswers({
+      imageBuffer,
+      pageWidthMm: paper.omrLayout.pageWidthMm,
+      pageHeightMm: paper.omrLayout.pageHeightMm,
+      markersMm: paper.omrLayout.markers,
+      questions: paper.omrLayout.questions,
+      bubbleRadiusMm: paper.omrLayout.bubbleRadiusMm,
+    });
+
+    if (!detection.markersFound) {
+      sheet.status = 'uploaded';
+      sheet.processingError = detection.error || 'Detection failed';
+      await sheet.save();
+      return sheet;
+    }
+
+    sheet.detectedAnswers = detection.results.map((r) => ({
+      questionNumber: r.questionNumber,
+      detectedOption: r.detectedOption || undefined,
+      confidence: r.confidence,
+      isAmbiguous: r.isAmbiguous,
+    })) as any;
+    sheet.processingError = null as any;
+    sheet.processedAt = new Date();
+    const hasIssues = detection.results.some((r) => r.isAmbiguous || r.detectedOption === null);
+    sheet.status = hasIssues ? 'needs_review' : 'processed';
+    await sheet.save();
+    return sheet;
+  }
+
+  async confirmOMRSheet(sheetId: string, schoolSlug: string, confirmedBy: string, answers: { questionNumber: number; confirmedOption?: string }[]) {
+    const sheet = await this.omrSheetModel.findOne({ _id: sheetId, schoolSlug });
+    if (!sheet) throw new NotFoundException('OMR sheet not found');
+    const paper: any = await this.examPaperModel.findOne({ _id: sheet.examPaperId, schoolSlug }).lean();
+
+    const allQuestionIds = paper.sections.flatMap((s: any) => s.questionIds);
+    const mcqQuestions = await this.questionModel.find({ _id: { $in: allQuestionIds }, type: 'mcq' }).lean();
+    // Real correct-answer lookup keyed by question ORDER (question 1, 2,
+    // 3... in the same order the OMR layout was generated in), not by
+    // ID, since the sheet only ever knows question NUMBERS from the
+    // printed grid.
+    const correctByNumber = new Map(mcqQuestions.map((q: any, i: number) => {
+      const correctOption = q.options?.find((o: any) => o.isCorrect);
+      const label = correctOption ? String.fromCharCode(65 + q.options.indexOf(correctOption)) : null;
+      return [i + 1, { label, marks: q.marks }];
+    }));
+
+    let score = 0, totalMarks = 0;
+    for (const [, info] of correctByNumber) totalMarks += info.marks || 0;
+    for (const ans of answers) {
+      const info = correctByNumber.get(ans.questionNumber);
+      if (info && ans.confirmedOption && info.label === ans.confirmedOption) score += info.marks || 0;
+    }
+
+    sheet.confirmedAnswers = answers.map((a) => ({ questionNumber: a.questionNumber, confirmedOption: a.confirmedOption })) as any;
+    sheet.status = 'confirmed';
+    sheet.confirmedBy = confirmedBy;
+    sheet.confirmedAt = new Date();
+    sheet.score = score;
+    sheet.totalMarks = totalMarks;
+    await sheet.save();
+    return sheet;
   }
 
   // ============================================================

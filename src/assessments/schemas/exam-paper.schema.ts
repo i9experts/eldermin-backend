@@ -9,6 +9,41 @@ export class PaperSection {
 }
 export const PaperSectionSchema = SchemaFactory.createForClass(PaperSection);
 
+@Schema({ _id: false })
+export class OMRBubblePosition {
+  @Prop({ required: true }) label: string; // 'A' | 'B' | 'C' | 'D'
+  @Prop({ required: true }) xMm: number;
+  @Prop({ required: true }) yMm: number;
+}
+export const OMRBubblePositionSchema = SchemaFactory.createForClass(OMRBubblePosition);
+
+@Schema({ _id: false })
+export class OMRQuestionRow {
+  @Prop({ required: true }) questionNumber: number;
+  @Prop({ type: [OMRBubblePositionSchema], default: [] }) bubbles: OMRBubblePosition[];
+}
+export const OMRQuestionRowSchema = SchemaFactory.createForClass(OMRQuestionRow);
+
+@Schema({ _id: false })
+export class OMRMarker {
+  @Prop({ required: true }) xMm: number;
+  @Prop({ required: true }) yMm: number;
+}
+export const OMRMarkerSchema = SchemaFactory.createForClass(OMRMarker);
+
+@Schema({ _id: false })
+export class OMRLayout {
+  @Prop({ required: true, default: 210 }) pageWidthMm: number;
+  @Prop({ required: true, default: 297 }) pageHeightMm: number;
+  // Four alignment markers, always in this order: top-left, top-right,
+  // bottom-left, bottom-right - the detection pipeline relies on this
+  // exact order to build its correction transform.
+  @Prop({ type: [OMRMarkerSchema], default: [] }) markers: OMRMarker[];
+  @Prop({ type: [OMRQuestionRowSchema], default: [] }) questions: OMRQuestionRow[];
+  @Prop({ default: 3 }) bubbleRadiusMm: number;
+}
+export const OMRLayoutSchema = SchemaFactory.createForClass(OMRLayout);
+
 export type ExamPaperDocument = ExamPaper & Document;
 
 // A real exam paper compiled from the real Question Bank. Language
@@ -35,6 +70,11 @@ export class ExamPaper {
   // (e.g. reading it aloud over the phone).
   @Prop({ required: true, unique: true }) paperCode: string;
   @Prop({ required: true }) createdBy: string;
+  // Computed once, the first time personalized OMR sheets are generated
+  // for this paper - identical for every student's copy, since only the
+  // printed identity (name/roll/sheetCode) differs between copies, not
+  // the bubble grid itself.
+  @Prop({ type: OMRLayoutSchema, default: null }) omrLayout: OMRLayout | null;
 }
 
 export const ExamPaperSchema = SchemaFactory.createForClass(ExamPaper);
