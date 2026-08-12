@@ -233,7 +233,7 @@ export class FinanceService {
   // tries to set B's parent to A). Caps the walk at the total account count
   // as a defensive bound against any pre-existing bad data forming a loop.
   private async wouldCreateCycle(schoolSlug: string, code: string, startParentCode: string): Promise<boolean> {
-    let current = startParentCode;
+    let current: string | undefined = startParentCode;
     const accounts = await this.coaModel.find({ schoolSlug }, { code: 1, parentCode: 1 }).lean();
     const byCode = new Map<string, string | undefined>(accounts.map((a: any) => [a.code, a.parentCode]));
     let guard = accounts.length + 1;

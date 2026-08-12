@@ -119,11 +119,18 @@ export class Campus {
   // many campuses into supervised regions (e.g. a 200-campus rural
   // network where Supervisors oversee one cluster each).
   @Prop({ type: Types.ObjectId, ref: 'Cluster', default: null }) clusterId: Types.ObjectId | null;
+  // Optional - links this campus to a legal/corporate entity
+  // (GroupInstitution) for schools/trusts that operate multiple
+  // separately-branded institutions. Previously the "Institutions" and
+  // "Campuses" tabs were structurally disconnected - adding an
+  // Institution record did nothing to any campus - this is the real fix.
+  @Prop({ type: Types.ObjectId, ref: 'GroupInstitution', default: null }) institutionId: Types.ObjectId | null;
 }
 
 export const CampusSchema = SchemaFactory.createForClass(Campus);
 CampusSchema.index({ schoolSlug: 1, isActive: 1 });
 CampusSchema.index({ schoolSlug: 1, clusterId: 1 });
+CampusSchema.index({ schoolSlug: 1, institutionId: 1 });
 
 // ============================================================
 // CLUSTER — groups multiple campuses into a supervised region.

@@ -237,4 +237,10 @@ export class OrganizationController {
     const { schoolSlug } = this.ctx(req);
     return this.service.archiveGroupInstitution(id, schoolSlug);
   }
+
+  @Patch('campuses/:id/institution')
+  async assignCampusToInstitution(@Param('id') id: string, @Body('institutionId') institutionId: string | null, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.assignCampusToInstitution(id, schoolSlug, institutionId);
+  }
 }

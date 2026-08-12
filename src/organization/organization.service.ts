@@ -363,28 +363,37 @@ export class OrganizationService {
 
   // ── Group Institutions ────────────────────────────────────
   async getGroupInstitutions(schoolSlug: string) {
-    const institutions = await this.groupInstitutionModel.find({ schoolSlug }).sort({ createdAt: 1 });
-    if (institutions.length > 0) return institutions;
+    const institutions = await this.groupInstitutionModel.find({ schoolSlug }).sort({ createdAt: 1 }).lean();
+    let list = institutions;
+    if (list.length === 0) {
+      const school: any = await this.getSchool(schoolSlug);
+      const seeded = new this.groupInstitutionModel({
+        schoolSlug,
+        name: school.name,
+        type: school.type,
+        status: school.isActive === false ? 'Inactive' : 'Active',
+        email: school.email,
+        phone: school.phone,
+        website: school.social?.website,
+        address: {
+          city: school.address?.city,
+          province: school.address?.province,
+          country: school.address?.country,
+          postalCode: school.address?.postalCode,
+        },
+      });
+      await seeded.save();
+      list = [seeded.toObject()];
+    }
 
-    const school = await this.getSchool(schoolSlug);
-    const seeded = new this.groupInstitutionModel({
-      schoolSlug,
-      name: school.name,
-      registrationNumber: school.registrationNumber,
-      type: school.type,
-      status: school.isActive ? 'Active' : 'Inactive',
-      email: school.email,
-      phone: school.phone,
-      website: school.social?.website,
-      address: {
-        city: school.address?.city,
-        province: school.address?.province,
-        country: school.address?.country,
-        postalCode: school.address?.postalCode,
-      },
-    });
-    await seeded.save();
-    return [seeded];
+    // Real campus counts per institution - previously these two tabs
+    // had no relationship at all, so no count was ever possible before.
+    const campusCounts = await this.campusModel.aggregate([
+      { $match: { schoolSlug, isActive: true, institutionId: { $ne: null } } },
+      { $group: { _id: '$institutionId', count: { $sum: 1 } } },
+    ]);
+    const countMap = new Map(campusCounts.map((c: any) => [String(c._id), c.count]));
+    return list.map((inst: any) => ({ ...inst, campusCount: countMap.get(String(inst._id)) || 0 }));
   }
 
   async createGroupInstitution(dto: CreateGroupInstitutionDto) {
@@ -401,10 +410,20 @@ export class OrganizationService {
   }
 
   async archiveGroupInstitution(id: string, schoolSlug: string) {
+    const inUse = await this.campusModel.countDocuments({ schoolSlug, institutionId: id, isActive: true });
+    if (inUse > 0) throw new BadRequestException(`${inUse} campus(es) are still assigned to this institution - reassign them first`);
     const institution = await this.groupInstitutionModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: { status: 'Inactive' } }, { new: true },
     );
     if (!institution) throw new NotFoundException('Institution not found');
     return institution;
+  }
+
+  async assignCampusToInstitution(campusId: string, schoolSlug: string, institutionId: string | null) {
+    const campus = await this.campusModel.findOneAndUpdate(
+      { _id: campusId, schoolSlug }, { $set: { institutionId } }, { new: true },
+    );
+    if (!campus) throw new NotFoundException('Campus not found');
+    return campus;
   }
 }
