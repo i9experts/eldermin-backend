@@ -5,6 +5,7 @@ import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, SyllabusQueryDto,
 } from './dto/syllabus.dto';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 @Injectable()
 export class SyllabusService {
@@ -26,7 +27,7 @@ export class SyllabusService {
     return { totalTopics, coveredTopics, coveragePct, trackStatus };
   }
 
-  async create(tenantId: string, institutionId: string, createdBy: string, createdByName: string, dto: CreateSyllabusDto) {
+  async create(tenantId: string, institutionId: string, createdBy: string, createdByName: string, dto: CreateSyllabusDto, requestingUser?: ScopedUser) {
     const rollup = this.computeRollup(dto.units || []);
     const syllabus = new this.syllabusModel({
       ...dto,
@@ -34,12 +35,13 @@ export class SyllabusService {
       institutionId,
       createdBy,
       createdByName,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : ((dto as any).campusId ? new Types.ObjectId((dto as any).campusId) : null),
       ...rollup,
     });
     return syllabus.save();
   }
 
-  async findAll(tenantId: string, query: SyllabusQueryDto) {
+  async findAll(tenantId: string, query: SyllabusQueryDto, requestingUser?: ScopedUser) {
     const filter: any = { tenantId };
     if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
     if (query.sectionName) filter.sectionName = query.sectionName;
@@ -49,6 +51,10 @@ export class SyllabusService {
     if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
     if (query.status) filter.status = query.status;
     if (query.trackStatus) filter.trackStatus = query.trackStatus;
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
     return this.syllabusModel.find(filter).sort({ gradeLevel: 1, subjectName: 1 }).lean();
   }
 

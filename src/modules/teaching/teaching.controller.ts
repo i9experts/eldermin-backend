@@ -10,7 +10,7 @@ export class TeachingController {
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
   @Get('dashboard')
-  getDashboard(@Request() req) { return this.teachingService.getDashboardStats(req.user.tenantId); }
+  getDashboard(@Request() req) { return this.teachingService.getDashboardStats(req.user.tenantId, req.user); }
 
   // ── TEACHER PROFILES ──────────────────────────────────────────────────────────
 

@@ -52,6 +52,12 @@ export type SyllabusDocument = Syllabus & Document;
 export class Syllabus {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
+  // Denormalized from the creating teacher's own campus at creation time
+  // (same convention as Teaching module's LessonPlan/Assignment) - a
+  // syllabus tracked at one campus's Grade 6 Section A is a genuinely
+  // separate coverage record from another campus's, even if the subject
+  // name and grade level string happen to match.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 
   // ── Design ──────────────────────────────────────────────────
   @Prop({ required: true }) subjectName: string;

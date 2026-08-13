@@ -23,7 +23,7 @@ export class SyllabusController {
 
   @Get()
   findAll(@Request() req: any, @Query() query: SyllabusQueryDto) {
-    return this.service.findAll(req.user.tenantId, query);
+    return this.service.findAll(req.user.tenantId, query, req.user);
   }
 
   @Get(':id')
@@ -34,7 +34,7 @@ export class SyllabusController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@Request() req: any, @Body() dto: CreateSyllabusDto) {
-    return this.service.create(req.user.tenantId, req.user.institutionId, req.user.userId, req.user.name, dto);
+    return this.service.create(req.user.tenantId, req.user.institutionId, req.user.userId, req.user.name, dto, req.user);
   }
 
   @Put(':id')

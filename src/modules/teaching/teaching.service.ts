@@ -26,21 +26,33 @@ export class TeachingService {
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
-  async getDashboardStats(tenantId: string) {
+  async getDashboardStats(tenantId: string, requestingUser?: ScopedUser) {
     const tid = this.tid(tenantId);
+    const scopeFilter: any = {};
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      const effectiveDepartment = resolveDepartmentScope(requestingUser, undefined);
+      if (effectiveCampusId) scopeFilter.campusId = effectiveCampusId;
+      if (effectiveDepartment) scopeFilter.department = effectiveDepartment;
+    }
     const [
       totalTeachers, activeTeachers, totalLessonPlans,
       pendingPlans, totalAssignments, overdueAssignments,
       behaviourNotes, positiveNotes,
     ] = await Promise.all([
-      this.teacherProfileModel.countDocuments({ tenantId: tid }),
-      this.teacherProfileModel.countDocuments({ tenantId: tid, status: 'active' }),
-      this.lessonPlanModel.countDocuments({ tenantId: tid }),
-      this.lessonPlanModel.countDocuments({ tenantId: tid, status: 'submitted' }),
-      this.assignmentModel.countDocuments({ tenantId: tid }),
-      this.assignmentModel.countDocuments({ tenantId: tid, status: 'overdue' }),
-      this.behaviourModel.countDocuments({ tenantId: tid }),
-      this.behaviourModel.countDocuments({ tenantId: tid, type: 'positive' }),
+      this.teacherProfileModel.countDocuments({ tenantId: tid, ...scopeFilter }),
+      this.teacherProfileModel.countDocuments({ tenantId: tid, status: 'active', ...scopeFilter }),
+      // LessonPlan/Assignment/BehaviourNote don't have a department field
+      // (that's an HR concept, not a class-based one), so a department-
+      // scoped Teacher's dashboard counts are campus-scoped here, same as
+      // any other campus-scoped role - only the Teacher Directory counts
+      // above narrow further to their own department.
+      this.lessonPlanModel.countDocuments({ tenantId: tid, ...(scopeFilter.campusId ? { campusId: scopeFilter.campusId } : {}) }),
+      this.lessonPlanModel.countDocuments({ tenantId: tid, status: 'submitted', ...(scopeFilter.campusId ? { campusId: scopeFilter.campusId } : {}) }),
+      this.assignmentModel.countDocuments({ tenantId: tid, ...(scopeFilter.campusId ? { campusId: scopeFilter.campusId } : {}) }),
+      this.assignmentModel.countDocuments({ tenantId: tid, status: 'overdue', ...(scopeFilter.campusId ? { campusId: scopeFilter.campusId } : {}) }),
+      this.behaviourModel.countDocuments({ tenantId: tid, ...(scopeFilter.campusId ? { campusId: scopeFilter.campusId } : {}) }),
+      this.behaviourModel.countDocuments({ tenantId: tid, type: 'positive', ...(scopeFilter.campusId ? { campusId: scopeFilter.campusId } : {}) }),
     ]);
     return {
       totalTeachers, activeTeachers, totalLessonPlans,
