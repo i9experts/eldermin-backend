@@ -12,6 +12,7 @@ export class DocumentsController {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       userName: req?.user?.name || 'Admin',
+      requestingUser: req?.user,
     };
   }
 
@@ -23,13 +24,13 @@ export class DocumentsController {
 
   // Documents
   @Get() async getDocs(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getDocuments(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getDocuments(schoolSlug, query, requestingUser);
   }
   @Post() @HttpCode(HttpStatus.CREATED)
   async createDoc(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.createDocument({ ...dto, schoolSlug, uploadedBy: userName });
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.createDocument({ ...dto, schoolSlug, uploadedBy: userName }, requestingUser);
   }
   @Put(':id') async updateDoc(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -61,8 +62,8 @@ export class DocumentsController {
 
   // Workflow Instances
   @Get('workflows') async getInstances(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getInstances(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getInstances(schoolSlug, query, requestingUser);
   }
   @Get('workflows/my-approvals') async getMyApprovals(@Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
@@ -70,8 +71,8 @@ export class DocumentsController {
   }
   @Post('workflows') @HttpCode(HttpStatus.CREATED)
   async initiateWorkflow(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.initiateWorkflow({ ...dto, schoolSlug, initiatedBy: userName });
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.initiateWorkflow({ ...dto, schoolSlug, initiatedBy: userName }, requestingUser);
   }
   @Patch('workflows/:id/action')
   async takeAction(@Param('id') id: string, @Body() dto: any, @Request() req: any) {

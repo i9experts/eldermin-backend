@@ -1,11 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   DocumentRecord, DocumentRecordDocument,
   WorkflowTemplate, WorkflowTemplateDocument,
   WorkflowInstance, WorkflowInstanceDocument,
 } from './schemas/documents.schema';
+import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -52,18 +53,30 @@ export class DocumentsService {
   }
 
   // ── Documents ──────────────────────────────────────────
-  async getDocuments(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, category, status, visibility, search } = query;
+  async getDocuments(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, category, status, visibility, search, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (category) filter.category = category;
     if (status) filter.status = status;
     if (visibility) filter.visibility = visibility;
-    if (search) filter.$or = [
+    // A document with no campusId at all means "applies to every
+    // campus" (school-wide policy/circular), so campus-scoped roles see
+    // their own campus's documents PLUS those - never just excluded, the
+    // way an unassigned Expense/Budget would be.
+    const campusFilter = requestingUser ? buildInclusiveCampusFilter(requestingUser, campusId) : (campusId ? { campusId } : null);
+    const searchOr = search ? [
       { title: { $regex: search, $options: 'i' } },
       { description: { $regex: search, $options: 'i' } },
       { tags: { $in: [new RegExp(search, 'i')] } },
-    ];
+    ] : null;
+    if (campusFilter && searchOr) {
+      filter.$and = [campusFilter, { $or: searchOr }];
+    } else if (campusFilter) {
+      Object.assign(filter, campusFilter);
+    } else if (searchOr) {
+      filter.$or = searchOr;
+    }
     const [data, total] = await Promise.all([
       this.docModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.docModel.countDocuments(filter),
@@ -71,8 +84,11 @@ export class DocumentsService {
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
-  async createDocument(data: any) {
-    const doc = new this.docModel(data);
+  async createDocument(data: any, requestingUser?: ScopedUser) {
+    const doc = new this.docModel({
+      ...data,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
+    });
     return doc.save();
   }
 
@@ -151,13 +167,15 @@ export class DocumentsService {
   }
 
   // ── Workflow Instances ─────────────────────────────────
-  async getInstances(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, type, assignedTo } = query;
+  async getInstances(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, type, assignedTo, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
     if (type) filter.workflowType = type;
     if (assignedTo) filter['steps.assignedTo'] = assignedTo;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     const [data, total] = await Promise.all([
       this.instanceModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.instanceModel.countDocuments(filter),
@@ -165,7 +183,7 @@ export class DocumentsService {
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
-  async initiateWorkflow(data: any) {
+  async initiateWorkflow(data: any, requestingUser?: ScopedUser) {
     const template = await this.templateModel.findById(data.templateId);
     if (!template) throw new NotFoundException('Workflow template not found');
 
@@ -184,6 +202,7 @@ export class DocumentsService {
       steps,
       currentStep: 1,
       status: 'in_progress',
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return instance.save();
   }

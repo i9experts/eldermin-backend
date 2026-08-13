@@ -41,6 +41,10 @@ export class DocumentRecord {
   @Prop() relatedTo: string;
   @Prop() relatedToType: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // null = applies to every campus (e.g. a school-wide policy or
+  // circular) - genuinely different from "ownership unknown", so reads
+  // use buildInclusiveCampusFilter rather than resolveCampusScope.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 
 export const DocumentRecordSchema = SchemaFactory.createForClass(DocumentRecord);
@@ -135,6 +139,10 @@ export class WorkflowInstance {
   @Prop() priority: string;
   @Prop() dueDate: Date;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Denormalized from the initiating user's own campus - a specific
+  // running approval (e.g. one teacher's leave request) is genuinely
+  // tied to a campus, unlike the WorkflowTemplate it's based on.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 
 export const WorkflowInstanceSchema = SchemaFactory.createForClass(WorkflowInstance);
