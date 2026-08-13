@@ -9,6 +9,11 @@ import { Room, RoomSchema } from './schemas/room.schema';
 import { PeriodTemplate, PeriodTemplateSchema } from './schemas/period-template.schema';
 import { Assignment, AssignmentSchema } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteSchema } from './schemas/behaviour-note.schema';
+import { Substitution, SubstitutionSchema } from './schemas/substitution.schema';
+import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
+import { EmailModule } from '../../email/email.module';
+import { SubstitutionService } from './substitution.service';
+import { SubstitutionController } from './substitution.controller';
 
 @Module({
   imports: [
@@ -20,10 +25,13 @@ import { BehaviourNote, BehaviourNoteSchema } from './schemas/behaviour-note.sch
       { name: PeriodTemplate.name, schema: PeriodTemplateSchema },
       { name: Assignment.name, schema: AssignmentSchema },
       { name: BehaviourNote.name, schema: BehaviourNoteSchema },
+      { name: Substitution.name, schema: SubstitutionSchema },
+      { name: Staff.name, schema: StaffSchema },
     ]),
+    EmailModule,
   ],
-  controllers: [TeachingController],
-  providers: [TeachingService],
-  exports: [TeachingService],
+  controllers: [TeachingController, SubstitutionController],
+  providers: [TeachingService, SubstitutionService],
+  exports: [TeachingService, SubstitutionService],
 })
 export class TeachingModule {}
