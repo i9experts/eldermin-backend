@@ -14,6 +14,14 @@ export class User {
   @Prop({ required: true })
   email: string;
 
+  // Real phone-based passwordless login (WhatsApp OTP) - a parent
+  // account created this way is looked up by phone first on every
+  // subsequent login, not re-derived from guardian records each time.
+  // Optional/unset for every account created the normal email+password
+  // way, so nothing existing changes behavior.
+  @Prop()
+  phone: string;
+
   @Prop({ required: true })
   passwordHash: string;
 
@@ -68,3 +76,4 @@ export class User {
 
 export const UserSchema = SchemaFactory.createForClass(User);
 UserSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+UserSchema.index({ phone: 1 }, { sparse: true });

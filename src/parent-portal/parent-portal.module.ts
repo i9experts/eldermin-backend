@@ -25,6 +25,11 @@ import {
   MessageThread, MessageThreadSchema,
   Message, MessageSchema,
 } from './schemas/notification-and-message.schema';
+import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
+import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
+import { EmailModule } from '../email/email.module';
+import { ParentAuthService } from './parent-auth.service';
+import { ParentAuthController } from './parent-auth.controller';
 
 @Module({
   imports: [
@@ -50,10 +55,13 @@ import {
       { name: Notification.name, schema: NotificationSchema },
       { name: MessageThread.name, schema: MessageThreadSchema },
       { name: Message.name, schema: MessageSchema },
+      { name: PhoneOtp.name, schema: PhoneOtpSchema },
+      { name: Tenant.name, schema: TenantSchema },
     ]),
+    EmailModule,
   ],
-  controllers: [ParentPortalController],
-  providers: [ParentPortalService],
-  exports: [ParentPortalService],
+  controllers: [ParentPortalController, ParentAuthController],
+  providers: [ParentPortalService, ParentAuthService],
+  exports: [ParentPortalService, ParentAuthService],
 })
 export class ParentPortalModule {}
