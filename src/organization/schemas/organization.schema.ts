@@ -180,8 +180,9 @@ export class AcademicYear {
   // Optional scope narrowing — mirrors Campus.institutionId / Grade.campusId.
   // Left null/undefined means the year applies school-wide (all
   // institutions / all campuses), which is the default and what most
-  // single-campus schools will use.
-  @Prop({ type: Types.ObjectId, ref: 'GroupInstitution', default: null }) institutionId: Types.ObjectId | null;
+  // single-campus schools will use. Stored as a plain string id (not an
+  // ObjectId ref) to match Grade.campusId's proven pattern.
+  @Prop({ type: String, default: null }) institutionId: string | null;
   @Prop({ type: String, default: null }) campusId: string | null;
 }
 
