@@ -8,6 +8,7 @@ import {
   GRN, GRNDocument,
   InventoryItem, InventoryItemDocument,
 } from './procurement.schema';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -151,10 +152,12 @@ export class ProcurementService {
     return pr.save();
   }
 
-  async getPRs(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, priority, category, search } = query;
+  async getPRs(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, priority, category, search, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (category) filter.category = category;

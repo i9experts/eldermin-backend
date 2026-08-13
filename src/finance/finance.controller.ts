@@ -239,7 +239,7 @@ export class FinanceController {
   // Expenses
   @Get('expenses') async getExpenses(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getExpenses(schoolSlug, query);
+    return this.service.getExpenses(schoolSlug, query, req?.user);
   }
   @Post('expenses') @HttpCode(HttpStatus.CREATED)
   async createExpense(@Body() dto: any, @Request() req: any) {
@@ -258,7 +258,7 @@ export class FinanceController {
   // Budgets
   @Get('budgets') async getBudgets(@Request() req: any, @Query('academicYear') ay?: string) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getBudgets(schoolSlug, ay);
+    return this.service.getBudgets(schoolSlug, ay, req?.user);
   }
   @Post('budgets') @HttpCode(HttpStatus.CREATED)
   async createBudget(@Body() dto: any, @Request() req: any) {

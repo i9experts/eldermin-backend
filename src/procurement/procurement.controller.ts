@@ -62,7 +62,7 @@ export class ProcurementController {
   @Get('requests')
   async getPRs(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getPRs(schoolSlug, query);
+    return this.service.getPRs(schoolSlug, query, req?.user);
   }
 
   @Get('requests/:id')

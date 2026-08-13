@@ -53,6 +53,7 @@ import {
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -1559,10 +1560,17 @@ export class FinanceService {
   }
 
   // ── Expenses ─────────────────────────────────────────────
-  async getExpenses(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, category, academicYear, from, to } = query;
+  async getExpenses(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, category, academicYear, from, to, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    // Campus-/department-scoped roles only see expenses explicitly
+    // tagged with their own campus - an expense with no campusId at all
+    // (e.g. a central/school-wide bill) won't show for them, since we
+    // can't confirm it belongs to their campus. Institution/platform
+    // roles are unaffected and still see every expense.
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (status) filter.status = status;
     if (category) filter.category = category;
     if (academicYear) filter.academicYear = academicYear;
@@ -1609,9 +1617,13 @@ export class FinanceService {
   }
 
   // ── Budgets ──────────────────────────────────────────────
-  async getBudgets(schoolSlug: string, academicYear?: string) {
+  async getBudgets(schoolSlug: string, academicYear?: string, requestingUser?: ScopedUser) {
     const filter: any = { schoolSlug };
     if (academicYear) filter.academicYear = academicYear;
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
     return this.budgetModel.find(filter).sort({ createdAt: -1 });
   }
 
