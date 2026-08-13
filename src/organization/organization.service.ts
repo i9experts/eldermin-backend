@@ -231,8 +231,14 @@ export class OrganizationService {
   }
 
   // ── Academic Years ────────────────────────────────────────
-  async getAcademicYears(schoolSlug: string) {
-    return this.yearModel.find({ schoolSlug }).sort({ startDate: -1 });
+  async getAcademicYears(schoolSlug: string, institutionId?: string, campusId?: string) {
+    const filter: any = { schoolSlug };
+    // Explicit filter narrows to that scope only. With no filter, return
+    // every year (school-wide + institution-specific + campus-specific)
+    // so existing single-campus schools keep seeing everything they had.
+    if (institutionId) filter.institutionId = institutionId;
+    if (campusId) filter.campusId = campusId;
+    return this.yearModel.find(filter).sort({ startDate: -1 });
   }
 
   async createAcademicYear(dto: CreateAcademicYearDto) {
@@ -241,6 +247,8 @@ export class OrganizationService {
     }
     const year = new this.yearModel({
       ...dto,
+      institutionId: dto.institutionId || null,
+      campusId: dto.campusId || null,
       startDate: new Date(dto.startDate),
       endDate: new Date(dto.endDate),
       terms: (dto.terms || []).map(t => ({
@@ -255,6 +263,8 @@ export class OrganizationService {
     if (dto.startDate) update.startDate = new Date(dto.startDate);
     if (dto.endDate) update.endDate = new Date(dto.endDate);
     if (dto.terms) update.terms = dto.terms.map(t => ({ ...t, startDate: new Date(t.startDate), endDate: new Date(t.endDate) }));
+    if ('institutionId' in dto) update.institutionId = dto.institutionId || null;
+    if ('campusId' in dto) update.campusId = dto.campusId || null;
     const year = await this.yearModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
     if (!year) throw new NotFoundException('Academic year not found');
     return year;

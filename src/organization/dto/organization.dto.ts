@@ -56,7 +56,11 @@ export class CreateAcademicYearDto {
   @IsDateString() startDate: string;
   @IsDateString() endDate: string;
   @IsOptional() @IsBoolean() isCurrent?: boolean;
+  @IsOptional() @IsNumber() totalWorkingDays?: number;
+  @IsOptional() @IsString() remarks?: string;
   @IsOptional() terms?: { name: string; startDate: string; endDate: string }[];
+  @IsOptional() @IsMongoId() institutionId?: string;
+  @IsOptional() @IsString() campusId?: string;
   schoolSlug?: string;
 }
 

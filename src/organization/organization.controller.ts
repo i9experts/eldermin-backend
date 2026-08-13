@@ -119,9 +119,13 @@ export class OrganizationController {
   }
 
   // Academic Years
-  @Get('academic-years') async getYears(@Request() req: any) {
+  @Get('academic-years') async getYears(
+    @Request() req: any,
+    @Query('institutionId') institutionId?: string,
+    @Query('campusId') campusId?: string,
+  ) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getAcademicYears(schoolSlug);
+    return this.service.getAcademicYears(schoolSlug, institutionId, campusId);
   }
 
   @Post('academic-years') @HttpCode(HttpStatus.CREATED)

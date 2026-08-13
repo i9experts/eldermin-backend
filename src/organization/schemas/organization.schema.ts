@@ -177,10 +177,18 @@ export class AcademicYear {
   @Prop() totalWorkingDays: number;
   @Prop() remarks: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Optional scope narrowing — mirrors Campus.institutionId / Grade.campusId.
+  // Left null/undefined means the year applies school-wide (all
+  // institutions / all campuses), which is the default and what most
+  // single-campus schools will use.
+  @Prop({ type: Types.ObjectId, ref: 'GroupInstitution', default: null }) institutionId: Types.ObjectId | null;
+  @Prop({ type: String, default: null }) campusId: string | null;
 }
 
 export const AcademicYearSchema = SchemaFactory.createForClass(AcademicYear);
 AcademicYearSchema.index({ schoolSlug: 1, isCurrent: 1 });
+AcademicYearSchema.index({ schoolSlug: 1, institutionId: 1 });
+AcademicYearSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // GRADE & SECTION
