@@ -396,14 +396,36 @@ export class OrganizationService {
       list = [seeded.toObject()];
     }
 
-    // Real campus counts per institution - previously these two tabs
-    // had no relationship at all, so no count was ever possible before.
-    const campusCounts = await this.campusModel.aggregate([
-      { $match: { schoolSlug, isActive: true, institutionId: { $ne: null } } },
-      { $group: { _id: '$institutionId', count: { $sum: 1 } } },
-    ]);
-    const countMap = new Map(campusCounts.map((c: any) => [String(c._id), c.count]));
-    return list.map((inst: any) => ({ ...inst, campusCount: countMap.get(String(inst._id)) || 0 }));
+    // Real campus counts + real campus principals per institution -
+    // previously these two tabs had no relationship at all, so no count
+    // or head info was ever possible before. An institution's single
+    // "Head" field (typed once on the Institution record) can go stale
+    // or simply not match reality once campuses have their own
+    // principals assigned, so we surface the real per-campus heads here
+    // rather than only showing that one manually-entered name.
+    const campuses = await this.campusModel.find(
+      { schoolSlug, isActive: true, institutionId: { $ne: null } },
+      { name: 1, principalName: 1, institutionId: 1 },
+    ).lean();
+    const campusesByInstitution = new Map<string, { name: string; principalName?: string }[]>();
+    for (const c of campuses as any[]) {
+      const key = String(c.institutionId);
+      if (!campusesByInstitution.has(key)) campusesByInstitution.set(key, []);
+      campusesByInstitution.get(key)!.push({ name: c.name, principalName: c.principalName });
+    }
+
+    return list.map((inst: any) => {
+      const instCampuses = campusesByInstitution.get(String(inst._id)) || [];
+      return {
+        ...inst,
+        campusCount: instCampuses.length,
+        // Real, campus-level heads (one per campus with a principal set) -
+        // the source of truth when campuses exist under this institution.
+        campusHeads: instCampuses
+          .filter((c) => c.principalName)
+          .map((c) => ({ campusName: c.name, principalName: c.principalName })),
+      };
+    });
   }
 
   async createGroupInstitution(dto: CreateGroupInstitutionDto) {
