@@ -8,6 +8,8 @@ export class Assignment {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'Staff', default: null }) teacherId: Types.ObjectId;
   @Prop() teacherName: string;
+  // Denormalized from the creating teacher's own campus at creation time.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop({ required: true }) title: string;
   @Prop() description: string;
   @Prop({ required: true }) subject: string;

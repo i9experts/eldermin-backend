@@ -13,6 +13,9 @@ export class BehaviourNote {
   @Prop() sectionName: string;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Staff' }) reportedBy: Types.ObjectId;
   @Prop() reportedByName: string;
+  // Denormalized from the reporting staff member's own campus at
+  // creation time.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop({ required: true }) incidentDate: Date;
   @Prop({ enum: ['positive', 'concern', 'serious', 'resolved'], default: 'concern' }) type: string;
   @Prop({ required: true }) note: string;

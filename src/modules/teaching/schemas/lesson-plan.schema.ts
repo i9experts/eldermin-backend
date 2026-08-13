@@ -8,6 +8,9 @@ export class LessonPlan {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'Staff', default: null }) teacherId: Types.ObjectId;
   @Prop() teacherName: string;
+  // Denormalized from the creating teacher's own campus at creation time
+  // (see resolveCampusScope) - lets lesson plans be scoped by campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop({ type: Types.ObjectId, ref: 'AcademicYear' }) academicYearId: Types.ObjectId;
 
   @Prop({ required: true }) subject: string;

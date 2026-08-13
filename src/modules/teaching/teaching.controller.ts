@@ -21,7 +21,7 @@ export class TeachingController {
   getByStaff(@Request() req, @Param('staffId') sid: string) { return this.teachingService.getTeacherProfileByStaffId(req.user.tenantId, sid); }
 
   @Get('teachers')
-  getTeachers(@Request() req) { return this.teachingService.getTeacherProfiles(req.user.tenantId); }
+  getTeachers(@Request() req) { return this.teachingService.getTeacherProfiles(req.user.tenantId, req.user); }
 
   @Post('teachers')
   createTeacher(@Request() req, @Body() body: any) { return this.teachingService.createTeacherProfile(req.user.tenantId, req.user.institutionId, body); }
@@ -38,10 +38,10 @@ export class TeachingController {
   rejectPlan(@Request() req, @Param('id') id: string, @Body() body: { reason: string }) { return this.teachingService.rejectLessonPlan(req.user.tenantId, id, body.reason); }
 
   @Get('lesson-plans')
-  getLessonPlans(@Request() req, @Query() q: any) { return this.teachingService.getLessonPlans(req.user.tenantId, q); }
+  getLessonPlans(@Request() req, @Query() q: any) { return this.teachingService.getLessonPlans(req.user.tenantId, q, req.user); }
 
   @Post('lesson-plans')
-  createLessonPlan(@Request() req, @Body() body: any) { return this.teachingService.createLessonPlan(req.user.tenantId, req.user.institutionId, body); }
+  createLessonPlan(@Request() req, @Body() body: any) { return this.teachingService.createLessonPlan(req.user.tenantId, req.user.institutionId, body, req.user); }
 
   @Patch('lesson-plans/:id')
   updateLessonPlan(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateLessonPlan(req.user.tenantId, id, body); }
@@ -52,7 +52,7 @@ export class TeachingController {
   getTeacherTimetable(@Request() req, @Param('staffId') sid: string) { return this.teachingService.getTeacherTimetable(req.user.tenantId, sid); }
 
   @Get('timetable')
-  getTimetables(@Request() req, @Query() q: any) { return this.teachingService.getTimetables(req.user.tenantId, q); }
+  getTimetables(@Request() req, @Query() q: any) { return this.teachingService.getTimetables(req.user.tenantId, q, req.user); }
 
   @Post('timetable')
   createTimetable(@Request() req, @Body() body: any) { return this.teachingService.createTimetable(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
@@ -63,7 +63,7 @@ export class TeachingController {
   // ── ROOMS ──────────────────────────────────────────────────────────────────────
 
   @Get('rooms')
-  getRooms(@Request() req, @Query('campusId') campusId?: string) { return this.teachingService.getRooms(req.user.tenantId, campusId); }
+  getRooms(@Request() req, @Query('campusId') campusId?: string) { return this.teachingService.getRooms(req.user.tenantId, campusId, req.user); }
 
   @Post('rooms')
   createRoom(@Request() req, @Body() body: any) { return this.teachingService.createRoom(req.user.tenantId, req.user.institutionId, body); }
@@ -77,7 +77,7 @@ export class TeachingController {
   // ── PERIOD TEMPLATES ───────────────────────────────────────────────────────────
 
   @Get('period-templates')
-  getPeriodTemplates(@Request() req) { return this.teachingService.getPeriodTemplates(req.user.tenantId); }
+  getPeriodTemplates(@Request() req) { return this.teachingService.getPeriodTemplates(req.user.tenantId, req.user); }
 
   @Post('period-templates')
   createPeriodTemplate(@Request() req, @Body() body: any) { return this.teachingService.createPeriodTemplate(req.user.tenantId, req.user.institutionId, body); }
@@ -97,10 +97,10 @@ export class TeachingController {
   // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 
   @Get('assignments')
-  getAssignments(@Request() req, @Query() q: any) { return this.teachingService.getAssignments(req.user.tenantId, q); }
+  getAssignments(@Request() req, @Query() q: any) { return this.teachingService.getAssignments(req.user.tenantId, q, req.user); }
 
   @Post('assignments')
-  createAssignment(@Request() req, @Body() body: any) { return this.teachingService.createAssignment(req.user.tenantId, req.user.institutionId, body); }
+  createAssignment(@Request() req, @Body() body: any) { return this.teachingService.createAssignment(req.user.tenantId, req.user.institutionId, body, req.user); }
 
   @Patch('assignments/:id')
   updateAssignment(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateAssignment(req.user.tenantId, id, body); }
@@ -108,10 +108,10 @@ export class TeachingController {
   // ── BEHAVIOUR NOTES ───────────────────────────────────────────────────────────
 
   @Get('behaviour')
-  getBehaviour(@Request() req, @Query() q: any) { return this.teachingService.getBehaviourNotes(req.user.tenantId, q); }
+  getBehaviour(@Request() req, @Query() q: any) { return this.teachingService.getBehaviourNotes(req.user.tenantId, q, req.user); }
 
   @Post('behaviour')
-  createBehaviour(@Request() req, @Body() body: any) { return this.teachingService.createBehaviourNote(req.user.tenantId, req.user.institutionId, body); }
+  createBehaviour(@Request() req, @Body() body: any) { return this.teachingService.createBehaviourNote(req.user.tenantId, req.user.institutionId, body, req.user); }
 
   @Patch('behaviour/:id')
   updateBehaviour(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateBehaviourNote(req.user.tenantId, id, body); }

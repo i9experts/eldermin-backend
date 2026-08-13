@@ -13,6 +13,11 @@ export class TeacherProfile {
   @Prop() designation: string;
   @Prop() department: string;
   @Prop() photoUrl: string;
+  // Denormalized from the linked Staff record at creation time - lets the
+  // Teacher Directory be filtered/scoped by campus without a join, the
+  // same way Room/PeriodTemplate/Timetable already carry their own
+  // campusId in this module.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 
   @Prop({ type: [String], default: [] }) subjectsCanTeach: string[];
   @Prop({ type: [String], default: [] }) gradeLevelsCanTeach: string[];

@@ -8,6 +8,7 @@ import { Room, RoomDocument } from './schemas/room.schema';
 import { PeriodTemplate, PeriodTemplateDocument } from './schemas/period-template.schema';
 import { Assignment, AssignmentDocument } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.schema';
+import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
 
 @Injectable()
 export class TeachingService {
@@ -50,9 +51,16 @@ export class TeachingService {
 
   // ── TEACHER PROFILES ──────────────────────────────────────────────────────────
 
-  async getTeacherProfiles(tenantId: string) {
+  async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      const effectiveDepartment = resolveDepartmentScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+      if (effectiveDepartment) filter.department = effectiveDepartment;
+    }
     return this.teacherProfileModel
-      .find({ tenantId: this.tid(tenantId) })
+      .find(filter)
       .sort({ lastName: 1 })
       .lean();
   }
@@ -69,6 +77,7 @@ export class TeachingService {
       ...data,
       tenantId: this.tid(tenantId),
       institutionId: new Types.ObjectId(institutionId),
+      campusId: data.campusId ? new Types.ObjectId(data.campusId) : null,
     });
   }
 
@@ -87,21 +96,29 @@ export class TeachingService {
 
   // ── LESSON PLANS ──────────────────────────────────────────────────────────────
 
-  async getLessonPlans(tenantId: string, query: any = {}) {
+  async getLessonPlans(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
     if (query.status) filter.status = query.status;
     if (query.subject) filter.subject = query.subject;
     if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
     return this.lessonPlanModel.find(filter).sort({ planDate: -1 }).limit(100).lean();
   }
 
-  async createLessonPlan(tenantId: string, institutionId: string, data: any) {
+  async createLessonPlan(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     const { objectives, teacherId, ...rest } = data;
     const payload: any = {
       ...rest,
       tenantId: this.tid(tenantId),
       institutionId: new Types.ObjectId(institutionId),
+      // Stamp the creating teacher's own campus, so this lesson plan is
+      // correctly scoped for anyone viewing the list later - not left
+      // to whatever the client happened to send (or didn't).
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     };
     if (objectives) payload.learningObjectives = objectives;
     if (teacherId) {
@@ -141,11 +158,15 @@ export class TeachingService {
 
   // ── TIMETABLE ─────────────────────────────────────────────────────────────────
 
-  async getTimetables(tenantId: string, query: any = {}) {
+  async getTimetables(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
     if (query.sectionName) filter.sectionName = query.sectionName;
     if (query.academicYearId) filter.academicYearId = new Types.ObjectId(query.academicYearId);
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, query.campusId);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
     return this.timetableModel.find(filter).lean();
   }
 
@@ -242,9 +263,10 @@ export class TeachingService {
   }
 
   // ── Rooms ──────────────────────────────────────────────────────────────────
-  async getRooms(tenantId: string, campusId?: string) {
+  async getRooms(tenantId: string, campusId?: string, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId), isActive: true };
-    if (campusId) filter.campusId = new Types.ObjectId(campusId);
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = new Types.ObjectId(effectiveCampusId);
     return this.roomModel.find(filter).sort({ name: 1 }).lean();
   }
 
@@ -270,8 +292,13 @@ export class TeachingService {
   }
 
   // ── Period Templates ─────────────────────────────────────────────────────
-  async getPeriodTemplates(tenantId: string) {
-    return this.periodTemplateModel.find({ tenantId: this.tid(tenantId), isActive: true }).lean();
+  async getPeriodTemplates(tenantId: string, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.tid(tenantId), isActive: true };
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
+    return this.periodTemplateModel.find(filter).lean();
   }
 
   async createPeriodTemplate(tenantId: string, institutionId: string, data: any) {
@@ -340,20 +367,25 @@ export class TeachingService {
 
   // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
 
-  async getAssignments(tenantId: string, query: any = {}) {
+  async getAssignments(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
     if (query.status) filter.status = query.status;
     if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
     return this.assignmentModel.find(filter).sort({ dueDate: -1 }).lean();
   }
 
-  async createAssignment(tenantId: string, institutionId: string, data: any) {
+  async createAssignment(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     const { teacherId, assessmentType, assessmentDate, dueDate, assignedDate, type, ...rest } = data;
     const payload: any = {
       ...rest,
       tenantId: this.tid(tenantId),
       institutionId: new Types.ObjectId(institutionId),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
       // map assessmentType → type; fall back to provided type or 'homework'
       type: assessmentType || type || 'homework',
       // map assessmentDate → both assignedDate and dueDate if not separately provided
@@ -381,20 +413,25 @@ export class TeachingService {
 
   // ── BEHAVIOUR NOTES ───────────────────────────────────────────────────────────
 
-  async getBehaviourNotes(tenantId: string, query: any = {}) {
+  async getBehaviourNotes(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.studentId) filter.studentId = new Types.ObjectId(query.studentId);
     if (query.type) filter.type = query.type;
     if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
     return this.behaviourModel.find(filter).sort({ incidentDate: -1 }).limit(100).lean();
   }
 
-  async createBehaviourNote(tenantId: string, institutionId: string, data: any) {
+  async createBehaviourNote(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     try {
       return await this.behaviourModel.create({
         ...data,
         tenantId: this.tid(tenantId),
         institutionId: new Types.ObjectId(institutionId),
+        campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
       });
     } catch (err: any) {
       if (err.name === 'ValidationError') throw new BadRequestException(err.message);
