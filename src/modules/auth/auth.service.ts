@@ -7,6 +7,7 @@ import * as crypto from 'crypto';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
+import { Campus, CampusDocument } from '../../organization/schemas/organization.schema';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
@@ -17,6 +18,7 @@ export class AuthService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -72,8 +74,24 @@ export class AuthService {
     const staffRecord = await this.staffModel.findOne({ userId: user._id }).select('supervisedClusterIds isBoardLevel campusId department').lean();
     const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
     const isBoardLevel = staffRecord?.isBoardLevel || undefined;
-    const campusId = staffRecord?.campusId?.toString() || undefined;
+    let campusId = staffRecord?.campusId?.toString() || undefined;
     const department = staffRecord?.department || undefined;
+
+    // Self-healing for the single-campus case: campus/department-scoped
+    // roles (everyone except super_admin/institution_owner) get hard-
+    // blocked from everything if their Staff record has no campusId set
+    // - correct behavior when a school genuinely has multiple campuses
+    // and we can't guess which one, but needlessly punishing for the
+    // common case of a school with exactly one campus, where there's no
+    // real ambiguity to begin with. Only auto-resolves when unambiguous;
+    // a school with 0 or 2+ campuses is left as-is (still fails closed),
+    // since guessing wrong there would be a real access-control mistake.
+    if (!campusId && schoolSlug) {
+      const campuses = await this.campusModel.find({ schoolSlug, isActive: true }).select('_id').limit(2).lean();
+      if (campuses.length === 1) {
+        campusId = String(campuses[0]._id);
+      }
+    }
 
     const payload = {
       sub: user._id.toString(),
