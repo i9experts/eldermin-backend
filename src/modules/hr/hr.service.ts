@@ -13,6 +13,7 @@ import { JobOpening, JobOpeningDocument } from './schemas/job-opening.schema';
 import { JobApplication, JobApplicationDocument } from './schemas/job-application.schema';
 import { InterviewSchedule, InterviewScheduleDocument } from './schemas/interview-schedule.schema';
 import { StaffAttendance, StaffAttendanceDocument } from './schemas/staff-attendance.schema';
+import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
 import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
@@ -85,9 +86,24 @@ export class HrService {
 
   // ── Staff ────────────────────────────────────────────────────────────
 
-  async getStaff(tenantId: string, campusId?: string) {
+  async getStaff(tenantId: string, campusId?: string, department?: string, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.newTid(tenantId), isActive: true };
-    if (campusId) filter.campusId = this.newTid(campusId);
+    if (requestingUser) {
+      // Hard-blocks (403) if the caller asked for a campus/department
+      // outside their own scope; otherwise resolves the effective
+      // filter - their own campus/department for campus/department-
+      // scoped roles, or the requested value (if any) for
+      // institution/platform-level roles who aren't restricted.
+      const effectiveCampusId = resolveCampusScope(requestingUser, campusId);
+      const effectiveDepartment = resolveDepartmentScope(requestingUser, department);
+      if (effectiveCampusId) filter.campusId = this.newTid(effectiveCampusId);
+      if (effectiveDepartment) filter.department = effectiveDepartment;
+    } else {
+      // No requesting user context (e.g. an internal/system call) -
+      // behave exactly as before: campusId is just an optional filter.
+      if (campusId) filter.campusId = this.newTid(campusId);
+      if (department) filter.department = department;
+    }
     return this.staffModel
       .find(filter)
       .populate('designationId', 'name code department')

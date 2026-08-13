@@ -10,6 +10,7 @@ import {
   CreateGradeDto, CreateDepartmentDto, CreateDesignationDto,
   CreateGroupInstitutionDto, CreateClusterDto,
 } from './dto/organization.dto';
+import { ScopedUser } from '../auth/scope.util';
 
 @Controller('organization')
 export class OrganizationController {
@@ -21,6 +22,7 @@ export class OrganizationController {
       userName: req?.user?.name || 'Admin',
       supervisedClusterIds: req?.user?.supervisedClusterIds as string[] | undefined,
       isBoardLevel: !!req?.user?.isBoardLevel,
+      requestingUser: req?.user as ScopedUser | undefined,
     };
   }
 
@@ -51,8 +53,8 @@ export class OrganizationController {
 
   // Campuses
   @Get('campuses') async getCampuses(@Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getCampuses(schoolSlug);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getCampuses(schoolSlug, requestingUser);
   }
 
   @Post('campuses') @HttpCode(HttpStatus.CREATED)
@@ -152,8 +154,8 @@ export class OrganizationController {
 
   // Grades
   @Get('grades') async getGrades(@Request() req: any, @Query('campusId') campusId?: string) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getGrades(schoolSlug, campusId);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getGrades(schoolSlug, campusId, requestingUser);
   }
 
   @Post('grades') @HttpCode(HttpStatus.CREATED)
@@ -191,8 +193,8 @@ export class OrganizationController {
 
   // Departments
   @Get('departments') async getDepts(@Request() req: any, @Query('campusId') campusId?: string) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getDepartments(schoolSlug, campusId);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getDepartments(schoolSlug, campusId, requestingUser);
   }
 
   @Post('departments') @HttpCode(HttpStatus.CREATED)

@@ -18,6 +18,7 @@ import {
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { UploadService } from '../upload/upload.service';
 
 @Injectable()
@@ -74,8 +75,19 @@ export class OrganizationService {
   }
 
   // ── Campuses ──────────────────────────────────────────────
-  async getCampuses(schoolSlug: string) {
-    const campuses = await this.campusModel.find({ schoolSlug, isActive: true }).sort({ name: 1 }).lean();
+  async getCampuses(schoolSlug: string, requestingUser?: ScopedUser) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (requestingUser) {
+      // Campus-/department-scoped roles (everyone except super_admin and
+      // institution_owner) only ever see their own campus in this list -
+      // no requestedCampusId is passed here since this endpoint has no
+      // such query param, so resolveCampusScope just returns their own
+      // campusId (or undefined for institution/platform-level callers,
+      // meaning no restriction).
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter._id = effectiveCampusId;
+    }
+    const campuses = await this.campusModel.find(filter).sort({ name: 1 }).lean();
     if (campuses.length === 0) return campuses;
 
     // Real per-campus counts, not the hardcoded 0 this used to be. Students
@@ -284,9 +296,10 @@ export class OrganizationService {
   }
 
   // ── Grades ────────────────────────────────────────────────
-  async getGrades(schoolSlug: string, campusId?: string) {
+  async getGrades(schoolSlug: string, campusId?: string, requestingUser?: ScopedUser) {
     const filter: any = { schoolSlug, isActive: true };
-    if (campusId) filter.campusId = campusId;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     return this.gradeModel.find(filter).sort({ displayOrder: 1, name: 1 });
   }
 
@@ -346,9 +359,10 @@ export class OrganizationService {
   }
 
   // ── Departments ───────────────────────────────────────────
-  async getDepartments(schoolSlug: string, campusId?: string) {
+  async getDepartments(schoolSlug: string, campusId?: string, requestingUser?: ScopedUser) {
     const filter: any = { schoolSlug, isActive: true };
-    if (campusId) filter.campusId = campusId;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     return this.deptModel.find(filter).sort({ name: 1 });
   }
 

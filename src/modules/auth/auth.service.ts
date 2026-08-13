@@ -64,9 +64,16 @@ export class AuthService {
     // users have no Staff record with this set, in which case both
     // fields are simply absent from the token and every existing
     // permission check continues to work exactly as before.
-    const staffRecord = await this.staffModel.findOne({ userId: user._id }).select('supervisedClusterIds isBoardLevel').lean();
+    // Also carries campus/department scoping for the campus- and
+    // department-level access model - the JWT strategy already reads
+    // payload.campusId, but until now nothing ever put it on the
+    // payload, so every logged-in user's campusId was silently
+    // undefined regardless of their actual Staff assignment.
+    const staffRecord = await this.staffModel.findOne({ userId: user._id }).select('supervisedClusterIds isBoardLevel campusId department').lean();
     const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
     const isBoardLevel = staffRecord?.isBoardLevel || undefined;
+    const campusId = staffRecord?.campusId?.toString() || undefined;
+    const department = staffRecord?.department || undefined;
 
     const payload = {
       sub: user._id.toString(),
@@ -78,6 +85,8 @@ export class AuthService {
       activeModules,
       supervisedClusterIds,
       isBoardLevel,
+      campusId,
+      department,
     };
 
     return {

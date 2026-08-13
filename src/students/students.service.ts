@@ -27,6 +27,7 @@ import {
   CreateBehaviourDto, UpdateBehaviourDto, BehaviourQueryDto,
   CreateAssessmentResultDto,
 } from './dto/student.dto';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -110,12 +111,14 @@ export class StudentsService {
     };
   }
 
-  async getStudents(schoolSlug: string, query: StudentQueryDto) {
+  async getStudents(schoolSlug: string, query: StudentQueryDto, requestingUser?: ScopedUser) {
     const { page, limit, search, sortBy, sortOrder,
-      grade, section, status, gender, academicYear, scholarshipHolder, specialNeeds } = query;
+      grade, section, status, gender, academicYear, scholarshipHolder, specialNeeds, campusId } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (grade) filter.currentGrade = grade;
     if (section) filter.currentSection = section;
     if (status) filter.status = status;

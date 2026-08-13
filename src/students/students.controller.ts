@@ -27,6 +27,7 @@ export class StudentsController {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
       userName: req?.user?.name || 'Admin',
+      requestingUser: req?.user,
     };
   }
 
@@ -48,8 +49,8 @@ export class StudentsController {
   /** GET /api/v1/students */
   @Get()
   async getStudents(@Request() req: any, @Query() query: StudentQueryDto) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getStudents(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.studentsService.getStudents(schoolSlug, query, requestingUser);
   }
 
   /** GET /api/v1/students/filters/grades-sections */
