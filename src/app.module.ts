@@ -36,6 +36,7 @@ import { RolesGuard } from './auth/roles.guard';
 import { AuditLogModule } from './common/audit-log.module';
 import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
+import { ComplaintsModule } from './complaints/complaints.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { EceModule } from './ece/ece.module';
     AuditLogModule,
     SyllabusModule,
     EceModule,
+    ComplaintsModule,
   ],
   controllers: [AppController],
   providers: [
