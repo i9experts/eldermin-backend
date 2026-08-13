@@ -6,6 +6,7 @@ import { Curriculum, CurriculumDocument } from './schemas/curriculum.schema';
 import { Syllabus, SyllabusDocument } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookDocument } from './schemas/book.schema';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
+import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 
 @Injectable()
 export class AcademicsService {
@@ -204,12 +205,14 @@ export class AcademicsService {
 
   // ─── LIBRARY — BOOKS ──────────────────────────────────────────────────────────
 
-  async getBooks(tenantId: string, query: any = {}) {
+  async getBooks(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.category)  filter.category = query.category;
     if (query.status)    filter.status = query.status;
     if (query.available === 'true') filter.availableCopies = { $gt: 0 };
     if (query.search)    filter.$text = { $search: query.search };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     return this.bookModel.find(filter).sort({ title: 1 }).limit(100).lean();
   }
 
@@ -224,7 +227,7 @@ export class AcademicsService {
     return { ...book, issues };
   }
 
-  async createBook(tenantId: string, institutionId: string, data: any) {
+  async createBook(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     const count = await this.bookModel.countDocuments({ tenantId: this.tid(tenantId) });
     const accessionNo = data.accessionNo
       || `ACC-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
@@ -238,6 +241,7 @@ export class AcademicsService {
         issuedCopies:    0,
         tenantId:        this.tid(tenantId),
         institutionId:   this.oid(institutionId),
+        campusId:        requestingUser?.campusId ? this.oid(requestingUser.campusId) : (data.campusId ? this.oid(data.campusId) : null),
       });
     } catch (e: any) { throw new BadRequestException(e.message); }
   }
@@ -262,11 +266,13 @@ export class AcademicsService {
 
   // ─── LIBRARY — ISSUES ─────────────────────────────────────────────────────────
 
-  async getIssues(tenantId: string, query: any = {}) {
+  async getIssues(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.status)       filter.status = query.status;
     if (query.borrowerType) filter.borrowerType = query.borrowerType;
     if (query.borrowerId)   filter.borrowerId = this.oid(query.borrowerId);
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (query.overdue === 'true') {
       filter.status  = { $in: ['issued','overdue'] };
       filter.dueDate = { $lt: new Date() };
@@ -274,7 +280,7 @@ export class AcademicsService {
     return this.issueModel.find(filter).sort({ createdAt: -1 }).limit(100).lean();
   }
 
-  async issueBook(tenantId: string, institutionId: string, data: any, userId: string) {
+  async issueBook(tenantId: string, institutionId: string, data: any, userId: string, requestingUser?: ScopedUser) {
     const book = await this.bookModel.findOne({ _id: data.bookId, tenantId: this.tid(tenantId) });
     if (!book) throw new NotFoundException('Book not found');
     if (book.availableCopies < 1) throw new BadRequestException('No copies available');
@@ -288,6 +294,9 @@ export class AcademicsService {
       bookId:       this.oid(data.bookId),
       bookTitle:    book.title,
       accessionNo:  book.accessionNo,
+      // Inherit the book's own campus, not the issuing staff member's -
+      // the issue record belongs to wherever the physical book lives.
+      campusId:     book.campusId || (requestingUser?.campusId ? this.oid(requestingUser.campusId) : null),
       issueDate,
       dueDate,
       status:       'issued',

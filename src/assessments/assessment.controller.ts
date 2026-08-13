@@ -29,6 +29,7 @@ export class AssessmentController {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
       userName: req?.user?.name || 'Admin',
+      requestingUser: req?.user,
     };
   }
 
@@ -42,8 +43,8 @@ export class AssessmentController {
   // ── Assessments (static GET routes must precede :id) ──────────
   @Get()
   async findAll(@Request() req: any, @Query() query: AssessmentQueryDto) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.findAll(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.findAll(schoolSlug, query, requestingUser);
   }
 
   // ── Question Bank ─────────────────────────────────────────────
@@ -141,8 +142,8 @@ export class AssessmentController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateAssessmentDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.create({ ...dto, schoolSlug, createdBy: userName });
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.create({ ...dto, schoolSlug, createdBy: userName }, requestingUser);
   }
 
   @Put(':id')

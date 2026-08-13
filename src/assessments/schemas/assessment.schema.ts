@@ -75,11 +75,15 @@ export class Assessment {
 
   @Prop() createdBy: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Denormalized from the creating user's own campus at creation time,
+  // same convention as Syllabus/LessonPlan/BehaviourRecord elsewhere.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 
 export const AssessmentSchema = SchemaFactory.createForClass(Assessment);
 AssessmentSchema.index({ schoolSlug: 1, grade: 1, status: 1 });
 AssessmentSchema.index({ schoolSlug: 1, academicYear: 1, type: 1 });
+AssessmentSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // QUESTION BANK

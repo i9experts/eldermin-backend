@@ -6,6 +6,10 @@ export type BookDocument = Book & Document;
 export class Book {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
+  // Which campus's physical library this copy belongs to - null means
+  // school-wide/unscoped (e.g. a single-campus school, or a shared
+  // digital catalog not yet split per campus).
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop({ required: true }) accessionNo: string;
   @Prop({ required: true }) title: string;
   @Prop({ required: true }) author: string;

@@ -22,6 +22,7 @@ import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-she
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
@@ -658,11 +659,12 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // ============================================================
   // ASSESSMENTS CRUD
   // ============================================================
-  async create(dto: CreateAssessmentDto) {
+  async create(dto: CreateAssessmentDto, requestingUser?: ScopedUser) {
     const assessment = new this.assessmentModel({
       ...dto,
       startDate: new Date(dto.startDate),
       endDate: dto.endDate ? new Date(dto.endDate) : undefined,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : ((dto as any).campusId ? new Types.ObjectId((dto as any).campusId) : null),
       subjects: dto.subjects.map(s => ({
         ...s,
         date: s.date ? new Date(s.date) : undefined,
@@ -672,9 +674,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return assessment.save();
   }
 
-  async findAll(schoolSlug: string, query: AssessmentQueryDto) {
+  async findAll(schoolSlug: string, query: AssessmentQueryDto, requestingUser?: ScopedUser) {
     const { page, limit, search, sortBy, sortOrder,
-      grade, section, type, status, academicYear, term } = query;
+      grade, section, type, status, academicYear, term, campusId } = query as any;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -684,6 +686,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     if (status) filter.status = status;
     if (academicYear) filter.academicYear = academicYear;
     if (term) filter.term = term;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (search) filter.$or = [
       { title: { $regex: search, $options: 'i' } },
       { description: { $regex: search, $options: 'i' } },

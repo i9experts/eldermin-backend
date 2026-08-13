@@ -85,12 +85,12 @@ export class AcademicsController {
 
   @Get('library/books')
   getBooks(@Request() req, @Query() q: any) {
-    return this.academicsService.getBooks(req.user.tenantId, q);
+    return this.academicsService.getBooks(req.user.tenantId, q, req.user);
   }
 
   @Post('library/books')
   createBook(@Request() req, @Body() body: any) {
-    return this.academicsService.createBook(req.user.tenantId, req.user.institutionId, body);
+    return this.academicsService.createBook(req.user.tenantId, req.user.institutionId, body, req.user);
   }
 
   @Get('library/books/:id')
@@ -107,7 +107,7 @@ export class AcademicsController {
 
   @Get('library/issues')
   getIssues(@Request() req, @Query() q: any) {
-    return this.academicsService.getIssues(req.user.tenantId, q);
+    return this.academicsService.getIssues(req.user.tenantId, q, req.user);
   }
 
   @Get('library/overdue')
@@ -118,7 +118,7 @@ export class AcademicsController {
   @Post('library/issue')
   issueBook(@Request() req, @Body() body: any) {
     return this.academicsService.issueBook(
-      req.user.tenantId, req.user.institutionId, body, req.user.userId,
+      req.user.tenantId, req.user.institutionId, body, req.user.userId, req.user,
     );
   }
 

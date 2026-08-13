@@ -7,6 +7,10 @@ export class BookIssue {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Book' }) bookId: Types.ObjectId;
+  // Denormalized from the book's own campus (which library copy this is)
+  // at issue time - a book physically at one campus's library shouldn't
+  // read as available/checked-out from another campus's view.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() bookTitle: string;
   @Prop() accessionNo: string;
   @Prop({ enum: ['student','staff'], required: true }) borrowerType: string;
