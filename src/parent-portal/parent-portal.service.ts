@@ -154,6 +154,24 @@ export class ParentPortalService {
     }).sort({ dueDate: -1 }).limit(100).lean();
   }
 
+  // ── Learning Resources (from delivered lesson plans covering this student's grade) ──
+  async getLearningResources(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    // LessonPlan lives in the Teaching module's own schema - read via the
+    // shared connection directly, same approach as getDatesheet, rather
+    // than pulling in that module's whole dependency graph.
+    const plans = await this.reportCardModel.db.collection('lessonPlans').find({
+      tenantId: new Types.ObjectId(tenantId), gradeLevel: (student as any).currentGrade,
+      $or: [{ sectionName: (student as any).currentSection }, { sectionName: { $exists: false } }, { sectionName: null }],
+      resources: { $exists: true, $ne: [] },
+    }).sort({ planDate: -1 }).limit(50).toArray();
+    return plans.map((p: any) => ({
+      subject: p.subject, topic: p.topic, planDate: p.planDate, resources: p.resources,
+    }));
+  }
+
   // ── Results ──────────────────────────────────────────────────
   async getResults(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);

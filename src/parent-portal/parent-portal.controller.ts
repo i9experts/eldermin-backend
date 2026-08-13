@@ -79,6 +79,12 @@ export class ParentPortalController {
     return this.service.getHomework(studentId, requestingUser, tenantId, schoolSlug);
   }
 
+  @Get('students/:studentId/learning-resources')
+  async getLearningResources(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getLearningResources(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
   @Get('students/:studentId/results')
   async getResults(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
