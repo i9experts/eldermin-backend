@@ -14,6 +14,7 @@ export class ComplianceController {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       userName: req?.user?.name || 'Admin',
+      requestingUser: req?.user,
     };
   }
 
@@ -25,15 +26,15 @@ export class ComplianceController {
 
   @Get('policies')
   async getPolicies(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getPolicies(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getPolicies(schoolSlug, query, requestingUser);
   }
 
   @Post('policies')
   @HttpCode(HttpStatus.CREATED)
   async createPolicy(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.createPolicy({ ...dto, schoolSlug, owner: dto.owner || userName });
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.createPolicy({ ...dto, schoolSlug, owner: dto.owner || userName }, requestingUser);
   }
 
   @Put('policies/:id')
@@ -44,8 +45,8 @@ export class ComplianceController {
 
   @Post('policies/:id/acknowledge')
   async acknowledgePolicy(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.acknowledgePolicy(id, schoolSlug, dto.staffId || userName, dto.staffName || userName);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.acknowledgePolicy(id, schoolSlug, dto.staffId || userName, dto.staffName || userName, requestingUser);
   }
 
   @Post('policies/:id/upload')
@@ -63,14 +64,14 @@ export class ComplianceController {
 
   @Get('approvals')
   async getApprovals(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getApprovals(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getApprovals(schoolSlug, query, requestingUser);
   }
 
   @Post('approvals') @HttpCode(HttpStatus.CREATED)
   async createApproval(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.createApproval(schoolSlug, dto.requestedBy || userName, dto);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.createApproval(schoolSlug, dto.requestedBy || userName, dto, requestingUser);
   }
 
   @Put('approvals/:id')
@@ -87,15 +88,15 @@ export class ComplianceController {
 
   @Get('safeguarding')
   async getSafeguarding(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getSafeguardingCases(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getSafeguardingCases(schoolSlug, query, requestingUser);
   }
 
   @Post('safeguarding')
   @HttpCode(HttpStatus.CREATED)
   async createSafeguarding(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.createSafeguardingCase({ ...dto, schoolSlug, reportedBy: dto.reportedBy || userName });
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.createSafeguardingCase({ ...dto, schoolSlug, reportedBy: dto.reportedBy || userName }, requestingUser);
   }
 
   @Put('safeguarding/:id')

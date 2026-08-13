@@ -35,6 +35,10 @@ export class Policy {
   @Prop() approvedBy: string;
   @Prop() approvedAt: Date;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // null = applies to every campus (most policies are school-wide) - a
+  // policy explicitly scoped to one campus is the exception, not the
+  // rule, so reads use the inclusive filter like DocumentRecord.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 export const PolicySchema = SchemaFactory.createForClass(Policy);
 PolicySchema.index({ schoolSlug: 1, category: 1, status: 1 });
@@ -51,6 +55,8 @@ export class PolicyAcknowledgement {
   @Prop({ required: true }) acknowledgedAt: Date;
   @Prop() comments: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Denormalized from the acknowledging staff member's own campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 export const PolicyAcknowledgementSchema = SchemaFactory.createForClass(PolicyAcknowledgement);
 
@@ -97,6 +103,10 @@ export class SafeguardingCase {
   @Prop({ type: [{ date: Date, note: String, addedBy: String }], default: [] })
   progressNotes: { date: Date; note: string; addedBy: string }[];
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Denormalized from the student's own campus - safeguarding cases are
+  // among the most sensitive records in the app, so this should never
+  // be left unscoped by accident.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 export const SafeguardingCaseSchema = SchemaFactory.createForClass(SafeguardingCase);
 SafeguardingCaseSchema.index({ schoolSlug: 1, status: 1, severity: 1 });
@@ -224,6 +234,8 @@ export class ApprovalRequest {
   @Prop() decisionNote: string;
 
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Denormalized from the requesting user's own campus at creation time.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 export const ApprovalRequestSchema = SchemaFactory.createForClass(ApprovalRequest);
 ApprovalRequestSchema.index({ schoolSlug: 1, status: 1 });

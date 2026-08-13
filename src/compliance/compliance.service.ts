@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   Policy, PolicyDocument,
   PolicyAcknowledgement, PolicyAcknowledgementDocument,
@@ -10,6 +10,7 @@ import {
   ApprovalRequest, ApprovalRequestDocument,
 } from './schemas/compliance.schema';
 import { UploadService } from '../upload/upload.service';
+import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -75,16 +76,24 @@ export class ComplianceService {
     };
   }
 
-  async getPolicies(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, category, status, search } = query;
+  async getPolicies(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, category, status, search, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (category) filter.category = category;
     if (status) filter.status = status;
-    if (search) filter.$or = [
+    const campusFilter = requestingUser ? buildInclusiveCampusFilter(requestingUser, campusId) : (campusId ? { campusId } : null);
+    const searchOr = search ? [
       { title: { $regex: search, $options: 'i' } },
       { policyNumber: { $regex: search, $options: 'i' } },
-    ];
+    ] : null;
+    if (campusFilter && searchOr) {
+      filter.$and = [campusFilter, { $or: searchOr }];
+    } else if (campusFilter) {
+      Object.assign(filter, campusFilter);
+    } else if (searchOr) {
+      filter.$or = searchOr;
+    }
     const [data, total] = await Promise.all([
       this.policyModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.policyModel.countDocuments(filter),
@@ -92,11 +101,12 @@ export class ComplianceService {
     return { data, meta: { total, page, limit } };
   }
 
-  async createPolicy(data: any) {
+  async createPolicy(data: any, requestingUser?: ScopedUser) {
     const policy = new this.policyModel({
       ...data,
       effectiveDate: data.effectiveDate ? new Date(data.effectiveDate) : undefined,
       reviewDate: data.reviewDate ? new Date(data.reviewDate) : undefined,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return policy.save();
   }
@@ -105,7 +115,7 @@ export class ComplianceService {
     return this.policyModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
   }
 
-  async acknowledgePolicy(policyId: string, schoolSlug: string, staffId: string, staffName: string) {
+  async acknowledgePolicy(policyId: string, schoolSlug: string, staffId: string, staffName: string, requestingUser?: ScopedUser) {
     const existing = await this.ackModel.findOne({ policyId, staffId, schoolSlug });
     if (existing) return existing;
 
@@ -114,6 +124,7 @@ export class ComplianceService {
       policyId, schoolSlug, staffId, staffName,
       policyTitle: policy?.title || '',
       acknowledgedAt: new Date(),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : null,
     });
     await ack.save();
     await this.policyModel.findByIdAndUpdate(policyId, { $inc: { acknowledgedCount: 1 } });
@@ -134,12 +145,14 @@ export class ComplianceService {
   }
 
   // ── Approval Requests ────────────────────────────────────────
-  async getApprovals(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, category, status } = query;
+  async getApprovals(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, category, status, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (category) filter.category = category;
     if (status) filter.status = status;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     const [data, total] = await Promise.all([
       this.approvalModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.approvalModel.countDocuments(filter),
@@ -147,7 +160,7 @@ export class ComplianceService {
     return { data, meta: { total, page, limit } };
   }
 
-  async createApproval(schoolSlug: string, requestedBy: string, dto: any) {
+  async createApproval(schoolSlug: string, requestedBy: string, dto: any, requestingUser?: ScopedUser) {
     // approvalChain comes in as a simple ordered list of approver names —
     // normalize into real stage objects rather than trusting the client to
     // send fully-formed ones.
@@ -160,6 +173,7 @@ export class ComplianceService {
     const approval = new this.approvalModel({
       ...dto, schoolSlug, requestedBy, approvalChain,
       status: approvalChain.length > 0 ? 'pending' : dto.status || 'pending',
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (dto.campusId ? new Types.ObjectId(dto.campusId) : null),
     });
     return approval.save();
   }
@@ -209,13 +223,15 @@ export class ComplianceService {
     return approval;
   }
 
-  async getSafeguardingCases(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, severity, type } = query;
+  async getSafeguardingCases(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, severity, type, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
     if (severity) filter.severity = severity;
     if (type) filter.type = type;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     const [data, total] = await Promise.all([
       this.safeguardingModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.safeguardingModel.countDocuments(filter),
@@ -223,10 +239,11 @@ export class ComplianceService {
     return { data, meta: { total, page, limit } };
   }
 
-  async createSafeguardingCase(data: any) {
+  async createSafeguardingCase(data: any, requestingUser?: ScopedUser) {
     const sc = new this.safeguardingModel({
       ...data,
       reportedDate: new Date(data.reportedDate || Date.now()),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return sc.save();
   }
