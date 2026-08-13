@@ -86,6 +86,34 @@ export function resolveCampusScope(user: ScopedUser, requestedCampusId?: string)
 }
 
 /**
+ * For record types where an unassigned/null campus genuinely means
+ * "applies to everyone" (e.g. a school-wide policy document, a circular
+ * for all campuses) rather than "ownership unclear, hide it" (the
+ * Expense/Budget/PurchaseRequest convention). Campus-/department-scoped
+ * callers see their own campus's records PLUS anything with no campus
+ * set at all. Institution/platform-level callers are unrestricted.
+ * Still hard-blocks (403) an explicitly requested campus outside scope.
+ */
+export function buildInclusiveCampusFilter(user: ScopedUser, requestedCampusId?: string): Record<string, any> | null {
+  const role = user.role || user.primaryRole;
+  const scope = getScopeLevel(role);
+
+  if (scope === ScopeLevel.PLATFORM || scope === ScopeLevel.INSTITUTION) {
+    return requestedCampusId ? { campusId: requestedCampusId } : null;
+  }
+
+  if (!user.campusId) {
+    throw new ForbiddenException('Your account has no campus assigned. Contact your administrator.');
+  }
+
+  if (requestedCampusId && String(requestedCampusId) !== String(user.campusId)) {
+    throw new ForbiddenException('Access denied. You are scoped to your own campus only.');
+  }
+
+  return { $or: [{ campusId: user.campusId }, { campusId: null }, { campusId: { $exists: false } }] };
+}
+
+/**
  * Same idea as resolveCampusScope, but for department - only meaningful
  * for department-scoped roles (Teacher today). Non-department-scoped
  * callers get an explicitly requested department honored as a normal
