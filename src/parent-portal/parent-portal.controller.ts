@@ -148,4 +148,50 @@ export class ParentPortalController {
     const { requestingUser, userId, name, schoolSlug } = this.ctx(req);
     return this.service.createStudentLeave(studentId, requestingUser, userId, name, schoolSlug, dto);
   }
+
+  // ── Notifications / Inbox ─────────────────────────────────────
+  @Get('notifications')
+  async getNotifications(@Request() req: any, @Query() query: any) {
+    const { userId, schoolSlug } = this.ctx(req);
+    return this.service.getNotifications(userId, schoolSlug, query);
+  }
+
+  @Post('notifications/:id/read')
+  async markRead(@Param('id') id: string, @Request() req: any) {
+    const { userId, schoolSlug } = this.ctx(req);
+    return this.service.markNotificationRead(id, userId, schoolSlug);
+  }
+
+  @Post('notifications/read-all')
+  async markAllRead(@Request() req: any) {
+    const { userId, schoolSlug } = this.ctx(req);
+    return this.service.markAllNotificationsRead(userId, schoolSlug);
+  }
+
+  // ── Messages ──────────────────────────────────────────────────
+  @Get('threads')
+  async getThreads(@Request() req: any) {
+    const { userId, schoolSlug } = this.ctx(req);
+    return this.service.getMyThreads(userId, schoolSlug);
+  }
+
+  @Post('threads')
+  @HttpCode(HttpStatus.CREATED)
+  async createThread(@Body() dto: any, @Request() req: any) {
+    const { userId, name, requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.createThread(userId, name, schoolSlug, requestingUser, dto);
+  }
+
+  @Get('threads/:id/messages')
+  async getThreadMessages(@Param('id') id: string, @Request() req: any) {
+    const { userId, schoolSlug } = this.ctx(req);
+    return this.service.getThreadMessages(id, userId, schoolSlug);
+  }
+
+  @Post('threads/:id/messages')
+  @HttpCode(HttpStatus.CREATED)
+  async sendMessage(@Param('id') id: string, @Body() dto: { body: string }, @Request() req: any) {
+    const { userId, name, schoolSlug } = this.ctx(req);
+    return this.service.sendMessage(id, userId, name, schoolSlug, dto.body);
+  }
 }

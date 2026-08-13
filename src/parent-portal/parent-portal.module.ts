@@ -20,6 +20,11 @@ import {
   ConsentResponse, ConsentResponseSchema,
   StudentLeave, StudentLeaveSchema,
 } from './schemas/consent-and-leave.schema';
+import {
+  Notification, NotificationSchema,
+  MessageThread, MessageThreadSchema,
+  Message, MessageSchema,
+} from './schemas/notification-and-message.schema';
 
 @Module({
   imports: [
@@ -42,6 +47,9 @@ import {
       { name: ConsentRequest.name, schema: ConsentRequestSchema },
       { name: ConsentResponse.name, schema: ConsentResponseSchema },
       { name: StudentLeave.name, schema: StudentLeaveSchema },
+      { name: Notification.name, schema: NotificationSchema },
+      { name: MessageThread.name, schema: MessageThreadSchema },
+      { name: Message.name, schema: MessageSchema },
     ]),
   ],
   controllers: [ParentPortalController],

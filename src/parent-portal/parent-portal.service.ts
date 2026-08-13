@@ -21,6 +21,11 @@ import {
   ConsentResponse, ConsentResponseDocument,
   StudentLeave, StudentLeaveDocument,
 } from './schemas/consent-and-leave.schema';
+import {
+  Notification, NotificationDocument,
+  MessageThread, MessageThreadDocument,
+  Message, MessageDocument,
+} from './schemas/notification-and-message.schema';
 
 @Injectable()
 export class ParentPortalService {
@@ -43,6 +48,9 @@ export class ParentPortalService {
     @InjectModel(ConsentRequest.name) private consentRequestModel: Model<ConsentRequestDocument>,
     @InjectModel(ConsentResponse.name) private consentResponseModel: Model<ConsentResponseDocument>,
     @InjectModel(StudentLeave.name) private studentLeaveModel: Model<StudentLeaveDocument>,
+    @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
+    @InjectModel(MessageThread.name) private threadModel: Model<MessageThreadDocument>,
+    @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
   ) {}
 
   // ── Admin: link a guardian's login to their child/children ─────
@@ -264,5 +272,68 @@ export class ParentPortalService {
   async getStudentLeaves(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
     return this.studentLeaveModel.find({ studentId, schoolSlug }).sort({ createdAt: -1 }).lean();
+  }
+
+  // ── Notifications / Inbox (same data, two views) ──────────────
+  async getNotifications(userId: string, schoolSlug: string, query: any) {
+    const filter: any = { recipientUserId: new Types.ObjectId(userId), schoolSlug };
+    if (query.unreadOnly === 'true') filter.isRead = false;
+    return this.notificationModel.find(filter).sort({ createdAt: -1 }).limit(100).lean();
+  }
+
+  async markNotificationRead(id: string, userId: string, schoolSlug: string) {
+    const n = await this.notificationModel.findOneAndUpdate(
+      { _id: id, recipientUserId: new Types.ObjectId(userId), schoolSlug },
+      { $set: { isRead: true, readAt: new Date() } }, { new: true },
+    );
+    if (!n) throw new NotFoundException('Notification not found');
+    return n;
+  }
+
+  async markAllNotificationsRead(userId: string, schoolSlug: string) {
+    const result = await this.notificationModel.updateMany(
+      { recipientUserId: new Types.ObjectId(userId), schoolSlug, isRead: false },
+      { $set: { isRead: true, readAt: new Date() } },
+    );
+    return { updated: result.modifiedCount };
+  }
+
+  // ── Messages ────────────────────────────────────────────────
+  async getMyThreads(userId: string, schoolSlug: string) {
+    return this.threadModel.find({ guardianUserId: new Types.ObjectId(userId), schoolSlug }).sort({ lastMessageAt: -1 }).lean();
+  }
+
+  async createThread(userId: string, guardianName: string, schoolSlug: string, requestingUser: ScopedUser, data: { subject: string; studentId?: string; studentName?: string; staffId: string; staffName: string; firstMessage: string }) {
+    if (data.studentId) assertStudentAccess(requestingUser, data.studentId);
+    const thread = await this.threadModel.create({
+      subject: data.subject, studentId: data.studentId || null, studentName: data.studentName,
+      guardianUserId: userId, guardianName,
+      staffId: data.staffId, staffName: data.staffName,
+      lastMessagePreview: data.firstMessage.slice(0, 140), lastMessageAt: new Date(), staffHasUnread: true,
+      schoolSlug,
+    });
+    await this.messageModel.create({ threadId: thread._id, senderRole: 'guardian', senderName: guardianName, body: data.firstMessage, schoolSlug });
+    return thread;
+  }
+
+  async getThreadMessages(threadId: string, userId: string, schoolSlug: string) {
+    const thread = await this.threadModel.findOne({ _id: threadId, guardianUserId: new Types.ObjectId(userId), schoolSlug });
+    if (!thread) throw new NotFoundException('Thread not found');
+    if (thread.guardianHasUnread) {
+      thread.guardianHasUnread = false;
+      await thread.save();
+    }
+    return this.messageModel.find({ threadId, schoolSlug }).sort({ createdAt: 1 }).lean();
+  }
+
+  async sendMessage(threadId: string, userId: string, guardianName: string, schoolSlug: string, body: string) {
+    const thread = await this.threadModel.findOne({ _id: threadId, guardianUserId: new Types.ObjectId(userId), schoolSlug });
+    if (!thread) throw new NotFoundException('Thread not found');
+    const message = await this.messageModel.create({ threadId, senderRole: 'guardian', senderName: guardianName, body, schoolSlug });
+    thread.lastMessagePreview = body.slice(0, 140);
+    thread.lastMessageAt = new Date();
+    thread.staffHasUnread = true;
+    await thread.save();
+    return message;
   }
 }
