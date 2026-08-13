@@ -235,9 +235,15 @@ export class Department {
   @Prop({ type: Types.ObjectId, ref: 'User' }) headId: Types.ObjectId;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Plain string id (matches Grade.campusId / AcademicYear.campusId's proven
+  // pattern) — null/undefined means the department applies across all
+  // campuses (e.g. a small single-campus school, or a genuinely
+  // school-wide department like central Finance).
+  @Prop({ type: String, default: null }) campusId: string | null;
 }
 
 export const DepartmentSchema = SchemaFactory.createForClass(Department);
+DepartmentSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // DESIGNATION / POSITION

@@ -85,9 +85,11 @@ export class HrService {
 
   // ── Staff ────────────────────────────────────────────────────────────
 
-  async getStaff(tenantId: string) {
+  async getStaff(tenantId: string, campusId?: string) {
+    const filter: any = { tenantId: this.newTid(tenantId), isActive: true };
+    if (campusId) filter.campusId = this.newTid(campusId);
     return this.staffModel
-      .find({ tenantId: this.newTid(tenantId), isActive: true })
+      .find(filter)
       .populate('designationId', 'name code department')
       .populate('campusId', 'name code')
       .sort({ firstName: 1 })

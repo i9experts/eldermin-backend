@@ -346,17 +346,21 @@ export class OrganizationService {
   }
 
   // ── Departments ───────────────────────────────────────────
-  async getDepartments(schoolSlug: string) {
-    return this.deptModel.find({ schoolSlug, isActive: true }).sort({ name: 1 });
+  async getDepartments(schoolSlug: string, campusId?: string) {
+    const filter: any = { schoolSlug, isActive: true };
+    if (campusId) filter.campusId = campusId;
+    return this.deptModel.find(filter).sort({ name: 1 });
   }
 
   async createDepartment(dto: CreateDepartmentDto) {
-    const dept = new this.deptModel(dto);
+    const dept = new this.deptModel({ ...dto, campusId: dto.campusId || null });
     return dept.save();
   }
 
   async updateDepartment(id: string, schoolSlug: string, dto: Partial<CreateDepartmentDto>) {
-    return this.deptModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    const update: any = { ...dto };
+    if ('campusId' in dto) update.campusId = dto.campusId || null;
+    return this.deptModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
   }
 
   // ── Designations ──────────────────────────────────────────

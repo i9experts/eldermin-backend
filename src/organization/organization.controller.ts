@@ -190,9 +190,9 @@ export class OrganizationController {
   }
 
   // Departments
-  @Get('departments') async getDepts(@Request() req: any) {
+  @Get('departments') async getDepts(@Request() req: any, @Query('campusId') campusId?: string) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getDepartments(schoolSlug);
+    return this.service.getDepartments(schoolSlug, campusId);
   }
 
   @Post('departments') @HttpCode(HttpStatus.CREATED)

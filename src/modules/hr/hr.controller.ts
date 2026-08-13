@@ -16,7 +16,7 @@ export class HrController {
   // ── Staff ────────────────────────────────────────────────────────────
 
   @Get('staff')
-  getStaff(@Request() req) { return this.hrService.getStaff(req.user.tenantId); }
+  getStaff(@Request() req, @Query('campusId') campusId?: string) { return this.hrService.getStaff(req.user.tenantId, campusId); }
 
   @Post('staff')
   createStaff(@Request() req, @Body() body: any) { return this.hrService.createStaff(req.user.tenantId, body); }

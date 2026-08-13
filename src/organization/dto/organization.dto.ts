@@ -79,6 +79,7 @@ export class CreateDepartmentDto {
   @IsOptional() @IsString() code?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() head?: string;
+  @IsOptional() @IsString() campusId?: string;
   schoolSlug?: string;
 }
 
