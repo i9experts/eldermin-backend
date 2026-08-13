@@ -16,6 +16,7 @@ import {
   CreateEnrollmentDto, UpdateEnrollmentDto,
   CreateRetentionDto, UpdateRetentionDto,
 } from './dto/admissions.dto';
+import { ScopedUser } from '../auth/scope.util';
 // import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 // import { SchoolGuard } from '../auth/guards/school.guard';
 // import { Roles } from '../auth/decorators/roles.decorator';
@@ -33,6 +34,7 @@ export class AdmissionsController {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      requestingUser: req?.user as ScopedUser | undefined,
     };
   }
 
@@ -116,8 +118,8 @@ export class AdmissionsController {
   /** GET /api/admissions/applicants */
   @Get('applicants')
   async getApplicants(@Request() req: any, @Query() query: ApplicantQueryDto) {
-    const { schoolSlug } = this.getSchoolCtx(req);
-    return this.admissionsService.getApplicants(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.getSchoolCtx(req);
+    return this.admissionsService.getApplicants(schoolSlug, query, requestingUser);
   }
 
   /** GET /api/admissions/applicants/:id */
@@ -224,8 +226,8 @@ export class AdmissionsController {
   /** GET /api/admissions/enrollments */
   @Get('enrollments')
   async getEnrollments(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.getSchoolCtx(req);
-    return this.admissionsService.getEnrollments(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.getSchoolCtx(req);
+    return this.admissionsService.getEnrollments(schoolSlug, query, requestingUser);
   }
 
   /** POST /api/admissions/enrollments */

@@ -28,6 +28,7 @@ import {
   CreateEnrollmentDto, UpdateEnrollmentDto,
   CreateRetentionDto, UpdateRetentionDto,
 } from './dto/admissions.dto';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 // ── Helper ────────────────────────────────────────────────────
 const buildPagination = (page = 1, limit = 20) => ({
@@ -308,7 +309,7 @@ export class AdmissionsService {
     return applicant.save();
   }
 
-  async getApplicants(schoolSlug: string, query: ApplicantQueryDto) {
+  async getApplicants(schoolSlug: string, query: ApplicantQueryDto, requestingUser?: ScopedUser) {
     const { page, limit, search, sortBy, sortOrder, status, stage, gradeApplied, assignedTo, campusId, academicYear } = query;
     const { skip } = buildPagination(page, limit);
 
@@ -317,7 +318,8 @@ export class AdmissionsService {
     if (stage) filter.stage = stage;
     if (gradeApplied) filter.gradeApplied = gradeApplied;
     if (assignedTo) filter.assignedTo = assignedTo;
-    if (campusId) filter.campusId = campusId;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (academicYear) filter.academicYear = academicYear;
     if (search) {
       filter.$or = [
@@ -535,14 +537,16 @@ export class AdmissionsService {
     return enrollment;
   }
 
-  async getEnrollments(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, gradeEnrolled, academicYear } = query;
+  async getEnrollments(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, gradeEnrolled, academicYear, campusId } = query;
     const { skip } = buildPagination(page, limit);
 
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
     if (gradeEnrolled) filter.gradeEnrolled = gradeEnrolled;
     if (academicYear) filter.academicYear = academicYear;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
 
     const [data, total] = await Promise.all([
       this.enrollmentModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),

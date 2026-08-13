@@ -18,6 +18,7 @@ import {
 import {
   CharacterProgramSettings, CharacterProgramSettingsDocument,
 } from './schemas/character-program-settings.schema';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -155,19 +156,20 @@ export class BehaviourService {
   // ============================================================
   // BEHAVIOUR RECORDS
   // ============================================================
-  async createRecord(data: any) {
+  async createRecord(data: any, requestingUser?: ScopedUser) {
     const record = new this.recordModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       date: new Date(data.date),
       followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return record.save();
   }
 
-  async getRecords(schoolSlug: string, query: any) {
+  async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
     const { page = 1, limit = 20, type, category, severity, grade, studentId,
-      resolved, from, to, followUpOverdue } = query;
+      resolved, from, to, followUpOverdue, campusId } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -177,6 +179,8 @@ export class BehaviourService {
     if (grade) filter.grade = grade;
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (resolved !== undefined) filter.resolved = resolved === 'true';
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (from || to) {
       filter.date = {};
       if (from) filter.date.$gte = new Date(from);
@@ -283,7 +287,7 @@ export class BehaviourService {
   // ============================================================
   // TARBIYAH ASSESSMENTS
   // ============================================================
-  async createTarbiyahAssessment(schoolSlug: string, data: any) {
+  async createTarbiyahAssessment(schoolSlug: string, data: any, requestingUser?: ScopedUser) {
     const settings = await this.getCharacterSettings(schoolSlug);
     const { min, max } = settings.ratingScale;
     const traits = data.traits || [];
@@ -307,12 +311,13 @@ export class BehaviourService {
       overallScore: parseFloat(avgScore.toFixed(2)),
       overallPercentage: parseFloat(overallPercentage.toFixed(1)),
       overallRating: getTarbiyahRating(overallPercentage),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return assessment.save();
   }
 
-  async getTarbiyahAssessments(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, grade, studentId, period, periodType } = query;
+  async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, grade, studentId, period, periodType, campusId } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -320,6 +325,8 @@ export class BehaviourService {
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (period) filter.period = period;
     if (periodType) filter.periodType = periodType;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
 
     const [data, total] = await Promise.all([
       this.tarbiyahModel.find(filter).sort({ assessmentDate: -1 }).skip(skip).limit(limit),
@@ -384,18 +391,19 @@ export class BehaviourService {
   // ============================================================
   // COUNSELLING SESSIONS
   // ============================================================
-  async createCounsellingSession(data: any) {
+  async createCounsellingSession(data: any, requestingUser?: ScopedUser) {
     const session = new this.counsellingModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       sessionDate: new Date(data.sessionDate),
       nextSessionDate: data.nextSessionDate ? new Date(data.nextSessionDate) : undefined,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return session.save();
   }
 
-  async getCounsellingSessions(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, type, counsellor, studentId, from, to } = query;
+  async getCounsellingSessions(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, type, counsellor, studentId, from, to, campusId } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -403,6 +411,8 @@ export class BehaviourService {
     if (type) filter.type = type;
     if (counsellor) filter.counsellor = { $regex: counsellor, $options: 'i' };
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (from || to) {
       filter.sessionDate = {};
       if (from) filter.sessionDate.$gte = new Date(from);
@@ -442,18 +452,19 @@ export class BehaviourService {
   // ============================================================
   // INTERVENTIONS
   // ============================================================
-  async createIntervention(data: any) {
+  async createIntervention(data: any, requestingUser?: ScopedUser) {
     const intervention = new this.interventionModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       startDate: new Date(data.startDate),
       reviewDate: data.reviewDate ? new Date(data.reviewDate) : undefined,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return intervention.save();
   }
 
-  async getInterventions(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, type, tier, studentId, overduereview } = query;
+  async getInterventions(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, type, tier, studentId, overduereview, campusId } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -461,6 +472,8 @@ export class BehaviourService {
     if (type) filter.type = type;
     if (tier) filter.tier = tier;
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     if (overduereview === 'true') {
       filter.status = 'active';
       filter.reviewDate = { $lte: new Date() };
@@ -502,22 +515,25 @@ export class BehaviourService {
   // ============================================================
   // BEHAVIOUR CONTRACTS
   // ============================================================
-  async createContract(data: any) {
+  async createContract(data: any, requestingUser?: ScopedUser) {
     const contract = new this.contractModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
       startDate: new Date(data.startDate),
       reviewDate: new Date(data.reviewDate),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return contract.save();
   }
 
-  async getContracts(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, studentId } = query;
+  async getContracts(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, studentId, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     const [data, total] = await Promise.all([
       this.contractModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.contractModel.countDocuments(filter),

@@ -18,6 +18,10 @@ export class BehaviourRecord {
 
   @Prop({ required: true }) studentName: string;
   @Prop({ required: true }) grade: string;
+
+  // Denormalized from the reporting staff member's own campus at
+  // creation time - lets these records be scoped by campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() section: string;
   @Prop() rollNumber: string;
 
@@ -147,6 +151,10 @@ export class TarbiyahAssessment {
 
   @Prop({ required: true }) studentName: string;
   @Prop({ required: true }) grade: string;
+
+  // Denormalized from the reporting staff member's own campus at
+  // creation time - lets these records be scoped by campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() section: string;
 
   @Prop({ required: true }) period: string; // e.g. "Term 1 2025-26", "Monthly 2025-02"
@@ -199,6 +207,10 @@ export class CounsellingSession {
 
   @Prop({ required: true }) studentName: string;
   @Prop({ required: true }) grade: string;
+
+  // Denormalized from the reporting staff member's own campus at
+  // creation time - lets these records be scoped by campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() section: string;
 
   @Prop({ required: true }) sessionDate: Date;
@@ -283,6 +295,10 @@ export class Intervention {
 
   @Prop({ required: true }) studentName: string;
   @Prop({ required: true }) grade: string;
+
+  // Denormalized from the reporting staff member's own campus at
+  // creation time - lets these records be scoped by campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() section: string;
 
   @Prop({ required: true }) title: string;
@@ -354,6 +370,10 @@ export class BehaviourContract {
   @Prop({ type: Types.ObjectId, ref: 'Student', required: true }) studentId: Types.ObjectId;
   @Prop({ required: true }) studentName: string;
   @Prop({ required: true }) grade: string;
+
+  // Denormalized from the reporting staff member's own campus at
+  // creation time - lets these records be scoped by campus.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() section: string;
 
   @Prop({ required: true }) title: string;

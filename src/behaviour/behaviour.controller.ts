@@ -20,6 +20,7 @@ export class BehaviourController {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
       academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
       userName: req?.user?.name || 'Admin',
+      requestingUser: req?.user,
     };
   }
 
@@ -39,8 +40,8 @@ export class BehaviourController {
   // ── Behaviour Records ─────────────────────────────────────────
   @Get('records')
   async getRecords(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getRecords(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getRecords(schoolSlug, query, requestingUser);
   }
 
   @Get('records/:id')
@@ -52,12 +53,12 @@ export class BehaviourController {
   @Post('records')
   @HttpCode(HttpStatus.CREATED)
   async createRecord(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     return this.service.createRecord({
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       reportedBy: dto.reportedBy || userName,
-    });
+    }, requestingUser);
   }
 
   @Put('records/:id')
@@ -89,8 +90,8 @@ export class BehaviourController {
   // ── Tarbiyah Assessments ──────────────────────────────────────
   @Get('tarbiyah')
   async getTarbiyah(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getTarbiyahAssessments(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getTarbiyahAssessments(schoolSlug, query, requestingUser);
   }
 
   @Get('tarbiyah/analytics')
@@ -106,12 +107,12 @@ export class BehaviourController {
   @Post('tarbiyah')
   @HttpCode(HttpStatus.CREATED)
   async createTarbiyah(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     return this.service.createTarbiyahAssessment(schoolSlug, {
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       assessedBy: dto.assessedBy || userName,
-    });
+    }, requestingUser);
   }
 
   @Get('character-settings')
@@ -135,19 +136,19 @@ export class BehaviourController {
   // ── Counselling ───────────────────────────────────────────────
   @Get('counselling')
   async getCounselling(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getCounsellingSessions(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getCounsellingSessions(schoolSlug, query, requestingUser);
   }
 
   @Post('counselling')
   @HttpCode(HttpStatus.CREATED)
   async createCounselling(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     return this.service.createCounsellingSession({
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       counsellor: dto.counsellor || userName,
-    });
+    }, requestingUser);
   }
 
   @Put('counselling/:id')
@@ -165,19 +166,19 @@ export class BehaviourController {
   // ── Interventions ─────────────────────────────────────────────
   @Get('interventions')
   async getInterventions(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getInterventions(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getInterventions(schoolSlug, query, requestingUser);
   }
 
   @Post('interventions')
   @HttpCode(HttpStatus.CREATED)
   async createIntervention(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     return this.service.createIntervention({
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       createdBy: dto.createdBy || userName,
-    });
+    }, requestingUser);
   }
 
   @Put('interventions/:id')
@@ -206,19 +207,19 @@ export class BehaviourController {
   // ── Behaviour Contracts ───────────────────────────────────────
   @Get('contracts')
   async getContracts(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getContracts(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getContracts(schoolSlug, query, requestingUser);
   }
 
   @Post('contracts')
   @HttpCode(HttpStatus.CREATED)
   async createContract(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     return this.service.createContract({
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       createdBy: userName,
-    });
+    }, requestingUser);
   }
 
   @Patch('contracts/:id/sign')
