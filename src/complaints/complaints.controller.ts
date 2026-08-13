@@ -83,4 +83,13 @@ export class ComplaintsController {
     const { schoolSlug } = this.ctx(req);
     return this.service.reopenCase(id, schoolSlug);
   }
+
+  @Post('run-escalations-now')
+  @HttpCode(HttpStatus.OK)
+  async runEscalationsNow() {
+    // Manual trigger for the same job @Cron runs hourly - lets you test
+    // the whole escalation ladder immediately instead of waiting, same
+    // pattern as the fee defaulter engine's run-automated-now endpoint.
+    return this.service.runEscalations();
+  }
 }
