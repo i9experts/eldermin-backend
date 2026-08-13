@@ -48,6 +48,22 @@ export class User {
 
   @Prop()
   resetPasswordExpires: Date;
+
+  // Real parent-to-student linkage - without this, a "parent" account
+  // has no defined relationship to any student at all, which means
+  // nothing can safely scope a parent-facing view to "only my own
+  // child's data" without this field to check against. Set by an
+  // admin/front-desk action when a guardian's login is created (see
+  // linkGuardianToStudents), never inferred or guessed.
+  @Prop({ type: [Types.ObjectId], ref: 'Student', default: [] })
+  guardianOfStudentIds: Types.ObjectId[];
+
+  // Same idea for a student's own login (a student themselves, not
+  // their parent) - most schools won't use student logins at all yet,
+  // but if/when they do, this is what a 'student' role account should
+  // be scoped to.
+  @Prop({ type: Types.ObjectId, ref: 'Student', default: null })
+  linkedStudentId: Types.ObjectId | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

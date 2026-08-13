@@ -51,6 +51,8 @@ export interface ScopedUser {
   primaryRole?: string;
   campusId?: string;
   department?: string;
+  guardianOfStudentIds?: string[];
+  linkedStudentId?: string;
 }
 
 /**
@@ -137,4 +139,39 @@ export function resolveDepartmentScope(user: ScopedUser, requestedDepartment?: s
   }
 
   return user.department;
+}
+
+/**
+ * Hard-blocks a 'parent' or 'student' role account from ever touching a
+ * student record they're not actually linked to. Unlike campus/
+ * department scoping (which narrows a view), this is closer to an
+ * ownership check - a parent has no legitimate reason to see ANY
+ * student outside their own guardianOfStudentIds, ever, regardless of
+ * campus/department. Non-parent/student roles are unrestricted here
+ * (their access is governed by the normal role/campus/department
+ * rules elsewhere, not this check).
+ */
+export function assertStudentAccess(user: ScopedUser, studentId: string): void {
+  const role = user.role || user.primaryRole;
+  if (role === UserRole.PARENT) {
+    const allowed = (user.guardianOfStudentIds || []).map(String);
+    if (!allowed.includes(String(studentId))) {
+      throw new ForbiddenException('Access denied. You are not a registered guardian for this student.');
+    }
+    return;
+  }
+  if (role === UserRole.STUDENT) {
+    if (String(user.linkedStudentId) !== String(studentId)) {
+      throw new ForbiddenException('Access denied. This is not your own student record.');
+    }
+    return;
+  }
+  // Every other role's access is governed elsewhere (campus/department
+  // scoping, or unrestricted for institution_owner/super_admin) - this
+  // check only exists to protect parent/student accounts specifically.
+}
+
+/** The list of student ids a parent account is allowed to see anything about at all - used to build "my children" pickers and to scope list endpoints. */
+export function getGuardianStudentIds(user: ScopedUser): string[] {
+  return (user.guardianOfStudentIds || []).map(String);
 }

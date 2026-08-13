@@ -105,6 +105,11 @@ export class AuthService {
       isBoardLevel,
       campusId,
       department,
+      // Real parent/student ownership scoping - see assertStudentAccess
+      // in scope.util.ts. Absent for every other role, exactly as
+      // campusId/department are absent for roles they don't apply to.
+      guardianOfStudentIds: user.guardianOfStudentIds?.map((id: any) => id.toString()) || undefined,
+      linkedStudentId: user.linkedStudentId?.toString() || undefined,
     };
 
     return {

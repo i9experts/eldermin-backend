@@ -37,6 +37,7 @@ import { AuditLogModule } from './common/audit-log.module';
 import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
 import { ComplaintsModule } from './complaints/complaints.module';
+import { ParentPortalModule } from './parent-portal/parent-portal.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { ComplaintsModule } from './complaints/complaints.module';
     SyllabusModule,
     EceModule,
     ComplaintsModule,
+    ParentPortalModule,
   ],
   controllers: [AppController],
   providers: [
