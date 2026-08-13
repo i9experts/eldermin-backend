@@ -153,6 +153,10 @@ export class Invoice {
   // exactly matching every pre-Phase-8 invoice.
   @Prop({ type: Types.ObjectId, ref: 'TermsTemplate', default: null }) termsTemplateId: Types.ObjectId | null;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Denormalized from the student's own campus at invoice creation time -
+  // lets the fee defaulter engine (and any other reporting) scope by
+  // campus without a join.
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
 }
 
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);

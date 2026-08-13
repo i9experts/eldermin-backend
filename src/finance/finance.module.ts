@@ -51,9 +51,18 @@ import {
   CommissionAssignment, CommissionAssignmentSchema,
 } from './schemas/commission.schema';
 import { PaymentVoucher, PaymentVoucherSchema } from './schemas/voucher.schema';
+import {
+  DefaulterReminderLog, DefaulterReminderLogSchema,
+  PaymentCommitment, PaymentCommitmentSchema,
+  DefaulterPolicy, DefaulterPolicySchema,
+} from './schemas/defaulter.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
+import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
+import { EmailModule } from '../email/email.module';
+import { FeeDefaulterService } from './fee-defaulter.service';
+import { FeeDefaulterController } from './fee-defaulter.controller';
 
 @Module({
   imports: [
@@ -97,10 +106,16 @@ import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schema
       { name: PaymentGatewayConfig.name, schema: PaymentGatewayConfigSchema },
       // Payment / Receipt Vouchers
       { name: PaymentVoucher.name, schema: PaymentVoucherSchema },
+      // Fee Defaulter Engine
+      { name: DefaulterReminderLog.name, schema: DefaulterReminderLogSchema },
+      { name: PaymentCommitment.name, schema: PaymentCommitmentSchema },
+      { name: DefaulterPolicy.name, schema: DefaulterPolicySchema },
+      { name: Tenant.name, schema: TenantSchema },
     ]),
+    EmailModule,
   ],
-  controllers: [FinanceController],
-  providers: [FinanceService],
-  exports: [FinanceService],
+  controllers: [FinanceController, FeeDefaulterController],
+  providers: [FinanceService, FeeDefaulterService],
+  exports: [FinanceService, FeeDefaulterService],
 })
 export class FinanceModule {}

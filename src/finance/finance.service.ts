@@ -1479,10 +1479,28 @@ export class FinanceService {
       ...data,
       subtotal, totalDiscount, totalTax, totalAmount, balanceDue: totalAmount,
       exchangeRate, baseCurrencyAmount,
+      campusId: await this.resolveInvoiceCampusId(data),
     });
     await inv.save();
     await this.postFeeInvoiceJournal(data.schoolSlug, inv, taxTemplate);
     return inv;
+  }
+
+  // Resolves the campusId to stamp on a new invoice: an explicit
+  // data.campusId wins; otherwise fall back to the linked student's own
+  // campusId. Neither being set (e.g. a non-student invoice type) leaves
+  // it null, meaning "school-wide/unscoped" like everywhere else in the
+  // app - which is honest, since there's genuinely nothing to attribute
+  // it to.
+  private async resolveInvoiceCampusId(data: any): Promise<any> {
+    if (data.campusId) return new Types.ObjectId(data.campusId);
+    if (data.studentId) {
+      const student = await this.studentModel.findById(data.studentId).select('campusId').lean();
+      if ((student as any)?.campusId) {
+        try { return new Types.ObjectId((student as any).campusId); } catch { /* campusId stored as non-ObjectId string on some legacy records */ }
+      }
+    }
+    return null;
   }
 
   async recordPayment(invoiceId: string, schoolSlug: string, paymentData: any) {
@@ -2795,6 +2813,7 @@ export class FinanceService {
           grade: (student as any).currentGrade,
           section: (student as any).currentSection,
           campus: studentCampusName || undefined,
+          campusId: (student as any).campusId ? (() => { try { return new Types.ObjectId((student as any).campusId); } catch { return null; } })() : null,
           month, academicYear,
           items, subtotal, totalDiscount, totalTax, totalAmount,
           balanceDue: totalAmount,

@@ -3,6 +3,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './modules/auth/auth.module';
 import { OrganizationModule } from './organization/organization.module';
@@ -42,6 +43,7 @@ import { EceModule } from './ece/ece.module';
     MongooseModule.forRoot(
       process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/eldermin',
     ),
+    ScheduleModule.forRoot(),
     AuthModule,
     OrganizationModule,
     HrModule,
