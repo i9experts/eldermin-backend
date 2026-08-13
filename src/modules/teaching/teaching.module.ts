@@ -10,10 +10,14 @@ import { PeriodTemplate, PeriodTemplateSchema } from './schemas/period-template.
 import { Assignment, AssignmentSchema } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteSchema } from './schemas/behaviour-note.schema';
 import { Substitution, SubstitutionSchema } from './schemas/substitution.schema';
+import { PTMMeeting, PTMMeetingSchema } from './schemas/ptm-meeting.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
+import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { EmailModule } from '../../email/email.module';
 import { SubstitutionService } from './substitution.service';
 import { SubstitutionController } from './substitution.controller';
+import { PTMService } from './ptm.service';
+import { PTMController } from './ptm.controller';
 
 @Module({
   imports: [
@@ -26,12 +30,14 @@ import { SubstitutionController } from './substitution.controller';
       { name: Assignment.name, schema: AssignmentSchema },
       { name: BehaviourNote.name, schema: BehaviourNoteSchema },
       { name: Substitution.name, schema: SubstitutionSchema },
+      { name: PTMMeeting.name, schema: PTMMeetingSchema },
       { name: Staff.name, schema: StaffSchema },
+      { name: Student.name, schema: StudentSchema },
     ]),
     EmailModule,
   ],
-  controllers: [TeachingController, SubstitutionController],
-  providers: [TeachingService, SubstitutionService],
-  exports: [TeachingService, SubstitutionService],
+  controllers: [TeachingController, SubstitutionController, PTMController],
+  providers: [TeachingService, SubstitutionService, PTMService],
+  exports: [TeachingService, SubstitutionService, PTMService],
 })
 export class TeachingModule {}
