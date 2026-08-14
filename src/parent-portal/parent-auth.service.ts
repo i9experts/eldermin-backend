@@ -62,7 +62,7 @@ export class ParentAuthService {
     const codeHash = await bcrypt.hash(code, 10);
     const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
 
-    const result = await this.whatsAppService.sendTemplateMessage(phone, 'parent_login_otp', { code });
+    const result = await this.whatsAppService.sendTemplateMessage(phone, 'parent_login_otp', { code }, { isAuthTemplate: true });
 
     await this.otpModel.create({
       phone, codeHash, expiresAt, attempts: 0,

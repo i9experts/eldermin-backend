@@ -22,8 +22,19 @@ export class WhatsAppService {
    * ({{1}}, {{2}}, ...) in the order Object.values() gives them - so
    * callers should build `params` as an ordered object matching the
    * template's actual placeholder order.
+   *
+   * `isAuthTemplate` must be true for Authentication-category templates
+   * using the "Copy Code" delivery method (e.g. parent_login_otp) -
+   * Meta requires those to carry the code in BOTH the body parameter
+   * AND a separate button component with sub_type 'copy_code'. A
+   * regular Utility template (e.g. fee_reminder) doesn't need this and
+   * would be rejected by Meta if it were added, so this only applies
+   * when explicitly requested.
    */
-  async sendTemplateMessage(to: string, templateName: string, params: Record<string, string>): Promise<{ sent: boolean; reason?: string }> {
+  async sendTemplateMessage(
+    to: string, templateName: string, params: Record<string, string>,
+    options?: { isAuthTemplate?: boolean },
+  ): Promise<{ sent: boolean; reason?: string }> {
     if (!this.isConfigured()) {
       this.logger.warn('WhatsApp send attempted but WABA_PHONE_NUMBER_ID/WABA_ACCESS_TOKEN are not set — nothing was sent.');
       return { sent: false, reason: 'WhatsApp Business API is not connected yet. Set up a WABA account (directly with Meta, or via a provider like Twilio/360dialog/Gupshup) and add the credentials to enable this.' };
@@ -34,10 +45,26 @@ export class WhatsAppService {
     // Meta requires the recipient number without a leading '+' in the
     // 'to' field, even though it wants full E.164 digits otherwise.
     const toDigitsOnly = to.replace(/[^\d]/g, '');
+    const paramValues = Object.values(params).map((value) => String(value));
 
-    const components = Object.keys(params).length > 0
-      ? [{ type: 'body', parameters: Object.values(params).map((value) => ({ type: 'text', text: String(value) })) }]
-      : undefined;
+    const components: any[] = [];
+    if (paramValues.length > 0) {
+      components.push({ type: 'body', parameters: paramValues.map((value) => ({ type: 'text', text: value })) });
+    }
+    if (options?.isAuthTemplate) {
+      // The code is always the first (and normally only) param for an
+      // auth template - copied into the button component as Meta's
+      // copy-code delivery method requires.
+      const code = paramValues[0];
+      components.push({ type: 'button', sub_type: 'copy_code', index: 0, parameters: [{ type: 'coupon_code', coupon_code: code }] });
+    }
+
+    // Language code as actually registered on the template in WhatsApp
+    // Manager - configurable since Meta's "English" option in the UI
+    // maps to the plain 'en' code, not 'en_US', and getting this wrong
+    // causes a "template not found" style failure that looks like a
+    // missing template rather than a language mismatch.
+    const languageCode = process.env.WABA_TEMPLATE_LANGUAGE || 'en';
 
     try {
       const response = await fetch(`https://graph.facebook.com/${this.apiVersion}/${phoneNumberId}/messages`, {
@@ -52,8 +79,8 @@ export class WhatsAppService {
           type: 'template',
           template: {
             name: templateName,
-            language: { code: 'en_US' },
-            ...(components ? { components } : {}),
+            language: { code: languageCode },
+            ...(components.length > 0 ? { components } : {}),
           },
         }),
       });
