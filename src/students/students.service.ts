@@ -63,8 +63,42 @@ export class StudentsService {
   // STUDENT CRUD
   // ============================================================
   async createStudent(dto: CreateStudentDto): Promise<Student> {
-    const student = new this.studentModel(dto);
-    return student.save();
+    // studentId is required + unique on the schema but was never being
+    // generated here (only the bulk-import path did this) - every single
+    // create via this method was guaranteed to fail Mongoose's required-
+    // field validation before this fix, surfacing as a bare 500 with no
+    // useful message since nothing caught it.
+    const year = new Date().getFullYear();
+    let studentId: string;
+    do {
+      const random = Math.floor(1000 + Math.random() * 9000);
+      studentId = `STU-${year}-${random}`;
+    } while (await this.studentModel.exists({ studentId }));
+
+    let admissionNumber = dto.admissionNumber;
+    if (!admissionNumber) {
+      do {
+        const random = Math.floor(1000 + Math.random() * 9000);
+        admissionNumber = `ADM-${year}-${random}`;
+      } while (await this.studentModel.exists({ admissionNumber, schoolSlug: dto.schoolSlug }));
+    }
+
+    try {
+      const student = new this.studentModel({ ...dto, studentId, admissionNumber });
+      return await student.save();
+    } catch (err: any) {
+      // A real, readable message (e.g. "firstName is required") instead of
+      // an unhandled exception bubbling into a generic 500 - the previous
+      // behavior for any Mongoose validation failure on this path.
+      if (err?.name === 'ValidationError') {
+        const fields = Object.keys(err.errors || {}).join(', ');
+        throw new BadRequestException(`Could not create student - missing or invalid: ${fields}`);
+      }
+      if (err?.code === 11000) {
+        throw new ConflictException('A student with this ID already exists - please try again');
+      }
+      throw err;
+    }
   }
 
   // Called automatically when Enrollment is completed
