@@ -1,3 +1,8 @@
+// Deploy cache-buster: forcing a fresh Railway build after a stale
+// snapshot cache caused every build since [commit 19312a4] to silently
+// reuse old source, meaning the Enrollment Wizard fix, Institution<->
+// Campus fix, and Guardian Directory fix never actually reached
+// production despite being correctly pushed. No functional change.
 import * as dotenv from 'dotenv';
 dotenv.config();
 
