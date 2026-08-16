@@ -18,7 +18,7 @@ export class PhoneOtp {
   @Prop({ required: true }) codeHash: string;
   @Prop({ required: true }) expiresAt: Date;
   @Prop({ default: 0 }) attempts: number;
-  @Prop({ default: null }) consumedAt: Date | null;
+  @Prop({ type: Date, default: null }) consumedAt: Date | null;
   // What actually happened when we tried to send it - honest, same
   // pattern as every other WhatsApp/SMS attempt in this app.
   @Prop() sendStatus: string;
