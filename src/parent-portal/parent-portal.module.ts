@@ -28,6 +28,7 @@ import {
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { EmailModule } from '../email/email.module';
+import { AuthModule } from '../modules/auth/auth.module';
 import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
 
@@ -59,6 +60,7 @@ import { ParentAuthController } from './parent-auth.controller';
       { name: Tenant.name, schema: TenantSchema },
     ]),
     EmailModule,
+    AuthModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
   providers: [ParentPortalService, ParentAuthService],
