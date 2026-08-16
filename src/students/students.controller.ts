@@ -5,7 +5,7 @@
 
 import {
   Controller, Get, Post, Put, Patch, Body, Param,
-  Query, Request, HttpCode, HttpStatus,
+  Query, Request, HttpCode, HttpStatus, BadRequestException,
 } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { UseInterceptors, UploadedFile, Res } from '@nestjs/common';
@@ -116,6 +116,23 @@ export class StudentsController {
       ...dto, schoolSlug,
       currentAcademicYear: dto.currentAcademicYear || academicYear,
     });
+  }
+
+  /** GET /api/v1/students/guardians/list */
+  @Get('guardians/list')
+  async getGuardians(@Query('studentId') studentId: string, @Query('search') search: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getAllGuardians(schoolSlug, studentId, search);
+  }
+
+  /** POST /api/v1/students/guardians - requires studentId (guardians are
+   * embedded on the real student they belong to, not a standalone record) */
+  @Post('guardians')
+  @HttpCode(HttpStatus.CREATED)
+  async createGuardian(@Body() body: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    if (!body.studentId) throw new BadRequestException('studentId is required - a guardian must be linked to a real student');
+    return this.studentsService.addGuardianToStudent(body.studentId, schoolSlug, body);
   }
 
   /** PUT /api/v1/students/:id */

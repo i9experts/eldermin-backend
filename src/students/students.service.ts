@@ -62,6 +62,71 @@ export class StudentsService {
   // ============================================================
   // STUDENT CRUD
   // ============================================================
+  // ── Guardian Directory ────────────────────────────────────────
+  // Guardians are embedded on Student.guardians[] - the schema's real,
+  // intended design (confirmed against CreateStudentDto, which is how
+  // the Enrollment Wizard correctly creates them). This aggregates
+  // across that same data rather than maintaining a second, parallel
+  // Guardian collection that would silently diverge from it - a
+  // guardian added via the wizard must show up here, and vice versa.
+  async getAllGuardians(schoolSlug: string, studentId?: string, search?: string) {
+    const matchStage: any = { schoolSlug };
+    if (studentId) matchStage._id = new Types.ObjectId(studentId);
+
+    const pipeline: any[] = [
+      { $match: matchStage },
+      { $unwind: '$guardians' },
+      {
+        $project: {
+          _id: '$guardians._id',
+          name: '$guardians.name',
+          relation: '$guardians.relation',
+          phone: '$guardians.phone',
+          email: '$guardians.email',
+          occupation: '$guardians.occupation',
+          employer: '$guardians.employer',
+          isPrimary: '$guardians.isPrimary',
+          isEmergencyContact: '$guardians.isEmergencyContact',
+          studentId: '$_id',
+          studentName: { $concat: ['$firstName', ' ', '$lastName'] },
+        },
+      },
+    ];
+
+    if (search) {
+      pipeline.push({
+        $match: {
+          $or: [
+            { name: { $regex: search, $options: 'i' } },
+            { phone: { $regex: search, $options: 'i' } },
+            { studentName: { $regex: search, $options: 'i' } },
+          ],
+        },
+      });
+    }
+
+    return this.studentModel.aggregate(pipeline);
+  }
+
+  async addGuardianToStudent(studentId: string, schoolSlug: string, data: any) {
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug });
+    if (!student) throw new NotFoundException('Student not found');
+
+    student.guardians = student.guardians || [];
+    student.guardians.push({
+      name: `${data.firstName} ${data.lastName}`.trim(),
+      relation: data.relation || 'guardian',
+      phone: data.phone || undefined,
+      email: data.email || undefined,
+      occupation: data.occupation || undefined,
+      employer: data.employer || undefined,
+      isPrimary: data.isPrimary || false,
+      isEmergencyContact: data.isEmergencyContact !== undefined ? data.isEmergencyContact : true,
+    } as any);
+    await student.save();
+    return student;
+  }
+
   async createStudent(dto: CreateStudentDto): Promise<Student> {
     // studentId is required + unique on the schema but was never being
     // generated here (only the bulk-import path did this) - every single
