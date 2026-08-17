@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UploadModule } from '../../upload/upload.module';
 import { FinanceModule } from '../../finance/finance.module';
+import { EmailModule } from '../../email/email.module';
 import { HrController } from './hr.controller';
 import { HrService } from './hr.service';
 import { Staff, StaffSchema } from './schemas/staff.schema';
@@ -38,6 +39,7 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
   imports: [
     UploadModule,
     FinanceModule,
+    EmailModule,
     MongooseModule.forFeature([
       { name: Staff.name, schema: StaffSchema },
       { name: Designation.name, schema: DesignationSchema },

@@ -2,7 +2,9 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as net from 'net';
+import * as crypto from 'crypto';
 import { UploadService } from '../../upload/upload.service';
+import { EmailService } from '../../email/email.service';
 import * as bcrypt from 'bcryptjs';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Staff, StaffDocument } from './schemas/staff.schema';
@@ -70,6 +72,7 @@ export class HrService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
+    private readonly emailService: EmailService,
     private readonly financeService: FinanceService,
   ) {}
 
@@ -170,7 +173,41 @@ export class HrService {
     staff.userId = user._id as any;
     await staff.save();
 
-    return { email: user.email, tempPassword, primaryRole: user.primaryRole };
+    // Real welcome email: Employee ID (safe to share) + a genuine, secure
+    // set-password link (same reset-token mechanism as forgot-password),
+    // rather than emailing the raw temp password itself - a plaintext
+    // password sitting in an inbox forever is a real risk, and this way
+    // the employee sets their own password directly. The temp password is
+    // still generated and returned below as a fallback the admin can share
+    // directly if email doesn't reach them for some reason.
+    let emailSent = false;
+    let emailError: string | undefined;
+    try {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+      const expires = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours - longer than the 1hr forgot-password window since this is a one-time onboarding step, not an urgent reset
+      await this.userModel.findByIdAndUpdate(user._id, {
+        resetPasswordTokenHash: tokenHash,
+        resetPasswordExpires: expires,
+      });
+      const setPasswordUrl = `https://app.eldermin.com/reset-password?token=${rawToken}`;
+      await this.emailService.sendEmail({
+        to: user.email,
+        subject: 'Your Eldermin ERP account is ready',
+        html: `
+          <p>Hi ${staff.firstName},</p>
+          <p>Your Eldermin ERP portal account has been created.</p>
+          <p><strong>Employee ID:</strong> ${staff.employeeId || '—'}<br/>
+          <strong>Login email:</strong> ${user.email}</p>
+          <p><a href="${setPasswordUrl}">Set your password</a> to get started (valid 48 hours).</p>
+        `,
+      });
+      emailSent = true;
+    } catch (err: any) {
+      emailError = err?.message || 'Failed to send welcome email';
+    }
+
+    return { email: user.email, tempPassword, primaryRole: user.primaryRole, emailSent, emailError };
   }
 
   async bulkCreateLogins(tenantId: string, institutionId: string, staffIds?: string[]) {
@@ -188,15 +225,16 @@ export class HrService {
     const results = await Promise.all(candidates.map(async (staff) => {
       try {
         const result = await this.createLoginForStaff(tenantId, institutionId, staff._id.toString());
-        return { ok: true as const, name: `${staff.firstName} ${staff.lastName}`, email: result.email, tempPassword: result.tempPassword };
+        return { ok: true as const, name: `${staff.firstName} ${staff.lastName}`, email: result.email, tempPassword: result.tempPassword, emailSent: result.emailSent, emailError: result.emailError };
       } catch (err: any) {
         return { ok: false as const, name: `${staff.firstName} ${staff.lastName}`, reason: err?.message || 'Failed' };
       }
     }));
 
-    const created = results.filter(r => r.ok).map(r => ({ name: r.name, email: (r as any).email, tempPassword: (r as any).tempPassword }));
+    const created = results.filter(r => r.ok).map(r => ({ name: r.name, email: (r as any).email, tempPassword: (r as any).tempPassword, emailSent: (r as any).emailSent, emailError: (r as any).emailError }));
     const skipped = results.filter(r => !r.ok).map(r => ({ name: r.name, reason: (r as any).reason }));
-    return { created, skipped, totalCreated: created.length, totalSkipped: skipped.length };
+    const emailsSent = created.filter(c => c.emailSent).length;
+    return { created, skipped, totalCreated: created.length, totalSkipped: skipped.length, emailsSent, emailsFailed: created.length - emailsSent };
   }
 
   async getStaffById(tenantId: string, staffId: string) {
