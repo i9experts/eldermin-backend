@@ -172,21 +172,17 @@ export class FamiliesService {
   //  Pass 2 (lower confidence, demo/testing use): group by matching last name
   // Both passes create UNVERIFIED families — admin must review and confirm.
   // ============================================================
-  async retrofitFamilies(schoolSlug: string) {
+  // Computes proposed family groupings WITHOUT writing anything to the
+  // database - the actual grouping logic (phone/CNIC matching, then
+  // lastname matching on whatever's left) is unchanged from the original
+  // retrofit, just separated from the write step so an admin can review
+  // and approve each proposed group individually before anything is created.
+  private async computeRetrofitGroups(schoolSlug: string) {
     const unlinkedStudents = await this.studentModel.find({
       schoolSlug,
       $or: [{ familyId: { $exists: false } }, { familyId: null }],
     });
 
-    let phoneGroupsCreated = 0;
-    let phoneStudentsLinked = 0;
-
-    // ---- Pass 1: phone-or-CNIC-based, checking ALL guardians on each ----
-    // student (not just the first) — a student's father might be listed
-    // first on one record and mother first on another, so only checking
-    // index 0 missed real matches. CNIC is a more reliable identifier than
-    // phone (numbers get changed/shared) so it's checked as an equally
-    // valid match key, not just a tiebreaker.
     const keyMap = new Map<string, typeof unlinkedStudents>();
     const keyToGuardian = new Map<string, any>();
     for (const s of unlinkedStudents) {
@@ -194,7 +190,7 @@ export class FamiliesService {
       for (const g of s.guardians || []) {
         const keys = [g.phone ? `phone:${g.phone}` : null, g.cnic ? `cnic:${g.cnic}` : null].filter(Boolean) as string[];
         for (const key of keys) {
-          if (seenKeysForThisStudent.has(key)) continue; // don't double-count same student under same key
+          if (seenKeysForThisStudent.has(key)) continue;
           seenKeysForThisStudent.add(key);
           if (!keyMap.has(key)) keyMap.set(key, []);
           keyMap.get(key)!.push(s);
@@ -203,13 +199,10 @@ export class FamiliesService {
       }
     }
 
-    // A phone and a CNIC belonging to the same guardian would otherwise
-    // create two separate, overlapping family groups for the same
-    // students — merge any groups that share at least one student.
     const mergedGroups: typeof unlinkedStudents[] = [];
     const studentToGroupIndex = new Map<string, number>();
     for (const [, students] of keyMap.entries()) {
-      if (students.length < 2) continue; // only a real "family" if 2+ students share the key
+      if (students.length < 2) continue;
       const existingGroupIdx = students
         .map(s => studentToGroupIndex.get(String(s._id)))
         .find(idx => idx !== undefined);
@@ -227,31 +220,18 @@ export class FamiliesService {
     }
 
     const stillUnlinkedIds = new Set(unlinkedStudents.map(s => String(s._id)));
+    const proposedGroups: any[] = [];
 
     for (const students of mergedGroups) {
       const g = students[0].guardians?.find((gd: any) => gd.phone || gd.cnic) || students[0].guardians?.[0];
-      const familyCode = await this.generateFamilyCode(schoolSlug);
-      const family = new this.familyModel({
-        familyCode, schoolSlug,
-        primaryGuardianName: g?.name || '',
-        phone: g?.phone || '', email: g?.email || '',
-        source: 'retrofit-phone', verified: false,
-        studentIds: students.map(s => s._id),
+      proposedGroups.push({
+        source: 'retrofit-phone',
+        matchedOn: g?.phone ? `Phone: ${g.phone}` : g?.cnic ? `CNIC: ${g.cnic}` : 'Guardian match',
+        guardianName: g?.name || '', phone: g?.phone || '', email: g?.email || '',
+        students: students.map(s => ({ studentId: String(s._id), name: `${s.firstName} ${s.lastName}`.trim(), grade: (s as any).currentGrade })),
       });
-      await family.save();
-      for (const s of students) {
-        await this.studentModel.findByIdAndUpdate(s._id, {
-          $set: { familyId: family._id, familyCode: family.familyCode },
-        });
-        stillUnlinkedIds.delete(String(s._id));
-      }
-      phoneGroupsCreated++;
-      phoneStudentsLinked += students.length;
+      students.forEach(s => stillUnlinkedIds.delete(String(s._id)));
     }
-
-    // ---- Pass 2: lastname-based (only remaining unlinked students, groups of 2+) ----
-    let lastnameGroupsCreated = 0;
-    let lastnameStudentsLinked = 0;
 
     const remaining = unlinkedStudents.filter(s => stillUnlinkedIds.has(String(s._id)));
     const lastnameMap = new Map<string, typeof unlinkedStudents>();
@@ -261,36 +241,58 @@ export class FamiliesService {
       if (!lastnameMap.has(key)) lastnameMap.set(key, []);
       lastnameMap.get(key)!.push(s);
     }
-
     for (const [lastName, students] of lastnameMap.entries()) {
-      if (students.length < 2) continue; // only group if 2+ share the last name
+      if (students.length < 2) continue;
+      proposedGroups.push({
+        source: 'retrofit-lastname',
+        matchedOn: `Shared last name: ${students[0].lastName}`,
+        guardianName: '', phone: '', email: '',
+        students: students.map(s => ({ studentId: String(s._id), name: `${s.firstName} ${s.lastName}`.trim(), grade: (s as any).currentGrade })),
+      });
+    }
+
+    return proposedGroups;
+  }
+
+  /** Preview only - computes and returns proposed family groupings, writes nothing. */
+  async previewRetrofit(schoolSlug: string) {
+    const groups = await this.computeRetrofitGroups(schoolSlug);
+    return {
+      totalGroupsProposed: groups.length,
+      totalStudentsInvolved: groups.reduce((sum, g) => sum + g.students.length, 0),
+      groups,
+    };
+  }
+
+  /** Creates only the specific groups an admin has reviewed and approved -
+   * each entry identifies one proposed group by its studentIds, matching
+   * exactly what previewRetrofit returned for that group. */
+  async commitRetrofit(schoolSlug: string, approvedGroups: { studentIds: string[]; guardianName?: string; phone?: string; email?: string; source: string }[]) {
+    let groupsCreated = 0;
+    let studentsLinked = 0;
+    for (const group of approvedGroups) {
+      if (!group.studentIds || group.studentIds.length < 2) continue;
       const familyCode = await this.generateFamilyCode(schoolSlug);
       const family = new this.familyModel({
         familyCode, schoolSlug,
-        primaryGuardianName: '',
-        phone: '', email: '',
-        source: 'retrofit-lastname', verified: false,
-        notes: `Auto-grouped by shared last name "${students[0].lastName}" — UNVERIFIED, please confirm this is a real family.`,
-        studentIds: students.map(s => s._id),
+        primaryGuardianName: group.guardianName || '',
+        phone: group.phone || '', email: group.email || '',
+        source: group.source === 'retrofit-lastname' ? 'retrofit-lastname' : 'retrofit-phone',
+        verified: false,
+        notes: group.source === 'retrofit-lastname'
+          ? `Admin-approved grouping by shared last name - please confirm this is a real family.`
+          : undefined,
+        studentIds: group.studentIds,
       });
       await family.save();
-      for (const s of students) {
-        await this.studentModel.findByIdAndUpdate(s._id, {
+      for (const studentId of group.studentIds) {
+        await this.studentModel.findByIdAndUpdate(studentId, {
           $set: { familyId: family._id, familyCode: family.familyCode },
         });
       }
-      lastnameGroupsCreated++;
-      lastnameStudentsLinked += students.length;
+      groupsCreated++;
+      studentsLinked += group.studentIds.length;
     }
-
-    const totalUnlinkedRemaining = unlinkedStudents.length - phoneStudentsLinked - lastnameStudentsLinked;
-
-    return {
-      totalStudentsProcessed: unlinkedStudents.length,
-      phoneGroupsCreated, phoneStudentsLinked,
-      lastnameGroupsCreated, lastnameStudentsLinked,
-      totalUnlinkedRemaining,
-      note: 'All retrofit-created families are UNVERIFIED. Review via GET /families?verifiedOnly=false and confirm each via POST /families/:id/verify.',
-    };
+    return { groupsCreated, studentsLinked };
   }
 }

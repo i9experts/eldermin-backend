@@ -74,9 +74,19 @@ export class FamiliesController {
     return this.service.verifyFamily(id, schoolSlug);
   }
 
-  @Post('retrofit')
-  async retrofit(@Request() req: any) {
+  /** GET /api/v1/families/retrofit/preview - computes proposed family
+   * groupings across the whole school, writes nothing. */
+  @Get('retrofit/preview')
+  async previewRetrofit(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.retrofitFamilies(schoolSlug);
+    return this.service.previewRetrofit(schoolSlug);
+  }
+
+  /** POST /api/v1/families/retrofit/commit - creates only the specific
+   * groups an admin has reviewed and explicitly approved. */
+  @Post('retrofit/commit')
+  async commitRetrofit(@Body('approvedGroups') approvedGroups: any[], @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.commitRetrofit(schoolSlug, approvedGroups || []);
   }
 }
