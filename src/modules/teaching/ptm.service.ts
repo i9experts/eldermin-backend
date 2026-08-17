@@ -52,13 +52,13 @@ export class PTMService {
 
     // E-Alert - a real attempt, honestly logged.
     if (primaryGuardian?.email) {
-      const sent = await this.emailService.sendEmail({
+      const result = await this.emailService.sendEmail({
         to: primaryGuardian.email,
         subject: `Parent-Teacher Meeting Scheduled — ${meeting.studentName}`,
         html: `<p>Dear ${primaryGuardian.name || 'Parent/Guardian'},</p><p>A parent-teacher meeting has been scheduled for <strong>${meeting.studentName}</strong> with <strong>${meeting.teacherName}</strong> on <strong>${new Date(meeting.scheduledDate).toDateString()}</strong>${meeting.startTime ? ` at ${meeting.startTime}` : ''}.</p>${meeting.discussionPoints.length ? `<p>Discussion points:</p><ul>${meeting.discussionPoints.map((p) => `<li>${p}</li>`).join('')}</ul>` : ''}<p>Please confirm your attendance with the school office.</p>`,
       });
       meeting.notifiedAt = new Date();
-      meeting.notificationStatus = sent ? 'sent' : 'failed';
+      meeting.notificationStatus = result.sent ? 'sent' : 'failed';
     } else {
       meeting.notificationStatus = 'no email on file for this guardian';
     }

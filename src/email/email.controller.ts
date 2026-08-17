@@ -13,7 +13,7 @@ export class EmailController {
       subject: '✅ Eldermin Email Test',
       html: '<p>Email is working! Eldermin ERP notifications are configured.</p>',
     });
-    return { success: result };
+    return result;
   }
 
   @Post('fee-reminder')

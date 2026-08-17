@@ -191,7 +191,7 @@ export class HrService {
         resetPasswordExpires: expires,
       });
       const setPasswordUrl = `https://app.eldermin.com/reset-password?token=${rawToken}`;
-      await this.emailService.sendEmail({
+      const emailResult = await this.emailService.sendEmail({
         to: user.email,
         subject: 'Your Eldermin ERP account is ready',
         html: `
@@ -202,7 +202,8 @@ export class HrService {
           <p><a href="${setPasswordUrl}">Set your password</a> to get started (valid 48 hours).</p>
         `,
       });
-      emailSent = true;
+      emailSent = emailResult.sent;
+      if (!emailResult.sent) emailError = emailResult.error || 'SES did not confirm delivery';
     } catch (err: any) {
       emailError = err?.message || 'Failed to send welcome email';
     }

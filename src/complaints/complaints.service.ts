@@ -83,13 +83,13 @@ export class ComplaintsService {
     if (data.assignedToId) {
       const staff = await this.staffModel.findById(data.assignedToId).lean();
       if ((staff as any)?.email) {
-        const sent = await this.emailService.sendEmail({
+        const result = await this.emailService.sendEmail({
           to: (staff as any).email,
           subject: `New case assigned: ${complaintCase.caseNumber} — ${complaintCase.title}`,
           html: `<p>A new case has been assigned to you.</p><p><strong>${complaintCase.title}</strong></p><p>${complaintCase.description}</p><p>Priority: ${complaintCase.priority} | Due by: ${dueBy.toLocaleString()}</p>`,
         });
         complaintCase.notifiedAssignmentAt = new Date();
-        complaintCase.notifiedAssignmentStatus = sent ? 'sent' : 'failed';
+        complaintCase.notifiedAssignmentStatus = result.sent ? 'sent' : 'failed';
       } else {
         complaintCase.notifiedAssignmentStatus = 'no email on file for assignee';
       }

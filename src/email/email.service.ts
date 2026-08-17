@@ -28,7 +28,7 @@ export class EmailService {
     this.fromEmail = process.env.SES_FROM_EMAIL || 'noreply@eldermin.com';
   }
 
-  async sendEmail(options: EmailOptions): Promise<boolean> {
+  async sendEmail(options: EmailOptions): Promise<{ sent: boolean; messageId?: string; error?: string }> {
     const toList = Array.isArray(options.to) ? options.to : [options.to];
 
     try {
@@ -45,12 +45,20 @@ export class EmailService {
         ReplyToAddresses: options.replyTo ? [options.replyTo] : [],
       });
 
-      await this.ses.send(command);
-      this.logger.log(`Email sent to: ${toList.join(', ')} | Subject: ${options.subject}`);
-      return true;
+      // IMPORTANT: a successful response here only means SES *accepted*
+      // the message into its sending pipeline - not that it was actually
+      // delivered. A bounce, spam-filter rejection, or suppression-list
+      // block all happen AFTER this point and would never throw here.
+      // Capturing and logging the real MessageId is the only way to
+      // trace what actually happened to a specific send afterward, via
+      // AWS's own SES sending statistics / CloudWatch - this was
+      // previously discarded entirely, silently.
+      const response = await this.ses.send(command);
+      this.logger.log(`Email accepted by SES for: ${toList.join(', ')} | Subject: ${options.subject} | MessageId: ${response.MessageId}`);
+      return { sent: true, messageId: response.MessageId };
     } catch (err: any) {
-      this.logger.error(`Email failed: ${err.message}`);
-      return false;
+      this.logger.error(`Email rejected by SES immediately: ${err.message}`);
+      return { sent: false, error: err.message };
     }
   }
 

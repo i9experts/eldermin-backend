@@ -179,13 +179,13 @@ export class SubstitutionService {
     // email service if the substitute has one on file; honestly
     // reports when it can't, rather than pretending.
     if ((staff as any).email) {
-      const sent = await this.emailService.sendEmail({
+      const result = await this.emailService.sendEmail({
         to: (staff as any).email,
         subject: `You've been assigned to cover ${fixture.gradeLevel} ${fixture.sectionName} — Period ${fixture.periodNo}`,
         html: `<p>Hi ${substituteTeacherName},</p><p>You've been assigned to substitute for <strong>${fixture.originalTeacherName}</strong> on <strong>${new Date(fixture.date).toDateString()}</strong>, Period ${fixture.periodNo} (${fixture.startTime}–${fixture.endTime}), subject: ${fixture.subject || 'N/A'}, room: ${fixture.roomNo || 'N/A'}.</p>`,
       });
       fixture.notifiedAt = new Date();
-      fixture.notificationStatus = sent ? 'sent' : 'failed';
+      fixture.notificationStatus = result.sent ? 'sent' : 'failed';
     } else {
       fixture.notificationStatus = 'no email on file for this teacher';
     }
