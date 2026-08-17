@@ -8,7 +8,7 @@ import {
   IsNumber, IsArray, IsDateString, IsMongoId,
   ValidateNested, Min, Max,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
 
 // ── Pagination ────────────────────────────────────────────────
@@ -114,8 +114,22 @@ export class UpdateStudentDto extends PartialType(CreateStudentDto) {
 }
 
 export class StudentQueryDto extends PaginationDto {
-  @IsOptional() @IsString() grade?: string;
-  @IsOptional() @IsString() section?: string;
+  // Accepts either ?grade=Grade-1 (a single string) or repeated
+  // ?grade=Grade-1&grade=Grade-2 (Express already parses that into an
+  // array) - normalized to always be an array so the service layer only
+  // ever has to handle one shape, whether one class was picked or many.
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]))
+  @IsArray()
+  @IsString({ each: true })
+  grade?: string[];
+
+  @IsOptional()
+  @Transform(({ value }) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]))
+  @IsArray()
+  @IsString({ each: true })
+  section?: string[];
+
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() gender?: string;
   @IsOptional() @IsString() academicYear?: string;

@@ -218,8 +218,8 @@ export class StudentsService {
     const filter: any = { schoolSlug };
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
-    if (grade) filter.currentGrade = grade;
-    if (section) filter.currentSection = section;
+    if (grade?.length) filter.currentGrade = { $in: grade };
+    if (section?.length) filter.currentSection = { $in: section };
     if (status) filter.status = status;
     if (gender) filter.gender = gender;
     if (academicYear) filter.currentAcademicYear = academicYear;
