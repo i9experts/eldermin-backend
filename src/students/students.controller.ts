@@ -4,7 +4,7 @@
 // ============================================================
 
 import {
-  Controller, Get, Post, Put, Patch, Body, Param,
+  Controller, Get, Post, Put, Patch, Delete, Body, Param,
   Query, Request, HttpCode, HttpStatus, BadRequestException,
 } from '@nestjs/common';
 import { StudentsService } from './students.service';
@@ -161,6 +161,27 @@ export class StudentsController {
   ) {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.bulkAssignCampus(schoolSlug, dto.campusId, dto.grade, dto.section);
+  }
+
+  /** PATCH /api/v1/students/bulk-status - suspend/withdraw/graduate/transfer
+   * multiple students at once. The safe, reversible action for almost
+   * every real case - keeps all history intact. */
+  @Patch('bulk-status')
+  async bulkUpdateStatus(
+    @Body() dto: { studentIds: string[]; status: string; leftDate?: string; leftReason?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkUpdateStatus(schoolSlug, dto.studentIds, dto.status, dto.leftDate, dto.leftReason);
+  }
+
+  /** DELETE /api/v1/students/:id - real hard delete, only for genuine
+   * mistakes. Blocks itself if the student has any real recorded
+   * activity - use bulk-status/status update for every other case. */
+  @Delete(':id')
+  async deleteStudent(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.deleteStudent(id, schoolSlug);
   }
 
   /** POST /api/v1/students/:id/photo */

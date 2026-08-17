@@ -266,6 +266,62 @@ export class StudentsService {
     return student;
   }
 
+  /** Bulk status change - suspend/withdraw/graduate/transfer multiple
+   * students at once. This is the safe, reversible, no-data-loss action -
+   * the right default for almost every real case, unlike a hard delete. */
+  async bulkUpdateStatus(schoolSlug: string, studentIds: string[], status: string, leftDate?: string, leftReason?: string) {
+    if (!studentIds?.length) throw new BadRequestException('studentIds is required');
+    const validStatuses = ['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave'];
+    if (!validStatuses.includes(status)) throw new BadRequestException(`Invalid status - must be one of: ${validStatuses.join(', ')}`);
+
+    const set: any = { status };
+    if (leftDate) set.leftDate = new Date(leftDate);
+    if (leftReason) set.leftReason = leftReason;
+
+    const result = await this.studentModel.updateMany(
+      { _id: { $in: studentIds }, schoolSlug },
+      { $set: set },
+    );
+    return { matched: result.matchedCount, updated: result.modifiedCount, status };
+  }
+
+  /** Real hard delete - genuinely removes the record, not a status change.
+   * Only intended for actual mistakes (duplicates, test entries) - blocks
+   * itself if the student has any real recorded activity across
+   * attendance, fees, behaviour, or results, since deleting a student with
+   * real history would silently destroy that data across roughly 20
+   * dependent collections. Status change (bulkUpdateStatus /
+   * updateStudent with status) is the correct action for every other case. */
+  async deleteStudent(id: string, schoolSlug: string) {
+    const student = await this.studentModel.findOne({ _id: id, schoolSlug });
+    if (!student) throw new NotFoundException('Student not found');
+
+    const [attendanceCount, feeCount, behaviourCount, resultCount] = await Promise.all([
+      this.attendanceModel.countDocuments({ studentId: id }),
+      this.feeModel.countDocuments({ studentId: id }),
+      this.behaviourModel.countDocuments({ studentId: id }),
+      this.resultModel.countDocuments({ studentId: id }),
+    ]);
+    const totalActivity = attendanceCount + feeCount + behaviourCount + resultCount;
+    if (totalActivity > 0) {
+      const details = [
+        attendanceCount > 0 ? `${attendanceCount} attendance record(s)` : null,
+        feeCount > 0 ? `${feeCount} fee record(s)` : null,
+        behaviourCount > 0 ? `${behaviourCount} behaviour record(s)` : null,
+        resultCount > 0 ? `${resultCount} result record(s)` : null,
+      ].filter(Boolean).join(', ');
+      throw new BadRequestException(
+        `Cannot delete - this student has real recorded activity (${details}). Use "Mark as Withdrawn" instead, which keeps their history intact.`,
+      );
+    }
+
+    await this.studentModel.deleteOne({ _id: id, schoolSlug });
+    if ((student as any).familyId) {
+      await this.familyModel.updateOne({ _id: (student as any).familyId }, { $pull: { studentIds: student._id } });
+    }
+    return { deleted: true };
+  }
+
   async bulkAssignCampus(schoolSlug: string, campusId: string, grade?: string, section?: string) {
     if (!campusId) throw new BadRequestException('campusId is required');
     const filter: any = {
