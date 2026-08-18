@@ -133,10 +133,11 @@ export class CampusService {
   }
 
   async getVehicles(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, search } = query;
+    const { page = 1, limit = 20, status, search, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
+    if (campusId) filter.campusId = campusId;
     if (search) filter.$or = [
       { registrationNumber: { $regex: search, $options: 'i' } },
       { make: { $regex: search, $options: 'i' } },
@@ -160,10 +161,11 @@ export class CampusService {
   }
 
   async getRoutes(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
+    if (campusId) filter.campusId = campusId;
     const [data, total] = await Promise.all([
       this.routeModel.find(filter).sort({ name: 1 }).skip(skip).limit(+limit),
       this.routeModel.countDocuments(filter),
@@ -202,8 +204,10 @@ export class CampusService {
     return new this.blockModel(data).save();
   }
 
-  async getBlocks(schoolSlug: string) {
-    return this.blockModel.find({ schoolSlug }).sort({ name: 1 });
+  async getBlocks(schoolSlug: string, campusId?: string) {
+    const filter: any = { schoolSlug };
+    if (campusId) filter.campusId = campusId;
+    return this.blockModel.find(filter).sort({ name: 1 });
   }
 
   async createRoom(data: any) {
@@ -211,11 +215,12 @@ export class CampusService {
   }
 
   async getRooms(schoolSlug: string, query: any) {
-    const { blockId, status, type } = query;
+    const { blockId, status, type, campusId } = query;
     const filter: any = { schoolSlug };
     if (blockId) filter.blockId = blockId;
     if (status) filter.status = status;
     if (type) filter.type = type;
+    if (campusId) filter.campusId = campusId;
     return this.roomModel.find(filter).sort({ roomNumber: 1 });
   }
 
@@ -253,11 +258,12 @@ export class CampusService {
   }
 
   async getHostelAllocations(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, blockId, status, search } = query;
+    const { page = 1, limit = 20, blockId, status, search, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (blockId) filter.blockId = blockId;
     if (status) filter.status = status;
+    if (campusId) filter.campusId = campusId;
     if (search) filter.studentName = { $regex: search, $options: 'i' };
     const [data, total] = await Promise.all([
       this.allocationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(+limit),
@@ -271,12 +277,13 @@ export class CampusService {
   }
 
   async getMaintenanceRequests(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, priority, category, search } = query;
+    const { page = 1, limit = 20, status, priority, category, search, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (category) filter.category = category;
+    if (campusId) filter.campusId = campusId;
     if (search) filter.$or = [
       { mrNumber: { $regex: search, $options: 'i' } },
       { title: { $regex: search, $options: 'i' } },

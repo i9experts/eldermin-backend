@@ -28,6 +28,7 @@ export class Vehicle {
   @Prop() lastServiceDate: Date;
   @Prop() nextServiceDate: Date;
   @Prop() mileage: number;
+  @Prop() campusId: string;
   @Prop({ enum: ['active', 'maintenance', 'inactive', 'retired'], default: 'active' }) status: string;
   @Prop() driverName: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) driverId: Types.ObjectId;
@@ -77,9 +78,11 @@ export class TransportRoute {
   @Prop({ default: 0 }) monthlyFee: number;
   @Prop({ default: 0 }) totalStudents: number;
   @Prop({ enum: ['active', 'inactive', 'suspended'], default: 'active' }) status: string;
+  @Prop() campusId: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const TransportRouteSchema = SchemaFactory.createForClass(TransportRoute);
+TransportRouteSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // TRANSPORT — STUDENT ALLOCATION
@@ -104,11 +107,13 @@ export class StudentTransport {
   @Prop() startDate: Date;
   @Prop() endDate: Date;
   @Prop({ required: true }) academicYear: string;
+  @Prop() campusId: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const StudentTransportSchema = SchemaFactory.createForClass(StudentTransport);
 StudentTransportSchema.index({ schoolSlug: 1, routeId: 1 });
 StudentTransportSchema.index({ studentId: 1 });
+StudentTransportSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // HOSTEL — BLOCK
@@ -129,9 +134,11 @@ export class HostelBlock {
   @Prop({ default: 0 }) occupiedBeds: number;
   @Prop() facilities: string[];                       // AC, Attached Bath, Study Room
   @Prop({ enum: ['active', 'maintenance', 'closed'], default: 'active' }) status: string;
+  @Prop() campusId: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const HostelBlockSchema = SchemaFactory.createForClass(HostelBlock);
+HostelBlockSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // HOSTEL — ROOM
@@ -158,10 +165,12 @@ export class HostelRoom {
     default: 'available',
   })
   status: string;
+  @Prop() campusId: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const HostelRoomSchema = SchemaFactory.createForClass(HostelRoom);
 HostelRoomSchema.index({ schoolSlug: 1, blockId: 1, status: 1 });
+HostelRoomSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // HOSTEL — ALLOCATION
@@ -194,11 +203,13 @@ export class HostelAllocation {
   @Prop() dietaryRequirements: string;
   @Prop() notes: string;
   @Prop({ required: true }) academicYear: string;
+  @Prop() campusId: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const HostelAllocationSchema = SchemaFactory.createForClass(HostelAllocation);
 HostelAllocationSchema.index({ studentId: 1, status: 1 });
 HostelAllocationSchema.index({ schoolSlug: 1, roomId: 1 });
+HostelAllocationSchema.index({ schoolSlug: 1, campusId: 1 });
 
 // ============================================================
 // MAINTENANCE REQUEST

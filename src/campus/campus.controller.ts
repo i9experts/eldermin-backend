@@ -79,9 +79,9 @@ export class CampusController {
   }
 
   @Get('hostel/blocks')
-  async getBlocks(@Request() req: any) {
+  async getBlocks(@Request() req: any, @Query('campusId') campusId?: string) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getBlocks(schoolSlug);
+    return this.service.getBlocks(schoolSlug, campusId);
   }
 
   @Post('hostel/blocks')
