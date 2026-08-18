@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
+import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import {
-  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, SyllabusQueryDto,
+  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, SyllabusQueryDto,
 } from './dto/syllabus.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
@@ -11,6 +12,7 @@ import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 export class SyllabusService {
   constructor(
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
+    @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
   ) {}
 
   // Recomputes the cached rollup fields from the actual topic-level state -
@@ -18,8 +20,23 @@ export class SyllabusService {
   // never need to walk every topic themselves.
   private computeRollup(units: any[]): { totalTopics: number; coveredTopics: number; coveragePct: number; trackStatus: string } {
     const allTopics = units.flatMap((u) => u.topics || []);
-    const totalTopics = allTopics.length;
-    const coveredTopics = allTopics.filter((t) => t.isCovered).length;
+    // Count at sub-topic granularity for any topic that has real
+    // sub-topic detail, falling back to the topic itself otherwise -
+    // this is what keeps older syllabi (created before sub-topics
+    // existed) working unchanged, while newer, more granular ones get a
+    // truer coverage percentage than "1 topic = 1 unit of progress"
+    // would give once it's actually broken into several weeks of work.
+    let totalTopics = 0;
+    let coveredTopics = 0;
+    for (const t of allTopics) {
+      if (t.subTopics && t.subTopics.length > 0) {
+        totalTopics += t.subTopics.length;
+        coveredTopics += t.subTopics.filter((s: any) => s.isCovered).length;
+      } else {
+        totalTopics += 1;
+        if (t.isCovered) coveredTopics += 1;
+      }
+    }
     const coveragePct = totalTopics > 0 ? Math.round((coveredTopics / totalTopics) * 100) : 0;
     let trackStatus = 'not_started';
     if (coveragePct === 100) trackStatus = 'completed';
@@ -113,6 +130,94 @@ export class SyllabusService {
   }
 
   // ── Tracking ────────────────────────────────────────────────
+  // Computes which real calendar week (1-based, within the matched term)
+  // a given date falls in - anchored to the school's own actual
+  // AcademicYear/Term start date, not an invented parallel numbering.
+  // Returns null if no matching academic year/term is found, so callers
+  // can distinguish "week 1" from "we genuinely don't know."
+  private async computeCurrentWeek(schoolSlug: string, academicYearLabel: string, term: string, asOf: Date = new Date()): Promise<number | null> {
+    const year = await this.academicYearModel.findOne({ schoolSlug, name: academicYearLabel }).lean();
+    if (!year) return null;
+    const matchedTerm = (year.terms || []).find((t: any) => t.name === term);
+    const termStart = matchedTerm?.startDate ? new Date(matchedTerm.startDate) : null;
+    if (!termStart) return null;
+    const diffMs = asOf.getTime() - termStart.getTime();
+    if (diffMs < 0) return null; // term hasn't started yet
+    return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
+  }
+
+  async markSubTopic(tenantId: string, id: string, dto: MarkSubTopicDto) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+
+    const unit = (syllabus.units as any[]).find((u) => u.unitNo === dto.unitNo);
+    if (!unit) throw new NotFoundException(`Unit ${dto.unitNo} not found`);
+    const topic = (unit.topics as any[]).find((t: any) => t.topicNo === dto.topicNo);
+    if (!topic) throw new NotFoundException(`Topic ${dto.topicNo} not found in unit ${dto.unitNo}`);
+    const subTopic = (topic.subTopics as any[]).find((s: any) => s.subTopicNo === dto.subTopicNo);
+    if (!subTopic) throw new NotFoundException(`Sub-topic ${dto.subTopicNo} not found in topic ${dto.topicNo}`);
+
+    subTopic.isCovered = dto.isCovered;
+    subTopic.coveredDate = dto.isCovered ? new Date() : undefined;
+    subTopic.coveredBy = dto.coveredBy;
+    if (dto.notes != null) subTopic.notes = dto.notes;
+
+    // Derive the parent topic's coverage from its sub-topics, since a
+    // topic with real sub-topic detail shouldn't be independently
+    // markable while the sub-topics underneath disagree with it.
+    if (topic.subTopics.length > 0) {
+      const allCovered = (topic.subTopics as any[]).every((s: any) => s.isCovered);
+      topic.isCovered = allCovered;
+      topic.coveredDate = allCovered ? new Date() : undefined;
+      topic.coveredBy = allCovered ? dto.coveredBy : undefined;
+    }
+
+    const rollup = this.computeRollup(syllabus.units as any[]);
+    Object.assign(syllabus, rollup, { lastTrackedAt: new Date() });
+    syllabus.markModified('units');
+    await syllabus.save();
+    return syllabus;
+  }
+
+  // Real "what am I teaching this week" view - finds every sub-topic
+  // across every syllabus this teacher is assigned to, planned for the
+  // real current week (computed per-syllabus, since different subjects
+  // can be on different academic years/terms), grouped by subject/class
+  // so a teacher sees their whole week in one place rather than
+  // checking each class's syllabus separately.
+  async getTeacherWeeklyPlanner(tenantId: string, schoolSlug: string, teacherId: string) {
+    const syllabi = await this.syllabusModel.find({ tenantId, teacherId: new Types.ObjectId(teacherId), status: { $in: ['active', 'approved'] } }).lean();
+
+    const results: any[] = [];
+    for (const s of syllabi) {
+      const currentWeek = await this.computeCurrentWeek(schoolSlug, s.academicYearLabel, s.term);
+      if (currentWeek === null) continue;
+
+      const thisWeekSubTopics: any[] = [];
+      for (const unit of s.units || []) {
+        for (const topic of (unit as any).topics || []) {
+          for (const sub of (topic as any).subTopics || []) {
+            if (sub.plannedWeek === currentWeek) {
+              thisWeekSubTopics.push({
+                unitNo: unit.unitNo, unitName: unit.unitName,
+                topicNo: topic.topicNo, topicName: topic.topicName,
+                subTopicNo: sub.subTopicNo, subTopicName: sub.subTopicName,
+                isCovered: sub.isCovered,
+              });
+            }
+          }
+        }
+      }
+      if (thisWeekSubTopics.length > 0) {
+        results.push({
+          syllabusId: s._id, subjectName: s.subjectName, gradeLevel: s.gradeLevel, sectionName: s.sectionName,
+          currentWeek, subTopics: thisWeekSubTopics,
+        });
+      }
+    }
+    return results;
+  }
+
   async markTopic(tenantId: string, id: string, dto: MarkTopicDto) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');

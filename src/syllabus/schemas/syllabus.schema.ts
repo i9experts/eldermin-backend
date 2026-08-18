@@ -16,6 +16,23 @@ import { Document, Types } from 'mongoose';
 // ============================================================
 
 @Schema({ _id: false })
+export class SyllabusSubTopic {
+  @Prop({ required: true }) subTopicNo: number;
+  @Prop({ required: true }) subTopicName: string;
+  @Prop() description: string;
+  // Which week of the real term this is planned for (1-based, computed
+  // against AcademicYear.terms[].startDate - not a separate, invented
+  // week-numbering system). Left unset means not yet scheduled.
+  @Prop() plannedWeek: number;
+
+  @Prop({ default: false }) isCovered: boolean;
+  @Prop() coveredDate: Date;
+  @Prop() coveredBy: string;
+  @Prop() notes: string;
+}
+export const SyllabusSubTopicSchema = SchemaFactory.createForClass(SyllabusSubTopic);
+
+@Schema({ _id: false })
 export class SyllabusTopic {
   @Prop({ required: true }) topicNo: number;
   @Prop({ required: true }) topicName: string;
@@ -26,8 +43,17 @@ export class SyllabusTopic {
   @Prop() pageFrom: number;
   @Prop() pageTo: number;
   @Prop({ default: 1 }) estimatedLessons: number;
+  @Prop({ type: [SyllabusSubTopicSchema], default: [] }) subTopics: SyllabusSubTopic[];
 
   // ── Tracking (merged in from the old SyllabusCoverage collection) ──
+  // When subTopics exist, isCovered/coveredDate/coveredBy are DERIVED
+  // (all sub-topics covered = topic covered) and kept in sync on every
+  // sub-topic update, rather than independently settable - a topic with
+  // real sub-topic detail shouldn't be markable as "covered" while a
+  // sub-topic underneath it still isn't. Topics with no sub-topics keep
+  // working exactly as before (this field is directly settable), so
+  // every syllabus created before this change keeps functioning
+  // unchanged.
   @Prop({ default: false }) isCovered: boolean;
   @Prop() coveredDate: Date;
   @Prop() coveredBy: string; // teacher name

@@ -4,6 +4,13 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
+export class SyllabusSubTopicDto {
+  @IsNumber() subTopicNo: number;
+  @IsString() subTopicName: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsNumber() plannedWeek?: number;
+}
+
 export class SyllabusTopicDto {
   @IsNumber() topicNo: number;
   @IsString() topicName: string;
@@ -14,6 +21,11 @@ export class SyllabusTopicDto {
   @IsOptional() @IsNumber() pageFrom?: number;
   @IsOptional() @IsNumber() pageTo?: number;
   @IsOptional() @IsNumber() estimatedLessons?: number;
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SyllabusSubTopicDto)
+  subTopics?: SyllabusSubTopicDto[];
 }
 
 export class SyllabusUnitDto {
@@ -83,6 +95,15 @@ export class MarkTopicDto {
   @IsBoolean() isCovered: boolean;
   @IsOptional() @IsString() coveredBy?: string;
   @IsOptional() @IsNumber() actualLessonsUsed?: number;
+  @IsOptional() @IsString() notes?: string;
+}
+
+export class MarkSubTopicDto {
+  @IsNumber() unitNo: number;
+  @IsNumber() topicNo: number;
+  @IsNumber() subTopicNo: number;
+  @IsBoolean() isCovered: boolean;
+  @IsOptional() @IsString() coveredBy?: string;
   @IsOptional() @IsString() notes?: string;
 }
 

@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { SyllabusService } from './syllabus.service';
 import {
-  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, ApproveSyllabusDto, SyllabusQueryDto,
+  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, SyllabusQueryDto,
 } from './dto/syllabus.dto';
 
 @Controller('syllabus')
@@ -19,6 +19,14 @@ export class SyllabusController {
   @Get('report/coverage')
   getCoverageReport(@Request() req: any, @Query() query: SyllabusQueryDto) {
     return this.service.getCoverageReport(req.user.tenantId, query);
+  }
+
+  /** GET /api/v1/syllabus/weekly-planner?teacherId=... - a teacher's real
+   * "what am I teaching this week" view across every subject/class they're
+   * assigned to, computed against the school's actual academic calendar. */
+  @Get('weekly-planner')
+  getTeacherWeeklyPlanner(@Request() req: any, @Query('teacherId') teacherId: string) {
+    return this.service.getTeacherWeeklyPlanner(req.user.tenantId, req.user.schoolSlug, teacherId);
   }
 
   @Get()
@@ -55,6 +63,11 @@ export class SyllabusController {
   @Patch(':id/mark-topic')
   markTopic(@Request() req: any, @Param('id') id: string, @Body() dto: MarkTopicDto) {
     return this.service.markTopic(req.user.tenantId, id, dto);
+  }
+
+  @Patch(':id/mark-sub-topic')
+  markSubTopic(@Request() req: any, @Param('id') id: string, @Body() dto: MarkSubTopicDto) {
+    return this.service.markSubTopic(req.user.tenantId, id, dto);
   }
 
   @Patch(':id/behind-schedule')
