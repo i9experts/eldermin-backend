@@ -2,9 +2,10 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
+import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import {
-  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, SyllabusQueryDto,
+  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, CreateSloTemplateDto, SyllabusQueryDto,
 } from './dto/syllabus.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
@@ -12,6 +13,7 @@ import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 export class SyllabusService {
   constructor(
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
+    @InjectModel(SloTemplate.name) private sloTemplateModel: Model<SloTemplateDocument>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
   ) {}
 
@@ -216,6 +218,71 @@ export class SyllabusService {
       }
     }
     return results;
+  }
+
+  // ── SLO Templates ──────────────────────────────────────────────────
+  // Reusable, sourced curriculum content a coordinator applies to
+  // *start* a new syllabus - never auto-applied silently, and never
+  // presented as verified unless it genuinely carries a real source.
+  async createSloTemplate(schoolSlug: string, dto: CreateSloTemplateDto) {
+    const template = new this.sloTemplateModel({ ...dto, schoolSlug });
+    return template.save();
+  }
+
+  async listSloTemplates(schoolSlug: string, subjectName?: string, gradeLevel?: string, framework?: string) {
+    const filter: any = { schoolSlug };
+    if (subjectName) filter.subjectName = subjectName;
+    if (gradeLevel) filter.gradeLevel = gradeLevel;
+    if (framework) filter.framework = framework;
+    return this.sloTemplateModel.find(filter).sort({ subjectName: 1, gradeLevel: 1 }).lean();
+  }
+
+  async getSloTemplate(schoolSlug: string, id: string) {
+    const template = await this.sloTemplateModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!template) throw new NotFoundException('SLO template not found');
+    return template;
+  }
+
+  async deleteSloTemplate(schoolSlug: string, id: string) {
+    const result = await this.sloTemplateModel.deleteOne({ _id: id, schoolSlug });
+    if (result.deletedCount === 0) throw new NotFoundException('SLO template not found');
+    return { deleted: true };
+  }
+
+  // Real, mathematical distribution of existing topics/sub-topics
+  // across the term's actual available weeks - proportional to each
+  // topic's estimatedLessons, so a topic planned to take 3x as long as
+  // another gets roughly 3x the weeks. Never invents or alters any
+  // curriculum content, purely assigns plannedWeek to what's already
+  // there. Overwrites any existing plannedWeek values, since this is
+  // meant as a single deliberate "generate my pacing guide" action, not
+  // an incremental merge.
+  async generatePacingGuide(tenantId: string, id: string) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    const totalWeeks = syllabus.totalWeeks || 0;
+    if (totalWeeks < 1) throw new BadRequestException('Set Total Weeks on the syllabus before generating a pacing guide');
+
+    const allTopics = (syllabus.units as any[]).flatMap((u) => u.topics || []);
+    const totalEstimatedLessons = allTopics.reduce((sum, t) => sum + (t.estimatedLessons || 1), 0) || 1;
+
+    let weekCursor = 1;
+    for (const topic of allTopics) {
+      const topicShareOfWeeks = Math.max(1, Math.round(((topic.estimatedLessons || 1) / totalEstimatedLessons) * totalWeeks));
+      const subTopics = topic.subTopics || [];
+      if (subTopics.length > 0) {
+        // Spread this topic's sub-topics evenly across its own share of weeks
+        subTopics.forEach((sub: any, idx: number) => {
+          const weekOffset = Math.floor((idx / subTopics.length) * topicShareOfWeeks);
+          sub.plannedWeek = Math.min(totalWeeks, weekCursor + weekOffset);
+        });
+      }
+      weekCursor = Math.min(totalWeeks, weekCursor + topicShareOfWeeks);
+    }
+
+    syllabus.markModified('units');
+    await syllabus.save();
+    return syllabus;
   }
 
   async markTopic(tenantId: string, id: string, dto: MarkTopicDto) {

@@ -54,7 +54,7 @@ export class CreateSyllabusDto {
   @IsOptional() @IsString() sectionName?: string;
   @IsString() academicYearLabel: string;
   @IsOptional() @IsString() term?: string;
-  @IsOptional() @IsEnum(['cambridge', 'ib', 'national', 'american', 'custom']) framework?: string;
+  @IsOptional() @IsEnum(['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom']) framework?: string;
   @IsOptional() @IsString() recommendedTextbook?: string;
   @IsOptional() @IsString() publisherName?: string;
   @IsOptional() @IsString() edition?: string;
@@ -74,7 +74,7 @@ export class UpdateSyllabusDto {
   @IsOptional() @IsString() sectionName?: string;
   @IsOptional() @IsString() academicYearLabel?: string;
   @IsOptional() @IsString() term?: string;
-  @IsOptional() @IsEnum(['cambridge', 'ib', 'national', 'american', 'custom']) framework?: string;
+  @IsOptional() @IsEnum(['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom']) framework?: string;
   @IsOptional() @IsString() recommendedTextbook?: string;
   @IsOptional() @IsString() publisherName?: string;
   @IsOptional() @IsString() edition?: string;
@@ -120,4 +120,19 @@ export class SyllabusQueryDto {
   @IsOptional() @IsMongoId() teacherId?: string;
   @IsOptional() @IsEnum(['draft', 'active', 'approved', 'archived']) status?: string;
   @IsOptional() @IsEnum(['not_started', 'on_track', 'behind', 'completed']) trackStatus?: string;
+}
+
+export class CreateSloTemplateDto {
+  @IsString() subjectName: string;
+  @IsString() gradeLevel: string;
+  @IsEnum(['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom']) framework: string;
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SyllabusUnitDto)
+  units?: SyllabusUnitDto[];
+  @IsOptional() @IsBoolean() isVerified?: boolean;
+  @IsOptional() @IsString() sourceDocument?: string;
+  @IsOptional() @IsString() sourceNotes?: string;
+  @IsOptional() @IsString() verifiedBy?: string;
 }

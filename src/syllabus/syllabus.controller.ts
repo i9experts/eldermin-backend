@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { SyllabusService } from './syllabus.service';
 import {
-  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, SyllabusQueryDto,
+  CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, CreateSloTemplateDto, SyllabusQueryDto,
 } from './dto/syllabus.dto';
 
 @Controller('syllabus')
@@ -27,6 +27,35 @@ export class SyllabusController {
   @Get('weekly-planner')
   getTeacherWeeklyPlanner(@Request() req: any, @Query('teacherId') teacherId: string) {
     return this.service.getTeacherWeeklyPlanner(req.user.tenantId, req.user.schoolSlug, teacherId);
+  }
+
+  /** SLO Templates - reusable, sourced curriculum content applied to
+   * *start* a new syllabus, never auto-applied silently. */
+  @Get('slo-templates')
+  listSloTemplates(@Request() req: any, @Query('subjectName') subjectName?: string, @Query('gradeLevel') gradeLevel?: string, @Query('framework') framework?: string) {
+    return this.service.listSloTemplates(req.user.schoolSlug, subjectName, gradeLevel, framework);
+  }
+
+  @Get('slo-templates/:id')
+  getSloTemplate(@Request() req: any, @Param('id') id: string) {
+    return this.service.getSloTemplate(req.user.schoolSlug, id);
+  }
+
+  @Post('slo-templates')
+  createSloTemplate(@Request() req: any, @Body() dto: CreateSloTemplateDto) {
+    return this.service.createSloTemplate(req.user.schoolSlug, dto);
+  }
+
+  @Delete('slo-templates/:id')
+  deleteSloTemplate(@Request() req: any, @Param('id') id: string) {
+    return this.service.deleteSloTemplate(req.user.schoolSlug, id);
+  }
+
+  /** Real, mathematical week distribution of existing topics/sub-topics
+   * across the term's actual available weeks - never invents content. */
+  @Post(':id/generate-pacing-guide')
+  generatePacingGuide(@Request() req: any, @Param('id') id: string) {
+    return this.service.generatePacingGuide(req.user.tenantId, id);
   }
 
   @Get()
