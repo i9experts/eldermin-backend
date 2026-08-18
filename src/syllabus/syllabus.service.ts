@@ -1,5 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, BadGatewayException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
@@ -15,6 +16,7 @@ export class SyllabusService {
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(SloTemplate.name) private sloTemplateModel: Model<SloTemplateDocument>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
+    private configService: ConfigService,
   ) {}
 
   // Recomputes the cached rollup fields from the actual topic-level state -
@@ -283,6 +285,52 @@ export class SyllabusService {
     syllabus.markModified('units');
     await syllabus.save();
     return syllabus;
+  }
+
+  // Reuses the exact same server-side Anthropic call pattern already
+  // established in analytics.service.ts - never called from the client
+  // directly. A recommendation, not a fact: unlike SLO content, a
+  // sensible assessment weighting isn't something that can be "wrong"
+  // against an official source in the same way, so this is fine to
+  // generate directly rather than needing a verified template.
+  async recommendAssessmentBreakdown(subjectName: string, gradeLevel: string, framework: string) {
+    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
+    if (!apiKey) throw new BadGatewayException('AI recommendation service is not configured.');
+
+    const systemPrompt = `You are a curriculum assessment specialist. Given a subject, grade level, and curriculum framework, recommend a sensible assessment weighting breakdown.
+Respond with ONLY raw JSON, no markdown, no preamble:
+{ "midTermPct": number, "finalExamPct": number, "classworkPct": number, "homeworkPct": number, "reasoning": string (1-2 sentences explaining the weighting choice) }
+The four percentages must sum to exactly 100. Base the reasoning on real, sensible assessment practice for this subject/grade/framework combination (e.g. younger grades typically weight continuous classwork more heavily than final exams; practical subjects may weight coursework more than theory subjects).`;
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: 400,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: `Subject: ${subjectName}\nGrade Level: ${gradeLevel}\nFramework: ${framework}` }],
+        }),
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the AI recommendation service.');
+    }
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      throw new BadGatewayException(`AI recommendation request failed (${response.status}): ${errBody.slice(0, 200)}`);
+    }
+
+    const result = await response.json();
+    const textBlock = (result?.content || []).find((b: any) => b.type === 'text');
+    const text = textBlock?.text || '{}';
+    const clean = text.replace(/```json|```/g, '').trim();
+    try {
+      return JSON.parse(clean);
+    } catch {
+      throw new BadGatewayException('AI recommendation returned an unparseable response.');
+    }
   }
 
   async markTopic(tenantId: string, id: string, dto: MarkTopicDto) {

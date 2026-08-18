@@ -58,6 +58,13 @@ export class SyllabusController {
     return this.service.generatePacingGuide(req.user.tenantId, id);
   }
 
+  /** AI-recommended assessment breakdown - a real recommendation, never
+   * auto-applied, the coordinator reviews and can override before saving. */
+  @Get('recommend-assessment-breakdown')
+  recommendAssessmentBreakdown(@Query('subjectName') subjectName: string, @Query('gradeLevel') gradeLevel: string, @Query('framework') framework: string) {
+    return this.service.recommendAssessmentBreakdown(subjectName, gradeLevel, framework);
+  }
+
   @Get()
   findAll(@Request() req: any, @Query() query: SyllabusQueryDto) {
     return this.service.findAll(req.user.tenantId, query, req.user);
