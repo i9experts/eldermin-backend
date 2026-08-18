@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, BadGatewayException
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
+import * as XLSX from 'xlsx';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
@@ -239,6 +240,75 @@ export class SyllabusService {
     );
     if (!template) throw new NotFoundException('SLO template not found');
     return template;
+  }
+
+  /** Generates a blank, structured fill-in workbook - a coordinator fills
+   * this out from their real source document, then uploads it back via
+   * parseSloTemplateUpload. This is purely a structured data-entry aid,
+   * not an attempt to extract or infer curriculum content on its own. */
+  generateSloTemplateDownload(): Buffer {
+    const wb = XLSX.utils.book_new();
+    const legend = [
+      ['SLO Template Fill-In Sheet'],
+      [''],
+      ['Instructions: Fill in one row per Topic. Group topics under the same Unit Number to belong to the same Unit.'],
+      ['Learning Objectives: separate multiple objectives with a semicolon ( ; ).'],
+      ['Do not change the column headers in row 7. Delete the example row (row 8) before adding your own real content.'],
+      [''],
+      ['Unit Number', 'Unit Name', 'Topic Number', 'Topic Name', 'Learning Objectives'],
+      [1, 'Numbers and Operations', 1, 'Adding Fractions', 'Add fractions with like denominators; Add fractions with unlike denominators'],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(legend);
+    ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 12 }, { wch: 28 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'SLO Template');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  }
+
+  /** Parses an uploaded, filled-in fill-in sheet into the same
+   * units/topics structure SLO templates already use. Returns a preview
+   * only - never saves anything - so the coordinator reviews the parsed
+   * result before it becomes a real template. */
+  parseSloTemplateUpload(fileBuffer: Buffer): { unitNo: number; unitName: string; topics: { topicNo: number; topicName: string; learningObjectives: string[] }[] }[] {
+    const wb = XLSX.read(fileBuffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    // Header row is expected around row 7 (index 6) per the downloaded
+    // template, but search for it directly rather than assuming an exact
+    // row number, in case the coordinator added or removed instruction
+    // rows above it.
+    const headerRowIdx = rows.findIndex((r) => (r[0] + '').trim() === 'Unit Number');
+    if (headerRowIdx === -1) {
+      throw new BadRequestException('Could not find the expected header row ("Unit Number", "Unit Name", "Topic Number", "Topic Name", "Learning Objectives"). Please use the downloaded template without changing its column headers.');
+    }
+
+    const dataRows = rows.slice(headerRowIdx + 1).filter((r) => r[0] !== undefined && r[0] !== '' && r[1] !== undefined && r[1] !== '');
+    if (dataRows.length === 0) {
+      throw new BadRequestException('No data rows found below the header row.');
+    }
+
+    const unitsMap = new Map<number, { unitNo: number; unitName: string; topics: any[] }>();
+    for (const row of dataRows) {
+      const unitNo = Number(row[0]);
+      const unitName = (row[1] || '').toString().trim();
+      const topicNo = Number(row[2]);
+      const topicName = (row[3] || '').toString().trim();
+      const objectivesRaw = (row[4] || '').toString().trim();
+      if (!unitName || !topicName || Number.isNaN(unitNo) || Number.isNaN(topicNo)) continue;
+
+      if (!unitsMap.has(unitNo)) unitsMap.set(unitNo, { unitNo, unitName, topics: [] });
+      unitsMap.get(unitNo)!.topics.push({
+        topicNo,
+        topicName,
+        learningObjectives: objectivesRaw ? objectivesRaw.split(';').map((o) => o.trim()).filter(Boolean) : [],
+      });
+    }
+
+    const units = Array.from(unitsMap.values()).sort((a, b) => a.unitNo - b.unitNo);
+    if (units.length === 0) {
+      throw new BadRequestException('No valid rows could be parsed - check that Unit Number and Topic Number columns contain numbers.');
+    }
+    return units;
   }
 
   async listSloTemplates(schoolSlug: string, subjectName?: string, gradeLevel?: string, framework?: string) {

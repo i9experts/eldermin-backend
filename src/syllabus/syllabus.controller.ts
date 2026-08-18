@@ -1,7 +1,11 @@
 import {
   Controller, Get, Post, Put, Patch, Delete,
   Body, Param, Query, Request, HttpCode, HttpStatus,
+  Res, UseInterceptors, UploadedFile, BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import type { Response } from 'express';
 import { SyllabusService } from './syllabus.service';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, CreateSloTemplateDto, SyllabusQueryDto,
@@ -34,6 +38,32 @@ export class SyllabusController {
   @Get('slo-templates')
   listSloTemplates(@Request() req: any, @Query('subjectName') subjectName?: string, @Query('gradeLevel') gradeLevel?: string, @Query('framework') framework?: string) {
     return this.service.listSloTemplates(req.user.schoolSlug, subjectName, gradeLevel, framework);
+  }
+
+  /** GET /api/v1/syllabus/slo-templates/download-template - a blank
+   * fill-in workbook, not a specific template's own id, so this must be
+   * declared before the :id wildcard route below or it would be
+   * swallowed as if "download-template" were an id. */
+  @Get('slo-templates/download-template')
+  downloadSloTemplateFillIn(@Res() res: Response) {
+    const buffer = this.service.generateSloTemplateDownload();
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="slo-template-fill-in.xlsx"',
+      'Content-Length': buffer.length,
+    });
+    res.status(HttpStatus.OK).end(buffer);
+  }
+
+  /** POST /api/v1/syllabus/slo-templates/parse-upload - parses a filled-in
+   * workbook into units/topics, returns a preview only. Never saves
+   * anything - the coordinator reviews the parsed result in the create
+   * form before it becomes a real template. */
+  @Post('slo-templates/parse-upload')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  parseSloTemplateUpload(@UploadedFile() file: any) {
+    if (!file) throw new BadRequestException('No file uploaded');
+    return { units: this.service.parseSloTemplateUpload(file.buffer) };
   }
 
   @Get('slo-templates/:id')
