@@ -29,6 +29,13 @@ export class TeachingController {
   @Patch('teachers/:id')
   updateTeacher(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateTeacherProfile(req.user.tenantId, id, body); }
 
+  /** DELETE /api/v1/teaching/teachers/:id - removes the teaching-config
+   * profile only. teacherId across lesson plans, homework, PTM, timetable,
+   * and syllabi all reference the underlying Staff record directly, not
+   * this profile's own id, so nothing else is orphaned by this. */
+  @Delete('teachers/:id')
+  deleteTeacher(@Request() req, @Param('id') id: string) { return this.teachingService.deleteTeacherProfile(req.user.tenantId, id); }
+
   // ── LESSON PLANS ──────────────────────────────────────────────────────────────
 
   @Patch('lesson-plans/:id/approve')

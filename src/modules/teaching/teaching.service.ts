@@ -101,6 +101,12 @@ export class TeachingService {
     ).lean();
   }
 
+  async deleteTeacherProfile(tenantId: string, id: string) {
+    const result = await this.teacherProfileModel.deleteOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (result.deletedCount === 0) throw new NotFoundException('Teacher profile not found');
+    return { deleted: true };
+  }
+
   async syncTeacherProfilesFromHR(tenantId: string, institutionId: string) {
     const existing = await this.teacherProfileModel.countDocuments({ tenantId: this.tid(tenantId) });
     return { message: 'Sync initiated', existing };
