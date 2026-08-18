@@ -46,6 +46,11 @@ export class SyllabusController {
     return this.service.createSloTemplate(req.user.schoolSlug, dto);
   }
 
+  @Put('slo-templates/:id')
+  updateSloTemplate(@Request() req: any, @Param('id') id: string, @Body() dto: Partial<CreateSloTemplateDto>) {
+    return this.service.updateSloTemplate(req.user.schoolSlug, id, dto);
+  }
+
   @Delete('slo-templates/:id')
   deleteSloTemplate(@Request() req: any, @Param('id') id: string) {
     return this.service.deleteSloTemplate(req.user.schoolSlug, id);

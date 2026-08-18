@@ -231,6 +231,16 @@ export class SyllabusService {
     return template.save();
   }
 
+  async updateSloTemplate(schoolSlug: string, id: string, dto: Partial<CreateSloTemplateDto>) {
+    const template = await this.sloTemplateModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: dto },
+      { new: true },
+    );
+    if (!template) throw new NotFoundException('SLO template not found');
+    return template;
+  }
+
   async listSloTemplates(schoolSlug: string, subjectName?: string, gradeLevel?: string, framework?: string) {
     const filter: any = { schoolSlug };
     if (subjectName) filter.subjectName = subjectName;
