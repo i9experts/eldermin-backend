@@ -27,6 +27,40 @@ export class AuthService {
     private emailService: EmailService,
   ) {}
 
+  /** Looks up everything needed for campus/department/class-teacher
+   * scoping - shared by login (embeds it into the JWT payload) and
+   * getMe (so the frontend can actually see this about itself; without
+   * this, campusId/department/classTeacherOfGradeName were only ever on
+   * the JWT and getMe never surfaced them, leaving the frontend with no
+   * way to know its own scope at all despite the backend enforcing it). */
+  private async resolveScopeFieldsForUser(userId: any, schoolSlug?: string | null) {
+    const staffRecord = await this.staffModel.findOne({ userId }).select('supervisedClusterIds isBoardLevel campusId department').lean();
+    const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
+    const isBoardLevel = staffRecord?.isBoardLevel || undefined;
+    let campusId = staffRecord?.campusId?.toString() || undefined;
+    const department = staffRecord?.department || undefined;
+
+    let classTeacherOfGradeId: string | undefined;
+    let classTeacherOfGradeName: string | undefined;
+    let classTeacherOfSectionName: string | undefined;
+    if (staffRecord) {
+      const teacherProfile = await this.teacherProfileModel
+        .findOne({ staffId: (staffRecord as any)._id, isClassTeacher: true })
+        .select('classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName')
+        .lean();
+      classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
+      classTeacherOfGradeName = teacherProfile?.classTeacherOfGradeName || undefined;
+      classTeacherOfSectionName = teacherProfile?.classTeacherOfSectionName || undefined;
+    }
+
+    if (!campusId && schoolSlug) {
+      const campuses = await this.campusModel.find({ schoolSlug, isActive: true }).select('_id').limit(2).lean();
+      if (campuses.length === 1) campusId = String(campuses[0]._id);
+    }
+
+    return { campusId, department, supervisedClusterIds, isBoardLevel, classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName };
+  }
+
   async login(email: string, password: string, slug?: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const query: any = { email: email.toLowerCase().trim(), isActive: true };
@@ -73,45 +107,9 @@ export class AuthService {
     // payload.campusId, but until now nothing ever put it on the
     // payload, so every logged-in user's campusId was silently
     // undefined regardless of their actual Staff assignment.
-    const staffRecord = await this.staffModel.findOne({ userId: user._id }).select('supervisedClusterIds isBoardLevel campusId department').lean();
-    const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
-    const isBoardLevel = staffRecord?.isBoardLevel || undefined;
-    let campusId = staffRecord?.campusId?.toString() || undefined;
-    const department = staffRecord?.department || undefined;
-
-    // Class Teacher assignment - carried on the token the same way
-    // campusId/department are, so a class teacher's own attendance
-    // access can be scoped without a DB lookup on every single request.
-    // Absent entirely for anyone who isn't a class teacher, exactly like
-    // campusId/department are absent for roles they don't apply to.
-    let classTeacherOfGradeId: string | undefined;
-    let classTeacherOfGradeName: string | undefined;
-    let classTeacherOfSectionName: string | undefined;
-    if (staffRecord) {
-      const teacherProfile = await this.teacherProfileModel
-        .findOne({ staffId: (staffRecord as any)._id, isClassTeacher: true })
-        .select('classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName')
-        .lean();
-      classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
-      classTeacherOfGradeName = teacherProfile?.classTeacherOfGradeName || undefined;
-      classTeacherOfSectionName = teacherProfile?.classTeacherOfSectionName || undefined;
-    }
-
-    // Self-healing for the single-campus case: campus/department-scoped
-    // roles (everyone except super_admin/institution_owner) get hard-
-    // blocked from everything if their Staff record has no campusId set
-    // - correct behavior when a school genuinely has multiple campuses
-    // and we can't guess which one, but needlessly punishing for the
-    // common case of a school with exactly one campus, where there's no
-    // real ambiguity to begin with. Only auto-resolves when unambiguous;
-    // a school with 0 or 2+ campuses is left as-is (still fails closed),
-    // since guessing wrong there would be a real access-control mistake.
-    if (!campusId && schoolSlug) {
-      const campuses = await this.campusModel.find({ schoolSlug, isActive: true }).select('_id').limit(2).lean();
-      if (campuses.length === 1) {
-        campusId = String(campuses[0]._id);
-      }
-    }
+    const scopeFields = await this.resolveScopeFieldsForUser(user._id, schoolSlug);
+    const { supervisedClusterIds, isBoardLevel, department, classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName } = scopeFields;
+    const campusId = scopeFields.campusId;
 
     const payload = {
       sub: user._id.toString(),
@@ -221,7 +219,12 @@ export class AuthService {
       .select('-passwordHash').lean();
     if (!user) throw new UnauthorizedException('User not found');
     const permissions = await this.rolesService.getPermissionsForUser(userId);
-    return { ...user, permissions: permissions || undefined };
+    // Self-healing single-campus fallback isn't critical here (unlike
+    // login) - getMe only runs after a successful login, by which point
+    // campusId should already be correctly set from their Staff record.
+    // User has no schoolSlug field to look this up by anyway.
+    const scopeFields = await this.resolveScopeFieldsForUser(userId, undefined);
+    return { ...user, permissions: permissions || undefined, ...scopeFields };
   }
 
   async uploadAvatar(userId: string, tenantId: string, file: Express.Multer.File) {
