@@ -13,6 +13,8 @@ import { Student, StudentDocument } from './schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import * as fontkit from '@pdf-lib/fontkit';
+import * as fs from 'fs';
 import {
   StudentAttendance, StudentAttendanceDocument,
   StudentFee, StudentFeeDocument,
@@ -392,9 +394,29 @@ export class StudentsService {
     const includeGuardians = selected.has('guardians');
 
     const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
     let page = pdfDoc.addPage([595, 842]); // A4
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    // Standard fonts (Helvetica) only support WinAnsi encoding - any
+    // non-Latin text (Arabic names being the known, real case that
+    // crashed this report before) throws when drawn with them. Rather
+    // than trying to predict every character this could ever fail on,
+    // drawTextSafe below tries the requested font first and only falls
+    // back to this real, verified Arabic-capable font if that actually
+    // throws - covers arabicName specifically and any other field or
+    // guardian name that happens to contain non-Latin script.
+    const arabicFontBytes = fs.readFileSync(
+      require.resolve('@fontsource/noto-sans-arabic/files/noto-sans-arabic-arabic-400-normal.woff2'),
+    );
+    const arabicFont = await pdfDoc.embedFont(arabicFontBytes);
+    const drawTextSafe = (targetPage: any, text: string, opts: any) => {
+      try {
+        targetPage.drawText(text, opts);
+      } catch {
+        targetPage.drawText(text, { ...opts, font: arabicFont });
+      }
+    };
     const navy = rgb(0.047, 0.267, 0.486);   // #0C447C
     const amber = rgb(0.937, 0.624, 0.153);  // #EF9F27
     const grayText = rgb(0.4, 0.4, 0.4);
@@ -496,7 +518,7 @@ export class StudentsService {
       }
     }
 
-    page.drawText(`${student.firstName || ''} ${student.lastName || ''}`.trim(), {
+    drawTextSafe(page, `${student.firstName || ''} ${student.lastName || ''}`.trim(), {
       x: margin, y, size: 21, font: bold, color: black, maxWidth: nameBlockWidth,
     });
     y -= 20;
@@ -534,7 +556,7 @@ export class StudentsService {
         let value = student[fieldKey];
         if (fieldKey === 'dateOfBirth' || fieldKey === 'admissionDate') value = fmtValue(value ? new Date(value) : null);
         else value = fmtValue(value);
-        page.drawText(value, { x: margin + 175, y, size: 10, font, color: black });
+        drawTextSafe(page, value, { x: margin + 175, y, size: 10, font, color: black });
         y -= 22;
       });
       y -= 12;
@@ -553,7 +575,7 @@ export class StudentsService {
           page.drawRectangle({ x: margin, y: y - 5, width: pageWidth - margin * 2, height: 21, color: rgb(0.985, 0.985, 0.985) });
         }
         const line = `${g.name || '—'} (${g.relation || '—'}) — ${g.phone || '—'}${g.email ? ' · ' + g.email : ''}`;
-        page.drawText(line, { x: margin + 14, y, size: 10, font, color: black });
+        drawTextSafe(page, line, { x: margin + 14, y, size: 10, font, color: black });
         y -= 22;
       });
       y -= 12;
