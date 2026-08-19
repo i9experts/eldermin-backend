@@ -14,7 +14,8 @@ import {
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
 import { UploadModule } from '../upload/upload.module';
-import { SchoolSchema } from '../organization/schemas/organization.schema';
+import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
+import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 
 @Module({
@@ -28,6 +29,8 @@ import { Family, FamilySchema } from '../families/schemas/family.schema';
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
       { name: 'School', schema: SchoolSchema },
       { name: Family.name, schema: FamilySchema },
+      { name: Campus.name, schema: CampusSchema },
+      { name: GroupInstitution.name, schema: GroupInstitutionSchema },
     ]),
   ],
   controllers: [StudentsController],

@@ -12,6 +12,8 @@ import { Model, Types } from 'mongoose';
 import { Student, StudentDocument } from './schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
+import { Campus } from '../organization/schemas/organization.schema';
+import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
 import * as fs from 'fs';
@@ -58,6 +60,8 @@ export class StudentsService {
     @InjectModel(AssessmentResult.name) private resultModel: Model<AssessmentResultDocument>,
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
+    @InjectModel(Campus.name) private campusModel: Model<any>,
+    @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     private uploadService: UploadService,
   ) {}
 
@@ -397,10 +401,38 @@ export class StudentsService {
     },
   };
 
-  async generateProfilePdf(id: string, schoolSlug: string, selectedFields: string[]): Promise<Buffer> {
+  async generateProfilePdf(id: string, schoolSlug: string, selectedFields: string[], institutionIdOverride?: string): Promise<Buffer> {
     const student: any = await this.studentModel.findOne({ _id: id, schoolSlug }).lean();
     if (!student) throw new NotFoundException('Student not found');
     const school: any = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+
+    // The real bug this resolves: School.logo is one single, school-wide
+    // logo, but a multi-campus school can have multiple separately-
+    // branded GroupInstitution records (Campus.institutionId), each with
+    // its own real logoUrl. Using the generic school-wide logo for every
+    // student regardless of which campus/institution they actually
+    // belong to is what caused a student's report to print with a
+    // completely different institution's logo. Traces the student's own
+    // campus to find their real institution's logo; institutionIdOverride
+    // lets the caller explicitly choose one instead (the "select
+    // institution before printing" option), for schools where this link
+    // isn't set up correctly yet or where an admin wants a specific one.
+    let institutionName: string | undefined;
+    let institutionLogo: string | undefined;
+    if (institutionIdOverride) {
+      const inst: any = await this.institutionModel.findOne({ _id: institutionIdOverride, schoolSlug }).lean();
+      institutionName = inst?.name;
+      institutionLogo = inst?.logoUrl;
+    } else if (student.campusId) {
+      const campus: any = await this.campusModel.findOne({ _id: student.campusId, schoolSlug }).lean();
+      if (campus?.institutionId) {
+        const inst: any = await this.institutionModel.findOne({ _id: campus.institutionId, schoolSlug }).lean();
+        institutionName = inst?.name;
+        institutionLogo = inst?.logoUrl;
+      }
+    }
+    const effectiveSchoolName = institutionName || school?.name;
+    const effectiveLogo = institutionLogo || school?.logo;
 
     const selected = new Set(selectedFields || []);
     const includePhoto = selected.has('photo');
@@ -466,8 +498,8 @@ export class StudentsService {
     const bannerCenterY = (bannerTop + bannerBottom) / 2;
 
     let textStartX = margin;
-    if (school?.logo) {
-      const img = await fetchImageBytes(school.logo);
+    if (effectiveLogo) {
+      const img = await fetchImageBytes(effectiveLogo);
       if (img) {
         try {
           const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
@@ -497,7 +529,7 @@ export class StudentsService {
       }
     }
 
-    const schoolName = school?.name || 'School';
+    const schoolName = effectiveSchoolName || 'School';
     // Shrink the school name if it's long enough to risk crowding the page edge
     const nameSize = schoolName.length > 38 ? 15 : 17;
     page.drawText(schoolName, {

@@ -201,11 +201,12 @@ export class StudentsController {
   async generateProfilePdf(
     @Param('id') id: string,
     @Body('fields') fields: string[],
+    @Body('institutionId') institutionId: string,
     @Request() req: any,
     @Res() res: any,
   ) {
     const { schoolSlug } = this.ctx(req);
-    const pdfBuffer = await this.studentsService.generateProfilePdf(id, schoolSlug, fields || []);
+    const pdfBuffer = await this.studentsService.generateProfilePdf(id, schoolSlug, fields || [], institutionId || undefined);
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="student-profile-${id}.pdf"`,
