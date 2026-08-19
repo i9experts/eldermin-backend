@@ -401,6 +401,18 @@ export class StudentsService {
     },
   };
 
+  private async fetchImageBytes(url: string): Promise<{ bytes: ArrayBuffer; isPng: boolean } | null> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const bytes = await res.arrayBuffer();
+      const isPng = url.toLowerCase().includes('.png') || res.headers.get('content-type')?.includes('png');
+      return { bytes, isPng: !!isPng };
+    } catch {
+      return null;
+    }
+  }
+
   async generateProfilePdf(id: string, schoolSlug: string, selectedFields: string[], institutionIdOverride?: string): Promise<Buffer> {
     const student: any = await this.studentModel.findOne({ _id: id, schoolSlug }).lean();
     if (!student) throw new NotFoundException('Student not found');
@@ -478,17 +490,9 @@ export class StudentsService {
       }
     };
 
-    const fetchImageBytes = async (url: string): Promise<{ bytes: ArrayBuffer; isPng: boolean } | null> => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        const bytes = await res.arrayBuffer();
-        const isPng = url.toLowerCase().includes('.png') || res.headers.get('content-type')?.includes('png');
-        return { bytes, isPng: !!isPng };
-      } catch {
-        return null;
-      }
-    };
+    // fetchImageBytes is now a shared private class method (see below) -
+    // used here and in generateGrRegisterPdf, both of which need to embed
+    // a school/institution logo.
 
     // ── Header banner ──
     const bannerHeight = 95;
@@ -499,7 +503,7 @@ export class StudentsService {
 
     let textStartX = margin;
     if (effectiveLogo) {
-      const img = await fetchImageBytes(effectiveLogo);
+      const img = await this.fetchImageBytes(effectiveLogo);
       if (img) {
         try {
           const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
@@ -545,7 +549,7 @@ export class StudentsService {
     const hasPhoto = includePhoto && student.photo;
     const nameBlockWidth = hasPhoto ? pageWidth - margin * 2 - 90 : pageWidth - margin * 2;
     if (hasPhoto) {
-      const img = await fetchImageBytes(student.photo);
+      const img = await this.fetchImageBytes(student.photo);
       if (img) {
         try {
           const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
@@ -760,6 +764,237 @@ export class StudentsService {
 
     const bytes = await pdfDoc.save();
     return Buffer.from(bytes);
+  }
+
+  // Known early-years stages get an explicit priority order, checked
+  // before falling back to numeric extraction - a name like "PreK-2"
+  // contains a digit but isn't a numbered grade, and would otherwise sort
+  // as if it were equivalent to "Grade 2" (confirmed with a direct test
+  // before this fix - it landed between Grade 1 and Grade 2 instead of
+  // before Kindergarten).
+  private static readonly EARLY_YEARS_ORDER = ['pre-nursery', 'prenursery', 'nursery', 'prek', 'pre-k', 'kg', 'kindergarten'];
+  private earlyYearsRank(name: string): number {
+    const lower = name.toLowerCase().replace(/[\s-]/g, '');
+    for (let i = 0; i < StudentsService.EARLY_YEARS_ORDER.length; i++) {
+      if (lower.startsWith(StudentsService.EARLY_YEARS_ORDER[i].replace(/[\s-]/g, ''))) return i;
+    }
+    return -1;
+  }
+  private naturalGradeSort(a: string, b: string): number {
+    const rankA = this.earlyYearsRank(a), rankB = this.earlyYearsRank(b);
+    if (rankA !== -1 && rankB !== -1) return rankA - rankB;
+    if (rankA !== -1 && rankB === -1) return -1;
+    if (rankA === -1 && rankB !== -1) return 1;
+    const numA = a.match(/\d+/); const numB = b.match(/\d+/);
+    if (numA && numB) return parseInt(numA[0]) - parseInt(numB[0]);
+    return a.localeCompare(b);
+  }
+
+  /** GR Register - a real, formal register listing every currently
+   * enrolled student grouped by class (grade + section), with GR No,
+   * Family Code, guardian contact details, and per-class + grand total
+   * counts (including gender breakdown). Distinct from
+   * generateStudentListPdf, which serves a different purpose with a
+   * different, more compact column set (age, B-Form, father/mother with
+   * CNIC) - this report specifically matches what a GR Register needs to
+   * contain, with real formatting rather than a dense, cramped table. */
+  async generateGrRegisterPdf(
+    schoolSlug: string,
+    filters: { grades?: string[]; sections?: string[]; campusId?: string; institutionId?: string },
+  ): Promise<Buffer> {
+    const query: any = { schoolSlug, status: 'active' };
+    if (filters.grades?.length) query.currentGrade = { $in: filters.grades };
+    if (filters.sections?.length) query.currentSection = { $in: filters.sections };
+    if (filters.campusId) query.campusId = filters.campusId;
+
+    const students: any[] = await this.studentModel.find(query).lean();
+    const school: any = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+
+    // Same institution-aware logo tracing as generateProfilePdf - a GR
+    // Register is just as much a school-branded printed document. A
+    // register can span multiple campuses if unfiltered, so there's no
+    // single "the student's campus" to trace here - relies on an
+    // explicit campusId/institutionId filter instead, falling back to
+    // the school-wide logo if neither is given.
+    let institutionName: string | undefined;
+    let institutionLogo: string | undefined;
+    if (filters.institutionId) {
+      const inst: any = await this.institutionModel.findOne({ _id: filters.institutionId, schoolSlug }).lean();
+      institutionName = inst?.name; institutionLogo = inst?.logoUrl;
+    } else if (filters.campusId) {
+      const campus: any = await this.campusModel.findOne({ _id: filters.campusId, schoolSlug }).lean();
+      if (campus?.institutionId) {
+        const inst: any = await this.institutionModel.findOne({ _id: campus.institutionId, schoolSlug }).lean();
+        institutionName = inst?.name; institutionLogo = inst?.logoUrl;
+      }
+    }
+    const effectiveName = institutionName || school?.name || 'School';
+    const effectiveLogo = institutionLogo || school?.logo;
+
+    // Group by "Grade - Section" (e.g. "Grade 3 - Girls"), sorted
+    // naturally by grade number then section name.
+    const groups = new Map<string, any[]>();
+    for (const s of students) {
+      const key = `${s.currentGrade || 'Unassigned'}${s.currentSection ? ` - ${s.currentSection}` : ''}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(s);
+    }
+    const sortedGroupKeys = Array.from(groups.keys()).sort((a, b) => {
+      const gradeA = a.split(' - ')[0], gradeB = b.split(' - ')[0];
+      const gradeCmp = this.naturalGradeSort(gradeA, gradeB);
+      return gradeCmp !== 0 ? gradeCmp : a.localeCompare(b);
+    });
+
+    const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '-') : '—';
+    const genderCounts = (list: any[]) => ({
+      m: list.filter(s => s.gender === 'male').length,
+      f: list.filter(s => s.gender === 'female').length,
+    });
+
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const arabicFontBytes = fs.readFileSync(
+      require.resolve('@fontsource/noto-sans-arabic/files/noto-sans-arabic-arabic-400-normal.woff2'),
+    );
+    const arabicFont = await pdfDoc.embedFont(arabicFontBytes);
+    const drawTextSafe = (targetPage: any, text: string, opts: any) => {
+      try { targetPage.drawText(text, opts); } catch { targetPage.drawText(text, { ...opts, font: arabicFont }); }
+    };
+
+    const navy = rgb(0.047, 0.267, 0.486);
+    const amber = rgb(0.937, 0.624, 0.153);
+    const black = rgb(0.1, 0.1, 0.1);
+    const grayText = rgb(0.45, 0.45, 0.45);
+    const lightBg = rgb(0.965, 0.97, 0.98);
+
+    const pageWidth = 842, pageHeight = 595; // landscape A4
+    const margin = 28;
+    const printDate = new Date();
+
+    const cols = [
+      { key: 'grNo', label: 'GR #', width: 55 },
+      { key: 'familyCode', label: 'F.Code', width: 55 },
+      { key: 'name', label: 'Student Name', width: 145 },
+      { key: 'father', label: 'Father Name', width: 130 },
+      { key: 'contact', label: 'Contact Details', width: 140 },
+      { key: 'dob', label: 'DOB', width: 75 },
+      { key: 'doa', label: 'DOA', width: 75 },
+      { key: 'address', label: 'Address', width: 111 },
+    ];
+    const tableWidth = cols.reduce((s, c) => s + c.width, 0);
+
+    let page = pdfDoc.addPage([pageWidth, pageHeight]);
+    let y = pageHeight - margin;
+
+    const drawPageHeader = async (isFirstPage: boolean) => {
+      if (isFirstPage) {
+        page.drawRectangle({ x: 0, y: y - 46, width: pageWidth, height: 60, color: navy });
+        let textStartX = margin;
+        if (effectiveLogo) {
+          const img = await this.fetchImageBytes(effectiveLogo);
+          if (img) {
+            try {
+              const embedded = img.isPng ? await pdfDoc.embedPng(img.bytes) : await pdfDoc.embedJpg(img.bytes);
+              const maxLogoH = 42, maxLogoW = 80;
+              const ratio = embedded.width / embedded.height;
+              let logoW = maxLogoW, logoH = logoW / ratio;
+              if (logoH > maxLogoH) { logoH = maxLogoH; logoW = logoH * ratio; }
+              const logoX = margin, logoY = y - 42;
+              const pad = 5;
+              page.drawRectangle({ x: logoX - pad, y: logoY - pad, width: logoW + pad * 2, height: logoH + pad * 2, color: rgb(1, 1, 1), borderColor: rgb(0.85, 0.85, 0.85), borderWidth: 0.5 });
+              page.drawImage(embedded, { x: logoX, y: logoY, width: logoW, height: logoH });
+              textStartX = logoX + logoW + pad * 2 + 16;
+            } catch { /* corrupt/unsupported image - fall through to text-only header */ }
+          }
+        }
+        drawTextSafe(page, effectiveName, { x: textStartX, y: y - 20, size: 16, font: bold, color: rgb(1, 1, 1), maxWidth: pageWidth - textStartX - margin });
+        page.drawText('GENERAL REGISTER (GR)', { x: textStartX, y: y - 38, size: 9, font: bold, color: rgb(0.8, 0.85, 0.95) });
+        y -= 68;
+      }
+    };
+
+    const drawGroupHeader = (groupName: string, count: number) => {
+      page.drawRectangle({ x: margin, y: y - 8, width: tableWidth, height: 24, color: amber });
+      page.drawText(groupName.toUpperCase(), { x: margin + 10, y: y - 1, size: 10.5, font: bold, color: rgb(1, 1, 1) });
+      page.drawText(`${count} student${count === 1 ? '' : 's'}`, { x: margin + tableWidth - 90, y: y - 1, size: 9, font: bold, color: rgb(1, 1, 1) });
+      y -= 30;
+      page.drawRectangle({ x: margin, y: y - 4, width: tableWidth, height: 18, color: rgb(0.93, 0.94, 0.96) });
+      let x = margin;
+      cols.forEach(c => { page.drawText(c.label, { x: x + 5, y: y, size: 7.5, font: bold, color: navy, maxWidth: c.width - 10 }); x += c.width; });
+      y -= 20;
+    };
+
+    const ensureSpace = (needed: number, currentGroup?: string, currentGroupCount?: number) => {
+      if (y - needed < margin + 20) {
+        page = pdfDoc.addPage([pageWidth, pageHeight]);
+        y = pageHeight - margin;
+        if (currentGroup) drawGroupHeader(`${currentGroup} (cont'd)`, currentGroupCount || 0);
+      }
+    };
+
+    await drawPageHeader(true);
+
+    let grandTotal = 0, grandM = 0, grandF = 0;
+
+    sortedGroupKeys.forEach((groupKey) => {
+      const groupStudents = groups.get(groupKey)!.sort((a, b) => (a.grNo || '').localeCompare(b.grNo || '') || `${a.firstName} ${a.lastName}`.localeCompare(`${b.firstName} ${b.lastName}`));
+      const { m, f } = genderCounts(groupStudents);
+      grandTotal += groupStudents.length; grandM += m; grandF += f;
+
+      ensureSpace(24 + 18 + 24);
+      drawGroupHeader(groupKey, groupStudents.length);
+
+      groupStudents.forEach((s, idx) => {
+        const father = (s.guardians || []).find((g: any) => g.relation === 'father');
+        const contactNumbers = (s.guardians || []).map((g: any) => g.phone).filter(Boolean).join(', ') || '—';
+        const rowHeight = 20;
+
+        ensureSpace(rowHeight, groupKey, groupStudents.length);
+        if (idx % 2 === 1) {
+          page.drawRectangle({ x: margin, y: y - rowHeight + 6, width: tableWidth, height: rowHeight, color: lightBg });
+        }
+
+        let x = margin;
+        const rowY = y - 4;
+        drawTextSafe(page, s.grNo || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[0].width - 10 }); x += cols[0].width;
+        drawTextSafe(page, s.familyCode || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[1].width - 10 }); x += cols[1].width;
+        drawTextSafe(page, `${s.firstName || ''} ${s.lastName || ''}`.trim(), { x: x + 5, y: rowY, size: 7.5, font: bold, color: black, maxWidth: cols[2].width - 10 }); x += cols[2].width;
+        drawTextSafe(page, father?.name || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[3].width - 10 }); x += cols[3].width;
+        drawTextSafe(page, contactNumbers, { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[4].width - 10 }); x += cols[4].width;
+        page.drawText(fmtDate(s.dateOfBirth), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[5].width - 10 }); x += cols[5].width;
+        page.drawText(fmtDate(s.admissionDate), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[6].width - 10 }); x += cols[6].width;
+        drawTextSafe(page, s.address || '—', { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[7].width - 10 });
+
+        y -= rowHeight;
+      });
+
+      // Per-group summary line
+      ensureSpace(20);
+      page.drawText(`${groupStudents.length} student${groupStudents.length === 1 ? '' : 's'} in ${groupKey}  |  ${m} M  |  ${f} F`,
+        { x: margin, y: y - 2, size: 8, font: bold, color: navy });
+      y -= 26;
+    });
+
+    if (students.length === 0) {
+      page.drawText('No students match the selected filters.', { x: margin, y, size: 10, font, color: grayText });
+    } else {
+      ensureSpace(30);
+      page.drawRectangle({ x: margin, y: y - 8, width: tableWidth, height: 26, color: navy });
+      page.drawText(`GRAND TOTAL: ${grandTotal} students  |  ${grandM} M  |  ${grandF} F`,
+        { x: margin + 10, y: y - 1, size: 10.5, font: bold, color: rgb(1, 1, 1) });
+      y -= 34;
+    }
+
+    const pages = pdfDoc.getPages();
+    pages.forEach((p, i) => {
+      p.drawText(`Generated ${printDate.toISOString().slice(0, 10)} · GR Register · Page ${i + 1} of ${pages.length}`,
+        { x: margin, y: 14, size: 7.5, font, color: grayText });
+    });
+
+    const bytes2 = await pdfDoc.save();
+    return Buffer.from(bytes2);
   }
 
   // ============================================================

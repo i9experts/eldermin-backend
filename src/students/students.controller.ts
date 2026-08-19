@@ -234,6 +234,25 @@ export class StudentsController {
     res.send(pdfBuffer);
   }
 
+  /** POST /api/v1/students/reports/gr-register */
+  @Post('reports/gr-register')
+  async generateGrRegisterPdf(
+    @Body() body: { grades?: string[]; sections?: string[]; campusId?: string; institutionId?: string },
+    @Request() req: any,
+    @Res() res: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    const pdfBuffer = await this.studentsService.generateGrRegisterPdf(schoolSlug, {
+      grades: body.grades, sections: body.sections, campusId: body.campusId, institutionId: body.institutionId,
+    });
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="gr-register.pdf"`,
+      'Content-Length': pdfBuffer.length,
+    });
+    res.send(pdfBuffer);
+  }
+
   // ============================================================
   // ATTENDANCE
   // ============================================================
