@@ -146,6 +146,17 @@ export class AuthService {
         // this is absent, so every account without one keeps working
         // exactly as it always has.
         permissions: permissions || undefined,
+        // Same scope fields as the JWT payload above - the frontend's
+        // standard login flow reads this response's user object
+        // directly and never calls getMe, so without these being here
+        // too, a freshly-logged-in user's own campus/class-teacher
+        // scope would be invisible to the frontend until their next
+        // page reload happened to trigger a getMe call somewhere.
+        campusId,
+        department,
+        classTeacherOfGradeId,
+        classTeacherOfGradeName,
+        classTeacherOfSectionName,
       },
       institution: {
         name: tenant?.displayName || slugToUse || 'Unknown',
