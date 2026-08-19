@@ -8,6 +8,7 @@ import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { Campus, CampusDocument } from '../../organization/schemas/organization.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
@@ -19,6 +20,7 @@ export class AuthService {
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -77,6 +79,24 @@ export class AuthService {
     let campusId = staffRecord?.campusId?.toString() || undefined;
     const department = staffRecord?.department || undefined;
 
+    // Class Teacher assignment - carried on the token the same way
+    // campusId/department are, so a class teacher's own attendance
+    // access can be scoped without a DB lookup on every single request.
+    // Absent entirely for anyone who isn't a class teacher, exactly like
+    // campusId/department are absent for roles they don't apply to.
+    let classTeacherOfGradeId: string | undefined;
+    let classTeacherOfGradeName: string | undefined;
+    let classTeacherOfSectionName: string | undefined;
+    if (staffRecord) {
+      const teacherProfile = await this.teacherProfileModel
+        .findOne({ staffId: (staffRecord as any)._id, isClassTeacher: true })
+        .select('classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName')
+        .lean();
+      classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
+      classTeacherOfGradeName = teacherProfile?.classTeacherOfGradeName || undefined;
+      classTeacherOfSectionName = teacherProfile?.classTeacherOfSectionName || undefined;
+    }
+
     // Self-healing for the single-campus case: campus/department-scoped
     // roles (everyone except super_admin/institution_owner) get hard-
     // blocked from everything if their Staff record has no campusId set
@@ -105,6 +125,9 @@ export class AuthService {
       isBoardLevel,
       campusId,
       department,
+      classTeacherOfGradeId,
+      classTeacherOfGradeName,
+      classTeacherOfSectionName,
       // Real parent/student ownership scoping - see assertStudentAccess
       // in scope.util.ts. Absent for every other role, exactly as
       // campusId/department are absent for roles they don't apply to.

@@ -17,6 +17,7 @@ import {
   CreateBehaviourDto, UpdateBehaviourDto, BehaviourQueryDto,
   CreateAssessmentResultDto,
 } from './dto/student.dto';
+import { resolveClassSectionScope } from '../auth/scope.util';
 
 @Controller('students')
 export class StudentsController {
@@ -260,8 +261,9 @@ export class StudentsController {
   /** GET /api/v1/students/attendance */
   @Get('attendance/list')
   async getAttendance(@Request() req: any, @Query() query: AttendanceQueryDto) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getAttendance(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    const { grade, section } = resolveClassSectionScope(requestingUser, query.grade, query.section);
+    return this.studentsService.getAttendance(schoolSlug, { ...query, grade, section });
   }
 
   /** GET /api/v1/students/:id/attendance/summary */
@@ -279,7 +281,8 @@ export class StudentsController {
   @Post('attendance')
   @HttpCode(HttpStatus.CREATED)
   async markAttendance(@Body() dto: MarkAttendanceDto, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
+    resolveClassSectionScope(requestingUser, dto.grade, dto.section);
     return this.studentsService.markAttendance({
       ...dto, schoolSlug, academicYear, markedBy: userName,
     });
@@ -289,7 +292,13 @@ export class StudentsController {
   @Post('attendance/bulk')
   @HttpCode(HttpStatus.CREATED)
   async bulkMarkAttendance(@Body() dto: BulkAttendanceDto, @Request() req: any) {
-    const { schoolSlug, academicYear } = this.ctx(req);
+    const { schoolSlug, academicYear, requestingUser } = this.ctx(req);
+    // Every record checked individually - a class teacher scoped to
+    // Grade 3-Girls shouldn't be able to sneak a Grade 5-A record into
+    // an otherwise-legitimate bulk request for their own class.
+    for (const record of dto.records) {
+      resolveClassSectionScope(requestingUser, record.grade, record.section);
+    }
     return this.studentsService.bulkMarkAttendance({ ...dto, schoolSlug, academicYear });
   }
 

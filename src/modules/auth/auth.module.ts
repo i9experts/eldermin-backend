@@ -10,6 +10,7 @@ import { User, UserSchema } from '../organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Campus, CampusSchema } from '../../organization/schemas/organization.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../teaching/schemas/teacher-profile.schema';
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
 import { EmailModule } from '../../email/email.module';
@@ -33,6 +34,7 @@ import { EmailModule } from '../../email/email.module';
       { name: Tenant.name, schema: TenantSchema },
       { name: Staff.name, schema: StaffSchema },
       { name: Campus.name, schema: CampusSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
     ]),
   ],
   controllers: [AuthController],

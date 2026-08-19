@@ -28,6 +28,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       linkedStudentId: payload.linkedStudentId,
       supervisedClusterIds: payload.supervisedClusterIds,
       isBoardLevel: payload.isBoardLevel || false,
+      classTeacherOfGradeId: payload.classTeacherOfGradeId,
+      classTeacherOfGradeName: payload.classTeacherOfGradeName,
+      classTeacherOfSectionName: payload.classTeacherOfSectionName,
     };
   }
 }

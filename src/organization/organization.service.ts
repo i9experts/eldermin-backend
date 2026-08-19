@@ -387,7 +387,7 @@ export class OrganizationService {
       if (prevStaff) {
         await this.teacherProfileModel.updateOne(
           { staffId: prevStaff._id },
-          { $set: { isClassTeacher: false, classTeacherOfGradeId: null, classTeacherOfSectionName: null, classTeacherOfName: null } },
+          { $set: { isClassTeacher: false, classTeacherOfGradeId: null, classTeacherOfGradeName: null, classTeacherOfSectionName: null, classTeacherOfName: null } },
         );
       }
     }
@@ -402,7 +402,7 @@ export class OrganizationService {
     const classTeacherOfName = `${grade.name}${sectionName ? ` - ${sectionName}` : ''}`;
     await this.teacherProfileModel.updateOne(
       { staffId: newTeacherStaff._id },
-      { $set: { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfSectionName: sectionName, classTeacherOfName } },
+      { $set: { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName } },
     );
 
     // Step 4: denormalize onto every student currently in this class.

@@ -34,6 +34,7 @@ export class TeacherProfile {
   // what's needed to look this assignment up without relying on a
   // populate that would silently return null.
   @Prop() classTeacherOfGradeId: string;
+  @Prop() classTeacherOfGradeName: string;
   @Prop() classTeacherOfSectionName: string;
   @Prop() classTeacherOfName: string; // denormalized display label, e.g. "Grade 3 - Girls"
 

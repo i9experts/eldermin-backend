@@ -53,6 +53,9 @@ export interface ScopedUser {
   department?: string;
   guardianOfStudentIds?: string[];
   linkedStudentId?: string;
+  classTeacherOfGradeId?: string;
+  classTeacherOfGradeName?: string;
+  classTeacherOfSectionName?: string;
 }
 
 /**
@@ -139,6 +142,38 @@ export function resolveDepartmentScope(user: ScopedUser, requestedDepartment?: s
   }
 
   return user.department;
+}
+
+/**
+ * Scopes a class teacher's attendance access to their own assigned
+ * grade+section only - the actual enforcement behind "class teacher
+ * assignment" that all the schema wiring elsewhere exists to support.
+ * Unlike campus/department scoping, this isn't role-based (a Principal
+ * could theoretically also be assigned as a class teacher) - it applies
+ * purely based on whether classTeacherOfGradeName is actually present on
+ * the token, meaning this specific person has an actual, real
+ * assignment. Someone with no class-teacher assignment at all passes
+ * their requested grade/section through unrestricted, exactly as before
+ * this existed - their access is governed by the normal role/campus
+ * rules elsewhere, not this check.
+ */
+export function resolveClassSectionScope(
+  user: ScopedUser,
+  requestedGrade?: string,
+  requestedSection?: string,
+): { grade?: string; section?: string } {
+  if (!user.classTeacherOfGradeName) {
+    return { grade: requestedGrade, section: requestedSection };
+  }
+
+  if (requestedGrade && String(requestedGrade) !== String(user.classTeacherOfGradeName)) {
+    throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
+  }
+  if (requestedSection && user.classTeacherOfSectionName && String(requestedSection) !== String(user.classTeacherOfSectionName)) {
+    throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
+  }
+
+  return { grade: user.classTeacherOfGradeName, section: user.classTeacherOfSectionName };
 }
 
 /**
