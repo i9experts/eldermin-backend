@@ -191,6 +191,17 @@ export class OrganizationController {
     return this.service.removeSection(id, schoolSlug, sectionId);
   }
 
+  @Patch('grades/:id/sections/:sectionId/class-teacher')
+  async assignClassTeacher(
+    @Param('id') gradeId: string,
+    @Param('sectionId') sectionId: string,
+    @Body('classTeacherId') classTeacherId: string,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.assignClassTeacher(gradeId, sectionId, classTeacherId, schoolSlug);
+  }
+
   // Departments
   @Get('departments') async getDepts(@Request() req: any, @Query('campusId') campusId?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);

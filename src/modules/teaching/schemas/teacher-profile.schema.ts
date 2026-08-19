@@ -27,8 +27,15 @@ export class TeacherProfile {
   @Prop({ default: 30 }) maxPeriodsPerWeek: number;
   @Prop({ default: 0 }) currentPeriodsPerWeek: number;
   @Prop({ default: false }) isClassTeacher: boolean;
-  @Prop({ type: Types.ObjectId, ref: 'Section', default: null }) classTeacherOf: Types.ObjectId;
-  @Prop() classTeacherOfName: string;
+  // Section is an embedded subdocument within Grade.sections[], not a
+  // standalone collection - ref: 'Section' below was never resolvable via
+  // populate (no such model is ever registered). Storing the parent
+  // Grade's id and the section name directly instead, which is exactly
+  // what's needed to look this assignment up without relying on a
+  // populate that would silently return null.
+  @Prop() classTeacherOfGradeId: string;
+  @Prop() classTeacherOfSectionName: string;
+  @Prop() classTeacherOfName: string; // denormalized display label, e.g. "Grade 3 - Girls"
 
   @Prop({ type: [String], default: [] }) certifications: string[];
   @Prop({ type: [String], default: [] }) specializations: string[];

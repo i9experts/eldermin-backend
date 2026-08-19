@@ -20,6 +20,8 @@ import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { UploadService } from '../upload/upload.service';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -35,6 +37,8 @@ export class OrganizationService {
     @InjectModel(Cluster.name) private clusterModel: Model<ClusterDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
     @InjectModel(StudentFee.name) private feeModel: Model<StudentFeeDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -338,6 +342,76 @@ export class OrganizationService {
     );
     if (!grade) throw new NotFoundException('Grade not found');
     return grade;
+  }
+
+  /** Assigns a real teacher (by their User id) as the Class Teacher of a
+   * specific grade+section. This is the actual foundational piece behind
+   * "class teacher" anywhere in the app - previously the schema had the
+   * right shape in three separate places (Section.classTeacherId,
+   * TeacherProfile.isClassTeacher, Student.classTeacherId) but nothing
+   * ever wired them together. This does:
+   *  1. Clears the PREVIOUS teacher's isClassTeacher flag, if this
+   *     section already had a different one assigned - a teacher should
+   *     only ever show as class teacher of the section they're
+   *     currently, actually assigned to.
+   *  2. Sets classTeacherId/classTeacher on the embedded Section itself
+   *     (the real, single source of truth for this assignment).
+   *  3. Sets isClassTeacher/classTeacherOfGradeId/classTeacherOfSectionName/
+   *     classTeacherOfName on the new teacher's own TeacherProfile -
+   *     denormalized for their own dashboard/profile to display directly.
+   *  4. Bulk-updates every Student currently in that grade+section with
+   *     classTeacher/classTeacherId - denormalized for student lists/
+   *     profiles to display without an extra join.
+   */
+  async assignClassTeacher(
+    gradeId: string,
+    sectionId: string,
+    classTeacherId: string,
+    schoolSlug: string,
+  ) {
+    const grade = await this.gradeModel.findOne({ _id: gradeId, schoolSlug });
+    if (!grade) throw new NotFoundException('Grade not found');
+    const section = grade.sections.find((s: any) => s._id.toString() === sectionId);
+    if (!section) throw new NotFoundException('Section not found');
+    const sectionName = section.name;
+
+    const newTeacherStaff = await this.staffModel.findOne({ userId: classTeacherId, schoolSlug }).lean();
+    if (!newTeacherStaff) throw new NotFoundException('No staff record found for this user');
+    const classTeacherName = `${newTeacherStaff.firstName || ''} ${newTeacherStaff.lastName || ''}`.trim();
+
+    // Step 1: clear the previous teacher's flag, if this section already
+    // had someone else assigned and it's actually changing.
+    const previousClassTeacherId = (section as any).classTeacherId?.toString();
+    if (previousClassTeacherId && previousClassTeacherId !== classTeacherId) {
+      const prevStaff = await this.staffModel.findOne({ userId: previousClassTeacherId, schoolSlug }).lean();
+      if (prevStaff) {
+        await this.teacherProfileModel.updateOne(
+          { staffId: prevStaff._id },
+          { $set: { isClassTeacher: false, classTeacherOfGradeId: null, classTeacherOfSectionName: null, classTeacherOfName: null } },
+        );
+      }
+    }
+
+    // Step 2: set the assignment on the embedded Section itself.
+    await this.gradeModel.updateOne(
+      { _id: gradeId, schoolSlug, 'sections._id': (section as any)._id },
+      { $set: { 'sections.$.classTeacherId': classTeacherId, 'sections.$.classTeacher': classTeacherName } },
+    );
+
+    // Step 3: set the new teacher's own TeacherProfile.
+    const classTeacherOfName = `${grade.name}${sectionName ? ` - ${sectionName}` : ''}`;
+    await this.teacherProfileModel.updateOne(
+      { staffId: newTeacherStaff._id },
+      { $set: { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfSectionName: sectionName, classTeacherOfName } },
+    );
+
+    // Step 4: denormalize onto every student currently in this class.
+    await this.studentModel.updateMany(
+      { schoolSlug, currentGrade: grade.name, currentSection: sectionName },
+      { $set: { classTeacher: classTeacherName, classTeacherId } },
+    );
+
+    return { gradeId, sectionName, classTeacherId, classTeacherName, classTeacherOfName };
   }
 
   async bulkCreateGrades(schoolSlug: string) {
