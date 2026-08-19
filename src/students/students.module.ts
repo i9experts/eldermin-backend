@@ -16,6 +16,7 @@ import {
 import { UploadModule } from '../upload/upload.module';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
+import { FeeStructure, FeeStructureSchema } from '../finance/schemas/finance.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 
 @Module({
@@ -31,6 +32,7 @@ import { Family, FamilySchema } from '../families/schemas/family.schema';
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
+      { name: FeeStructure.name, schema: FeeStructureSchema },
     ]),
   ],
   controllers: [StudentsController],

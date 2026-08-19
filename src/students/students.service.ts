@@ -14,6 +14,7 @@ import { UploadService } from '../upload/upload.service';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
+import { FeeStructure, FeeStructureDocument } from '../finance/schemas/finance.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
 import * as fs from 'fs';
@@ -62,6 +63,7 @@ export class StudentsService {
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
+    @InjectModel(FeeStructure.name) private feeStructureModel: Model<FeeStructureDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -249,7 +251,34 @@ export class StudentsService {
       this.studentModel.countDocuments(filter),
     ]);
 
-    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit!) } };
+    // Monthly Tuition Fee - not a field on Student at all, has to be
+    // matched from FeeStructure by grade/section/campus/academicYear.
+    // Batch-fetched once for the whole page rather than queried per
+    // student (N+1). FeeStructure.section is optional (unset = applies
+    // to the whole grade) and .campus is a free-text field that may not
+    // always be set either, so this picks the most SPECIFIC matching
+    // structure for each student rather than just the first one found.
+    const activeStructures = await this.feeStructureModel.find({ schoolSlug, isActive: true }).lean();
+    const tuitionAmountFor = (s: any): number | null => {
+      let best: { structure: any; specificity: number } | null = null;
+      for (const fs of activeStructures) {
+        if (fs.grade !== s.currentGrade) continue;
+        if (fs.academicYear && s.currentAcademicYear && fs.academicYear !== s.currentAcademicYear) continue;
+        if (fs.section && fs.section !== s.currentSection) continue;
+        if (fs.campus && s.campusId && fs.campus !== String(s.campusId)) continue;
+        const specificity = (fs.section ? 1 : 0) + (fs.campus ? 1 : 0) + (fs.academicYear ? 1 : 0);
+        if (!best || specificity > best.specificity) best = { structure: fs, specificity };
+      }
+      if (!best) return null;
+      const tuitionLine = (best.structure.items || []).find((i: any) => i.feeHead?.toLowerCase().includes('tuition'));
+      return tuitionLine ? tuitionLine.amount : null;
+    };
+    const dataWithFees = data.map((s: any) => {
+      const obj = s.toObject ? s.toObject() : s;
+      return { ...obj, monthlyTuitionFee: tuitionAmountFor(obj) };
+    });
+
+    return { data: dataWithFees, meta: { total, page, limit, pages: Math.ceil(total / limit!) } };
   }
 
   async getStudentById(id: string, schoolSlug: string): Promise<Student> {

@@ -90,6 +90,7 @@ export class Student {
   // currentRollNumber, which is scoped to the student's current
   // grade/section and can change every year.
   @Prop() grNo: string;
+  @Prop() rfid: string; // RFID card number, used for attendance/access systems
 
   // ── Contact ────────────────────────────────────────────────
   @Prop() address: string;

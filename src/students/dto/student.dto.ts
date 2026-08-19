@@ -58,6 +58,7 @@ export class CreateStudentDto {
   @IsOptional() @IsString() bForm?: string;
   @IsOptional() @IsString() photo?: string;
   @IsString() grNo: string;
+  @IsOptional() @IsString() rfid?: string;
   @IsOptional() @IsString() dateOfBirthInWords?: string;
 
   // Contact
