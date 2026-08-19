@@ -79,12 +79,17 @@ export class Student {
   @Prop({ required: true }) lastName: string;
   @Prop() arabicName: string;
   @Prop({ required: true }) dateOfBirth: Date;
+  @Prop() dateOfBirthInWords: string; // e.g. "Fifteenth of March, Two Thousand and Ten" - common on Pakistani official documents (B-Form/NADRA)
   @Prop({ enum: ['male', 'female'], required: true }) gender: string;
   @Prop({ default: 'Pakistani' }) nationality: string;
   @Prop() religion: string;
   @Prop() bForm: string;      // NADRA B-Form number
   @Prop() passportNumber: string;
   @Prop() photo: string;      // URL
+  // A permanent, school-wide register number - distinct from
+  // currentRollNumber, which is scoped to the student's current
+  // grade/section and can change every year.
+  @Prop() grNo: string;
 
   // ── Contact ────────────────────────────────────────────────
   @Prop() address: string;
@@ -115,9 +120,21 @@ export class Student {
   // ── Admission Info ─────────────────────────────────────────
   @Prop() admissionDate: Date;
   @Prop() admissionNumber: string;
+  @Prop() reAdmissionDate: Date; // for a student who left and later re-enrolled - distinct from the original admissionDate
   @Prop({ type: Types.ObjectId, ref: 'Enrollment' }) enrollmentId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'Applicant' }) applicantId: Types.ObjectId;
   @Prop() previousSchool: string;
+
+  // ── Emergency Contact ────────────────────────────────────────
+  // Distinct from medical.emergencyAction (which is medical procedure
+  // instructions) - this is a real person to actually call.
+  @Prop() emergencyContactName: string;
+  @Prop() emergencyContactRelation: string;
+  @Prop() emergencyContactPhone: string;
+
+  // ── Tutor Information ─────────────────────────────────────────
+  @Prop() tutorName: string;
+  @Prop() tutorPhone: string;
 
   // ── Academic History ───────────────────────────────────────
   @Prop({ type: [AcademicRecordSchema], default: [] })

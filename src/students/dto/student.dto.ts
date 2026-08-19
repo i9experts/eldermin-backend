@@ -57,6 +57,8 @@ export class CreateStudentDto {
   @IsOptional() @IsString() religion?: string;
   @IsOptional() @IsString() bForm?: string;
   @IsOptional() @IsString() photo?: string;
+  @IsString() grNo: string;
+  @IsOptional() @IsString() dateOfBirthInWords?: string;
 
   // Contact
   @IsOptional() @IsString() personalEmail?: string;

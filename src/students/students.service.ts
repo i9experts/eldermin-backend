@@ -353,6 +353,7 @@ export class StudentsService {
       fields: {
         firstName: 'First Name', lastName: 'Last Name', dateOfBirth: 'Date of Birth',
         gender: 'Gender', nationality: 'Nationality', religion: 'Religion', arabicName: 'Arabic Name',
+        grNo: 'GR No', dateOfBirthInWords: 'Date of Birth (in words)',
       },
     },
     contact: {
@@ -365,7 +366,7 @@ export class StudentsService {
     academic: {
       label: 'Academic Information',
       fields: {
-        currentGrade: 'Grade', currentSection: 'Section', currentRollNumber: 'GR No',
+        currentGrade: 'Grade', currentSection: 'Section', currentRollNumber: 'Class Roll No',
         currentAcademicYear: 'Academic Year', houseGroup: 'House Group',
       },
     },
@@ -373,7 +374,19 @@ export class StudentsService {
       label: 'Admission Information',
       fields: {
         admissionNumber: 'Admission Number', admissionDate: 'Admission Date',
-        previousSchool: 'Previous School',
+        reAdmissionDate: 'Re-Admission Date', previousSchool: 'Previous School',
+      },
+    },
+    emergency: {
+      label: 'Emergency Contact',
+      fields: {
+        emergencyContactName: 'Name', emergencyContactRelation: 'Relation', emergencyContactPhone: 'Phone',
+      },
+    },
+    tutor: {
+      label: 'Tutor Information',
+      fields: {
+        tutorName: 'Name', tutorPhone: 'Phone',
       },
     },
     status: {
@@ -554,7 +567,7 @@ export class StudentsService {
         }
         page.drawText(`${group.fields[fieldKey]}`, { x: margin + 14, y, size: 9.5, font: bold, color: rgb(0.35, 0.35, 0.35) });
         let value = student[fieldKey];
-        if (fieldKey === 'dateOfBirth' || fieldKey === 'admissionDate') value = fmtValue(value ? new Date(value) : null);
+        if (fieldKey === 'dateOfBirth' || fieldKey === 'admissionDate' || fieldKey === 'reAdmissionDate') value = fmtValue(value ? new Date(value) : null);
         else value = fmtValue(value);
         drawTextSafe(page, value, { x: margin + 175, y, size: 10, font, color: black });
         y -= 22;
