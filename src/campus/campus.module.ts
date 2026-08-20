@@ -15,6 +15,7 @@ import {
   Building, BuildingSchema,
   CampusRoom, CampusRoomSchema,
   UtilityReading, UtilityReadingSchema,
+  Visitor, VisitorSchema,
 } from './campus.schema';
 
 @Module({
@@ -32,6 +33,7 @@ import {
       { name: Building.name, schema: BuildingSchema },
       { name: CampusRoom.name, schema: CampusRoomSchema },
       { name: UtilityReading.name, schema: UtilityReadingSchema },
+      { name: Visitor.name, schema: VisitorSchema },
     ]),
   ],
   controllers: [CampusController],

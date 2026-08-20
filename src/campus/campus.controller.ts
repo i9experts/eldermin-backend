@@ -289,4 +289,24 @@ export class CampusController {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteUtilityReading(id, schoolSlug);
   }
+
+  // ── Visitors ─────────────────────────────────────────────────
+  @Get('visitors')
+  async getVisitors(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVisitors(schoolSlug, query);
+  }
+
+  @Post('visitors/check-in')
+  @HttpCode(HttpStatus.CREATED)
+  async checkInVisitor(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.checkInVisitor({ ...dto, schoolSlug });
+  }
+
+  @Patch('visitors/:badge/check-out')
+  async checkOutVisitor(@Param('badge') badge: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.checkOutVisitor(badge, schoolSlug);
+  }
 }

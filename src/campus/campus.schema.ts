@@ -462,3 +462,34 @@ export class UtilityReading {
 export const UtilityReadingSchema = SchemaFactory.createForClass(UtilityReading);
 UtilityReadingSchema.index({ schoolSlug: 1, campusId: 1, readingDate: -1 });
 UtilityReadingSchema.index({ schoolSlug: 1, buildingId: 1 });
+
+// ============================================================
+// CAMPUS OPERATIONS — VISITOR (security gate log)
+// host is deliberately free text, not a real Staff/User link - a
+// visitor's stated host is often verbal, given at the gate, and may not
+// always correspond to someone in the Staff system (e.g. a parent
+// visiting another parent, or someone visiting a specific student
+// directly). badge is auto-generated server-side (see generateVisitorBadge
+// in the service) rather than trusted from the frontend, to avoid a
+// real collision risk if multiple gates check visitors in at once.
+// ============================================================
+export type VisitorDocument = Visitor & Document;
+
+@Schema({ timestamps: true, collection: 'campus_visitors' })
+export class Visitor {
+  @Prop({ required: true }) badge: string; // V-0841 - unique per school, see compound index below
+  @Prop({ required: true }) name: string;
+  @Prop() purpose: string;
+  @Prop() phone: string;
+  @Prop() cnic: string;
+  @Prop() host: string; // who they're visiting - free text, see note above
+  @Prop({ required: true }) checkInTime: Date;
+  @Prop() checkOutTime: Date;
+  @Prop({ enum: ['Inside', 'Checked Out'], default: 'Inside' }) status: string;
+  @Prop() campusId: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const VisitorSchema = SchemaFactory.createForClass(Visitor);
+VisitorSchema.index({ schoolSlug: 1, badge: 1 }, { unique: true });
+VisitorSchema.index({ schoolSlug: 1, campusId: 1, checkInTime: -1 });
+VisitorSchema.index({ schoolSlug: 1, status: 1 });

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -14,6 +14,7 @@ import {
   Building, BuildingDocument,
   CampusRoom, CampusRoomDocument,
   UtilityReading, UtilityReadingDocument,
+  Visitor, VisitorDocument,
 } from './campus.schema';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -33,6 +34,7 @@ export class CampusService {
     @InjectModel(Building.name) private buildingModel: Model<BuildingDocument>,
     @InjectModel(CampusRoom.name) private campusRoomModel: Model<CampusRoomDocument>,
     @InjectModel(UtilityReading.name) private utilityReadingModel: Model<UtilityReadingDocument>,
+    @InjectModel(Visitor.name) private visitorModel: Model<VisitorDocument>,
   ) {}
 
   async getDashboard(schoolSlug: string) {
@@ -578,5 +580,65 @@ export class CampusService {
     const reading = await this.utilityReadingModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!reading) throw new NotFoundException('Utility reading not found');
     return reading;
+  }
+
+  // ── Visitors (security gate log) ────────────────────────────
+  // Auto-generated server-side rather than trusted from the frontend -
+  // avoids a real collision risk if multiple gates check visitors in at
+  // the same time. Retries once on a genuine race (two check-ins
+  // querying the same "highest badge" moment apart, both attempting the
+  // same next number) - rare for a gate-level check-in flow, but the
+  // compound unique index would otherwise throw a raw duplicate-key
+  // error instead of just quietly succeeding on retry.
+  private async generateVisitorBadge(schoolSlug: string): Promise<string> {
+    const latest = await this.visitorModel.findOne({ schoolSlug }).sort({ createdAt: -1 }).select('badge').lean();
+    const latestNum = latest?.badge ? parseInt(latest.badge.replace('V-', ''), 10) : 840;
+    return `V-${String((isNaN(latestNum) ? 840 : latestNum) + 1).padStart(4, '0')}`;
+  }
+
+  async checkInVisitor(data: any) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const badge = await this.generateVisitorBadge(data.schoolSlug);
+      try {
+        return await new this.visitorModel({ ...data, badge, checkInTime: data.checkInTime || new Date(), status: 'Inside' }).save();
+      } catch (err: any) {
+        if (err.code === 11000 && attempt === 0) continue; // genuine race - retry once with a fresh number
+        throw err;
+      }
+    }
+    throw new BadRequestException('Could not generate a unique visitor badge - please try again');
+  }
+
+  async getVisitors(schoolSlug: string, query: any) {
+    const { page = 1, limit = 50, campusId, status, search, from, to } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (campusId) filter.campusId = campusId;
+    if (status) filter.status = status;
+    if (search) filter.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { badge: { $regex: search, $options: 'i' } },
+      { purpose: { $regex: search, $options: 'i' } },
+    ];
+    if (from || to) {
+      filter.checkInTime = {};
+      if (from) filter.checkInTime.$gte = new Date(from);
+      if (to) filter.checkInTime.$lte = new Date(to);
+    }
+    const [data, total] = await Promise.all([
+      this.visitorModel.find(filter).sort({ checkInTime: -1 }).skip(skip).limit(+limit),
+      this.visitorModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit } };
+  }
+
+  async checkOutVisitor(badge: string, schoolSlug: string) {
+    const visitor = await this.visitorModel.findOneAndUpdate(
+      { badge, schoolSlug, status: 'Inside' },
+      { $set: { checkOutTime: new Date(), status: 'Checked Out' } },
+      { new: true },
+    );
+    if (!visitor) throw new NotFoundException('Visitor not found, or already checked out');
+    return visitor;
   }
 }
