@@ -237,4 +237,30 @@ export class CampusController {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteBuilding(id, schoolSlug);
   }
+
+  // ── Campus Rooms ─────────────────────────────────────────────
+  @Get('rooms')
+  async getCampusRooms(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getCampusRooms(schoolSlug, query);
+  }
+
+  @Post('rooms')
+  @HttpCode(HttpStatus.CREATED)
+  async createCampusRoom(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createCampusRoom({ ...dto, schoolSlug });
+  }
+
+  @Put('rooms/:id')
+  async updateCampusRoom(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateCampusRoom(id, schoolSlug, dto);
+  }
+
+  @Delete('rooms/:id')
+  async deleteCampusRoom(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteCampusRoom(id, schoolSlug);
+  }
 }

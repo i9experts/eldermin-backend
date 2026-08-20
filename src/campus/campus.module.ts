@@ -13,6 +13,7 @@ import {
   Asset, AssetSchema,
   SchoolEvent, SchoolEventSchema,
   Building, BuildingSchema,
+  CampusRoom, CampusRoomSchema,
 } from './campus.schema';
 
 @Module({
@@ -28,6 +29,7 @@ import {
       { name: Asset.name, schema: AssetSchema },
       { name: SchoolEvent.name, schema: SchoolEventSchema },
       { name: Building.name, schema: BuildingSchema },
+      { name: CampusRoom.name, schema: CampusRoomSchema },
     ]),
   ],
   controllers: [CampusController],

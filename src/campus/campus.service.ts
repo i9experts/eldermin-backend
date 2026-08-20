@@ -12,6 +12,7 @@ import {
   Asset, AssetDocument,
   SchoolEvent, SchoolEventDocument,
   Building, BuildingDocument,
+  CampusRoom, CampusRoomDocument,
 } from './campus.schema';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -29,6 +30,7 @@ export class CampusService {
     @InjectModel(Asset.name) private assetModel: Model<AssetDocument>,
     @InjectModel(SchoolEvent.name) private eventModel: Model<SchoolEventDocument>,
     @InjectModel(Building.name) private buildingModel: Model<BuildingDocument>,
+    @InjectModel(CampusRoom.name) private campusRoomModel: Model<CampusRoomDocument>,
   ) {}
 
   async getDashboard(schoolSlug: string) {
@@ -464,5 +466,52 @@ export class CampusService {
     const building = await this.buildingModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!building) throw new NotFoundException('Building not found');
     return building;
+  }
+
+  // ── Campus Rooms (classroom/lab/office - distinct from HostelRoom) ──
+  async createCampusRoom(data: any) {
+    const building = await this.buildingModel.findOne({ _id: data.buildingId, schoolSlug: data.schoolSlug });
+    if (!building) throw new NotFoundException('Building not found');
+    return new this.campusRoomModel({ ...data, buildingName: building.name, campusId: data.campusId || building.campusId }).save();
+  }
+
+  async getCampusRooms(schoolSlug: string, query: any) {
+    const { page = 1, limit = 50, buildingId, campusId, type, availability, status, search } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (buildingId) filter.buildingId = buildingId;
+    if (campusId) filter.campusId = campusId;
+    if (type) filter.type = type;
+    if (availability) filter.availability = availability;
+    if (status) filter.status = status;
+    if (search) filter.$or = [
+      { roomNumber: { $regex: search, $options: 'i' } },
+      { buildingName: { $regex: search, $options: 'i' } },
+    ];
+    const [data, total] = await Promise.all([
+      this.campusRoomModel.find(filter).sort({ buildingName: 1, roomNumber: 1 }).skip(skip).limit(+limit),
+      this.campusRoomModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit } };
+  }
+
+  async updateCampusRoom(id: string, schoolSlug: string, data: any) {
+    // Re-resolve buildingName if the room is being moved to a different
+    // building, same reasoning as create - never trust a denormalized
+    // name to be sent correctly, always derive it from the real record.
+    if (data.buildingId) {
+      const building = await this.buildingModel.findOne({ _id: data.buildingId, schoolSlug });
+      if (!building) throw new NotFoundException('Building not found');
+      data.buildingName = building.name;
+    }
+    const room = await this.campusRoomModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!room) throw new NotFoundException('Room not found');
+    return room;
+  }
+
+  async deleteCampusRoom(id: string, schoolSlug: string) {
+    const room = await this.campusRoomModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!room) throw new NotFoundException('Room not found');
+    return room;
   }
 }

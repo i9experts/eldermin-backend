@@ -398,3 +398,35 @@ export const BuildingSchema = SchemaFactory.createForClass(Building);
 export type BuildingDocument = Building & Document;
 BuildingSchema.index({ schoolSlug: 1, code: 1 }, { unique: true });
 BuildingSchema.index({ schoolSlug: 1, campusId: 1 });
+
+// ============================================================
+// CAMPUS OPERATIONS — ROOM (classroom/lab/office within a Building)
+// Distinct from HostelRoom above (hostel-specific, its own occupancy/
+// allocation model) - this is a general room inventory: classrooms,
+// labs, offices, etc. Real link to Building rather than a free-text
+// name, matching the same real-link-plus-denormalized-name pattern used
+// throughout Campus Operations (Building.managerId/managerName,
+// Section.classTeacherId/classTeacher).
+// ============================================================
+export type CampusRoomDocument = CampusRoom & Document;
+
+@Schema({ timestamps: true, collection: 'campus_rooms' })
+export class CampusRoom {
+  @Prop({ required: true }) roomNumber: string;
+  @Prop({ type: Types.ObjectId, ref: 'Building', required: true }) buildingId: Types.ObjectId;
+  @Prop() buildingName: string;
+  @Prop() floor: string;
+  @Prop({ enum: ['Classroom', 'Laboratory', 'Office', 'Staff Room', 'Storage', 'Conference Room', 'Auditorium', 'Other'], default: 'Classroom' })
+  type: string;
+  @Prop({ default: 0 }) capacity: number;
+  @Prop() department: string;
+  @Prop({ default: false }) isSmart: boolean; // has smart-board/projector/AV equipment
+  @Prop({ enum: ['Available', 'Occupied', 'Under Maintenance', 'Reserved'], default: 'Available' })
+  availability: string;
+  @Prop({ enum: ['Active', 'Inactive'], default: 'Active' }) status: string;
+  @Prop() campusId: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const CampusRoomSchema = SchemaFactory.createForClass(CampusRoom);
+CampusRoomSchema.index({ schoolSlug: 1, buildingId: 1, roomNumber: 1 }, { unique: true });
+CampusRoomSchema.index({ schoolSlug: 1, campusId: 1 });
