@@ -263,4 +263,30 @@ export class CampusController {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteCampusRoom(id, schoolSlug);
   }
+
+  // ── Utility Readings ─────────────────────────────────────────
+  @Get('utilities')
+  async getUtilityReadings(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getUtilityReadings(schoolSlug, query);
+  }
+
+  @Post('utilities')
+  @HttpCode(HttpStatus.CREATED)
+  async createUtilityReading(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createUtilityReading({ ...dto, schoolSlug });
+  }
+
+  @Put('utilities/:id')
+  async updateUtilityReading(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateUtilityReading(id, schoolSlug, dto);
+  }
+
+  @Delete('utilities/:id')
+  async deleteUtilityReading(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteUtilityReading(id, schoolSlug);
+  }
 }

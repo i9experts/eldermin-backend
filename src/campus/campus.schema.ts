@@ -430,3 +430,35 @@ export class CampusRoom {
 export const CampusRoomSchema = SchemaFactory.createForClass(CampusRoom);
 CampusRoomSchema.index({ schoolSlug: 1, buildingId: 1, roomNumber: 1 }, { unique: true });
 CampusRoomSchema.index({ schoolSlug: 1, campusId: 1 });
+
+// ============================================================
+// CAMPUS OPERATIONS — UTILITY READING
+// Meter readings (electricity/water/generator/solar/gas) tracked per
+// Building, matching the same real-link pattern as CampusRoom.
+// buildingName here is optional/nullable, unlike CampusRoom's required
+// link - a reading can genuinely be campus-wide (e.g. solar generation
+// serving the whole campus, not one specific building), matching the
+// real INIT_UTILITIES sample data seen in the existing frontend (a
+// Solar reading with building: "All").
+// ============================================================
+export type UtilityReadingDocument = UtilityReading & Document;
+
+@Schema({ timestamps: true, collection: 'utility_readings' })
+export class UtilityReading {
+  @Prop({ enum: ['Electricity', 'Water', 'Generator', 'Solar', 'Gas'], required: true })
+  type: string;
+  @Prop({ type: Types.ObjectId, ref: 'Building' }) buildingId: Types.ObjectId;
+  @Prop() buildingName: string; // "All" / "Campus-wide" when buildingId is not set
+  @Prop({ required: true }) previousReading: number;
+  @Prop({ required: true }) currentReading: number;
+  @Prop() unit: string; // kWh, L, etc.
+  @Prop() cost: number;
+  @Prop({ required: true }) readingDate: Date;
+  @Prop({ enum: ['Normal', 'High Usage', 'Anomaly'], default: 'Normal' })
+  status: string;
+  @Prop() campusId: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const UtilityReadingSchema = SchemaFactory.createForClass(UtilityReading);
+UtilityReadingSchema.index({ schoolSlug: 1, campusId: 1, readingDate: -1 });
+UtilityReadingSchema.index({ schoolSlug: 1, buildingId: 1 });

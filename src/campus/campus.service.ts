@@ -13,6 +13,7 @@ import {
   SchoolEvent, SchoolEventDocument,
   Building, BuildingDocument,
   CampusRoom, CampusRoomDocument,
+  UtilityReading, UtilityReadingDocument,
 } from './campus.schema';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -31,6 +32,7 @@ export class CampusService {
     @InjectModel(SchoolEvent.name) private eventModel: Model<SchoolEventDocument>,
     @InjectModel(Building.name) private buildingModel: Model<BuildingDocument>,
     @InjectModel(CampusRoom.name) private campusRoomModel: Model<CampusRoomDocument>,
+    @InjectModel(UtilityReading.name) private utilityReadingModel: Model<UtilityReadingDocument>,
   ) {}
 
   async getDashboard(schoolSlug: string) {
@@ -513,5 +515,68 @@ export class CampusService {
     const room = await this.campusRoomModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!room) throw new NotFoundException('Room not found');
     return room;
+  }
+
+  // ── Utility Readings ─────────────────────────────────────────
+  // consumption is deliberately never stored - always derived from
+  // currentReading - previousReading, so it can never drift out of sync
+  // if either value is corrected later.
+  private withConsumption(reading: any) {
+    const obj = reading.toObject ? reading.toObject() : reading;
+    return { ...obj, consumption: (obj.currentReading ?? 0) - (obj.previousReading ?? 0) };
+  }
+
+  async createUtilityReading(data: any) {
+    let buildingName = data.buildingName;
+    if (data.buildingId) {
+      const building = await this.buildingModel.findOne({ _id: data.buildingId, schoolSlug: data.schoolSlug });
+      if (!building) throw new NotFoundException('Building not found');
+      buildingName = building.name;
+      data.campusId = data.campusId || building.campusId;
+    } else if (!buildingName) {
+      // A reading with no building link at all (e.g. campus-wide solar
+      // generation) still needs a real, honest label rather than
+      // silently showing blank.
+      buildingName = 'Campus-wide';
+    }
+    const reading = await new this.utilityReadingModel({ ...data, buildingName }).save();
+    return this.withConsumption(reading);
+  }
+
+  async getUtilityReadings(schoolSlug: string, query: any) {
+    const { page = 1, limit = 50, buildingId, campusId, type, status, from, to } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (buildingId) filter.buildingId = buildingId;
+    if (campusId) filter.campusId = campusId;
+    if (type) filter.type = type;
+    if (status) filter.status = status;
+    if (from || to) {
+      filter.readingDate = {};
+      if (from) filter.readingDate.$gte = new Date(from);
+      if (to) filter.readingDate.$lte = new Date(to);
+    }
+    const [data, total] = await Promise.all([
+      this.utilityReadingModel.find(filter).sort({ readingDate: -1 }).skip(skip).limit(+limit),
+      this.utilityReadingModel.countDocuments(filter),
+    ]);
+    return { data: data.map((r) => this.withConsumption(r)), meta: { total, page, limit } };
+  }
+
+  async updateUtilityReading(id: string, schoolSlug: string, data: any) {
+    if (data.buildingId) {
+      const building = await this.buildingModel.findOne({ _id: data.buildingId, schoolSlug });
+      if (!building) throw new NotFoundException('Building not found');
+      data.buildingName = building.name;
+    }
+    const reading = await this.utilityReadingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!reading) throw new NotFoundException('Utility reading not found');
+    return this.withConsumption(reading);
+  }
+
+  async deleteUtilityReading(id: string, schoolSlug: string) {
+    const reading = await this.utilityReadingModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!reading) throw new NotFoundException('Utility reading not found');
+    return reading;
   }
 }
