@@ -12,6 +12,7 @@ import {
   MaintenanceRequest, MaintenanceRequestSchema,
   Asset, AssetSchema,
   SchoolEvent, SchoolEventSchema,
+  Building, BuildingSchema,
 } from './campus.schema';
 
 @Module({
@@ -26,6 +27,7 @@ import {
       { name: MaintenanceRequest.name, schema: MaintenanceRequestSchema },
       { name: Asset.name, schema: AssetSchema },
       { name: SchoolEvent.name, schema: SchoolEventSchema },
+      { name: Building.name, schema: BuildingSchema },
     ]),
   ],
   controllers: [CampusController],

@@ -211,4 +211,30 @@ export class CampusController {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateEventStatus(id, schoolSlug, dto.status, dto.attendance);
   }
+
+  // ── Buildings ────────────────────────────────────────────────
+  @Get('buildings')
+  async getBuildings(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBuildings(schoolSlug, query);
+  }
+
+  @Post('buildings')
+  @HttpCode(HttpStatus.CREATED)
+  async createBuilding(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createBuilding({ ...dto, schoolSlug });
+  }
+
+  @Put('buildings/:id')
+  async updateBuilding(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateBuilding(id, schoolSlug, dto);
+  }
+
+  @Delete('buildings/:id')
+  async deleteBuilding(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteBuilding(id, schoolSlug);
+  }
 }

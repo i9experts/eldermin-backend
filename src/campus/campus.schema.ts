@@ -367,3 +367,34 @@ export class SchoolEvent {
 export const SchoolEventSchema = SchemaFactory.createForClass(SchoolEvent);
 SchoolEventSchema.index({ schoolSlug: 1, startDate: 1, status: 1 });
 SchoolEventSchema.index({ schoolSlug: 1, category: 1 });
+
+// ── Building ──────────────────────────────────────────────────
+// The real foundation for Campus Operations' Buildings tab, which was
+// previously running entirely on fake, hardcoded data. Rooms and
+// Utilities (both still fake at this point) are meant to build on top
+// of this - a Room belongs to a Building, and Utility meter readings
+// are typically tracked per Building too.
+@Schema({ timestamps: true, collection: 'buildings' })
+export class Building {
+  @Prop({ required: true }) code: string;
+  @Prop({ required: true }) name: string;
+  @Prop({ enum: ['Academic', 'Laboratory', 'Administrative', 'Hostel', 'Sports', 'Library', 'Medical', 'Cafeteria'], required: true })
+  type: string;
+  @Prop({ default: 0 }) floors: number;
+  @Prop({ default: 0 }) capacity: number;
+  // Real link to whoever manages this building, denormalized name for
+  // display - matches the same real-link-plus-denormalized-name pattern
+  // already used for Section.classTeacherId/classTeacher.
+  @Prop({ type: Types.ObjectId, ref: 'User' }) managerId: Types.ObjectId;
+  @Prop() managerName: string;
+  @Prop({ enum: ['Compliant', 'Pending', 'Overdue'], default: 'Pending' })
+  fireSafety: string;
+  @Prop({ enum: ['Active', 'Partial Use', 'Renovation', 'Closed'], default: 'Active' })
+  status: string;
+  @Prop() campusId: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const BuildingSchema = SchemaFactory.createForClass(Building);
+export type BuildingDocument = Building & Document;
+BuildingSchema.index({ schoolSlug: 1, code: 1 }, { unique: true });
+BuildingSchema.index({ schoolSlug: 1, campusId: 1 });

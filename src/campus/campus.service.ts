@@ -11,6 +11,7 @@ import {
   MaintenanceRequest, MaintenanceRequestDocument,
   Asset, AssetDocument,
   SchoolEvent, SchoolEventDocument,
+  Building, BuildingDocument,
 } from './campus.schema';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -27,6 +28,7 @@ export class CampusService {
     @InjectModel(MaintenanceRequest.name) private maintenanceModel: Model<MaintenanceRequestDocument>,
     @InjectModel(Asset.name) private assetModel: Model<AssetDocument>,
     @InjectModel(SchoolEvent.name) private eventModel: Model<SchoolEventDocument>,
+    @InjectModel(Building.name) private buildingModel: Model<BuildingDocument>,
   ) {}
 
   async getDashboard(schoolSlug: string) {
@@ -427,5 +429,40 @@ export class CampusService {
     const update: any = { status };
     if (attendance !== undefined) update.actualAttendance = attendance;
     return this.eventModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+  }
+
+  // ── Buildings ────────────────────────────────────────────────
+  async createBuilding(data: any) {
+    return new this.buildingModel(data).save();
+  }
+
+  async getBuildings(schoolSlug: string, query: any) {
+    const { page = 1, limit = 50, campusId, type, status, search } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (campusId) filter.campusId = campusId;
+    if (type) filter.type = type;
+    if (status) filter.status = status;
+    if (search) filter.$or = [
+      { name: { $regex: search, $options: 'i' } },
+      { code: { $regex: search, $options: 'i' } },
+    ];
+    const [data, total] = await Promise.all([
+      this.buildingModel.find(filter).sort({ name: 1 }).skip(skip).limit(+limit),
+      this.buildingModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit } };
+  }
+
+  async updateBuilding(id: string, schoolSlug: string, data: any) {
+    const building = await this.buildingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!building) throw new NotFoundException('Building not found');
+    return building;
+  }
+
+  async deleteBuilding(id: string, schoolSlug: string) {
+    const building = await this.buildingModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!building) throw new NotFoundException('Building not found');
+    return building;
   }
 }
