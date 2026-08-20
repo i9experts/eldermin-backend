@@ -121,6 +121,24 @@ export class StudentsService {
     if (!student) throw new NotFoundException('Student not found');
 
     student.guardians = student.guardians || [];
+
+    // Real root cause of guardians appearing duplicated many times over
+    // in the Guardian Directory: this push() had no duplicate check at
+    // all - the same guardian could be added to the same student
+    // repeatedly (e.g. via "Link to Another Child" if the same student
+    // is accidentally re-selected, since nothing prevented that either).
+    // Phone is the most reliable identifier for "is this the same real
+    // person" - name alone risks false negatives on minor formatting
+    // differences, but the same phone number linked twice to the same
+    // student is never legitimate.
+    const newPhone = (data.phone || '').trim();
+    if (newPhone) {
+      const alreadyLinked = student.guardians.some((g: any) => (g.phone || '').trim() === newPhone);
+      if (alreadyLinked) {
+        throw new BadRequestException(`This guardian (${newPhone}) is already linked to this student.`);
+      }
+    }
+
     student.guardians.push({
       name: `${data.firstName} ${data.lastName}`.trim(),
       relation: data.relation || 'guardian',
@@ -133,6 +151,40 @@ export class StudentsService {
     } as any);
     await student.save();
     return student;
+  }
+
+  /** One-time cleanup for the real damage already done by the missing
+   * duplicate check above - scans every student's guardians[] array and
+   * removes exact duplicates (same phone, or same name if no phone was
+   * ever recorded), keeping the first occurrence of each. Returns a
+   * summary rather than silently running, so an admin can see exactly
+   * what was affected. */
+  async deduplicateGuardians(schoolSlug: string) {
+    const students = await this.studentModel.find({ schoolSlug, 'guardians.1': { $exists: true } });
+    let studentsFixed = 0;
+    let duplicatesRemoved = 0;
+    const affected: { studentId: string; studentName: string; removedCount: number }[] = [];
+
+    for (const student of students) {
+      const seen = new Set<string>();
+      const deduped: any[] = [];
+      for (const g of student.guardians as any[]) {
+        const key = (g.phone || '').trim() || `name:${(g.name || '').trim().toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(g);
+      }
+      const removed = student.guardians.length - deduped.length;
+      if (removed > 0) {
+        student.guardians = deduped as any;
+        await student.save();
+        studentsFixed++;
+        duplicatesRemoved += removed;
+        affected.push({ studentId: String(student._id), studentName: `${student.firstName} ${student.lastName}`, removedCount: removed });
+      }
+    }
+
+    return { studentsFixed, duplicatesRemoved, affected };
   }
 
   async createStudent(dto: CreateStudentDto): Promise<Student> {

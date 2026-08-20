@@ -136,6 +136,15 @@ export class StudentsController {
     return this.studentsService.addGuardianToStudent(body.studentId, schoolSlug, body);
   }
 
+  /** POST /api/v1/students/guardians/deduplicate - one-time cleanup for
+   * duplicate guardian records created before the duplicate check was
+   * added to addGuardianToStudent. Returns a summary of what was fixed. */
+  @Post('guardians/deduplicate')
+  async deduplicateGuardians(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.deduplicateGuardians(schoolSlug);
+  }
+
   /** PUT /api/v1/students/:id */
   @Put(':id')
   async updateStudent(
