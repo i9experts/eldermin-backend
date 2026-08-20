@@ -49,13 +49,21 @@ export class MedicalDto {
 export class CreateStudentDto {
   // Identity
   @IsString() firstName: string;
+  @IsOptional() @IsString() middleName?: string;
   @IsString() lastName: string;
+  @IsOptional() @IsString() preferredName?: string;
   @IsOptional() @IsString() arabicName?: string;
   @IsDateString() dateOfBirth: string;
+  @IsOptional() @IsString() placeOfBirth?: string;
   @IsEnum(['male', 'female']) gender: string;
   @IsOptional() @IsString() nationality?: string;
+  @IsOptional() @IsString() secondNationality?: string;
   @IsOptional() @IsString() religion?: string;
+  @IsOptional() @IsString() motherTongue?: string;
   @IsOptional() @IsString() bForm?: string;
+  @IsOptional() @IsString() nationalId?: string;
+  @IsOptional() @IsString() visaNo?: string;
+  @IsOptional() @IsString() passportNumber?: string;
   @IsOptional() @IsString() photo?: string;
   @IsString() grNo: string;
   @IsOptional() @IsString() rfid?: string;
@@ -64,10 +72,21 @@ export class CreateStudentDto {
   // Contact
   @IsOptional() @IsString() personalEmail?: string;
   @IsOptional() @IsString() personalPhone?: string;
+  @IsOptional() @IsString() whatsApp?: string;
+  @IsOptional() @IsString() altPhone?: string;
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() town?: string;
   @IsOptional() @IsString() city?: string;
   @IsOptional() @IsString() province?: string;
+  @IsOptional() @IsString() country?: string;
+  @IsOptional() @IsString() postalCode?: string;
+
+  // Permanent Address (distinct from current address above)
+  @IsOptional() @IsString() permanentAddress?: string;
+  @IsOptional() @IsString() permanentCity?: string;
+  @IsOptional() @IsString() permanentProvince?: string;
+  @IsOptional() @IsString() permanentCountry?: string;
+  @IsOptional() @IsString() permanentPostalCode?: string;
 
   // Guardians
   @IsOptional() @IsArray() @ValidateNested({ each: true })
@@ -91,10 +110,21 @@ export class CreateStudentDto {
   // Flags
   @IsOptional() @IsBoolean() siblingInSchool?: boolean;
   @IsOptional() @IsBoolean() specialNeeds?: boolean;
+  @IsOptional() @IsBoolean() isGifted?: boolean;
+  @IsOptional() @IsBoolean() isESL?: boolean;
+  @IsOptional() @IsBoolean() isSiblingOfStaff?: boolean;
   @IsOptional() @IsBoolean() scholarshipHolder?: boolean;
   @IsOptional() @IsString() scholarshipDetail?: string;
   @IsOptional() @IsBoolean() transportRequired?: boolean;
   @IsOptional() @IsString() transportRoute?: string;
+  @IsOptional() @IsString() transportStop?: string;
+  @IsOptional() @IsBoolean() hostelResident?: boolean;
+  @IsOptional() @IsBoolean() cafeteriaSubscribed?: boolean;
+
+  // Physical
+  @IsOptional() @IsNumber() heightCm?: number;
+  @IsOptional() @IsNumber() weightKg?: number;
+  @IsOptional() @IsDateString() lastMeasuredOn?: string;
 
   // Programme type - distinguishes Early Years children from K-12 on the
   // same Student record. Not present here would mean the global

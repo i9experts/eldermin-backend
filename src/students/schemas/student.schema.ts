@@ -76,15 +76,22 @@ export class Student {
   // ── Identity ───────────────────────────────────────────────
   @Prop({ required: true, unique: true }) studentId: string; // STU-2025-XXXX
   @Prop({ required: true }) firstName: string;
+  @Prop() middleName: string;
   @Prop({ required: true }) lastName: string;
+  @Prop() preferredName: string; // nickname used day-to-day in class
   @Prop() arabicName: string;
   @Prop({ required: true }) dateOfBirth: Date;
   @Prop() dateOfBirthInWords: string; // e.g. "Fifteenth of March, Two Thousand and Ten" - common on Pakistani official documents (B-Form/NADRA)
+  @Prop() placeOfBirth: string;
   @Prop({ enum: ['male', 'female'], required: true }) gender: string;
   @Prop({ default: 'Pakistani' }) nationality: string;
+  @Prop() secondNationality: string;
   @Prop() religion: string;
+  @Prop() motherTongue: string;
   @Prop() bForm: string;      // NADRA B-Form number
+  @Prop() nationalId: string; // CNIC, for older students who have their own
   @Prop() passportNumber: string;
+  @Prop() visaNo: string;
   @Prop() photo: string;      // URL
   // A permanent, school-wide register number - distinct from
   // currentRollNumber, which is scoped to the student's current
@@ -97,9 +104,23 @@ export class Student {
   @Prop() town: string;     // neighborhood/area within the city, e.g. North Nazimabad, Gulberg
   @Prop() city: string;
   @Prop() province: string;
+  @Prop() country: string;
   @Prop() postalCode: string;
   @Prop() personalEmail: string;
   @Prop() personalPhone: string; // for older students
+  @Prop() whatsApp: string;
+  @Prop() altPhone: string;
+
+  // ── Permanent Address ──────────────────────────────────────
+  // Distinct from the current address above - a family's permanent/
+  // hometown address can genuinely differ from where they currently
+  // live, common enough on Pakistani school forms to need its own set
+  // rather than reusing the current address fields for both.
+  @Prop() permanentAddress: string;
+  @Prop() permanentCity: string;
+  @Prop() permanentProvince: string;
+  @Prop() permanentCountry: string;
+  @Prop() permanentPostalCode: string;
 
   // ── Guardians ──────────────────────────────────────────────
   @Prop({ type: [GuardianSchema], default: [] })
@@ -149,11 +170,21 @@ export class Student {
   @Prop({ default: false }) siblingInSchool: boolean;
   @Prop({ type: [String], default: [] }) siblingIds: string[];
   @Prop({ default: false }) specialNeeds: boolean;
+  @Prop({ default: false }) isGifted: boolean;
+  @Prop({ default: false }) isESL: boolean; // English as a Second Language
+  @Prop({ default: false }) isSiblingOfStaff: boolean;
   @Prop({ default: false }) scholarshipHolder: boolean;
   @Prop() scholarshipDetail: string;
   @Prop({ default: false }) transportRequired: boolean;
   @Prop() transportRoute: string;
+  @Prop() transportStop: string;
   @Prop({ default: false }) hostelResident: boolean;
+  @Prop({ default: false }) cafeteriaSubscribed: boolean;
+
+  // ── Physical ───────────────────────────────────────────────
+  @Prop() heightCm: number;
+  @Prop() weightKg: number;
+  @Prop() lastMeasuredOn: Date;
 
   // ── Status ─────────────────────────────────────────────────
   @Prop({
