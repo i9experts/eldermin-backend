@@ -84,9 +84,29 @@ export class HrService {
   // must still process even if, say, COA hasn't been seeded for this school
   // yet) — errors are swallowed here and show up as gaps in the Trial
   // Balance instead of a hard failure on payroll/claims/advances.
+  //
+  // Real gap found in QA: seedDefaultCOA was only ever triggered by a
+  // manual admin action in Finance settings - a school that never clicked
+  // it had EVERY payroll/advance/claim GL posting fail silently, forever,
+  // with zero visibility anywhere (payslips, PDFs, Mark Paid all "worked"
+  // normally while Finance stayed completely empty). Self-healing now:
+  // on the specific "account not found" failure, auto-seed (idempotent -
+  // upsert-only, never touches an already-configured COA) and retry once.
+  // Zero extra cost for a school that's already set up (no error, no
+  // retry path taken); one-time self-heal for one that was never seeded.
   private async safePostJournal(schoolSlug: string | undefined, dto: Parameters<FinanceService['postJournalEntry']>[1]) {
     if (!schoolSlug) return;
-    try { await this.financeService.postJournalEntry(schoolSlug, dto); } catch (err) { /* see comment above */ }
+    try {
+      await this.financeService.postJournalEntry(schoolSlug, dto);
+    } catch (err: any) {
+      if (err?.message?.includes('not found') && err?.message?.includes('Suspense')) {
+        try {
+          await this.financeService.seedDefaultCOA(schoolSlug);
+          await this.financeService.postJournalEntry(schoolSlug, dto);
+        } catch (retryErr) { /* genuinely failed even after self-heal attempt - swallowed per the comment above */ }
+      }
+      /* other failures swallowed per the comment above */
+    }
   }
 
   private newTid(t: string) { return t; }
@@ -1032,7 +1052,7 @@ export class HrService {
     cancelled: [], // terminal
   };
 
-  async updatePayrollStatus(tenantId: string, id: string, status: string, userId: string) {
+  async updatePayrollStatus(tenantId: string, id: string, status: string, userId: string, schoolSlug?: string) {
     if (!Object.keys(HrService.PAYROLL_TRANSITIONS).includes(status)) {
       throw new BadRequestException(`Invalid payroll status: ${status}`);
     }
@@ -1051,11 +1071,41 @@ export class HrService {
       update.approvedBy = this.newTid(userId);
       update.approvedAt = new Date();
     }
-    return this.payrollRunModel.findOneAndUpdate(
+    const updated = await this.payrollRunModel.findOneAndUpdate(
       { _id: id, tenantId: this.newTid(tenantId) },
       { $set: update },
       { new: true },
     ).lean();
+
+    // The real gap found in QA: createPayslip books the expense and the
+    // liability (Salary Payable) when the payslip is created, but nothing
+    // ever cleared that liability when the money was actually paid out -
+    // Salaries Payable would sit on the books forever even after real
+    // payment, understating cash movement and overstating outstanding
+    // liabilities indefinitely. One consolidated entry per run (not one
+    // per employee - a school with 100 staff doesn't need 100 near-
+    // identical lines for a single bank transfer) clears exactly what was
+    // originally credited to 2100 per payslip: netSalary + the non-tax
+    // deductions folded into it there (loan/leave/other) - tax and PF
+    // stay untouched, since those are owed to a different party (the tax
+    // authority / PF trustee) and get cleared by a separate transaction
+    // when actually remitted, not by paying the employee.
+    if (status === 'paid') {
+      const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) }).lean();
+      const totalPayable = payslips.reduce((sum, p: any) =>
+        sum + (p.netSalary || 0) + (p.loanDeduction || 0) + (p.leaveDeduction || 0) + (p.otherDeductions || 0), 0);
+      if (totalPayable > 0) {
+        await this.safePostJournal(schoolSlug, {
+          date: new Date(), reference: run.periodLabel, narration: `Salary payment — ${run.periodLabel}`,
+          sourceType: 'payroll_payment', sourceId: String(id),
+          lines: [
+            { accountCode: '2100', debit: totalPayable },
+            { accountCode: '1000', credit: totalPayable },
+          ],
+        });
+      }
+    }
+    return updated;
   }
 
   async getPayslips(tenantId: string, query: any = {}) {
