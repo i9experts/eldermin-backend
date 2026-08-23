@@ -1162,6 +1162,14 @@ export class HrService {
   }
 
   async updateSalaryComponent(id: string, schoolSlug: string, dto: any) {
+    // Same duplicate-code check as create - the database's own unique
+    // index already prevents the actual collision, but without this a
+    // renamed/re-coded component would surface a raw MongoDB E11000
+    // error instead of a real, readable message.
+    if (dto.code) {
+      const clash = await this.salaryComponentModel.findOne({ schoolSlug, code: dto.code, _id: { $ne: this.newTid(id) } }).lean();
+      if (clash) throw new BadRequestException(`A component with code "${dto.code}" already exists`);
+    }
     const component = await this.salaryComponentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
     if (!component) throw new NotFoundException('Salary component not found');
     return component;
