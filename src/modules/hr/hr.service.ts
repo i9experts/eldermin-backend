@@ -28,6 +28,8 @@ import * as fontkit from '@pdf-lib/fontkit';
 import * as fs from 'fs';
 import { School, SchoolDocument } from '../../organization/schemas/organization.schema';
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
+import { OfferLetter, OfferLetterDocument } from './schemas/offer-letter.schema';
+import { AppointmentLetter, AppointmentLetterDocument } from './schemas/appointment-letter.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicyDocument } from './schemas/leave-policy.schema';
 import { BiometricConfig, BiometricConfigDocument } from './schemas/biometric-config.schema';
@@ -61,6 +63,8 @@ export class HrService {
     @InjectModel(PerformanceReview.name) private performanceModel: Model<PerformanceReviewDocument>,
     @InjectModel(Training.name) private trainingModel: Model<TrainingDocument>,
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
+    @InjectModel(OfferLetter.name) private offerLetterModel: Model<OfferLetterDocument>,
+    @InjectModel(AppointmentLetter.name) private appointmentLetterModel: Model<AppointmentLetterDocument>,
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
     @InjectModel(BiometricConfig.name) private biometricConfigModel: Model<BiometricConfigDocument>,
@@ -1327,6 +1331,102 @@ export class HrService {
     return staff;
   }
 
+  /** Shared letter-PDF builder for Offer Letters, Appointment Letters,
+   * and Contracts - the three real employment documents that previously
+   * either didn't exist at all (offer/appointment) or generated no
+   * actual document at all (contract, data-only before this). Kept as
+   * one shared method rather than three separate implementations, since
+   * a real letterhead/font-safety bug fixed in one should never need
+   * fixing three more times elsewhere. Uses the same Arabic-font
+   * fallback already verified for payslips and student profiles - a
+   * candidate or staff name containing Arabic script would otherwise
+   * crash the whole letter. */
+  private async buildLetterPdf(schoolName: string, opts: {
+    title: string; refNo?: string; date: Date; recipientName: string;
+    bodyParagraphs: string[]; fields: { label: string; value: string }[];
+    closingLine?: string;
+  }): Promise<Buffer> {
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
+    const page = pdfDoc.addPage([595, 842]); // A4
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const arabicFontBytes = fs.readFileSync(
+      require.resolve('@fontsource/noto-sans-arabic/files/noto-sans-arabic-arabic-400-normal.woff2'),
+    );
+    const arabicFont = await pdfDoc.embedFont(arabicFontBytes);
+    const navy = rgb(0.11, 0.23, 0.37);
+    const gray = rgb(0.42, 0.45, 0.5);
+    const margin = 55;
+    const pageWidth = 595;
+    const textWidth = pageWidth - margin * 2;
+    let y = 780;
+
+    const drawText = (text: string, x: number, yPos: number, opt: { size?: number; f?: any; color?: any } = {}) => {
+      const drawOpts = { x, y: yPos, size: opt.size ?? 10.5, font: opt.f ?? font, color: opt.color ?? rgb(0.15, 0.15, 0.18) };
+      try { page.drawText(text ?? '', drawOpts); }
+      catch { page.drawText(text ?? '', { ...drawOpts, font: arabicFont }); }
+    };
+    // Simple word-wrap - splits a paragraph across multiple lines so
+    // real letter body text (which can run long) doesn't overflow the
+    // page or overlap the next section.
+    const wrapText = (text: string, maxWidth: number, size: number, f: any): string[] => {
+      const words = (text || '').split(' ');
+      const lines: string[] = [];
+      let current = '';
+      for (const word of words) {
+        const attempt = current ? `${current} ${word}` : word;
+        const width = f.widthOfTextAtSize(attempt, size);
+        if (width > maxWidth && current) { lines.push(current); current = word; }
+        else { current = attempt; }
+      }
+      if (current) lines.push(current);
+      return lines;
+    };
+
+    // Letterhead
+    drawText(schoolName, margin, y, { size: 16, f: bold, color: navy });
+    y -= 22;
+    drawText(opts.title.toUpperCase(), margin, y, { size: 13, f: bold, color: navy });
+    y -= 28;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1, color: rgb(0.85, 0.87, 0.9) });
+    y -= 20;
+
+    if (opts.refNo) { drawText(`Ref: ${opts.refNo}`, margin, y, { size: 9.5, color: gray }); y -= 15; }
+    drawText(`Date: ${opts.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}`, margin, y, { size: 9.5, color: gray });
+    y -= 28;
+
+    drawText(`Dear ${opts.recipientName},`, margin, y, { size: 11, f: bold });
+    y -= 24;
+
+    for (const para of opts.bodyParagraphs) {
+      const lines = wrapText(para, textWidth, 10.5, font);
+      for (const line of lines) { drawText(line, margin, y); y -= 16; }
+      y -= 8;
+    }
+
+    y -= 6;
+    for (const field of opts.fields) {
+      drawText(`${field.label}:`, margin, y, { size: 10, f: bold });
+      drawText(field.value, margin + 170, y, { size: 10 });
+      y -= 18;
+    }
+
+    if (opts.closingLine) {
+      y -= 16;
+      const lines = wrapText(opts.closingLine, textWidth, 10.5, font);
+      for (const line of lines) { drawText(line, margin, y); y -= 16; }
+    }
+
+    y -= 50;
+    drawText('_______________________', margin, y, { size: 10 });
+    y -= 16;
+    drawText('Authorized Signatory', margin, y, { size: 9.5, color: gray });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
+  }
+
   async generatePayslipPdf(payslipId: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
     const payslip = await this.payslipModel.findOne({ _id: payslipId, tenantId: this.newTid(tenantId) }).lean();
     if (!payslip) throw new NotFoundException('Payslip not found');
@@ -1527,12 +1627,12 @@ export class HrService {
     return this.contractModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
-  async createContract(tenantId: string, institutionId: string, data: any, userId: string) {
+  async createContract(tenantId: string, institutionId: string, schoolSlug: string, data: any, userId: string) {
     const count = await this.contractModel.countDocuments({ tenantId: this.newTid(tenantId) });
     const contractNo = `CON-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
     const expiresAt = data.endDate ? new Date(data.endDate) : null;
     return this.contractModel.create({
-      ...data, contractNo, expiresAt,
+      ...data, contractNo, expiresAt, schoolSlug,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
       createdBy: this.newTid(userId),
@@ -1554,6 +1654,140 @@ export class HrService {
       this.contractModel.countDocuments({ tenantId: this.newTid(tenantId), status: 'active', expiresAt: { $lt: now } }),
     ]);
     return { active, expiringSoon, expired };
+  }
+
+  async generateContractPdf(id: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
+    const contract = await this.contractModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
+    if (!contract) throw new NotFoundException('Contract not found');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || 'Eldermin School';
+    const typeLabels: Record<string, string> = { permanent: 'Permanent', fixed_term: 'Fixed Term', probationary: 'Probationary', part_time: 'Part Time', visiting: 'Visiting', renewal: 'Renewal' };
+    const buffer = await this.buildLetterPdf(schoolName, {
+      title: 'Employment Contract',
+      refNo: contract.contractNo,
+      date: new Date(),
+      recipientName: contract.staffName || 'Employee',
+      bodyParagraphs: [
+        `This Employment Contract sets out the terms and conditions of your ${typeLabels[contract.type] || contract.type} employment with ${schoolName}, effective from the start date specified below.`,
+        contract.termsAndConditions || 'Your employment is subject to the standard policies and code of conduct of the institution, as may be amended from time to time.',
+      ],
+      fields: [
+        { label: 'Contract Type', value: typeLabels[contract.type] || contract.type },
+        { label: 'Designation', value: contract.designation || '—' },
+        { label: 'Department', value: contract.department || '—' },
+        { label: 'Start Date', value: new Date(contract.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) },
+        { label: 'End Date', value: contract.endDate ? new Date(contract.endDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Open-ended' },
+        { label: 'Gross Salary', value: `${contract.currency} ${(contract.grossSalary || 0).toLocaleString()}/month` },
+        { label: 'Notice Period', value: `${contract.noticePeriodDays} days` },
+        { label: 'Working Hours', value: `${contract.workingHoursPerWeek} hours/week` },
+      ],
+      closingLine: 'Please sign and return a copy of this contract to acknowledge your acceptance of these terms.',
+    });
+    return buffer;
+  }
+
+  // ── OFFER LETTERS ────────────────────────────────────────────────────
+  async getOfferLetters(schoolSlug: string, query: any = {}) {
+    const filter: any = { schoolSlug };
+    if (query.status) filter.status = query.status;
+    return this.offerLetterModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createOfferLetter(tenantId: string, institutionId: string, schoolSlug: string, data: any, userId: string) {
+    const count = await this.offerLetterModel.countDocuments({ schoolSlug });
+    const offerNo = `OFR-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.offerLetterModel.create({
+      ...data, offerNo, schoolSlug,
+      tenantId: this.newTid(tenantId), institutionId: this.newTid(institutionId), createdBy: this.newTid(userId),
+    });
+  }
+
+  async updateOfferLetterStatus(id: string, schoolSlug: string, status: string, extra: any = {}) {
+    const update: any = { status, ...extra };
+    if (['accepted', 'declined'].includes(status)) update.respondedAt = new Date();
+    const offer = await this.offerLetterModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+    if (!offer) throw new NotFoundException('Offer letter not found');
+    return offer;
+  }
+
+  async generateOfferLetterPdf(id: string, schoolSlug: string): Promise<Buffer> {
+    const offer = await this.offerLetterModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!offer) throw new NotFoundException('Offer letter not found');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || 'Eldermin School';
+    return this.buildLetterPdf(schoolName, {
+      title: 'Offer of Employment',
+      refNo: offer.offerNo,
+      date: new Date(),
+      recipientName: offer.candidateName,
+      bodyParagraphs: [
+        `We are pleased to offer you the position of ${offer.designation} at ${schoolName}. We were impressed by your background and believe you will be a valuable addition to our team.`,
+        `This offer is valid until ${new Date(offer.offerValidUntil).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}. Please confirm your acceptance by this date.`,
+        offer.additionalTerms || '',
+      ].filter(Boolean),
+      fields: [
+        { label: 'Designation', value: offer.designation },
+        { label: 'Department', value: offer.department || '—' },
+        { label: 'Proposed Salary', value: `${offer.currency} ${(offer.proposedSalary || 0).toLocaleString()}/month` },
+        { label: 'Proposed Joining Date', value: new Date(offer.proposedJoiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) },
+        ...(offer.probationPeriodMonths ? [{ label: 'Probation Period', value: `${offer.probationPeriodMonths} months` }] : []),
+        ...(offer.reportingTo ? [{ label: 'Reporting To', value: offer.reportingTo }] : []),
+      ],
+      closingLine: 'We look forward to welcoming you to our team. Congratulations!',
+    });
+  }
+
+  // ── APPOINTMENT LETTERS ──────────────────────────────────────────────
+  async getAppointmentLetters(schoolSlug: string, query: any = {}) {
+    const filter: any = { schoolSlug };
+    if (query.staffId) filter.staffId = this.newTid(query.staffId);
+    if (query.status) filter.status = query.status;
+    return this.appointmentLetterModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createAppointmentLetter(tenantId: string, institutionId: string, schoolSlug: string, data: any, userId: string) {
+    const count = await this.appointmentLetterModel.countDocuments({ schoolSlug });
+    const appointmentNo = `APT-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+    return this.appointmentLetterModel.create({
+      ...data, appointmentNo, schoolSlug,
+      tenantId: this.newTid(tenantId), institutionId: this.newTid(institutionId), createdBy: this.newTid(userId),
+    });
+  }
+
+  async updateAppointmentLetterStatus(id: string, schoolSlug: string, status: string) {
+    const update: any = { status };
+    if (status === 'issued') update.issuedAt = new Date();
+    if (status === 'acknowledged') update.acknowledgedAt = new Date();
+    const letter = await this.appointmentLetterModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+    if (!letter) throw new NotFoundException('Appointment letter not found');
+    return letter;
+  }
+
+  async generateAppointmentLetterPdf(id: string, schoolSlug: string): Promise<Buffer> {
+    const letter = await this.appointmentLetterModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!letter) throw new NotFoundException('Appointment letter not found');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || 'Eldermin School';
+    return this.buildLetterPdf(schoolName, {
+      title: 'Appointment Letter',
+      refNo: letter.appointmentNo,
+      date: new Date(),
+      recipientName: letter.staffName || 'Employee',
+      bodyParagraphs: [
+        `Further to your acceptance of our offer, we are pleased to confirm your appointment as ${letter.designation} at ${schoolName}, effective from your joining date specified below.`,
+        letter.additionalTerms || 'Your appointment is subject to the standard policies and code of conduct of the institution, including satisfactory completion of the probation period noted below.',
+      ],
+      fields: [
+        { label: 'Designation', value: letter.designation },
+        { label: 'Department', value: letter.department || '—' },
+        { label: 'Joining Date', value: new Date(letter.joiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) },
+        { label: 'Probation Period', value: `${letter.probationPeriodMonths} months` },
+        { label: 'Salary', value: `${letter.currency} ${(letter.salary || 0).toLocaleString()}/month` },
+        ...(letter.workingHoursPerWeek ? [{ label: 'Working Hours', value: `${letter.workingHoursPerWeek} hours/week` }] : []),
+        ...(letter.reportingTo ? [{ label: 'Reporting To', value: letter.reportingTo }] : []),
+      ],
+      closingLine: 'We welcome you to the team and look forward to a successful association.',
+    });
   }
 
   // ── EXIT ──────────────────────────────────────────────────────────────

@@ -367,10 +367,61 @@ export class HrController {
   getContracts(@Request() req, @Query() q: any) { return this.hrService.getContracts(req.user.tenantId, q); }
 
   @Post('contracts')
-  createContract(@Request() req, @Body() body: any) { return this.hrService.createContract(req.user.tenantId, this.iid(req), body, req.user.userId); }
+  createContract(@Request() req, @Body() body: any) { return this.hrService.createContract(req.user.tenantId, this.iid(req), req.user.schoolSlug, body, req.user.userId); }
 
   @Patch('contracts/:id')
   updateContract(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateContract(req.user.tenantId, id, body); }
+
+  @Get('contracts/:id/pdf')
+  async downloadContractPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
+    const pdf = await this.hrService.generateContractPdf(id, req.user.tenantId, req.user.schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="contract-${id}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
+  // ── OFFER LETTERS ────────────────────────────────────────────────────
+
+  @Get('offer-letters')
+  getOfferLetters(@Request() req, @Query() q: any) { return this.hrService.getOfferLetters(req.user.schoolSlug, q); }
+
+  @Post('offer-letters')
+  createOfferLetter(@Request() req, @Body() body: any) {
+    return this.hrService.createOfferLetter(req.user.tenantId, this.iid(req), req.user.schoolSlug, body, req.user.userId);
+  }
+
+  @Patch('offer-letters/:id/status')
+  updateOfferLetterStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; declineReason?: string }) {
+    return this.hrService.updateOfferLetterStatus(id, req.user.schoolSlug, body.status, body.declineReason ? { declineReason: body.declineReason } : {});
+  }
+
+  @Get('offer-letters/:id/pdf')
+  async downloadOfferLetterPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
+    const pdf = await this.hrService.generateOfferLetterPdf(id, req.user.schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="offer-letter-${id}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
+  // ── APPOINTMENT LETTERS ──────────────────────────────────────────────
+
+  @Get('appointment-letters')
+  getAppointmentLetters(@Request() req, @Query() q: any) { return this.hrService.getAppointmentLetters(req.user.schoolSlug, q); }
+
+  @Post('appointment-letters')
+  createAppointmentLetter(@Request() req, @Body() body: any) {
+    return this.hrService.createAppointmentLetter(req.user.tenantId, this.iid(req), req.user.schoolSlug, body, req.user.userId);
+  }
+
+  @Patch('appointment-letters/:id/status')
+  updateAppointmentLetterStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string }) {
+    return this.hrService.updateAppointmentLetterStatus(id, req.user.schoolSlug, body.status);
+  }
+
+  @Get('appointment-letters/:id/pdf')
+  async downloadAppointmentLetterPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
+    const pdf = await this.hrService.generateAppointmentLetterPdf(id, req.user.schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="appointment-letter-${id}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
 
   // ── EXIT ──────────────────────────────────────────────────────────────
 

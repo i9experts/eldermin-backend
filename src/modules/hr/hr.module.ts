@@ -21,6 +21,8 @@ import { SalaryTemplate, SalaryTemplateSchema } from './schemas/salary-template.
 import { PerformanceReview, PerformanceReviewSchema } from './schemas/performance-review.schema';
 import { Training, TrainingSchema } from './schemas/training.schema';
 import { StaffContract, StaffContractSchema } from './schemas/staff-contract.schema';
+import { OfferLetter, OfferLetterSchema } from './schemas/offer-letter.schema';
+import { AppointmentLetter, AppointmentLetterSchema } from './schemas/appointment-letter.schema';
 import { ExitRecord, ExitRecordSchema } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicySchema } from './schemas/leave-policy.schema';
 import { BiometricConfig, BiometricConfigSchema } from './schemas/biometric-config.schema';
@@ -58,6 +60,8 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: PerformanceReview.name, schema: PerformanceReviewSchema },
       { name: Training.name, schema: TrainingSchema },
       { name: StaffContract.name, schema: StaffContractSchema },
+      { name: OfferLetter.name, schema: OfferLetterSchema },
+      { name: AppointmentLetter.name, schema: AppointmentLetterSchema },
       { name: ExitRecord.name, schema: ExitRecordSchema },
       { name: LeavePolicy.name, schema: LeavePolicySchema },
       { name: BiometricConfig.name, schema: BiometricConfigSchema },

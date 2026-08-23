@@ -7,6 +7,7 @@ export class StaffContract {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Staff' }) staffId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
+  @Prop({ index: true }) schoolSlug: string;
   @Prop() staffName: string;
   @Prop() contractNo: string;
   @Prop({ enum: ['permanent','fixed_term','probationary','part_time','visiting','renewal'], required: true }) type: string;
