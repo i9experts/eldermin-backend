@@ -78,7 +78,7 @@ export class DocumentsService {
       filter.$or = searchOr;
     }
     const [data, total] = await Promise.all([
-      this.docModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.docModel.find(filter).populate('campusId', 'name').sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.docModel.countDocuments(filter),
     ]);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
