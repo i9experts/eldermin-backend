@@ -993,10 +993,44 @@ export class HrService {
     return { deleted: true };
   }
 
+  // Real state machine, not a blind string write - the previous version
+  // accepted any status value with no transition check at all, meaning
+  // a run that was correctly left at 'processing' by processPayrollBatch
+  // (because some staff genuinely failed) could still be clicked
+  // straight to 'approved' from the UI, with no one ever noticing some
+  // staff never got a payslip. 'approved' is only reachable from
+  // 'completed' now - the actual fix for that gap.
+  private static readonly PAYROLL_TRANSITIONS: Record<string, string[]> = {
+    draft: ['processing', 'cancelled'],
+    processing: ['completed', 'cancelled'], // NOT 'approved' directly - must genuinely complete first
+    completed: ['approved', 'cancelled'],
+    approved: ['paid', 'cancelled'],
+    paid: [], // terminal - real money has moved, nothing should change this after the fact
+    cancelled: [], // terminal
+  };
+
   async updatePayrollStatus(tenantId: string, id: string, status: string, userId: string) {
+    if (!Object.keys(HrService.PAYROLL_TRANSITIONS).includes(status)) {
+      throw new BadRequestException(`Invalid payroll status: ${status}`);
+    }
+    const run = await this.payrollRunModel.findOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (!run) throw new NotFoundException('Payroll run not found');
+    const allowed = HrService.PAYROLL_TRANSITIONS[run.status] || [];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException(`Cannot move a payroll run from '${run.status}' to '${status}'.`);
+    }
+    const update: any = { status };
+    // Only a genuine approval actually stamps who approved it and when -
+    // every other transition (marking paid, cancelling, etc) leaves that
+    // field alone rather than overwriting it with whoever happened to
+    // click the next button.
+    if (status === 'approved') {
+      update.approvedBy = this.newTid(userId);
+      update.approvedAt = new Date();
+    }
     return this.payrollRunModel.findOneAndUpdate(
       { _id: id, tenantId: this.newTid(tenantId) },
-      { $set: { status, approvedBy: this.newTid(userId), approvedAt: new Date() } },
+      { $set: update },
       { new: true },
     ).lean();
   }
