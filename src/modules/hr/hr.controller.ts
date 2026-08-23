@@ -422,6 +422,11 @@ export class HrController {
     return this.hrService.assignStaffShift(id, req.user.tenantId, body.shiftId);
   }
 
+  @Patch('staff/:id/shifts')
+  assignStaffShifts(@Request() req, @Param('id') id: string, @Body() body: { shiftIds: string[] }) {
+    return this.hrService.assignStaffShifts(id, req.user.tenantId, body.shiftIds || []);
+  }
+
   // ── REMINDERS (holidays + upcoming) ───────────────────────────────────
 
   @Get('holidays')

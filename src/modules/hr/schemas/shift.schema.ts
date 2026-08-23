@@ -21,6 +21,15 @@ export class Shift {
   @Prop({ default: 60 }) lateThresholdMinutes: number;
   @Prop() halfDayCutoffTime: string; // optional override; falls back to school AttendanceSettings.halfDayCutoffTime if unset
   @Prop({ type: [String], default: ['mon', 'tue', 'wed', 'thu', 'fri'] }) applicableDays: string[];
+  // Only meaningful when 'sat' is in applicableDays - schools vary widely:
+  // some work every Saturday, some alternate weeks, some close one specific
+  // Saturday a month (commonly the last one). 'all_except_nth' with
+  // saturdayOffOccurrence=5 means "the last Saturday of the month", correctly
+  // resolved per-month rather than hardcoded to a fixed date-of-month, since
+  // a month can have either 4 or 5 Saturdays.
+  @Prop({ enum: ['all', 'alternate_odd', 'alternate_even', 'all_except_nth'], default: 'all' })
+  saturdayPolicy: string;
+  @Prop({ min: 1, max: 5 }) saturdayOffOccurrence: number; // 1-4 = that occurrence, 5 = "last" regardless of whether the month has 4 or 5 Saturdays
   @Prop({ default: true }) isActive: boolean;
   @Prop({ default: false }) isDefault: boolean; // the shift assigned to staff who haven't been explicitly assigned one
 }

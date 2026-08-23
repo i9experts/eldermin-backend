@@ -754,9 +754,15 @@ export class HrService {
     const shiftById = new Map(shifts.map((s: any) => [String(s._id), s]));
     const defaultShift = shifts.find((s: any) => s.isDefault) || null;
 
-    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId shiftId').lean();
+    const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId shiftId shiftIds').lean();
     const employeeIdMap = new Map(staffList.map(s => [s.employeeId, s._id.toString()]));
-    const staffShiftMap = new Map(staffList.map((s: any) => [String(s._id), s.shiftId ? String(s.shiftId) : null]));
+    // shiftIds (new, multi-shift) takes priority; legacy single shiftId is
+    // the fallback for staff never migrated to the new array - both keep
+    // working, nothing silently breaks for an already-configured school.
+    const staffShiftsMap = new Map(staffList.map((s: any) => {
+      const ids: string[] = (s.shiftIds && s.shiftIds.length > 0) ? s.shiftIds.map((id: any) => String(id)) : (s.shiftId ? [String(s.shiftId)] : []);
+      return [String(s._id), ids];
+    }));
 
     const ops: any[] = [];
     const skipped: number[] = [];
@@ -771,17 +777,30 @@ export class HrService {
       if (statusCol !== -1) {
         status = cols[statusCol] || 'present';
       } else if (attendanceSettings || shifts.length) {
-        const assignedShiftId = staffShiftMap.get(String(staffId));
-        const shift = (assignedShiftId && shiftById.get(assignedShiftId)) || defaultShift;
-        const rule = shift
+        const assignedIds = staffShiftsMap.get(String(staffId)) || [];
+        const assignedShifts = assignedIds.map(id => shiftById.get(id)).filter(Boolean);
+        // A specific date this person was actually assigned a shift for -
+        // e.g. their Mon-Thu shift on a Monday, their Friday-only shift on
+        // a Friday, or their Saturday shift only on a Saturday that isn't
+        // off under that shift's own policy.
+        const resolvedShift = this.resolveShiftForDate(assignedShifts, new Date(date)) || defaultShift;
+        const rule = resolvedShift
           ? {
-              standardCheckInTime: shift.startTime,
-              graceMinutes: shift.graceMinutes,
-              lateThresholdMinutes: shift.lateThresholdMinutes,
-              halfDayCutoffTime: shift.halfDayCutoffTime || attendanceSettings?.halfDayCutoffTime,
+              standardCheckInTime: resolvedShift.startTime,
+              graceMinutes: resolvedShift.graceMinutes,
+              lateThresholdMinutes: resolvedShift.lateThresholdMinutes,
+              halfDayCutoffTime: resolvedShift.halfDayCutoffTime || attendanceSettings?.halfDayCutoffTime,
             }
           : attendanceSettings;
-        status = rule ? this.computeAttendanceStatus(checkInTime, rule) : 'present';
+        // No shift (assigned or default) covers this exact date - most
+        // likely a policy-driven day off (e.g. an alternate Saturday) or a
+        // day genuinely outside anyone's working days. Not an absence -
+        // there was never an expectation of showing up.
+        if (!resolvedShift && assignedShifts.length > 0) {
+          status = 'weekend';
+        } else {
+          status = rule ? this.computeAttendanceStatus(checkInTime, rule) : 'present';
+        }
       }
       ops.push({
         updateOne: {
@@ -1769,7 +1788,7 @@ export class HrService {
   }
 
   async deleteShift(id: string, schoolSlug: string) {
-    const inUse = await this.staffModel.countDocuments({ schoolSlug, shiftId: this.newTid(id) } as any);
+    const inUse = await this.staffModel.countDocuments({ schoolSlug, $or: [{ shiftId: this.newTid(id) }, { shiftIds: this.newTid(id) }] } as any);
     if (inUse > 0) {
       throw new BadRequestException(`This shift is assigned to ${inUse} staff member(s) — reassign them first or deactivate the shift instead of deleting it`);
     }
@@ -1792,6 +1811,79 @@ export class HrService {
   // school's configured grace period and half-day cutoff, instead of every
   // imported row silently defaulting to 'present' regardless of when someone
   // actually checked in.
+  private static readonly DAY_CODES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+  private getSaturdayOccurrenceInMonth(date: Date): number {
+    return Math.ceil(date.getDate() / 7);
+  }
+
+  private isLastSaturdayOfMonth(date: Date): boolean {
+    const nextWeek = new Date(date);
+    nextWeek.setDate(date.getDate() + 7);
+    return nextWeek.getMonth() !== date.getMonth();
+  }
+
+  /** Whether a specific calendar Saturday actually counts as a working day
+   * under a shift's policy. Directly verified against real dates, including
+   * the tricky case of "last Saturday off" needing to correctly land on
+   * either the 4th or 5th Saturday depending on how many the month has. */
+  private isWorkingSaturday(date: Date, policy?: string, offOccurrence?: number): boolean {
+    if (!policy || policy === 'all') return true;
+    const occurrence = this.getSaturdayOccurrenceInMonth(date);
+    if (policy === 'alternate_odd') return occurrence % 2 === 1;
+    if (policy === 'alternate_even') return occurrence % 2 === 0;
+    if (policy === 'all_except_nth') {
+      if (offOccurrence === 5) return !this.isLastSaturdayOfMonth(date);
+      return occurrence !== offOccurrence;
+    }
+    return true;
+  }
+
+  /** Given the shift(s) actually assigned to a staff member and a specific
+   * date, finds which one applies - most schools need different timings on
+   * different days (Mon-Thu one shift, Friday another, Saturday a third or
+   * none), which a single shiftId could never express. Returns null if no
+   * assigned shift covers this date (including a Saturday that's off under
+   * whichever shift would otherwise cover it), meaning the day isn't a
+   * working day for this person at all - not that they're absent. */
+  private resolveShiftForDate(shifts: any[], date: Date): any | null {
+    const dc = HrService.DAY_CODES[date.getDay()];
+    for (const shift of shifts) {
+      if (!(shift.applicableDays || []).includes(dc)) continue;
+      if (dc === 'sat' && !this.isWorkingSaturday(date, shift.saturdayPolicy, shift.saturdayOffOccurrence)) continue;
+      return shift;
+    }
+    return null;
+  }
+
+  /** Replaces a single shiftId assignment with a real set - validates the
+   * assigned shifts don't ambiguously overlap on the same day (e.g. two
+   * shifts both claiming Monday), since resolveShiftForDate would otherwise
+   * silently pick whichever came first with no way for an admin to know
+   * that happened. */
+  async assignStaffShifts(staffId: string, tenantId: string, shiftIds: string[]) {
+    if (shiftIds.length > 1) {
+      const shifts = await this.shiftModel.find({ _id: { $in: shiftIds.map(id => this.newTid(id)) } }).select('name applicableDays').lean();
+      const seenDays = new Map<string, string>(); // day -> shift name that already claimed it
+      for (const shift of shifts) {
+        for (const day of shift.applicableDays || []) {
+          const clashName = seenDays.get(day);
+          if (clashName) {
+            throw new BadRequestException(`"${clashName}" and "${shift.name}" both cover ${day} - a staff member's assigned shifts can't overlap on the same day`);
+          }
+          seenDays.set(day, shift.name);
+        }
+      }
+    }
+    const staff = await this.staffModel.findOneAndUpdate(
+      { _id: staffId, tenantId: this.newTid(tenantId) },
+      { $set: { shiftIds: shiftIds.map(id => this.newTid(id)) } },
+      { new: true },
+    );
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff;
+  }
+
   private computeAttendanceStatus(checkInTime: string, settings: any): string {
     if (!checkInTime) return 'absent';
     const toMinutes = (hhmm: string) => {

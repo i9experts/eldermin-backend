@@ -113,6 +113,15 @@ export class Staff {
   @Prop({ type: Types.ObjectId, ref: 'Shift', default: null })
   shiftId: Types.ObjectId | null;
 
+  // Multiple shifts for staff whose timing genuinely differs by day (most
+  // schools: Mon-Thu one timing, Friday another, Saturday a third or none
+  // at all). Additive alongside shiftId above rather than replacing it -
+  // existing single-shift assignments keep working exactly as before;
+  // resolution checks this array first (matching the actual day) and only
+  // falls back to the legacy single shiftId if this is empty.
+  @Prop({ type: [Types.ObjectId], ref: 'Shift', default: [] })
+  shiftIds: Types.ObjectId[];
+
   @Prop({
     type: {
       title: String, middleName: String, preferredName: String, arabicName: String,
