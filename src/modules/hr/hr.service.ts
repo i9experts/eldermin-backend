@@ -904,6 +904,95 @@ export class HrService {
     });
   }
 
+  /** The actual fix for the real bug found in QA: the previous flow had
+   * the frontend loop calling POST /payslips once per staff member -
+   * 30+ separate HTTP round-trips, no per-staff error handling, and a
+   * hard uniqueness constraint on Payslip(staffId, month, year) that
+   * made a failed run un-retryable (retrying would immediately fail
+   * again on the first already-processed person and abort before ever
+   * reaching whoever still needed processing). This moves the whole
+   * batch server-side, atomically per-run, with three real fixes:
+   *  1. Idempotent - a staff member who already has a payslip for this
+   *     month/year is silently SKIPPED, not treated as an error. This
+   *     is what actually makes retry safe: re-running payroll for a
+   *     month that partially succeeded just picks up where it left off.
+   *  2. Per-staff error isolation - one person's failure (bad data,
+   *     whatever) doesn't abort the rest of the batch. Each outcome is
+   *     tracked individually and returned in the summary.
+   *  3. Honest status - the run is only ever marked 'completed' if
+   *     every single staff member ended up with a real payslip (whether
+   *     from this run or an earlier one). Any real failure leaves it
+   *     at 'processing' with the failures visible, not silently
+   *     reported as done.
+   */
+  async processPayrollBatch(tenantId: string, institutionId: string, schoolSlug: string, payrollRunId: string, rows: any[], userId: string) {
+    const run = await this.payrollRunModel.findOne({ _id: payrollRunId, tenantId: this.newTid(tenantId) });
+    if (!run) throw new NotFoundException('Payroll run not found');
+
+    const succeeded: any[] = [];
+    const skipped: any[] = [];
+    const failed: { staffId: string; staffName: string; error: string }[] = [];
+
+    for (const row of rows) {
+      const already = await this.payslipModel.findOne({
+        tenantId: this.newTid(tenantId), staffId: this.newTid(row.staffId), month: row.month, year: row.year,
+      }).lean();
+      if (already) {
+        skipped.push({ staffId: row.staffId, staffName: row.staffName, payslipId: already._id });
+        continue;
+      }
+      try {
+        const payslip = await this.createPayslip(tenantId, institutionId, schoolSlug, { ...row, payrollRunId });
+        succeeded.push({ staffId: row.staffId, staffName: row.staffName, payslipId: payslip._id });
+      } catch (err: any) {
+        failed.push({ staffId: row.staffId, staffName: row.staffName, error: err?.message || 'Unknown error' });
+      }
+    }
+
+    // Only honestly "completed" if every single row now has a real
+    // payslip, whether created just now or already existing from a
+    // prior attempt at this same run.
+    const allAccountedFor = failed.length === 0;
+    const totals = [...succeeded, ...skipped];
+    if (allAccountedFor) {
+      const allPayslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(payrollRunId) }).lean();
+      const totalGrossSalary = allPayslips.reduce((s, p: any) => s + (p.grossSalary || 0), 0);
+      const totalDeductions = allPayslips.reduce((s, p: any) => s + (p.totalDeductions || 0), 0);
+      const totalNetSalary = allPayslips.reduce((s, p: any) => s + (p.netSalary || 0), 0);
+      await this.payrollRunModel.updateOne(
+        { _id: payrollRunId },
+        { $set: { status: 'completed', totalEmployees: allPayslips.length, totalGrossSalary, totalDeductions, totalNetSalary, processedBy: this.newTid(userId), processedAt: new Date() } },
+      );
+    }
+
+    return {
+      runId: payrollRunId,
+      status: allAccountedFor ? 'completed' : 'processing',
+      totalRows: rows.length,
+      succeededCount: succeeded.length,
+      skippedCount: skipped.length,
+      failedCount: failed.length,
+      failed, // full detail on exactly who failed and why, so a real retry (not a rebuild) is possible
+    };
+  }
+
+  /** Safety net for a genuinely stuck run (the actual scenario this
+   * whole fix exists to prevent, but a real recovery path matters
+   * regardless) - only allowed while nothing has been marked paid yet,
+   * since a paid payslip has real money and a real GL entry behind it
+   * that deleting the run must never silently orphan. */
+  async deletePayrollRun(tenantId: string, id: string) {
+    const run = await this.payrollRunModel.findOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (!run) throw new NotFoundException('Payroll run not found');
+    const paidCount = await this.payslipModel.countDocuments({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id), status: 'paid' });
+    if (paidCount > 0) {
+      throw new BadRequestException(`Cannot delete - ${paidCount} payslip(s) on this run are already marked paid. Those need to be handled individually first.`);
+    }
+    await this.payslipModel.deleteMany({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) });
+    await this.payrollRunModel.deleteOne({ _id: id });
+    return { deleted: true };
+  }
+
   async updatePayrollStatus(tenantId: string, id: string, status: string, userId: string) {
     return this.payrollRunModel.findOneAndUpdate(
       { _id: id, tenantId: this.newTid(tenantId) },

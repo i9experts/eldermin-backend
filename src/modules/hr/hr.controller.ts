@@ -251,6 +251,16 @@ export class HrController {
   @Patch('payroll/runs/:id/status')
   updatePayrollStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string }) { return this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId); }
 
+  @Post('payroll/runs/:id/process-batch')
+  processPayrollBatch(@Request() req, @Param('id') id: string, @Body() body: { rows: any[] }) {
+    return this.hrService.processPayrollBatch(req.user.tenantId, this.iid(req), req.user.schoolSlug, id, body.rows, req.user.userId);
+  }
+
+  @Delete('payroll/runs/:id')
+  deletePayrollRun(@Request() req, @Param('id') id: string) {
+    return this.hrService.deletePayrollRun(req.user.tenantId, id);
+  }
+
   // ── PAYSLIPS ──────────────────────────────────────────────────────────
 
   @Get('payslips')
