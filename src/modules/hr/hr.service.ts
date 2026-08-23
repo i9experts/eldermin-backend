@@ -23,6 +23,8 @@ import { SalaryComponent, SalaryComponentDocument } from './schemas/salary-compo
 import { PerformanceReview, PerformanceReviewDocument } from './schemas/performance-review.schema';
 import { Training, TrainingDocument } from './schemas/training.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import * as fontkit from '@pdf-lib/fontkit';
+import * as fs from 'fs';
 import { School, SchoolDocument } from '../../organization/schemas/organization.schema';
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
@@ -1213,16 +1215,31 @@ export class HrService {
     const schoolName = (school as any)?.name || 'Eldermin School';
 
     const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
     const page = pdfDoc.addPage([595, 842]); // A4
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    // Standard fonts only support WinAnsi encoding - a staff name (or
+    // school name) containing Arabic script crashes the whole payslip
+    // otherwise. Same real, verified fix already applied to student
+    // profile PDFs - tries the requested font first, only falls back to
+    // this real Arabic-capable font if that specific draw call throws.
+    const arabicFontBytes = fs.readFileSync(
+      require.resolve('@fontsource/noto-sans-arabic/files/noto-sans-arabic-arabic-400-normal.woff2'),
+    );
+    const arabicFont = await pdfDoc.embedFont(arabicFontBytes);
     const navy = rgb(0.11, 0.23, 0.37);
     const gray = rgb(0.42, 0.45, 0.5);
     const lightGray = rgb(0.95, 0.96, 0.97);
     let y = 800;
 
     const drawText = (text: string, x: number, yPos: number, opts: { size?: number; f?: any; color?: any } = {}) => {
-      page.drawText(text ?? '', { x, y: yPos, size: opts.size ?? 10, font: opts.f ?? font, color: opts.color ?? rgb(0.15, 0.15, 0.18) });
+      const drawOpts = { x, y: yPos, size: opts.size ?? 10, font: opts.f ?? font, color: opts.color ?? rgb(0.15, 0.15, 0.18) };
+      try {
+        page.drawText(text ?? '', drawOpts);
+      } catch {
+        page.drawText(text ?? '', { ...drawOpts, font: arabicFont });
+      }
     };
     const fmt = (n: number) => `${payslip.currency || 'PKR'} ${Number(n || 0).toLocaleString()}`;
 
