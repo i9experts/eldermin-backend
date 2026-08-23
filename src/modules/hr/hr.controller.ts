@@ -291,6 +291,27 @@ export class HrController {
     return this.hrService.deleteSalaryComponent(id, req.user.schoolSlug);
   }
 
+  // ── SALARY TEMPLATES (addresses "everything is manual") ─────────────
+  @Get('salary-templates')
+  getSalaryTemplates(@Request() req) {
+    return this.hrService.getSalaryTemplates(req.user.schoolSlug);
+  }
+
+  @Post('salary-templates')
+  createSalaryTemplate(@Request() req, @Body() body: any) {
+    return this.hrService.createSalaryTemplate(req.user.tenantId, req.user.schoolSlug, body);
+  }
+
+  @Patch('salary-templates/:id')
+  updateSalaryTemplate(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.hrService.updateSalaryTemplate(id, req.user.schoolSlug, body);
+  }
+
+  @Delete('salary-templates/:id')
+  deleteSalaryTemplate(@Request() req, @Param('id') id: string) {
+    return this.hrService.deleteSalaryTemplate(id, req.user.schoolSlug);
+  }
+
   @Patch('staff/:id/salary-structure')
   setStaffSalaryStructure(@Request() req, @Param('id') id: string, @Body() body: { lines: { componentId: string; amount: number }[] }) {
     return this.hrService.setStaffSalaryStructure(id, req.user.tenantId, req.user.schoolSlug, body.lines);

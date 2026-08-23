@@ -20,6 +20,7 @@ import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.sche
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { SalaryComponent, SalaryComponentDocument } from './schemas/salary-component.schema';
+import { SalaryTemplate, SalaryTemplateDocument } from './schemas/salary-template.schema';
 import { PerformanceReview, PerformanceReviewDocument } from './schemas/performance-review.schema';
 import { Training, TrainingDocument } from './schemas/training.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
@@ -56,6 +57,7 @@ export class HrService {
     @InjectModel(PayrollRun.name) private payrollRunModel: Model<PayrollRunDocument>,
     @InjectModel(Payslip.name) private payslipModel: Model<PayslipDocument>,
     @InjectModel(SalaryComponent.name) private salaryComponentModel: Model<SalaryComponentDocument>,
+    @InjectModel(SalaryTemplate.name) private salaryTemplateModel: Model<SalaryTemplateDocument>,
     @InjectModel(PerformanceReview.name) private performanceModel: Model<PerformanceReviewDocument>,
     @InjectModel(Training.name) private trainingModel: Model<TrainingDocument>,
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
@@ -1183,6 +1185,33 @@ export class HrService {
     const result = await this.salaryComponentModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!result) throw new NotFoundException('Salary component not found');
     return { message: 'Salary component deleted' };
+  }
+
+  // ── Salary Templates (addresses "everything is manual") ──────────────
+  async getSalaryTemplates(schoolSlug: string) {
+    return this.salaryTemplateModel.find({ schoolSlug, isActive: true }).populate('lines.componentId', 'name code type').lean();
+  }
+
+  async createSalaryTemplate(tenantId: string, schoolSlug: string, dto: any) {
+    const existing = await this.salaryTemplateModel.findOne({ schoolSlug, name: dto.name });
+    if (existing) throw new BadRequestException(`A template named "${dto.name}" already exists`);
+    return this.salaryTemplateModel.create({ ...dto, tenantId: this.newTid(tenantId), schoolSlug });
+  }
+
+  async updateSalaryTemplate(id: string, schoolSlug: string, dto: any) {
+    if (dto.name) {
+      const clash = await this.salaryTemplateModel.findOne({ schoolSlug, name: dto.name, _id: { $ne: this.newTid(id) } }).lean();
+      if (clash) throw new BadRequestException(`A template named "${dto.name}" already exists`);
+    }
+    const template = await this.salaryTemplateModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!template) throw new NotFoundException('Salary template not found');
+    return template;
+  }
+
+  async deleteSalaryTemplate(id: string, schoolSlug: string) {
+    const result = await this.salaryTemplateModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Salary template not found');
+    return { message: 'Salary template deleted' };
   }
 
   // Sets a specific staff member's actual salary structure — the real

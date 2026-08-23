@@ -17,6 +17,7 @@ import { LeaveBalance, LeaveBalanceSchema } from './schemas/leave-balance.schema
 import { PayrollRun, PayrollRunSchema } from './schemas/payroll-run.schema';
 import { Payslip, PayslipSchema } from './schemas/payslip.schema';
 import { SalaryComponent, SalaryComponentSchema } from './schemas/salary-component.schema';
+import { SalaryTemplate, SalaryTemplateSchema } from './schemas/salary-template.schema';
 import { PerformanceReview, PerformanceReviewSchema } from './schemas/performance-review.schema';
 import { Training, TrainingSchema } from './schemas/training.schema';
 import { StaffContract, StaffContractSchema } from './schemas/staff-contract.schema';
@@ -53,6 +54,7 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: PayrollRun.name, schema: PayrollRunSchema },
       { name: Payslip.name, schema: PayslipSchema },
       { name: SalaryComponent.name, schema: SalaryComponentSchema },
+      { name: SalaryTemplate.name, schema: SalaryTemplateSchema },
       { name: PerformanceReview.name, schema: PerformanceReviewSchema },
       { name: Training.name, schema: TrainingSchema },
       { name: StaffContract.name, schema: StaffContractSchema },
