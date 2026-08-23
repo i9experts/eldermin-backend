@@ -35,6 +35,11 @@ export class Staff {
   @Prop()
   dateOfBirth: Date;
 
+  // Common secondary identifier on Pakistani institutional staff records -
+  // used alongside name since names alone can repeat.
+  @Prop()
+  fatherName: string;
+
   @Prop()
   dateOfJoining: Date;
 

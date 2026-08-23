@@ -9,7 +9,7 @@ export class StaffAttendance {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'Campus' }) campusId: Types.ObjectId;
   @Prop({ required: true }) date: Date;
-  @Prop({ enum: ['present','absent','late','half_day','on_leave','holiday','weekend','remote'], default: 'absent' }) status: string;
+  @Prop({ enum: ['present','absent','late','half_day','on_leave','sick_leave','holiday','weekend','remote','extra_day'], default: 'absent' }) status: string;
   @Prop() checkInTime: string;
   @Prop() checkOutTime: string;
   @Prop({ default: 0 }) lateByMins: number;

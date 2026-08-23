@@ -176,6 +176,11 @@ export class HrController {
   @Post('attendance/bulk')
   markAttendance(@Request() req, @Body() body: { records: any[] }) { return this.hrService.markStaffAttendance(req.user.tenantId, this.iid(req), body.records); }
 
+  @Delete('attendance')
+  deleteAttendance(@Request() req, @Body() body: { date: string; staffIds: string[] }) {
+    return this.hrService.deleteStaffAttendance(req.user.tenantId, body.date, body.staffIds);
+  }
+
   @Post('attendance/biometric/config')
   saveBiometricConfig(@Request() req, @Body() body: any) { return this.hrService.saveBiometricConfig(req.user.tenantId, body); }
 

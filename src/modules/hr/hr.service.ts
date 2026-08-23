@@ -653,6 +653,19 @@ export class HrService {
     return { message: `${records.length} attendance records saved` };
   }
 
+  /** Deletes specific staff members' attendance records for one date -
+   * the real gap behind the toolbar's delete icon in the comparison
+   * screenshot. Scoped to (tenantId, date, staffId in [...]) rather than
+   * accepting raw record ids, since the frontend already tracks
+   * selection by staffId for this exact screen. */
+  async deleteStaffAttendance(tenantId: string, date: string, staffIds: string[]) {
+    if (!staffIds?.length) throw new BadRequestException('No staff selected to delete attendance for');
+    const result = await this.staffAttendanceModel.deleteMany({
+      tenantId: this.newTid(tenantId), date: new Date(date), staffId: { $in: staffIds.map((id) => this.newTid(id)) },
+    });
+    return { deletedCount: result.deletedCount };
+  }
+
   async getAttendanceSummary(tenantId: string, month: number, year: number) {
     const start = new Date(year, month - 1, 1);
     const end = new Date(year, month, 0);
