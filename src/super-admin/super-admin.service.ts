@@ -255,7 +255,7 @@ export class SuperAdminService {
   // INSTITUTION MANAGEMENT
   // ============================================================
   async getInstitutions(query: any) {
-    const { page = 1, limit = 20, search, status, plan, city, churnRisk, sortBy = 'createdAt', sortOrder = 'desc' } = query;
+    const { page = 1, limit = 20, search, status, plan, city, churnRisk, resellerId, sortBy = 'createdAt', sortOrder = 'desc' } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = {};
@@ -263,6 +263,7 @@ export class SuperAdminService {
     if (plan) filter.plan = plan;
     if (city) filter.city = { $regex: city, $options: 'i' };
     if (churnRisk === 'true') filter.isAtChurnRisk = true;
+    if (resellerId) filter.resellerId = resellerId;
     if (search) {
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },

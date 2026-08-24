@@ -38,6 +38,7 @@ import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
 import { ComplaintsModule } from './complaints/complaints.module';
 import { ParentPortalModule } from './parent-portal/parent-portal.module';
+import { ResellersModule } from './resellers/resellers.module';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { ParentPortalModule } from './parent-portal/parent-portal.module';
     EceModule,
     ComplaintsModule,
     ParentPortalModule,
+    ResellersModule,
   ],
   controllers: [AppController],
   providers: [

@@ -161,6 +161,16 @@ export class Institution {
   // Referral
   @Prop() referredBy: string;
   @Prop() campaignSource: string;
+
+  // Reseller / Partner Network — real link to the Reseller collection
+  // (see src/resellers/schemas/reseller.schema.ts), with a denormalized
+  // name for display, matching the same real-link-plus-denormalized-name
+  // convention already used for Building.managerId/managerName and
+  // Section.classTeacherId/classTeacher. null/undefined means this
+  // institution was signed up direct, not through a partner.
+  @Prop({ type: Types.ObjectId, ref: 'Reseller', default: null, index: true })
+  resellerId: Types.ObjectId | null;
+  @Prop() resellerName: string;
 }
 
 export const InstitutionSchema = SchemaFactory.createForClass(Institution);
@@ -169,6 +179,7 @@ InstitutionSchema.index({ trialEndDate: 1 });
 InstitutionSchema.index({ subscriptionEndDate: 1 });
 InstitutionSchema.index({ lastActivityAt: 1 });
 InstitutionSchema.index({ city: 1, country: 1 });
+InstitutionSchema.index({ resellerId: 1, status: 1 });
 
 // ============================================================
 // SUBSCRIPTION HISTORY
