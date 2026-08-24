@@ -9,9 +9,11 @@ import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { Campus, CampusDocument } from '../../organization/schemas/organization.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
+import { Reseller, ResellerDocument } from '../../resellers/schemas/reseller.schema';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
+import { UserRole } from '../../auth/roles.enum';
 
 @Injectable()
 export class AuthService {
@@ -21,6 +23,7 @@ export class AuthService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    @InjectModel(Reseller.name) private resellerModel: Model<ResellerDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -76,6 +79,54 @@ export class AuthService {
     const valid = await bcrypt.compare(password, hash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
+    const role = user.primaryRole || user.role;
+
+    // Eldermin Partner Network — Reseller Portal v1. A reseller_admin/
+    // reseller_support account is platform-level, same as super_admin: it
+    // has no school Tenant at all, so the normal tenant-resolution path
+    // below (and everything scoped by schoolSlug/campusId) doesn't apply.
+    // Short-circuit into a dedicated, much smaller response shape instead.
+    if (role === UserRole.RESELLER_ADMIN || role === UserRole.RESELLER_SUPPORT) {
+      if (user.isActive === false) throw new ForbiddenException('Account suspended');
+      const reseller = user.resellerId
+        ? await this.resellerModel.findById(user.resellerId).lean()
+        : null;
+      if (!reseller) throw new ForbiddenException('Your partner account is not linked to a reseller. Contact Eldermin support.');
+      if (reseller.status === 'suspended' || reseller.status === 'terminated') {
+        throw new ForbiddenException(`This partner account is ${reseller.status}.`);
+      }
+
+      await this.userModel.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
+      const name = user.name || `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim();
+
+      const payload = {
+        sub: user._id.toString(),
+        role,
+        name,
+        resellerId: String(reseller._id),
+      };
+
+      return {
+        accessToken: this.jwtService.sign(payload),
+        user: {
+          id: user._id,
+          name,
+          email: user.email,
+          role,
+          avatarUrl: user.profile?.avatarUrl || null,
+          resellerId: String(reseller._id),
+        },
+        reseller: {
+          id: reseller._id,
+          name: reseller.name,
+          slug: reseller.slug,
+          tier: reseller.tier,
+          track: reseller.track,
+          status: reseller.status,
+        },
+      };
+    }
+
     // Try to resolve tenant — fall back gracefully if none exists yet
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let tenant: any = null;
@@ -91,7 +142,6 @@ export class AuthService {
 
     await this.userModel.findByIdAndUpdate(user._id, { lastLoginAt: new Date() });
 
-    const role = user.primaryRole || user.role;
     const name = user.name || `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim();
     const activeModules = tenant?.activeModules || ['organization'];
 

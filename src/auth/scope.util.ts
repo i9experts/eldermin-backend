@@ -56,6 +56,7 @@ export interface ScopedUser {
   classTeacherOfGradeId?: string;
   classTeacherOfGradeName?: string;
   classTeacherOfSectionName?: string;
+  resellerId?: string;
 }
 
 /**
@@ -209,4 +210,30 @@ export function assertStudentAccess(user: ScopedUser, studentId: string): void {
 /** The list of student ids a parent account is allowed to see anything about at all - used to build "my children" pickers and to scope list endpoints. */
 export function getGuardianStudentIds(user: ScopedUser): string[] {
   return (user.guardianOfStudentIds || []).map(String);
+}
+
+/**
+ * Eldermin Partner Network — Reseller Portal v1. Same shape as
+ * resolveCampusScope, but for reseller_admin/reseller_support: hard-block
+ * (403) an explicitly requested resellerId outside their own, fail closed
+ * if their account has no resellerId assigned, and otherwise force their
+ * own resellerId as the effective filter. Every other role (super_admin
+ * included) is unrestricted here — resellerId is just a normal optional
+ * filter for them, since platform staff legitimately view any partner.
+ */
+export function resolveResellerScope(user: ScopedUser, requestedResellerId?: string): string | undefined {
+  const role = user.role || user.primaryRole;
+  if (role !== UserRole.RESELLER_ADMIN && role !== UserRole.RESELLER_SUPPORT) {
+    return requestedResellerId || undefined;
+  }
+
+  if (!user.resellerId) {
+    throw new ForbiddenException('Your account has no partner assigned. Contact Eldermin support.');
+  }
+
+  if (requestedResellerId && String(requestedResellerId) !== String(user.resellerId)) {
+    throw new ForbiddenException('Access denied. You are scoped to your own partner account only.');
+  }
+
+  return user.resellerId;
 }

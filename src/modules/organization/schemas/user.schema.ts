@@ -5,10 +5,14 @@ export type UserDocument = User & Document;
 
 @Schema({ timestamps: true, collection: 'users' })
 export class User {
-  @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' })
+  // Not required — a Reseller Portal account (see resellerId below) is a
+  // platform-level login, same as super_admin, with no school tenant at
+  // all. Every existing user-creation path already supplies both fields,
+  // so this relaxation changes no existing behavior.
+  @Prop({ type: Types.ObjectId, ref: 'Tenant' })
   tenantId: Types.ObjectId;
 
-  @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' })
+  @Prop({ type: Types.ObjectId, ref: 'Institution' })
   institutionId: Types.ObjectId;
 
   @Prop({ required: true })
@@ -32,10 +36,18 @@ export class User {
     required: true,
     enum: ['super_admin','institution_owner','principal','vice_principal','admin',
            'academic_coordinator','finance_manager','hr_manager','teacher',
-           'librarian','parent','student','support_staff'],
+           'librarian','parent','student','support_staff',
+           'reseller_admin','reseller_support'],
     default: 'admin',
   })
   primaryRole: string;
+
+  // Eldermin Partner Network — Reseller Portal v1. Set only for
+  // reseller_admin/reseller_support accounts; unset (and unused) for
+  // every other role, same convention as guardianOfStudentIds below being
+  // parent-only.
+  @Prop({ type: Types.ObjectId, ref: 'Reseller', default: null })
+  resellerId: Types.ObjectId | null;
 
   // Optional custom role (school-defined, module-level access) — when set,
   // this overrides the standard enum-based permission matrix entirely for
