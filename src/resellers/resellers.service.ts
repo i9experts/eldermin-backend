@@ -13,12 +13,39 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
 import { Reseller, ResellerDocument } from './schemas/reseller.schema';
+import {
+  CommissionPosting,
+  CommissionPostingDocument,
+} from './schemas/commission-posting.schema';
+import {
+  ProvisioningRequest,
+  ProvisioningRequestDocument,
+} from './schemas/provisioning-request.schema';
+import {
+  DealRegistration,
+  DealRegistrationDocument,
+} from './schemas/deal-registration.schema';
 import {
   Institution,
   InstitutionDocument,
 } from '../super-admin/schemas/super-admin.schema';
+import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { SuperAdminService } from '../super-admin/super-admin.service';
+import { FinanceService } from '../finance/finance.service';
+import { EmailService } from '../email/email.service';
+
+// Eldermin's own internal ledger for the partner program — NOT any
+// school's chart of accounts. See finance.service.ts seedCommissionAccounts.
+export const PLATFORM_SCHOOL_SLUG = 'eldermin-platform';
+
+// A partner is "proven" enough to skip manual review once they've cleared
+// certification at a tier above the entry-level Certified Partner — the
+// rollout plan's "auto-approve Gold/Platinum in-quota, manual review for
+// new/Silver" mapped onto this program's three tiers.
+const AUTO_APPROVE_TIERS = ['regional_partner', 'master_distributor'];
 
 // Defaults from the Eldermin Partner Network plan (§02 Tiers & packages).
 // Applied at creation time when the caller doesn't override them, so a
@@ -68,7 +95,16 @@ export class ResellersService {
     @InjectModel(Reseller.name) private resellerModel: Model<ResellerDocument>,
     @InjectModel(Institution.name)
     private institutionModel: Model<InstitutionDocument>,
+    @InjectModel(CommissionPosting.name)
+    private commissionPostingModel: Model<CommissionPostingDocument>,
+    @InjectModel(ProvisioningRequest.name)
+    private provisioningRequestModel: Model<ProvisioningRequestDocument>,
+    @InjectModel(DealRegistration.name)
+    private dealRegistrationModel: Model<DealRegistrationDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private superAdminService: SuperAdminService,
+    private financeService: FinanceService,
+    private emailService: EmailService,
   ) {}
 
   private generateSlug(name: string): string {
@@ -314,5 +350,387 @@ export class ResellersService {
           : 'Track B reseller — no commission payable; Eldermin invoices this partner wholesale instead (Phase 2).',
       institutions,
     };
+  }
+
+  // ── Commission & Billing Engine (Phase 2) ─────────────────
+  // Ledger postings must never block the batch run itself — see hr.service
+  // safePostJournal for the identical precedent. Unlike that fire-and-forget
+  // wrapper though, a genuine failure here IS re-thrown: runCommissionBatch
+  // needs to know which specific rows failed so they show up in failed[]
+  // and can be retried (the idempotency key makes a retry safe), rather
+  // than silently vanishing the way an HR ledger gap did before its fix.
+  private async safePostCommissionJournal(
+    dto: Parameters<FinanceService['postJournalEntry']>[1],
+  ) {
+    try {
+      return await this.financeService.postJournalEntry(PLATFORM_SCHOOL_SLUG, dto);
+    } catch (err: any) {
+      if (err?.message?.includes('not found') && err?.message?.includes('Suspense')) {
+        await this.financeService.seedDefaultCOA(PLATFORM_SCHOOL_SLUG);
+        await this.financeService.seedCommissionAccounts(PLATFORM_SCHOOL_SLUG);
+        return await this.financeService.postJournalEntry(PLATFORM_SCHOOL_SLUG, dto);
+      }
+      throw err;
+    }
+  }
+
+  // Idempotent batch, mirroring processPayrollBatch's shape: a natural-key
+  // dedupe check before doing anything (skipped[]), per-row error isolation
+  // (failed[] never aborts the run), and a result that's safe to re-run —
+  // a second run for the same period only posts rows that weren't posted
+  // (or weren't payable) the first time.
+  async runCommissionBatch(periodMonth?: string, postedBy = 'System') {
+    const period = periodMonth || new Date().toISOString().slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(period)) {
+      throw new BadRequestException('periodMonth must be in YYYY-MM format');
+    }
+
+    const resellers = await this.resellerModel.find({ status: 'active' });
+    const succeeded: any[] = [];
+    const skipped: any[] = [];
+    const failed: any[] = [];
+
+    for (const reseller of resellers) {
+      const institutions = await this.institutionModel.find({
+        resellerId: reseller._id,
+        status: 'active',
+      });
+
+      for (const inst of institutions) {
+        const revenue = inst.monthlyRevenue || 0;
+        const rate = reseller.track === 'A' ? reseller.commissionRateYear1 : reseller.wholesaleDiscount;
+        const amount = Math.round(revenue * (rate / 100) * 100) / 100;
+
+        if (revenue <= 0 || amount <= 0) {
+          skipped.push({ resellerId: reseller._id, institutionId: inst._id, reason: 'no revenue or 0% rate' });
+          continue;
+        }
+
+        const already = await this.commissionPostingModel.findOne({
+          resellerId: reseller._id,
+          institutionId: inst._id,
+          periodMonth: period,
+        });
+        if (already) {
+          skipped.push({ resellerId: reseller._id, institutionId: inst._id, reason: 'already posted', postingId: already._id });
+          continue;
+        }
+
+        try {
+          const lines =
+            reseller.track === 'A'
+              ? [
+                  { accountCode: '5700', debit: amount, partnerType: 'reseller', partnerId: String(reseller._id), partnerName: reseller.name },
+                  { accountCode: '2600', credit: amount, partnerType: 'reseller', partnerId: String(reseller._id), partnerName: reseller.name },
+                ]
+              : [
+                  { accountCode: '1600', debit: amount, partnerType: 'reseller', partnerId: String(reseller._id), partnerName: reseller.name },
+                  { accountCode: '4300', credit: amount, partnerType: 'reseller', partnerId: String(reseller._id), partnerName: reseller.name },
+                ];
+
+          const entry = await this.safePostCommissionJournal({
+            reference: `RESELLER-${reseller.track === 'A' ? 'COMM' : 'WHOLESALE'}-${reseller.slug}-${inst.slug}-${period}`,
+            narration: `${reseller.track === 'A' ? 'Partner commission' : 'Wholesale receivable'} — ${inst.name} — ${period}`,
+            sourceType: 'reseller_commission',
+            sourceId: String(reseller._id),
+            postedBy,
+            lines,
+          });
+
+          const posting = await this.commissionPostingModel.create({
+            resellerId: reseller._id,
+            resellerName: reseller.name,
+            institutionId: inst._id,
+            institutionName: inst.name,
+            periodMonth: period,
+            track: reseller.track,
+            revenueAmount: revenue,
+            rateApplied: rate,
+            amount,
+            journalEntryId: entry._id,
+            postedBy,
+            postedAt: new Date(),
+          });
+          succeeded.push(posting);
+        } catch (err: any) {
+          failed.push({ resellerId: reseller._id, institutionId: inst._id, error: err?.message || 'Unknown error' });
+        }
+      }
+    }
+
+    return {
+      periodMonth: period,
+      succeeded: succeeded.length,
+      skipped: skipped.length,
+      failed: failed.length,
+      details: { succeeded, skipped, failed },
+    };
+  }
+
+  async getCommissionLedger(resellerId: string, query: any = {}) {
+    const { page = 1, limit = 30 } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { resellerId };
+    if (query.periodMonth) filter.periodMonth = query.periodMonth;
+
+    const [data, total] = await Promise.all([
+      this.commissionPostingModel.find(filter).sort({ periodMonth: -1, createdAt: -1 }).skip(skip).limit(limit),
+      this.commissionPostingModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  // ── Self-serve provisioning (Phase 2 Provisioning Queue) ──
+  async submitProvisioningRequest(resellerId: string, dto: any, requestedBy: string) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    if (reseller.status !== 'active') {
+      throw new BadRequestException('Your partner account must be active before requesting provisioning.');
+    }
+    if (!dto?.name?.trim()) throw new BadRequestException('Institution name is required.');
+
+    const autoApprove = AUTO_APPROVE_TIERS.includes(reseller.tier) && reseller.certificationComplete;
+
+    const request = await this.provisioningRequestModel.create({
+      resellerId: reseller._id,
+      resellerName: reseller.name,
+      institution: {
+        name: dto.name,
+        city: dto.city,
+        country: dto.country,
+        plan: dto.plan || 'starter',
+        contactName: dto.contactName,
+        contactEmail: dto.contactEmail,
+      },
+      requestedBy,
+      status: autoApprove ? 'approved' : 'pending_review',
+      autoApproved: autoApprove,
+    });
+
+    if (autoApprove) {
+      const institution = await this.superAdminService.createInstitution(
+        { ...dto, resellerId: reseller._id, resellerName: reseller.name },
+        requestedBy,
+      );
+      request.resultingInstitutionId = institution._id;
+      request.reviewedBy = 'System (auto-approved — tier eligible)';
+      request.reviewedAt = new Date();
+      await request.save();
+    }
+
+    return request;
+  }
+
+  async getProvisioningQueue(query: any = {}) {
+    const { page = 1, limit = 20, status, resellerId } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = {};
+    if (status) filter.status = status;
+    if (resellerId) filter.resellerId = resellerId;
+
+    const [data, total] = await Promise.all([
+      this.provisioningRequestModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.provisioningRequestModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  async reviewProvisioningRequest(id: string, decision: 'approved' | 'rejected', reviewedBy: string, reviewNote?: string) {
+    const request = await this.provisioningRequestModel.findById(id);
+    if (!request) throw new NotFoundException('Provisioning request not found');
+    if (request.status !== 'pending_review') {
+      throw new BadRequestException(`Request is already ${request.status}`);
+    }
+
+    if (decision === 'approved') {
+      const reseller = await this.resellerModel.findById(request.resellerId);
+      if (!reseller) throw new NotFoundException('Reseller not found');
+      const institution = await this.superAdminService.createInstitution(
+        { ...request.institution, resellerId: reseller._id, resellerName: reseller.name },
+        reviewedBy,
+      );
+      request.resultingInstitutionId = institution._id;
+    }
+
+    request.status = decision;
+    request.reviewedBy = reviewedBy;
+    request.reviewedAt = new Date();
+    request.reviewNote = reviewNote || '';
+    await request.save();
+    return request;
+  }
+
+  // ── Deal registration (Phase 2) ────────────────────────────
+  async registerDeal(resellerId: string, dto: any) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    if (reseller.status !== 'active') {
+      throw new BadRequestException('Your partner account must be active before registering deals.');
+    }
+    if (!dto?.prospectName?.trim()) throw new BadRequestException('Prospect name is required.');
+
+    const now = new Date();
+    // Case-insensitive match on prospect name — a real conflict check
+    // needs to catch "Springfield Grammar" vs "springfield grammar", not
+    // just an exact string match.
+    const conflict = await this.dealRegistrationModel.findOne({
+      prospectName: { $regex: `^${dto.prospectName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      status: 'registered',
+      protectionExpiresAt: { $gt: now },
+      resellerId: { $ne: reseller._id },
+    });
+    if (conflict) {
+      throw new BadRequestException(
+        `This prospect is already registered by another partner (protected until ${conflict.protectionExpiresAt.toISOString().slice(0, 10)}).`,
+      );
+    }
+
+    const protectionExpiresAt = new Date(now);
+    protectionExpiresAt.setDate(protectionExpiresAt.getDate() + 90);
+
+    return this.dealRegistrationModel.create({
+      resellerId: reseller._id,
+      resellerName: reseller.name,
+      prospectName: dto.prospectName,
+      contactName: dto.contactName,
+      contactEmail: dto.contactEmail,
+      contactPhone: dto.contactPhone,
+      city: dto.city,
+      country: dto.country,
+      estimatedInstitutionSize: dto.estimatedInstitutionSize,
+      notes: dto.notes,
+      registeredAt: now,
+      protectionExpiresAt,
+    });
+  }
+
+  async getDeals(query: any = {}) {
+    const { page = 1, limit = 20, status, resellerId } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = {};
+    if (resellerId) filter.resellerId = resellerId;
+    if (status) filter.status = status;
+
+    const [rows, total] = await Promise.all([
+      this.dealRegistrationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.dealRegistrationModel.countDocuments(filter),
+    ]);
+
+    // Lazily surface expiry rather than a cron — a deal past its window
+    // is "expired" for display purposes the instant anyone looks at it,
+    // with no background job required to keep that true.
+    const now = new Date();
+    const data = rows.map((r) => {
+      const obj = r.toObject();
+      if (obj.status === 'registered' && obj.protectionExpiresAt < now) obj.status = 'expired';
+      return obj;
+    });
+
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  async convertDeal(id: string, institutionId: string, convertedBy: string) {
+    const deal = await this.dealRegistrationModel.findById(id);
+    if (!deal) throw new NotFoundException('Deal registration not found');
+    if (deal.status !== 'registered') {
+      throw new BadRequestException(`Deal is already ${deal.status}`);
+    }
+
+    const institution = await this.institutionModel.findById(institutionId);
+    if (!institution) throw new NotFoundException('Institution not found');
+
+    institution.resellerId = deal.resellerId as any;
+    (institution as any).resellerName = deal.resellerName;
+    await institution.save();
+
+    deal.status = 'converted';
+    deal.convertedInstitutionId = institution._id as any;
+    deal.convertedAt = new Date();
+    deal.reviewedBy = convertedBy;
+    await deal.save();
+    return deal;
+  }
+
+  async rejectDeal(id: string, reviewedBy: string, reviewNote?: string) {
+    const deal = await this.dealRegistrationModel.findById(id);
+    if (!deal) throw new NotFoundException('Deal registration not found');
+    if (deal.status !== 'registered') {
+      throw new BadRequestException(`Deal is already ${deal.status}`);
+    }
+    deal.status = 'rejected';
+    deal.reviewedBy = reviewedBy;
+    deal.reviewNote = reviewNote || '';
+    await deal.save();
+    return deal;
+  }
+
+  // ── Reseller Portal v1 — account provisioning ──────────────
+  // Creates the login itself (Super Admin action from Partner Directory).
+  // A temp password is generated server-side and never returned in the
+  // response — instead the partner gets the exact same "set your own
+  // password" email flow as forgotPassword, so no plaintext credential
+  // ever has to be relayed by hand.
+  async createPortalUser(resellerId: string, dto: { email: string; name?: string; role?: string }, createdBy: string) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    if (!dto?.email?.trim()) throw new BadRequestException('Email is required.');
+
+    const email = dto.email.toLowerCase().trim();
+    const existing = await this.userModel.findOne({ email });
+    if (existing) throw new BadRequestException('A user with this email already exists.');
+
+    const role = dto.role === 'reseller_support' ? 'reseller_support' : 'reseller_admin';
+    const tempPassword = crypto.randomBytes(16).toString('hex');
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+    const user = await this.userModel.create({
+      email,
+      passwordHash,
+      primaryRole: role,
+      resellerId: reseller._id,
+      profile: dto.name ? { firstName: dto.name } : {},
+      isActive: true,
+    });
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    await this.userModel.findByIdAndUpdate(user._id, {
+      resetPasswordTokenHash: tokenHash,
+      resetPasswordExpires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // one week to claim the invite
+    });
+
+    const setPasswordUrl = `https://app.eldermin.com/reset-password?token=${rawToken}`;
+    try {
+      await this.emailService.sendEmail({
+        to: email,
+        subject: `You've been invited to the Eldermin Partner Portal — ${reseller.name}`,
+        html: `
+          <p>Hi${dto.name ? ` ${dto.name}` : ''},</p>
+          <p>${createdBy} has created a Partner Portal login for <strong>${reseller.name}</strong> on Eldermin.</p>
+          <p>Set your password to get started (link valid for 7 days):</p>
+          <p><a href="${setPasswordUrl}">${setPasswordUrl}</a></p>
+        `,
+      });
+    } catch {
+      // Same convention as forgotPassword — an email delivery failure
+      // must never block the account from existing; the Super Admin can
+      // resend/relay the link manually if needed.
+    }
+
+    return { id: user._id, email: user.email, role, resellerId: reseller._id };
+  }
+
+  async getPortalUsers(resellerId: string) {
+    return this.userModel
+      .find({ resellerId, primaryRole: { $in: ['reseller_admin', 'reseller_support'] } })
+      .select('email profile primaryRole isActive lastLoginAt createdAt');
+  }
+
+  // ── Reseller Portal v1 — the partner's own dashboard ───────
+  // Same shape as getResellerById, but resellerId is always the caller's
+  // own (enforced by scope.util.resolveResellerScope at the controller),
+  // never a path param they could point at another partner.
+  async getPortalDashboard(resellerId: string) {
+    return this.getResellerById(resellerId);
   }
 }

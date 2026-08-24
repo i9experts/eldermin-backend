@@ -413,6 +413,31 @@ export class FinanceService {
     return this.coaModel.find({ schoolSlug }).sort({ code: 1 });
   }
 
+  // Eldermin Partner Network — Commission & Billing Engine (Phase 2).
+  // These are NOT a school's own chart of accounts — they're Eldermin's
+  // internal ledger for what it owes/is owed on the partner program, so
+  // they're seeded under the reserved platform schoolSlug the Resellers
+  // module posts to (see resellers.service.ts PLATFORM_SCHOOL_SLUG), never
+  // mixed into seedDefaultCOA's per-school defaults above. Same upsert-only
+  // ($setOnInsert) idempotency as seedDefaultCOA.
+  async seedCommissionAccounts(schoolSlug: string) {
+    const defaults = [
+      { code: '2600', name: 'Partner Commission Payable', type: 'liability', subType: 'current_liability' },
+      { code: '5700', name: 'Partner Commission Expense', type: 'expense', subType: 'operating_expense' },
+      { code: '1600', name: 'Reseller Wholesale Receivable', type: 'asset', subType: 'current_asset' },
+      { code: '4300', name: 'Wholesale Partner Revenue', type: 'revenue', subType: 'operating_revenue' },
+    ];
+    const ops = defaults.map(d => ({
+      updateOne: {
+        filter: { code: d.code, schoolSlug },
+        update: { $setOnInsert: { ...d, schoolSlug, isSystem: true, isActive: true, currentBalance: 0, openingBalance: 0 } },
+        upsert: true,
+      },
+    }));
+    await this.coaModel.bulkWrite(ops);
+    return this.coaModel.find({ schoolSlug, code: { $in: defaults.map(d => d.code) } });
+  }
+
   // CSV bulk import for the Chart of Accounts. Validates every row up front
   // (including cross-row parentCode cycles, since a CSV can introduce a loop
   // that no single-row check would catch) before writing anything, then

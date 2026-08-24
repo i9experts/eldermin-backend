@@ -12,4 +12,10 @@ export enum UserRole {
   PARENT = 'parent',
   STUDENT = 'student',
   SUPPORT_STAFF = 'support_staff',
+  // Eldermin Partner Network — Reseller Portal v1. Platform-level roles
+  // (no tenantId/institutionId, same as SUPER_ADMIN) scoped instead to a
+  // single resellerId, mirroring how campus-level roles are scoped to a
+  // single campusId. See auth/scope.util.ts resolveResellerScope.
+  RESELLER_ADMIN = 'reseller_admin',
+  RESELLER_SUPPORT = 'reseller_support',
 }

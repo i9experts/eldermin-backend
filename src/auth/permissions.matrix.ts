@@ -27,6 +27,8 @@ export type Permission =
   | 'behaviour:read' | 'behaviour:write' | 'behaviour:delete'
   // Campus
   | 'campus:read' | 'campus:write' | 'campus:delete'
+  // Eldermin Partner Network — Reseller Portal v1
+  | 'reseller:read' | 'reseller:write'
   // Super admin
   | 'super_admin:all';
 
@@ -134,6 +136,12 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'org:read',
     'campus:read',
   ],
+
+  // Eldermin Partner Network — Reseller Portal v1. Platform-level roles
+  // scoped to a single resellerId (see scope.util.ts resolveResellerScope),
+  // not a tenant/institution — they never touch org/hr/finance/etc.
+  [UserRole.RESELLER_ADMIN]: ['reseller:read', 'reseller:write'],
+  [UserRole.RESELLER_SUPPORT]: ['reseller:read'],
 };
 
 export function hasPermission(role: UserRole, permission: Permission): boolean {

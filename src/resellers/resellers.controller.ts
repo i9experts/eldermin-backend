@@ -1,8 +1,15 @@
 // ============================================================
-// RESELLERS CONTROLLER — Eldermin Partner Network (Phase 1)
+// RESELLERS CONTROLLER — Eldermin Partner Network (Phase 1 + Phase 2)
 // Super-Admin-only. Reserved at /super-admin/resellers so it reads as
 // part of the same platform-management surface as institutions,
 // tickets, and announcements.
+//
+// Route ordering matters here: every literal single-segment route
+// (commission-batch/run, provisioning-requests, deals) is declared
+// BEFORE the generic @Get(':id')/@Patch(':id') handlers below it —
+// Nest/Express matches routes in declaration order, so a literal route
+// declared after ':id' would never be reached (":id" would swallow it
+// first, treating "deals" as an id).
 // ============================================================
 
 import {
@@ -35,6 +42,46 @@ export class ResellersController {
     return this.service.getResellers(query);
   }
 
+  // ── Commission & Billing Engine (Phase 2) ─────────────────
+  @Post('commission-batch/run')
+  @HttpCode(HttpStatus.OK)
+  async runCommissionBatch(@Body() dto: { periodMonth?: string }, @Request() req: any) {
+    return this.service.runCommissionBatch(dto?.periodMonth, this.adminUser(req));
+  }
+
+  // ── Self-serve provisioning queue (Phase 2) ───────────────
+  @Get('provisioning-requests')
+  async provisioningQueue(@Query() query: any) {
+    return this.service.getProvisioningQueue(query);
+  }
+
+  @Patch('provisioning-requests/:id/review')
+  async reviewProvisioningRequest(
+    @Param('id') id: string,
+    @Body() dto: { decision: 'approved' | 'rejected'; reviewNote?: string },
+    @Request() req: any,
+  ) {
+    return this.service.reviewProvisioningRequest(id, dto.decision, this.adminUser(req), dto.reviewNote);
+  }
+
+  // ── Deal registration (Phase 2) ───────────────────────────
+  @Get('deals')
+  async deals(@Query() query: any) {
+    return this.service.getDeals(query);
+  }
+
+  @Patch('deals/:id/convert')
+  async convertDeal(@Param('id') id: string, @Body() dto: { institutionId: string }, @Request() req: any) {
+    return this.service.convertDeal(id, dto.institutionId, this.adminUser(req));
+  }
+
+  @Patch('deals/:id/reject')
+  async rejectDeal(@Param('id') id: string, @Body() dto: { reviewNote?: string }, @Request() req: any) {
+    return this.service.rejectDeal(id, this.adminUser(req), dto?.reviewNote);
+  }
+
+  // ── Partner Directory (Phase 1) — generic :id routes below;
+  // nothing literal may be added after this point without moving above ──
   @Get(':id')
   async get(@Param('id') id: string) {
     return this.service.getResellerById(id);
@@ -78,5 +125,26 @@ export class ResellersController {
   @Get(':id/commission-summary')
   async commissionSummary(@Param('id') id: string) {
     return this.service.getCommissionSummary(id);
+  }
+
+  @Get(':id/commission-ledger')
+  async commissionLedger(@Param('id') id: string, @Query() query: any) {
+    return this.service.getCommissionLedger(id, query);
+  }
+
+  // ── Reseller Portal v1 — account provisioning ─────────────
+  @Post(':id/portal-users')
+  @HttpCode(HttpStatus.CREATED)
+  async createPortalUser(
+    @Param('id') id: string,
+    @Body() dto: { email: string; name?: string; role?: string },
+    @Request() req: any,
+  ) {
+    return this.service.createPortalUser(id, dto, this.adminUser(req));
+  }
+
+  @Get(':id/portal-users')
+  async portalUsers(@Param('id') id: string) {
+    return this.service.getPortalUsers(id);
   }
 }
