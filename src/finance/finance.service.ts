@@ -1185,7 +1185,10 @@ export class FinanceService {
     return '5600'; // Other Operating Expenses
   }
 
-  private mapPaymentMethodToAccount(method: string): string {
+  // Public - other modules settling a payable/receivable via bank or cash
+  // (e.g. HrService's payroll payment) reuse this instead of duplicating
+  // the Cash-vs-Bank account mapping.
+  mapPaymentMethodToAccount(method: string): string {
     return method === 'cash' ? '1000' : '1100'; // Cash vs Bank Accounts
   }
 
