@@ -5,7 +5,7 @@
 
 import {
   IsString, IsEmail, IsOptional, IsEnum, IsBoolean,
-  IsNumber, IsArray, IsDateString, IsMongoId,
+  IsNumber, IsArray, IsDateString, IsMongoId, IsObject,
   ValidateNested, Min, Max,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
@@ -35,13 +35,47 @@ export class GuardianDto {
 }
 
 // ── Medical ───────────────────────────────────────────────────
+// allergyItems/conditionItems/medicationItems carry the real structured
+// detail the Enrollment Wizard collects (severity, treatment, dosage,
+// etc.) - see StudentsService.createStudent, which mirrors these into
+// the same MedicalRecord collection the Health tab reads/writes, so
+// data entered at enrollment doesn't stay invisible until someone
+// re-enters it there. allergies/medications/conditions (plain string
+// arrays) stay for the simpler embedded Student.medical field.
+export class AllergyItemDto {
+  @IsOptional() @IsString() type?: string;
+  @IsString() name: string;
+  @IsOptional() @IsString() severity?: string;
+  @IsOptional() @IsString() treatment?: string;
+}
+
+export class ConditionItemDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() severity?: string;
+  @IsOptional() @IsString() emergencyProtocol?: string;
+}
+
+export class MedicationItemDto {
+  @IsString() name: string;
+  @IsOptional() @IsString() dosage?: string;
+  @IsOptional() @IsString() frequency?: string;
+  @IsOptional() @IsString() keptAt?: string;
+}
+
 export class MedicalDto {
   @IsOptional() @IsString() bloodGroup?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) allergies?: string[];
   @IsOptional() @IsArray() @IsString({ each: true }) medications?: string[];
   @IsOptional() @IsArray() @IsString({ each: true }) conditions?: string[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AllergyItemDto) allergyItems?: AllergyItemDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ConditionItemDto) conditionItems?: ConditionItemDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MedicationItemDto) medicationItems?: MedicationItemDto[];
   @IsOptional() @IsString() doctorName?: string;
   @IsOptional() @IsString() doctorPhone?: string;
+  @IsOptional() @IsString() doctorClinic?: string;
+  @IsOptional() @IsString() emergencyAction?: string;
+  @IsOptional() @IsString() peRestrictions?: string;
+  @IsOptional() @IsString() dietaryRestrictions?: string;
   @IsOptional() @IsString() specialNeedsDetail?: string;
 }
 
@@ -106,6 +140,10 @@ export class CreateStudentDto {
   @IsOptional() @IsMongoId() enrollmentId?: string;
   @IsOptional() @IsMongoId() applicantId?: string;
   @IsOptional() @IsString() previousSchool?: string;
+  @IsOptional() @IsString() previousSchoolCity?: string;
+  @IsOptional() @IsString() previousGrade?: string;
+  @IsOptional() @IsString() transferCertNo?: string;
+  @IsOptional() @IsDateString() tcDate?: string;
 
   // Emergency Contact — distinct from medical.emergencyAction (medical
   // procedure instructions); this is a real person to actually call.
@@ -123,6 +161,9 @@ export class CreateStudentDto {
 
   // Flags
   @IsOptional() @IsBoolean() siblingInSchool?: boolean;
+  @IsOptional() @IsString() siblingName?: string;
+  @IsOptional() @IsString() siblingAdmissionNo?: string;
+  @IsOptional() @IsString() siblingGrade?: string;
   @IsOptional() @IsBoolean() specialNeeds?: boolean;
   @IsOptional() @IsBoolean() isGifted?: boolean;
   @IsOptional() @IsBoolean() isESL?: boolean;
@@ -146,6 +187,10 @@ export class CreateStudentDto {
   // ValidationPipe's whitelist:true silently strips it from every
   // create/update request before it reaches the service.
   @IsOptional() @IsEnum(['k12', 'early-years']) programType?: string;
+
+  // School-defined custom fields (see EnrollmentField / "Manage Enrollment
+  // Fields") - keyed by fieldKey, value shape depends on the field's type.
+  @IsOptional() @IsObject() customFields?: Record<string, any>;
 
   // Injected
   schoolSlug?: string;
