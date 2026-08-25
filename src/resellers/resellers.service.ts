@@ -29,10 +29,15 @@ import {
   DealRegistrationDocument,
 } from './schemas/deal-registration.schema';
 import {
+  MdfClaim,
+  MdfClaimDocument,
+} from './schemas/mdf-claim.schema';
+import {
   Institution,
   InstitutionDocument,
 } from '../super-admin/schemas/super-admin.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
+import { BankAccount, BankAccountDocument } from '../finance/schemas/finance.schema';
 import { SuperAdminService } from '../super-admin/super-admin.service';
 import { FinanceService } from '../finance/finance.service';
 import { EmailService } from '../email/email.service';
@@ -46,6 +51,15 @@ export const PLATFORM_SCHOOL_SLUG = 'eldermin-platform';
 // rollout plan's "auto-approve Gold/Platinum in-quota, manual review for
 // new/Silver" mapped onto this program's three tiers.
 const AUTO_APPROVE_TIERS = ['regional_partner', 'master_distributor'];
+
+// Phase 3 — Regional Partner tier. Both MDF and branding are benefits of
+// having actually reached this tier or above, not just Certified Partner —
+// same tier list as AUTO_APPROVE_TIERS today, but kept as its own constant
+// since the two are conceptually unrelated (this one's about earned
+// commercial benefits, that one's about provisioning trust) and the plan
+// could easily diverge them later (e.g. a probation period before MDF
+// unlocks even at Regional Partner).
+const PHASE3_TIERS = ['regional_partner', 'master_distributor'];
 
 // Defaults from the Eldermin Partner Network plan (§02 Tiers & packages).
 // Applied at creation time when the caller doesn't override them, so a
@@ -101,7 +115,9 @@ export class ResellersService {
     private provisioningRequestModel: Model<ProvisioningRequestDocument>,
     @InjectModel(DealRegistration.name)
     private dealRegistrationModel: Model<DealRegistrationDocument>,
+    @InjectModel(MdfClaim.name) private mdfClaimModel: Model<MdfClaimDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(BankAccount.name) private bankAccountModel: Model<BankAccountDocument>,
     private superAdminService: SuperAdminService,
     private financeService: FinanceService,
     private emailService: EmailService,
@@ -732,5 +748,186 @@ export class ResellersService {
   // never a path param they could point at another partner.
   async getPortalDashboard(resellerId: string) {
     return this.getResellerById(resellerId);
+  }
+
+  // ── Phase 3 — Regional Partner tier ─────────────────────────
+  // Both MDF and branding are benefits of the *current* tier, not
+  // something earned once and kept forever — a partner downgraded back to
+  // Certified Partner loses eligibility immediately (checked live against
+  // reseller.tier on every call), no separate "grandfathered" flag needed.
+  private assertPhase3Eligible(reseller: any, benefit: string) {
+    if (!PHASE3_TIERS.includes(reseller.tier)) {
+      throw new BadRequestException(
+        `${benefit} is a Regional Partner benefit — ${reseller.name} is currently a ${reseller.tier.replace('_', ' ')}.`,
+      );
+    }
+  }
+
+  // ── MDF budget ───────────────────────────────────────────────
+  async setMdfBudget(resellerId: string, amount: number, fiscalYear: number) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    this.assertPhase3Eligible(reseller, 'MDF (Marketing Development Fund)');
+    if (amount < 0) throw new BadRequestException('MDF budget cannot be negative');
+    reseller.mdfAllocatedAmount = amount;
+    reseller.mdfFiscalYear = fiscalYear;
+    await reseller.save();
+    return reseller;
+  }
+
+  // Remaining is always derived from live claims, never stored — see the
+  // schema comment on Reseller.mdfAllocatedAmount for why.
+  async getMdfSummary(resellerId: string) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    const fiscalYear = reseller.mdfFiscalYear || new Date().getFullYear();
+    const claims = await this.mdfClaimModel.find({ resellerId, fiscalYear }).lean();
+    const committed = claims
+      .filter((c) => c.status === 'approved' || c.status === 'paid')
+      .reduce((sum, c) => sum + (c.amountApproved ?? c.amountRequested ?? 0), 0);
+    return {
+      fiscalYear,
+      allocated: reseller.mdfAllocatedAmount || 0,
+      committed,
+      remaining: Math.max(0, (reseller.mdfAllocatedAmount || 0) - committed),
+      eligible: PHASE3_TIERS.includes(reseller.tier),
+      claims,
+    };
+  }
+
+  async submitMdfClaim(resellerId: string, dto: any, submittedBy: string) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    if (reseller.status !== 'active') {
+      throw new BadRequestException('Your partner account must be active to submit an MDF claim.');
+    }
+    this.assertPhase3Eligible(reseller, 'MDF (Marketing Development Fund)');
+    if (!dto?.description?.trim()) throw new BadRequestException('Description is required.');
+    const amountRequested = Number(dto.amountRequested);
+    if (!amountRequested || amountRequested <= 0) throw new BadRequestException('amountRequested must be greater than 0.');
+
+    const fiscalYear = reseller.mdfFiscalYear || new Date().getFullYear();
+    const summary = await this.getMdfSummary(resellerId);
+    if (amountRequested > summary.remaining) {
+      throw new BadRequestException(
+        `This claim (${amountRequested}) exceeds the remaining MDF budget (${summary.remaining} of ${summary.allocated} for ${fiscalYear}).`,
+      );
+    }
+
+    return this.mdfClaimModel.create({
+      resellerId: reseller._id,
+      resellerName: reseller.name,
+      fiscalYear,
+      activityType: dto.activityType || 'other',
+      description: dto.description,
+      amountRequested,
+      receiptUrl: dto.receiptUrl,
+      submittedBy,
+    });
+  }
+
+  async getMdfClaims(query: any = {}) {
+    const { page = 1, limit = 20, status, resellerId } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = {};
+    if (status) filter.status = status;
+    if (resellerId) filter.resellerId = resellerId;
+
+    const [data, total] = await Promise.all([
+      this.mdfClaimModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.mdfClaimModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  async reviewMdfClaim(id: string, decision: 'approved' | 'rejected', reviewedBy: string, amountApproved?: number, reviewNote?: string) {
+    const claim = await this.mdfClaimModel.findById(id);
+    if (!claim) throw new NotFoundException('MDF claim not found');
+    if (claim.status !== 'pending_review') throw new BadRequestException(`Claim is already ${claim.status}`);
+
+    if (decision === 'approved') {
+      const approved = amountApproved != null ? Number(amountApproved) : claim.amountRequested;
+      if (approved <= 0 || approved > claim.amountRequested) {
+        throw new BadRequestException('amountApproved must be greater than 0 and cannot exceed the requested amount.');
+      }
+      claim.amountApproved = approved;
+    }
+    claim.status = decision;
+    claim.reviewedBy = reviewedBy;
+    claim.reviewedAt = new Date();
+    claim.reviewNote = reviewNote || '';
+    await claim.save();
+    return claim;
+  }
+
+  // Settles an approved MDF claim — Dr Marketing & Advertising (5400),
+  // Cr Cash/Bank, under the same reserved platform ledger the Commission
+  // Engine posts to (this is Eldermin's own marketing spend, not any
+  // school's), following the exact recordVendorPayment-derived pattern
+  // used for the Commission Engine and Payroll's payment action.
+  async payMdfClaim(id: string, payment: { paymentMethod: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string }, paidBy: string) {
+    const claim = await this.mdfClaimModel.findById(id);
+    if (!claim) throw new NotFoundException('MDF claim not found');
+    if (claim.status !== 'approved') throw new BadRequestException(`Only an approved claim can be paid — this one is ${claim.status}.`);
+    if (!payment?.paymentMethod) throw new BadRequestException('paymentMethod is required.');
+    if (payment.paymentMethod !== 'cash' && !payment.bankAccountId) {
+      throw new BadRequestException('bankAccountId is required for a non-cash payment method.');
+    }
+
+    const amount = claim.amountApproved ?? claim.amountRequested;
+    const paymentDate = payment.paymentDate ? new Date(payment.paymentDate) : new Date();
+    let bankAccountName: string | undefined;
+    if (payment.bankAccountId) {
+      const bankAcc = await this.bankAccountModel.findOne({ _id: payment.bankAccountId, schoolSlug: PLATFORM_SCHOOL_SLUG }).lean();
+      bankAccountName = bankAcc ? `${bankAcc.bankName} — ${bankAcc.accountTitle}` : undefined;
+    }
+
+    await this.financeService.postJournalEntry(PLATFORM_SCHOOL_SLUG, {
+      date: paymentDate, reference: `MDF-${claim._id}`,
+      narration: `MDF claim settled — ${claim.resellerName} — ${claim.description}`,
+      sourceType: 'mdf_claim', sourceId: String(claim._id),
+      lines: [
+        { accountCode: '5400', debit: amount, partnerType: 'reseller', partnerId: String(claim.resellerId), partnerName: claim.resellerName },
+        {
+          accountCode: this.financeService.mapPaymentMethodToAccount(payment.paymentMethod), credit: amount,
+          partnerType: 'reseller', partnerId: String(claim.resellerId), partnerName: claim.resellerName,
+          bankAccountId: payment.bankAccountId, bankAccountName,
+        },
+      ],
+    });
+
+    claim.status = 'paid';
+    claim.paymentMethod = payment.paymentMethod;
+    claim.bankAccountId = payment.bankAccountId || '';
+    claim.bankAccountName = bankAccountName || '';
+    claim.referenceNumber = payment.referenceNumber || '';
+    claim.paidAt = paymentDate;
+    claim.paidBy = paidBy;
+    await claim.save();
+    return claim;
+  }
+
+  // ── Branding (logo + accent colour) ─────────────────────────
+  // Super-Admin-side setter (moderation/override capability) — the
+  // partner's own self-serve equivalent is getOwnBranding/updateOwnBranding
+  // below, called from the Reseller Portal with resellerId pre-scoped by
+  // resolveResellerScope at the controller.
+  async setBranding(resellerId: string, dto: { logoUrl?: string; accentColor?: string }) {
+    const reseller = await this.resellerModel.findById(resellerId);
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    this.assertPhase3Eligible(reseller, 'Custom branding');
+    reseller.branding = { logoUrl: dto.logoUrl, accentColor: dto.accentColor } as any;
+    await reseller.save();
+    return reseller;
+  }
+
+  async getOwnBranding(resellerId: string) {
+    const reseller = await this.resellerModel.findById(resellerId).lean();
+    if (!reseller) throw new NotFoundException('Reseller not found');
+    return { eligible: PHASE3_TIERS.includes(reseller.tier), branding: reseller.branding || {} };
+  }
+
+  async updateOwnBranding(resellerId: string, dto: { logoUrl?: string; accentColor?: string }) {
+    return this.setBranding(resellerId, dto);
   }
 }
