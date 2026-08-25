@@ -24,6 +24,7 @@ import {
   Behaviour, BehaviourDocument,
   AssessmentResult, AssessmentResultDocument,
 } from './schemas/student-supporting.schema';
+import { EnrollmentField, EnrollmentFieldDocument } from './schemas/enrollment-field.schema';
 
 import {
   CreateStudentDto, UpdateStudentDto, StudentQueryDto,
@@ -64,6 +65,7 @@ export class StudentsService {
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     @InjectModel(FeeStructure.name) private feeStructureModel: Model<FeeStructureDocument>,
+    @InjectModel(EnrollmentField.name) private enrollmentFieldModel: Model<EnrollmentFieldDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -2006,5 +2008,83 @@ export class StudentsService {
     }
 
     return { created, updated, skipped, failed };
+  }
+
+  // ============================================================
+  // ENROLLMENT FIELDS — custom fields for the enrollment wizard
+  // (Step 7 "Services") and the admin's "Manage Enrollment Fields"
+  // panel, scoped per school.
+  // ============================================================
+
+  async getEnrollmentFields(schoolSlug: string) {
+    return this.enrollmentFieldModel
+      .find({ schoolSlug })
+      .sort({ section: 1, sortOrder: 1 })
+      .lean();
+  }
+
+  async createEnrollmentField(schoolSlug: string, data: any) {
+    if (!data?.label?.trim()) throw new BadRequestException('Label is required.');
+    if (!data?.fieldKey?.trim()) throw new BadRequestException('fieldKey is required.');
+    const { isSystemField: _ignored, schoolSlug: _ignored2, ...safeData } = data;
+    return this.enrollmentFieldModel.create({ ...safeData, schoolSlug, isSystemField: false });
+  }
+
+  async updateEnrollmentField(schoolSlug: string, id: string, data: any) {
+    const { isSystemField, schoolSlug: _ignored, ...safeData } = data || {};
+    const updated = await this.enrollmentFieldModel.findOneAndUpdate(
+      { _id: id, schoolSlug, isSystemField: false },
+      { $set: safeData },
+      { new: true },
+    ).lean();
+    if (!updated) throw new BadRequestException('Field not found or cannot update system fields.');
+    return updated;
+  }
+
+  async deleteEnrollmentField(schoolSlug: string, id: string) {
+    const deleted = await this.enrollmentFieldModel.findOneAndDelete({
+      _id: id,
+      schoolSlug,
+      isSystemField: false,
+    });
+    if (!deleted) throw new BadRequestException('Field not found or cannot delete system fields.');
+    return { message: 'Custom field deleted' };
+  }
+
+  async seedDefaultEnrollmentFields(schoolSlug: string) {
+    const existing = await this.enrollmentFieldModel.countDocuments({ schoolSlug });
+    if (existing > 0) return { message: 'Fields already seeded', count: existing };
+
+    const defaultFields = [
+      { label: 'Previous School Name', fieldKey: 'previousSchoolName', fieldType: 'text', section: 'admission', sortOrder: 1, isSystemField: true },
+      { label: 'Previous Grade', fieldKey: 'previousGrade', fieldType: 'text', section: 'admission', sortOrder: 2, isSystemField: true },
+      { label: 'Transfer Certificate No', fieldKey: 'transferCertNo', fieldType: 'text', section: 'admission', sortOrder: 3, isSystemField: true },
+      { label: 'Admission Type', fieldKey: 'admissionType', fieldType: 'select', options: ['new', 'transfer', 'readmission', 'lateral'], section: 'admission', sortOrder: 4, isRequired: true, isSystemField: true },
+      { label: 'Nationality', fieldKey: 'nationality', fieldType: 'text', section: 'personal', sortOrder: 1, isSystemField: true },
+      { label: 'Second Nationality', fieldKey: 'secondNationality', fieldType: 'text', section: 'personal', sortOrder: 2, isSystemField: true },
+      { label: 'Religion', fieldKey: 'religion', fieldType: 'select', options: ['Islam', 'Christianity', 'Hinduism', 'Judaism', 'Buddhism', 'Other'], section: 'personal', sortOrder: 3, isSystemField: true },
+      { label: 'Mother Tongue', fieldKey: 'motherTongue', fieldType: 'text', section: 'personal', sortOrder: 4, isSystemField: true },
+      { label: 'Place of Birth', fieldKey: 'placeOfBirth', fieldType: 'text', section: 'personal', sortOrder: 5, isSystemField: true },
+      { label: 'Passport Number', fieldKey: 'passportNo', fieldType: 'text', section: 'personal', sortOrder: 6, isSystemField: true },
+      { label: 'National ID', fieldKey: 'nationalId', fieldType: 'text', section: 'personal', sortOrder: 7, isSystemField: true },
+      { label: 'Birth Certificate No', fieldKey: 'birthCertNo', fieldType: 'text', section: 'personal', sortOrder: 8, isSystemField: true },
+      { label: 'Has Transport Service', fieldKey: 'hasTransport', fieldType: 'checkbox', section: 'services', sortOrder: 1, isSystemField: true },
+      { label: 'Transport Route', fieldKey: 'transportRoute', fieldType: 'text', section: 'services', sortOrder: 2, isSystemField: true },
+      { label: 'Transport Stop', fieldKey: 'transportStop', fieldType: 'text', section: 'services', sortOrder: 3, isSystemField: true },
+      { label: 'Has Hostel Service', fieldKey: 'hasHostel', fieldType: 'checkbox', section: 'services', sortOrder: 4, isSystemField: true },
+      { label: 'Has Cafeteria Service', fieldKey: 'hasCafeteria', fieldType: 'checkbox', section: 'services', sortOrder: 5, isSystemField: true },
+      { label: 'Sibling at School', fieldKey: 'hasSibling', fieldType: 'checkbox', section: 'services', sortOrder: 6, isSystemField: true },
+      { label: 'Sibling Admission No', fieldKey: 'siblingAdmissionNo', fieldType: 'text', section: 'services', sortOrder: 7, isSystemField: true },
+      { label: 'Has Special Educational Needs', fieldKey: 'isSEN', fieldType: 'checkbox', section: 'health', sortOrder: 1, isSystemField: true },
+      { label: 'SEN Details', fieldKey: 'senDetails', fieldType: 'textarea', section: 'health', sortOrder: 2, isSystemField: true },
+      { label: 'Dietary Restrictions', fieldKey: 'dietaryRestrictions', fieldType: 'text', section: 'health', sortOrder: 3, isSystemField: true },
+      { label: 'PE Restrictions', fieldKey: 'peRestrictions', fieldType: 'textarea', section: 'health', sortOrder: 4, isSystemField: true },
+      { label: 'Emergency Medical Action', fieldKey: 'emergencyAction', fieldType: 'textarea', section: 'health', sortOrder: 5, isSystemField: true },
+    ];
+
+    await this.enrollmentFieldModel.insertMany(
+      defaultFields.map(f => ({ ...f, schoolSlug })),
+    );
+    return { message: 'Default enrollment fields seeded', count: defaultFields.length };
   }
 }
