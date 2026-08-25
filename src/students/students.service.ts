@@ -385,8 +385,23 @@ export class StudentsService {
   }
 
   async updateStudent(id: string, schoolSlug: string, dto: UpdateStudentDto): Promise<Student> {
+    // `medical` is a nested sub-document (bloodGroup, allergies, doctorName,
+    // etc.) - a plain `$set: { medical: {...} }` replaces the WHOLE
+    // sub-document, silently wiping every medical field not included in
+    // this particular request (e.g. the Health tab's allergy/doctor detail
+    // getting erased just because the Edit Profile form only sent
+    // bloodGroup/specialNeedsDetail). Flatten it into dot-notation `$set`
+    // keys instead so each provided field merges in without touching the
+    // rest of the sub-document.
+    const { medical, ...rest } = dto as any;
+    const setDoc: Record<string, any> = { ...rest };
+    if (medical && typeof medical === 'object') {
+      for (const [key, value] of Object.entries(medical)) {
+        if (value !== undefined) setDoc[`medical.${key}`] = value;
+      }
+    }
     const student = await this.studentModel.findOneAndUpdate(
-      { _id: id, schoolSlug }, { $set: dto }, { new: true },
+      { _id: id, schoolSlug }, { $set: setDoc }, { new: true },
     );
     if (!student) throw new NotFoundException('Student not found');
     return student;
