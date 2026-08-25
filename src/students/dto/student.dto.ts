@@ -133,6 +133,7 @@ export class CreateStudentDto {
   @IsOptional() @IsString() transportRoute?: string;
   @IsOptional() @IsString() transportStop?: string;
   @IsOptional() @IsBoolean() hostelResident?: boolean;
+  @IsOptional() @IsString() hostelRoom?: string;
   @IsOptional() @IsBoolean() cafeteriaSubscribed?: boolean;
 
   // Physical

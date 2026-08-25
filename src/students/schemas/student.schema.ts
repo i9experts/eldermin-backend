@@ -179,6 +179,7 @@ export class Student {
   @Prop() transportRoute: string;
   @Prop() transportStop: string;
   @Prop({ default: false }) hostelResident: boolean;
+  @Prop() hostelRoom: string; // room preference, e.g. "Single, Ground Floor"
   @Prop({ default: false }) cafeteriaSubscribed: boolean;
 
   // ── Physical ───────────────────────────────────────────────
