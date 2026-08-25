@@ -108,6 +108,78 @@ export class StudentsController {
     return this.studentsService.getStudent360(id, schoolSlug);
   }
 
+  // ============================================================
+  // MEDICAL RECORD — Health tab
+  // ============================================================
+
+  /** GET /api/v1/students/:id/medical */
+  @Get(':id/medical')
+  async getMedicalRecord(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getMedicalRecord(schoolSlug, id);
+  }
+
+  /** POST /api/v1/students/:id/medical */
+  @Post(':id/medical')
+  async upsertMedicalRecord(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.upsertMedicalRecord(schoolSlug, id, body);
+  }
+
+  // ============================================================
+  // STUDENT NOTES — Notes tab
+  // ============================================================
+
+  /** GET /api/v1/students/:id/notes */
+  @Get(':id/notes')
+  async getStudentNotes(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getStudentNotes(schoolSlug, id);
+  }
+
+  /** POST /api/v1/students/:id/notes */
+  @Post(':id/notes')
+  async createStudentNote(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.studentsService.createStudentNote(schoolSlug, id, body, userName);
+  }
+
+  // ============================================================
+  // STUDENT DOCUMENTS — Documents tab
+  // ============================================================
+
+  /** GET /api/v1/students/:id/documents */
+  @Get(':id/documents')
+  async getStudentDocuments(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getStudentDocuments(schoolSlug, id);
+  }
+
+  /** POST /api/v1/students/:id/documents */
+  @Post(':id/documents')
+  async createStudentDocument(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.studentsService.createStudentDocument(schoolSlug, id, body, userName);
+  }
+
+  // ============================================================
+  // ACADEMIC HISTORY — History tab
+  // ============================================================
+
+  /** GET /api/v1/students/:id/academic-history */
+  @Get(':id/academic-history')
+  async getAcademicHistory(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getAcademicHistory(schoolSlug, id);
+  }
+
+  /** POST /api/v1/students/:id/academic-history */
+  @Post(':id/academic-history')
+  async createAcademicHistory(@Param('id') id: string, @Body() body: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.createAcademicHistory(schoolSlug, id, body);
+  }
+
   /** POST /api/v1/students */
   @Post()
   @HttpCode(HttpStatus.CREATED)
