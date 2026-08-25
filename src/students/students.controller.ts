@@ -94,6 +94,45 @@ export class StudentsController {
   }
 
 
+  // ============================================================
+  // ENROLLMENT FIELDS (must stay above the :id routes below)
+  // ============================================================
+
+  /** GET /api/v1/students/enrollment-fields */
+  @Get('enrollment-fields')
+  async getEnrollmentFields(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getEnrollmentFields(schoolSlug);
+  }
+
+  /** POST /api/v1/students/enrollment-fields/seed-defaults */
+  @Post('enrollment-fields/seed-defaults')
+  async seedDefaultEnrollmentFields(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.seedDefaultEnrollmentFields(schoolSlug);
+  }
+
+  /** POST /api/v1/students/enrollment-fields */
+  @Post('enrollment-fields')
+  async createEnrollmentField(@Request() req: any, @Body() body: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.createEnrollmentField(schoolSlug, body);
+  }
+
+  /** PATCH /api/v1/students/enrollment-fields/:id */
+  @Patch('enrollment-fields/:id')
+  async updateEnrollmentField(@Param('id') id: string, @Request() req: any, @Body() body: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.updateEnrollmentField(schoolSlug, id, body);
+  }
+
+  /** DELETE /api/v1/students/enrollment-fields/:id */
+  @Delete('enrollment-fields/:id')
+  async deleteEnrollmentField(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.deleteEnrollmentField(schoolSlug, id);
+  }
+
   /** GET /api/v1/students/:id */
   @Get(':id')
   async getStudent(@Param('id') id: string, @Request() req: any) {
