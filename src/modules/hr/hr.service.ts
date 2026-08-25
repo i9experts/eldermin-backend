@@ -19,6 +19,8 @@ import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../au
 import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
+import { PayrollPayment, PayrollPaymentDocument } from './schemas/payroll-payment.schema';
+import { BankAccount, BankAccountDocument } from '../../finance/schemas/finance.schema';
 import { SalaryComponent, SalaryComponentDocument } from './schemas/salary-component.schema';
 import { SalaryTemplate, SalaryTemplateDocument } from './schemas/salary-template.schema';
 import { PerformanceReview, PerformanceReviewDocument } from './schemas/performance-review.schema';
@@ -58,6 +60,8 @@ export class HrService {
     @InjectModel(LeaveBalance.name) private leaveBalanceModel: Model<LeaveBalanceDocument>,
     @InjectModel(PayrollRun.name) private payrollRunModel: Model<PayrollRunDocument>,
     @InjectModel(Payslip.name) private payslipModel: Model<PayslipDocument>,
+    @InjectModel(PayrollPayment.name) private payrollPaymentModel: Model<PayrollPaymentDocument>,
+    @InjectModel(BankAccount.name) private bankAccountModel: Model<BankAccountDocument>,
     @InjectModel(SalaryComponent.name) private salaryComponentModel: Model<SalaryComponentDocument>,
     @InjectModel(SalaryTemplate.name) private salaryTemplateModel: Model<SalaryTemplateDocument>,
     @InjectModel(PerformanceReview.name) private performanceModel: Model<PerformanceReviewDocument>,
@@ -634,8 +638,12 @@ export class HrService {
     if (query.date) filter.date = new Date(query.date);
     if (query.staffId) filter.staffId = this.newTid(query.staffId);
     if (query.month && query.year) {
-      const start = new Date(query.year, query.month - 1, 1);
-      const end = new Date(query.year, query.month, 0);
+      // UTC, matching how markStaffAttendance/deleteStaffAttendance store
+      // `date` (new Date("YYYY-MM-DD") is always UTC midnight) - a local-time
+      // construction here would drift by the server's UTC offset and could
+      // silently exclude the last day of the month from results.
+      const start = new Date(Date.UTC(query.year, query.month - 1, 1));
+      const end = new Date(Date.UTC(query.year, query.month, 0, 23, 59, 59, 999));
       filter.date = { $gte: start, $lte: end };
     }
     return this.staffAttendanceModel
@@ -671,8 +679,11 @@ export class HrService {
   }
 
   async getAttendanceSummary(tenantId: string, month: number, year: number) {
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 0);
+    // Same UTC-vs-local fix as getStaffAttendance above - this feeds payroll's
+    // attendance-based deductions, so a dropped last-day-of-month record here
+    // understates absences for the period.
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
     return this.staffAttendanceModel.aggregate([
       { $match: { tenantId: this.newTid(tenantId), date: { $gte: start, $lte: end } } },
       { $group: { _id: { staffId: '$staffId', status: '$status' }, count: { $sum: 1 } } },
@@ -1069,15 +1080,25 @@ export class HrService {
     cancelled: [], // terminal
   };
 
-  async updatePayrollStatus(tenantId: string, id: string, status: string, userId: string, schoolSlug?: string) {
+  async updatePayrollStatus(
+    tenantId: string, id: string, status: string, userId: string, schoolSlug?: string,
+    payment?: { paymentMethod?: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string },
+  ) {
     if (!Object.keys(HrService.PAYROLL_TRANSITIONS).includes(status)) {
       throw new BadRequestException(`Invalid payroll status: ${status}`);
     }
     const run = await this.payrollRunModel.findOne({ _id: id, tenantId: this.newTid(tenantId) });
     if (!run) throw new NotFoundException('Payroll run not found');
-    const allowed = HrService.PAYROLL_TRANSITIONS[run.status] || [];
+    const fromStatus = run.status;
+    const allowed = HrService.PAYROLL_TRANSITIONS[fromStatus] || [];
     if (!allowed.includes(status)) {
-      throw new BadRequestException(`Cannot move a payroll run from '${run.status}' to '${status}'.`);
+      throw new BadRequestException(`Cannot move a payroll run from '${fromStatus}' to '${status}'.`);
+    }
+    if (status === 'paid') {
+      if (!payment?.paymentMethod) throw new BadRequestException('paymentMethod is required to mark a payroll run as paid');
+      if (payment.paymentMethod !== 'cash' && !payment.bankAccountId) {
+        throw new BadRequestException('bankAccountId is required for a non-cash payment method');
+      }
     }
     const update: any = { status };
     // Only a genuine approval actually stamps who approved it and when -
@@ -1088,41 +1109,101 @@ export class HrService {
       update.approvedBy = this.newTid(userId);
       update.approvedAt = new Date();
     }
+    if (status === 'paid') {
+      update.paymentDate = payment?.paymentDate ? new Date(payment.paymentDate) : new Date();
+    }
     const updated = await this.payrollRunModel.findOneAndUpdate(
       { _id: id, tenantId: this.newTid(tenantId) },
       { $set: update },
       { new: true },
     ).lean();
 
-    // The real gap found in QA: createPayslip books the expense and the
-    // liability (Salary Payable) when the payslip is created, but nothing
-    // ever cleared that liability when the money was actually paid out -
-    // Salaries Payable would sit on the books forever even after real
-    // payment, understating cash movement and overstating outstanding
-    // liabilities indefinitely. One consolidated entry per run (not one
-    // per employee - a school with 100 staff doesn't need 100 near-
-    // identical lines for a single bank transfer) clears exactly what was
-    // originally credited to 2100 per payslip: netSalary + the non-tax
-    // deductions folded into it there (loan/leave/other) - tax and PF
-    // stay untouched, since those are owed to a different party (the tax
-    // authority / PF trustee) and get cleared by a separate transaction
-    // when actually remitted, not by paying the employee.
+    // GL posting is gated on the run actually reaching 'approved' here -
+    // not at payslip creation time (see postPayslipToLedger) - so a run
+    // still awaiting the school admin's review never touches Finance.
+    if (status === 'approved') {
+      const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) }).lean();
+      for (const payslip of payslips) {
+        try {
+          await this.postPayslipToLedger(schoolSlug, payslip);
+        } catch { /* one payslip's posting failure must not block the rest - shows as a Trial Balance gap, same convention as safePostJournal */ }
+      }
+    }
+
+    // Reverses whatever postPayslipToLedger already booked when an
+    // approved run gets cancelled instead of paid - the other real gap
+    // found in QA (see reversePayslipLedgerEntry). A run cancelled from
+    // 'completed' never had anything posted in the first place, so there's
+    // nothing to reverse there.
+    if (status === 'cancelled' && fromStatus === 'approved') {
+      const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) }).lean();
+      for (const payslip of payslips) {
+        try {
+          await this.reversePayslipLedgerEntry(schoolSlug, payslip);
+        } catch { /* same isolation as above */ }
+      }
+    }
+
+    // The actual payment action: settles Salaries Payable via a real bank
+    // account or cash, following the exact pattern every other "settle a
+    // payable" flow in this codebase uses (see FinanceService.
+    // recordVendorPayment) - a dedicated PayrollPayment audit record, the
+    // credit leg resolved by payment method (not hardcoded to Cash), and
+    // bank account tagging/denormalization on the journal line. Only
+    // netSalary + the non-tax deductions folded into 2100 per payslip is
+    // cleared here - tax and PF stay untouched, owed to a different party
+    // and settled by a separate remittance, not by paying the employee.
     if (status === 'paid') {
       const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) }).lean();
       const totalPayable = payslips.reduce((sum, p: any) =>
         sum + (p.netSalary || 0) + (p.loanDeduction || 0) + (p.leaveDeduction || 0) + (p.otherDeductions || 0), 0);
+
+      const paymentDate = update.paymentDate;
+      const paymentMethod = payment!.paymentMethod!;
+      let bankAccountName: string | undefined;
+      if (payment?.bankAccountId) {
+        const bankAcc = await this.bankAccountModel.findOne({ _id: payment.bankAccountId, schoolSlug }).lean();
+        if (!bankAcc) throw new BadRequestException('Selected bank account was not found');
+        bankAccountName = `${bankAcc.bankName} — ${bankAcc.accountTitle}`;
+      }
+
+      const paymentRecord = await this.payrollPaymentModel.create({
+        tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id), periodLabel: run.periodLabel,
+        amount: totalPayable, paymentDate, paymentMethod,
+        referenceNumber: payment?.referenceNumber,
+        bankAccountId: payment?.bankAccountId, bankAccountName,
+        paidBy: this.newTid(userId),
+      });
+
       if (totalPayable > 0) {
         await this.safePostJournal(schoolSlug, {
-          date: new Date(), reference: run.periodLabel, narration: `Salary payment — ${run.periodLabel}`,
-          sourceType: 'payroll_payment', sourceId: String(id),
+          date: paymentDate, reference: run.periodLabel, narration: `Salary payment — ${run.periodLabel}`,
+          sourceType: 'payroll_payment', sourceId: String(paymentRecord._id),
           lines: [
             { accountCode: '2100', debit: totalPayable },
-            { accountCode: '1000', credit: totalPayable },
+            {
+              accountCode: this.financeService.mapPaymentMethodToAccount(paymentMethod), credit: totalPayable,
+              bankAccountId: payment?.bankAccountId, bankAccountName,
+            },
           ],
         });
       }
+
+      // Payslip.status/paidAt were stubbed fields nothing ever set - a
+      // payslip stayed 'draft' forever even after its run was fully paid.
+      await this.payslipModel.updateMany(
+        { tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) },
+        { $set: { status: 'paid', paidAt: paymentDate } },
+      );
     }
+
     return updated;
+  }
+
+  async getPayrollPayments(tenantId: string, payrollRunId?: string) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (payrollRunId) filter.payrollRunId = this.newTid(payrollRunId);
+    return this.payrollPaymentModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
   async getPayslips(tenantId: string, query: any = {}) {
@@ -1179,28 +1260,47 @@ export class HrService {
       );
     }
 
-    // Post to the GL: base salary expense, reimbursements booked separately
-    // from pure salary cost, deductions split into their own payable/tax
-    // accounts, and everything nets to Salary Payable (what's actually
-    // owed to the employee once paid).
-    const baseSalaryExpense = data.grossSalary || 0;
-    const nonTaxDeductions = (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0);
+    // GL posting is NOT done here anymore - see postPayslipToLedger below.
+    // The real gap found in QA: a payroll run still sitting at 'completed'
+    // (pending the school admin's review) already had its salary expense
+    // and Salaries Payable booked into Finance the moment each payslip was
+    // created during process-batch - a rejected/never-approved run's
+    // numbers were indistinguishable from a real, approved one anywhere
+    // in Finance. Posting is now deferred to the run's genuine 'approved'
+    // transition (updatePayrollStatus), one run at a time, per payslip.
+
+    return payslip;
+  }
+
+  /** Posts one payslip's salary expense / Salaries Payable (and any
+   * advance-linked claim settlement) to the GL. Called only when the
+   * payslip's parent run is actually approved - never at creation time.
+   * Idempotent via `postedToFinance`, so re-approving (or a retry after a
+   * partial failure) never double-posts. */
+  private async postPayslipToLedger(schoolSlug: string | undefined, payslip: any) {
+    if (payslip.postedToFinance) return;
+
+    const settledClaims = await this.expenseClaimModel.find({ settledPayslipId: payslip._id }).lean();
+    const advanceLinkedClaims = settledClaims.filter((c: any) => c.advanceId);
+    const nonAdvanceClaims = settledClaims.filter((c: any) => !c.advanceId);
+    const reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
+
+    const baseSalaryExpense = (payslip.grossSalary || 0) - reimbursement;
+    const nonTaxDeductions = (payslip.loanDeduction || 0) + (payslip.leaveDeduction || 0) + (payslip.otherDeductions || 0);
+    const staffId = String(payslip.staffId || '');
     const lines: any[] = [
-      { accountCode: '5000', debit: baseSalaryExpense, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department },
+      { accountCode: '5000', debit: baseSalaryExpense, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department },
     ];
-    if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
-    lines.push({ accountCode: '2100', credit: netSalary + nonTaxDeductions, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
-    if (data.incomeTax) lines.push({ accountCode: '2200', credit: data.incomeTax, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
-    if (data.providentFund) lines.push({ accountCode: '2300', credit: data.providentFund, partnerType: 'staff', partnerId: String(data.staffId || ''), partnerName: data.staffName, costCenterName: data.department });
+    if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    lines.push({ accountCode: '2100', credit: (payslip.netSalary || 0) + nonTaxDeductions, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    if (payslip.incomeTax) lines.push({ accountCode: '2200', credit: payslip.incomeTax, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    if (payslip.providentFund) lines.push({ accountCode: '2300', credit: payslip.providentFund, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+
     await this.safePostJournal(schoolSlug, {
-      date: new Date(), reference: periodLabel, narration: `Payroll — ${data.staffName || ''} — ${periodLabel}`,
+      date: new Date(), reference: payslip.periodLabel, narration: `Payroll — ${payslip.staffName || ''} — ${payslip.periodLabel}`,
       sourceType: 'payroll', sourceId: String(payslip._id), lines,
     });
 
-    // Advance-linked claims settle separately from payroll payable — the
-    // employee was already paid via the advance, so this just recognizes
-    // the expense and clears the Employee Advances balance, in its own
-    // entry per claim for a clean audit trail back to each claim.
     for (const claim of advanceLinkedClaims) {
       await this.safePostJournal(schoolSlug, {
         date: new Date(), reference: claim.claimNo, narration: `Advance settled via claim ${claim.claimNo} — ${claim.staffName}`,
@@ -1212,7 +1312,52 @@ export class HrService {
       });
     }
 
-    return payslip;
+    await this.payslipModel.updateOne({ _id: payslip._id }, { $set: { postedToFinance: true } });
+  }
+
+  /** Unwinds a payslip's GL posting - the other real gap found in QA:
+   * PAYROLL_TRANSITIONS allows an already-approved run to still be
+   * cancelled, but nothing ever reversed what postPayslipToLedger had
+   * already booked, leaving a cancelled run's numbers permanently sitting
+   * in Finance. Posts the exact mirror image (debit/credit swapped) of
+   * the original entry rather than deleting it, preserving the audit
+   * trail - a reversing entry, not a correction. */
+  private async reversePayslipLedgerEntry(schoolSlug: string | undefined, payslip: any) {
+    if (!payslip.postedToFinance) return;
+
+    const settledClaims = await this.expenseClaimModel.find({ settledPayslipId: payslip._id }).lean();
+    const advanceLinkedClaims = settledClaims.filter((c: any) => c.advanceId);
+    const nonAdvanceClaims = settledClaims.filter((c: any) => !c.advanceId);
+    const reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
+
+    const baseSalaryExpense = (payslip.grossSalary || 0) - reimbursement;
+    const nonTaxDeductions = (payslip.loanDeduction || 0) + (payslip.leaveDeduction || 0) + (payslip.otherDeductions || 0);
+    const staffId = String(payslip.staffId || '');
+    const lines: any[] = [
+      { accountCode: '5000', credit: baseSalaryExpense, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department },
+    ];
+    if (reimbursement > 0) lines.push({ accountCode: '5500', credit: reimbursement, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    lines.push({ accountCode: '2100', debit: (payslip.netSalary || 0) + nonTaxDeductions, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    if (payslip.incomeTax) lines.push({ accountCode: '2200', debit: payslip.incomeTax, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    if (payslip.providentFund) lines.push({ accountCode: '2300', debit: payslip.providentFund, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+
+    await this.safePostJournal(schoolSlug, {
+      date: new Date(), reference: payslip.periodLabel, narration: `Payroll cancelled — reversal — ${payslip.staffName || ''} — ${payslip.periodLabel}`,
+      sourceType: 'payroll_reversal', sourceId: String(payslip._id), lines,
+    });
+
+    for (const claim of advanceLinkedClaims) {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(), reference: claim.claimNo, narration: `Advance settlement reversed — claim ${claim.claimNo} cancelled — ${claim.staffName}`,
+        sourceType: 'expense_claim_reversal', sourceId: String(claim._id),
+        lines: [
+          { accountCode: '5500', credit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+          { accountCode: '1300', debit: claim.amount, partnerType: 'staff', partnerId: String(claim.staffId), partnerName: claim.staffName },
+        ],
+      });
+    }
+
+    await this.payslipModel.updateOne({ _id: payslip._id }, { $set: { postedToFinance: false } });
   }
 
   // ── Salary Components (the payroll "root system") ────────────────────

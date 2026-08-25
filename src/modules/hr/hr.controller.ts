@@ -254,7 +254,17 @@ export class HrController {
   createPayrollRun(@Request() req, @Body() body: any) { return this.hrService.createPayrollRun(req.user.tenantId, this.iid(req), body, req.user.userId); }
 
   @Patch('payroll/runs/:id/status')
-  updatePayrollStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string }) { return this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId, req.user.schoolSlug); }
+  updatePayrollStatus(
+    @Request() req, @Param('id') id: string,
+    @Body() body: { status: string; paymentMethod?: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string },
+  ) {
+    return this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId, req.user.schoolSlug, body);
+  }
+
+  @Get('payroll/payments')
+  getPayrollPayments(@Request() req, @Query('payrollRunId') payrollRunId?: string) {
+    return this.hrService.getPayrollPayments(req.user.tenantId, payrollRunId);
+  }
 
   @Post('payroll/runs/:id/process-batch')
   processPayrollBatch(@Request() req, @Param('id') id: string, @Body() body: { rows: any[] }) {

@@ -35,6 +35,12 @@ export class Payslip {
   @Prop({ enum: ['draft','issued','paid'], default: 'draft' }) status: string;
   @Prop() paidAt: Date;
   @Prop() s3Key: string;
+  // Whether this payslip's GL entry (salary expense + Salaries Payable)
+  // has actually been posted to Finance. Gates posting to the payroll
+  // run's 'approved' transition rather than at creation time, so a run
+  // still under review never touches the ledger - see
+  // HrService.postPayslipToLedger / updatePayrollStatus.
+  @Prop({ default: false }) postedToFinance: boolean;
 }
 export const PayslipSchema = SchemaFactory.createForClass(Payslip);
 PayslipSchema.index({ tenantId: 1, staffId: 1, month: 1, year: 1 }, { unique: true });
