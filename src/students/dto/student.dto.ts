@@ -192,9 +192,21 @@ export class CreateStudentDto {
   // Fields") - keyed by fieldKey, value shape depends on the field's type.
   @IsOptional() @IsObject() customFields?: Record<string, any>;
 
-  // Injected
+  // schoolSlug is deliberately left undeclared as a validated property -
+  // it's injected server-side from the authenticated tenant context (see
+  // students.controller.ts's ctx()) and must never be client-writable,
+  // or a request could move a student into another school's tenant.
+  //
+  // campusId, on the other hand, IS meant to be client-writable - the
+  // Academic tab's "Assign Campus" control sends it on every save - but
+  // being declared with no class-validator decorator at all meant the
+  // global ValidationPipe's whitelist:true silently stripped it before
+  // the service ever saw it, exactly like the emergencyContact* fields
+  // above once did. currentGrade/currentSection right next to it in that
+  // same save request are properly decorated and always saved fine,
+  // which is why only the campus selection reverted after a refresh.
   schoolSlug?: string;
-  campusId?: string;
+  @IsOptional() @IsString() campusId?: string;
 }
 
 export class UpdateStudentDto extends PartialType(CreateStudentDto) {
