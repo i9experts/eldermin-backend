@@ -13,6 +13,7 @@ import {
   Behaviour, BehaviourSchema,
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
+import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-field.schema';
 import { UploadModule } from '../upload/upload.module';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
@@ -28,6 +29,7 @@ import { Family, FamilySchema } from '../families/schemas/family.schema';
       { name: StudentFee.name, schema: StudentFeeSchema },
       { name: Behaviour.name, schema: BehaviourSchema },
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
+      { name: EnrollmentField.name, schema: EnrollmentFieldSchema },
       { name: 'School', schema: SchoolSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
