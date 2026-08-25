@@ -24,6 +24,10 @@ import {
   Behaviour, BehaviourDocument,
   AssessmentResult, AssessmentResultDocument,
 } from './schemas/student-supporting.schema';
+import { MedicalRecord, MedicalRecordDocument } from './schemas/medical-record.schema';
+import { StudentNote, StudentNoteDocument } from './schemas/student-note.schema';
+import { StudentDocumentRecord, StudentDocumentRecordDocument } from './schemas/student-document-record.schema';
+import { AcademicHistoryRecord, AcademicHistoryRecordDocument } from './schemas/academic-history-record.schema';
 import { EnrollmentField, EnrollmentFieldDocument } from './schemas/enrollment-field.schema';
 
 import {
@@ -65,6 +69,10 @@ export class StudentsService {
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     @InjectModel(FeeStructure.name) private feeStructureModel: Model<FeeStructureDocument>,
+    @InjectModel(MedicalRecord.name) private medicalRecordModel: Model<MedicalRecordDocument>,
+    @InjectModel(StudentNote.name) private studentNoteModel: Model<StudentNoteDocument>,
+    @InjectModel(StudentDocumentRecord.name) private studentDocumentRecordModel: Model<StudentDocumentRecordDocument>,
+    @InjectModel(AcademicHistoryRecord.name) private academicHistoryRecordModel: Model<AcademicHistoryRecordDocument>,
     @InjectModel(EnrollmentField.name) private enrollmentFieldModel: Model<EnrollmentFieldDocument>,
     private uploadService: UploadService,
   ) {}
@@ -2008,6 +2016,62 @@ export class StudentsService {
     }
 
     return { created, updated, skipped, failed };
+  }
+
+  // ============================================================
+  // MEDICAL RECORD — Health tab (Student 360)
+  // ============================================================
+
+  async getMedicalRecord(schoolSlug: string, studentId: string) {
+    return this.medicalRecordModel.findOne({ schoolSlug, studentId }).lean();
+  }
+
+  async upsertMedicalRecord(schoolSlug: string, studentId: string, dto: any) {
+    return this.medicalRecordModel.findOneAndUpdate(
+      { schoolSlug, studentId },
+      { $set: { ...dto, schoolSlug, studentId } },
+      { new: true, upsert: true },
+    );
+  }
+
+  // ============================================================
+  // STUDENT NOTES — Notes tab (Student 360)
+  // ============================================================
+
+  async getStudentNotes(schoolSlug: string, studentId: string) {
+    return this.studentNoteModel.find({ schoolSlug, studentId }).sort({ createdAt: -1 }).lean();
+  }
+
+  async createStudentNote(schoolSlug: string, studentId: string, dto: any, createdByName: string) {
+    if (!dto?.content?.trim()) throw new BadRequestException('Note content is required.');
+    return this.studentNoteModel.create({ ...dto, schoolSlug, studentId, createdByName });
+  }
+
+  // ============================================================
+  // STUDENT DOCUMENTS — Documents tab (Student 360)
+  // ============================================================
+
+  async getStudentDocuments(schoolSlug: string, studentId: string) {
+    return this.studentDocumentRecordModel.find({ schoolSlug, studentId }).sort({ createdAt: -1 }).lean();
+  }
+
+  async createStudentDocument(schoolSlug: string, studentId: string, dto: any, uploadedByName: string) {
+    if (!dto?.label?.trim()) throw new BadRequestException('Label is required.');
+    if (!dto?.s3Key?.trim()) throw new BadRequestException('File key is required.');
+    return this.studentDocumentRecordModel.create({ ...dto, schoolSlug, studentId, uploadedByName });
+  }
+
+  // ============================================================
+  // ACADEMIC HISTORY — History tab (Student 360)
+  // ============================================================
+
+  async getAcademicHistory(schoolSlug: string, studentId: string) {
+    return this.academicHistoryRecordModel.find({ schoolSlug, studentId }).sort({ yearLabel: -1 }).lean();
+  }
+
+  async createAcademicHistory(schoolSlug: string, studentId: string, dto: any) {
+    if (!dto?.yearLabel?.trim()) throw new BadRequestException('Academic year label is required.');
+    return this.academicHistoryRecordModel.create({ ...dto, schoolSlug, studentId });
   }
 
   // ============================================================

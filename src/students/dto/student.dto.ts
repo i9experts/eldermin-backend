@@ -107,6 +107,20 @@ export class CreateStudentDto {
   @IsOptional() @IsMongoId() applicantId?: string;
   @IsOptional() @IsString() previousSchool?: string;
 
+  // Emergency Contact — distinct from medical.emergencyAction (medical
+  // procedure instructions); this is a real person to actually call.
+  // Existed on the Student schema and in the Edit Profile form's save
+  // payload, but never declared here — the global ValidationPipe's
+  // whitelist:true was silently stripping all 5 of these fields from
+  // every create/update request before the service ever saw them.
+  @IsOptional() @IsString() emergencyContactName?: string;
+  @IsOptional() @IsString() emergencyContactRelation?: string;
+  @IsOptional() @IsString() emergencyContactPhone?: string;
+
+  // Tutor Information
+  @IsOptional() @IsString() tutorName?: string;
+  @IsOptional() @IsString() tutorPhone?: string;
+
   // Flags
   @IsOptional() @IsBoolean() siblingInSchool?: boolean;
   @IsOptional() @IsBoolean() specialNeeds?: boolean;
