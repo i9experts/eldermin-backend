@@ -13,6 +13,11 @@ import {
   Behaviour, BehaviourSchema,
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
+import { MedicalRecord, MedicalRecordSchema } from './schemas/medical-record.schema';
+import { StudentNote, StudentNoteSchema } from './schemas/student-note.schema';
+import { StudentDocumentRecord, StudentDocumentRecordSchema } from './schemas/student-document-record.schema';
+import { AcademicHistoryRecord, AcademicHistoryRecordSchema } from './schemas/academic-history-record.schema';
+import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-field.schema';
 import { UploadModule } from '../upload/upload.module';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
@@ -28,6 +33,11 @@ import { Family, FamilySchema } from '../families/schemas/family.schema';
       { name: StudentFee.name, schema: StudentFeeSchema },
       { name: Behaviour.name, schema: BehaviourSchema },
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
+      { name: MedicalRecord.name, schema: MedicalRecordSchema },
+      { name: StudentNote.name, schema: StudentNoteSchema },
+      { name: StudentDocumentRecord.name, schema: StudentDocumentRecordSchema },
+      { name: AcademicHistoryRecord.name, schema: AcademicHistoryRecordSchema },
+      { name: EnrollmentField.name, schema: EnrollmentFieldSchema },
       { name: 'School', schema: SchoolSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },

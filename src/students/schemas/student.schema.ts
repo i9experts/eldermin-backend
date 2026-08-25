@@ -64,6 +64,10 @@ export class MedicalInfo {
   @Prop({ type: [String], default: [] }) conditions: string[];
   @Prop() doctorName: string;
   @Prop() doctorPhone: string;
+  @Prop() doctorClinic: string;
+  @Prop() emergencyAction: string;
+  @Prop() peRestrictions: string;
+  @Prop() dietaryRestrictions: string;
   @Prop() insuranceProvider: string;
   @Prop() insurancePolicyNumber: string;
   @Prop() specialNeedsDetail: string;
@@ -146,6 +150,10 @@ export class Student {
   @Prop({ type: Types.ObjectId, ref: 'Enrollment' }) enrollmentId: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'Applicant' }) applicantId: Types.ObjectId;
   @Prop() previousSchool: string;
+  @Prop() previousSchoolCity: string;
+  @Prop() previousGrade: string;
+  @Prop() transferCertNo: string;
+  @Prop() tcDate: Date;
 
   // ── Emergency Contact ────────────────────────────────────────
   // Distinct from medical.emergencyAction (which is medical procedure
@@ -169,6 +177,9 @@ export class Student {
   // ── Flags ──────────────────────────────────────────────────
   @Prop({ default: false }) siblingInSchool: boolean;
   @Prop({ type: [String], default: [] }) siblingIds: string[];
+  @Prop() siblingName: string;
+  @Prop() siblingAdmissionNo: string;
+  @Prop() siblingGrade: string;
   @Prop({ default: false }) specialNeeds: boolean;
   @Prop({ default: false }) isGifted: boolean;
   @Prop({ default: false }) isESL: boolean; // English as a Second Language
@@ -179,12 +190,19 @@ export class Student {
   @Prop() transportRoute: string;
   @Prop() transportStop: string;
   @Prop({ default: false }) hostelResident: boolean;
+  @Prop() hostelRoom: string; // room preference, e.g. "Single, Ground Floor"
   @Prop({ default: false }) cafeteriaSubscribed: boolean;
 
   // ── Physical ───────────────────────────────────────────────
   @Prop() heightCm: number;
   @Prop() weightKg: number;
   @Prop() lastMeasuredOn: Date;
+
+  // ── Custom Fields ──────────────────────────────────────────
+  // School-defined fields (see EnrollmentField / "Manage Enrollment
+  // Fields"), keyed by fieldKey. Collected in the Enrollment Wizard's
+  // Step 7 (Services) but never reached the student record until now.
+  @Prop({ type: Object, default: {} }) customFields: Record<string, any>;
 
   // ── Status ─────────────────────────────────────────────────
   @Prop({

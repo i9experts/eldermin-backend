@@ -80,6 +80,30 @@ export class ResellersController {
     return this.service.rejectDeal(id, this.adminUser(req), dto?.reviewNote);
   }
 
+  // ── MDF claims queue (Phase 3) ────────────────────────────
+  @Get('mdf-claims')
+  async mdfClaims(@Query() query: any) {
+    return this.service.getMdfClaims(query);
+  }
+
+  @Patch('mdf-claims/:id/review')
+  async reviewMdfClaim(
+    @Param('id') id: string,
+    @Body() dto: { decision: 'approved' | 'rejected'; amountApproved?: number; reviewNote?: string },
+    @Request() req: any,
+  ) {
+    return this.service.reviewMdfClaim(id, dto.decision, this.adminUser(req), dto.amountApproved, dto.reviewNote);
+  }
+
+  @Patch('mdf-claims/:id/pay')
+  async payMdfClaim(
+    @Param('id') id: string,
+    @Body() dto: { paymentMethod: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string },
+    @Request() req: any,
+  ) {
+    return this.service.payMdfClaim(id, dto, this.adminUser(req));
+  }
+
   // ── Partner Directory (Phase 1) — generic :id routes below;
   // nothing literal may be added after this point without moving above ──
   @Get(':id')
@@ -130,6 +154,23 @@ export class ResellersController {
   @Get(':id/commission-ledger')
   async commissionLedger(@Param('id') id: string, @Query() query: any) {
     return this.service.getCommissionLedger(id, query);
+  }
+
+  // ── MDF budget (Phase 3, Regional Partner tier) ────────────
+  @Patch(':id/mdf-budget')
+  async setMdfBudget(@Param('id') id: string, @Body() dto: { amount: number; fiscalYear: number }) {
+    return this.service.setMdfBudget(id, dto.amount, dto.fiscalYear);
+  }
+
+  @Get(':id/mdf-summary')
+  async mdfSummary(@Param('id') id: string) {
+    return this.service.getMdfSummary(id);
+  }
+
+  // ── Branding (Phase 3, Regional Partner tier) ──────────────
+  @Patch(':id/branding')
+  async setBranding(@Param('id') id: string, @Body() dto: { logoUrl?: string; accentColor?: string }) {
+    return this.service.setBranding(id, dto);
   }
 
   // ── Reseller Portal v1 — account provisioning ─────────────

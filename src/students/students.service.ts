@@ -24,6 +24,11 @@ import {
   Behaviour, BehaviourDocument,
   AssessmentResult, AssessmentResultDocument,
 } from './schemas/student-supporting.schema';
+import { MedicalRecord, MedicalRecordDocument } from './schemas/medical-record.schema';
+import { StudentNote, StudentNoteDocument } from './schemas/student-note.schema';
+import { StudentDocumentRecord, StudentDocumentRecordDocument } from './schemas/student-document-record.schema';
+import { AcademicHistoryRecord, AcademicHistoryRecordDocument } from './schemas/academic-history-record.schema';
+import { EnrollmentField, EnrollmentFieldDocument } from './schemas/enrollment-field.schema';
 
 import {
   CreateStudentDto, UpdateStudentDto, StudentQueryDto,
@@ -64,6 +69,11 @@ export class StudentsService {
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     @InjectModel(FeeStructure.name) private feeStructureModel: Model<FeeStructureDocument>,
+    @InjectModel(MedicalRecord.name) private medicalRecordModel: Model<MedicalRecordDocument>,
+    @InjectModel(StudentNote.name) private studentNoteModel: Model<StudentNoteDocument>,
+    @InjectModel(StudentDocumentRecord.name) private studentDocumentRecordModel: Model<StudentDocumentRecordDocument>,
+    @InjectModel(AcademicHistoryRecord.name) private academicHistoryRecordModel: Model<AcademicHistoryRecordDocument>,
+    @InjectModel(EnrollmentField.name) private enrollmentFieldModel: Model<EnrollmentFieldDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -210,7 +220,36 @@ export class StudentsService {
 
     try {
       const student = new this.studentModel({ ...dto, studentId, admissionNumber });
-      return await student.save();
+      await student.save();
+
+      // Mirror any structured medical detail the Enrollment Wizard collected
+      // into the real MedicalRecord the Health tab actually reads/writes -
+      // student.medical only stores the simple bloodGroup/doctorName/etc
+      // fields, so without this the wizard's allergy/condition/medication
+      // detail, emergency action, and PE/dietary restrictions would be
+      // captured and validated but never show up anywhere again.
+      const m = dto.medical as any;
+      const hasMedicalDetail = m && (
+        m.bloodGroup || m.allergyItems?.length || m.conditionItems?.length ||
+        m.medicationItems?.length || m.emergencyAction || m.peRestrictions ||
+        m.dietaryRestrictions || m.doctorName
+      );
+      if (hasMedicalDetail) {
+        await this.medicalRecordModel.create({
+          studentId: student._id,
+          schoolSlug: dto.schoolSlug,
+          bloodGroup: m.bloodGroup || 'unknown',
+          allergies: m.allergyItems || [],
+          conditions: m.conditionItems || [],
+          medications: m.medicationItems || [],
+          emergencyAction: m.emergencyAction,
+          peRestrictions: m.peRestrictions,
+          dietaryRestrictions: m.dietaryRestrictions,
+          familyDoctor: m.doctorName ? { name: m.doctorName, phone: m.doctorPhone, clinic: m.doctorClinic } : undefined,
+        });
+      }
+
+      return student;
     } catch (err: any) {
       // A real, readable message (e.g. "firstName is required") instead of
       // an unhandled exception bubbling into a generic 500 - the previous
@@ -2006,5 +2045,139 @@ export class StudentsService {
     }
 
     return { created, updated, skipped, failed };
+  }
+
+  // ============================================================
+  // MEDICAL RECORD — Health tab (Student 360)
+  // ============================================================
+
+  async getMedicalRecord(schoolSlug: string, studentId: string) {
+    return this.medicalRecordModel.findOne({ schoolSlug, studentId }).lean();
+  }
+
+  async upsertMedicalRecord(schoolSlug: string, studentId: string, dto: any) {
+    return this.medicalRecordModel.findOneAndUpdate(
+      { schoolSlug, studentId },
+      { $set: { ...dto, schoolSlug, studentId } },
+      { new: true, upsert: true },
+    );
+  }
+
+  // ============================================================
+  // STUDENT NOTES — Notes tab (Student 360)
+  // ============================================================
+
+  async getStudentNotes(schoolSlug: string, studentId: string) {
+    return this.studentNoteModel.find({ schoolSlug, studentId }).sort({ createdAt: -1 }).lean();
+  }
+
+  async createStudentNote(schoolSlug: string, studentId: string, dto: any, createdByName: string) {
+    if (!dto?.content?.trim()) throw new BadRequestException('Note content is required.');
+    return this.studentNoteModel.create({ ...dto, schoolSlug, studentId, createdByName });
+  }
+
+  // ============================================================
+  // STUDENT DOCUMENTS — Documents tab (Student 360)
+  // ============================================================
+
+  async getStudentDocuments(schoolSlug: string, studentId: string) {
+    return this.studentDocumentRecordModel.find({ schoolSlug, studentId }).sort({ createdAt: -1 }).lean();
+  }
+
+  async createStudentDocument(schoolSlug: string, studentId: string, dto: any, uploadedByName: string) {
+    if (!dto?.label?.trim()) throw new BadRequestException('Label is required.');
+    if (!dto?.s3Key?.trim()) throw new BadRequestException('File key is required.');
+    return this.studentDocumentRecordModel.create({ ...dto, schoolSlug, studentId, uploadedByName });
+  }
+
+  // ============================================================
+  // ACADEMIC HISTORY — History tab (Student 360)
+  // ============================================================
+
+  async getAcademicHistory(schoolSlug: string, studentId: string) {
+    return this.academicHistoryRecordModel.find({ schoolSlug, studentId }).sort({ yearLabel: -1 }).lean();
+  }
+
+  async createAcademicHistory(schoolSlug: string, studentId: string, dto: any) {
+    if (!dto?.yearLabel?.trim()) throw new BadRequestException('Academic year label is required.');
+    return this.academicHistoryRecordModel.create({ ...dto, schoolSlug, studentId });
+  }
+
+  // ============================================================
+  // ENROLLMENT FIELDS — custom fields for the enrollment wizard
+  // (Step 7 "Services") and the admin's "Manage Enrollment Fields"
+  // panel, scoped per school.
+  // ============================================================
+
+  async getEnrollmentFields(schoolSlug: string) {
+    return this.enrollmentFieldModel
+      .find({ schoolSlug })
+      .sort({ section: 1, sortOrder: 1 })
+      .lean();
+  }
+
+  async createEnrollmentField(schoolSlug: string, data: any) {
+    if (!data?.label?.trim()) throw new BadRequestException('Label is required.');
+    if (!data?.fieldKey?.trim()) throw new BadRequestException('fieldKey is required.');
+    const { isSystemField: _ignored, schoolSlug: _ignored2, ...safeData } = data;
+    return this.enrollmentFieldModel.create({ ...safeData, schoolSlug, isSystemField: false });
+  }
+
+  async updateEnrollmentField(schoolSlug: string, id: string, data: any) {
+    const { isSystemField, schoolSlug: _ignored, ...safeData } = data || {};
+    const updated = await this.enrollmentFieldModel.findOneAndUpdate(
+      { _id: id, schoolSlug, isSystemField: false },
+      { $set: safeData },
+      { new: true },
+    ).lean();
+    if (!updated) throw new BadRequestException('Field not found or cannot update system fields.');
+    return updated;
+  }
+
+  async deleteEnrollmentField(schoolSlug: string, id: string) {
+    const deleted = await this.enrollmentFieldModel.findOneAndDelete({
+      _id: id,
+      schoolSlug,
+      isSystemField: false,
+    });
+    if (!deleted) throw new BadRequestException('Field not found or cannot delete system fields.');
+    return { message: 'Custom field deleted' };
+  }
+
+  async seedDefaultEnrollmentFields(schoolSlug: string) {
+    const existing = await this.enrollmentFieldModel.countDocuments({ schoolSlug });
+    if (existing > 0) return { message: 'Fields already seeded', count: existing };
+
+    const defaultFields = [
+      { label: 'Previous School Name', fieldKey: 'previousSchoolName', fieldType: 'text', section: 'admission', sortOrder: 1, isSystemField: true },
+      { label: 'Previous Grade', fieldKey: 'previousGrade', fieldType: 'text', section: 'admission', sortOrder: 2, isSystemField: true },
+      { label: 'Transfer Certificate No', fieldKey: 'transferCertNo', fieldType: 'text', section: 'admission', sortOrder: 3, isSystemField: true },
+      { label: 'Admission Type', fieldKey: 'admissionType', fieldType: 'select', options: ['new', 'transfer', 'readmission', 'lateral'], section: 'admission', sortOrder: 4, isRequired: true, isSystemField: true },
+      { label: 'Nationality', fieldKey: 'nationality', fieldType: 'text', section: 'personal', sortOrder: 1, isSystemField: true },
+      { label: 'Second Nationality', fieldKey: 'secondNationality', fieldType: 'text', section: 'personal', sortOrder: 2, isSystemField: true },
+      { label: 'Religion', fieldKey: 'religion', fieldType: 'select', options: ['Islam', 'Christianity', 'Hinduism', 'Judaism', 'Buddhism', 'Other'], section: 'personal', sortOrder: 3, isSystemField: true },
+      { label: 'Mother Tongue', fieldKey: 'motherTongue', fieldType: 'text', section: 'personal', sortOrder: 4, isSystemField: true },
+      { label: 'Place of Birth', fieldKey: 'placeOfBirth', fieldType: 'text', section: 'personal', sortOrder: 5, isSystemField: true },
+      { label: 'Passport Number', fieldKey: 'passportNo', fieldType: 'text', section: 'personal', sortOrder: 6, isSystemField: true },
+      { label: 'National ID', fieldKey: 'nationalId', fieldType: 'text', section: 'personal', sortOrder: 7, isSystemField: true },
+      { label: 'Birth Certificate No', fieldKey: 'birthCertNo', fieldType: 'text', section: 'personal', sortOrder: 8, isSystemField: true },
+      { label: 'Has Transport Service', fieldKey: 'hasTransport', fieldType: 'checkbox', section: 'services', sortOrder: 1, isSystemField: true },
+      { label: 'Transport Route', fieldKey: 'transportRoute', fieldType: 'text', section: 'services', sortOrder: 2, isSystemField: true },
+      { label: 'Transport Stop', fieldKey: 'transportStop', fieldType: 'text', section: 'services', sortOrder: 3, isSystemField: true },
+      { label: 'Has Hostel Service', fieldKey: 'hasHostel', fieldType: 'checkbox', section: 'services', sortOrder: 4, isSystemField: true },
+      { label: 'Has Cafeteria Service', fieldKey: 'hasCafeteria', fieldType: 'checkbox', section: 'services', sortOrder: 5, isSystemField: true },
+      { label: 'Sibling at School', fieldKey: 'hasSibling', fieldType: 'checkbox', section: 'services', sortOrder: 6, isSystemField: true },
+      { label: 'Sibling Admission No', fieldKey: 'siblingAdmissionNo', fieldType: 'text', section: 'services', sortOrder: 7, isSystemField: true },
+      { label: 'Has Special Educational Needs', fieldKey: 'isSEN', fieldType: 'checkbox', section: 'health', sortOrder: 1, isSystemField: true },
+      { label: 'SEN Details', fieldKey: 'senDetails', fieldType: 'textarea', section: 'health', sortOrder: 2, isSystemField: true },
+      { label: 'Dietary Restrictions', fieldKey: 'dietaryRestrictions', fieldType: 'text', section: 'health', sortOrder: 3, isSystemField: true },
+      { label: 'PE Restrictions', fieldKey: 'peRestrictions', fieldType: 'textarea', section: 'health', sortOrder: 4, isSystemField: true },
+      { label: 'Emergency Medical Action', fieldKey: 'emergencyAction', fieldType: 'textarea', section: 'health', sortOrder: 5, isSystemField: true },
+    ];
+
+    await this.enrollmentFieldModel.insertMany(
+      defaultFields.map(f => ({ ...f, schoolSlug })),
+    );
+    return { message: 'Default enrollment fields seeded', count: defaultFields.length };
   }
 }

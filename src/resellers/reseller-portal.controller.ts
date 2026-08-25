@@ -17,6 +17,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Query,
   Request,
@@ -70,5 +71,33 @@ export class ResellerPortalController {
   @Get('deals')
   async deals(@Query() query: any, @Request() req: any) {
     return this.service.getDeals({ ...query, resellerId: this.scopedId(req, query.resellerId) });
+  }
+
+  // ── MDF (Phase 3, Regional Partner tier) ────────────────────
+  @Get('mdf-summary')
+  async mdfSummary(@Request() req: any) {
+    return this.service.getMdfSummary(this.scopedId(req));
+  }
+
+  @Post('mdf-claims')
+  async submitMdfClaim(@Body() dto: any, @Request() req: any) {
+    const resellerId = this.scopedId(req, dto?.resellerId);
+    return this.service.submitMdfClaim(resellerId, dto, req.user.name || req.user.userId);
+  }
+
+  @Get('mdf-claims')
+  async mdfClaims(@Query() query: any, @Request() req: any) {
+    return this.service.getMdfClaims({ ...query, resellerId: this.scopedId(req, query.resellerId) });
+  }
+
+  // ── Branding (Phase 3, Regional Partner tier) — self-serve ──
+  @Get('branding')
+  async branding(@Request() req: any) {
+    return this.service.getOwnBranding(this.scopedId(req));
+  }
+
+  @Patch('branding')
+  async updateBranding(@Body() dto: { logoUrl?: string; accentColor?: string }, @Request() req: any) {
+    return this.service.updateOwnBranding(this.scopedId(req), dto);
   }
 }
