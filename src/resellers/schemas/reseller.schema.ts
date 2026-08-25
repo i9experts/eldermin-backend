@@ -28,6 +28,19 @@ class ResellerContact {
   @Prop() designation: string;
 }
 
+// Phase 3 — Regional Partner tier. Both MDF and branding are benefits a
+// partner only holds while actually AT regional_partner/master_distributor
+// (see resellers.service.ts isBrandingEligible/isMdfEligible) — kept as
+// plain fields here rather than nested under "phase3" so a downgrade to
+// certified_partner naturally stops qualifying without a migration, the
+// same convention as commissionRateYear1/wholesaleDiscount both always
+// existing regardless of current track.
+@Schema({ _id: false })
+class ResellerBranding {
+  @Prop() logoUrl: string;
+  @Prop() accentColor: string; // hex, e.g. '#1e3a5f'
+}
+
 export type ResellerDocument = Reseller & Document;
 
 @Schema({ timestamps: true, collection: 'resellers' })
@@ -92,6 +105,16 @@ export class Reseller {
   @Prop() suspendedAt: Date;
   @Prop() terminatedReason: string;
   @Prop() terminatedAt: Date;
+
+  // Phase 3 — MDF (Marketing Development Fund): a co-marketing budget
+  // Eldermin allocates per fiscal year that the partner draws down via
+  // claims (see MdfClaim). "Remaining" is always derived (allocated minus
+  // approved/paid claims for the same year), never stored, so it can never
+  // drift out of sync with the claims themselves.
+  @Prop({ default: 0 }) mdfAllocatedAmount: number;
+  @Prop() mdfFiscalYear: number;
+
+  @Prop({ type: ResellerBranding, default: {} }) branding: ResellerBranding;
 }
 
 export const ResellerSchema = SchemaFactory.createForClass(Reseller);

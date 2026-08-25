@@ -1185,7 +1185,7 @@ export class FinanceService {
     return '5600'; // Other Operating Expenses
   }
 
-  private mapPaymentMethodToAccount(method: string): string {
+  mapPaymentMethodToAccount(method: string): string {
     return method === 'cash' ? '1000' : '1100'; // Cash vs Bank Accounts
   }
 
