@@ -220,7 +220,36 @@ export class StudentsService {
 
     try {
       const student = new this.studentModel({ ...dto, studentId, admissionNumber });
-      return await student.save();
+      await student.save();
+
+      // Mirror any structured medical detail the Enrollment Wizard collected
+      // into the real MedicalRecord the Health tab actually reads/writes -
+      // student.medical only stores the simple bloodGroup/doctorName/etc
+      // fields, so without this the wizard's allergy/condition/medication
+      // detail, emergency action, and PE/dietary restrictions would be
+      // captured and validated but never show up anywhere again.
+      const m = dto.medical as any;
+      const hasMedicalDetail = m && (
+        m.bloodGroup || m.allergyItems?.length || m.conditionItems?.length ||
+        m.medicationItems?.length || m.emergencyAction || m.peRestrictions ||
+        m.dietaryRestrictions || m.doctorName
+      );
+      if (hasMedicalDetail) {
+        await this.medicalRecordModel.create({
+          studentId: student._id,
+          schoolSlug: dto.schoolSlug,
+          bloodGroup: m.bloodGroup || 'unknown',
+          allergies: m.allergyItems || [],
+          conditions: m.conditionItems || [],
+          medications: m.medicationItems || [],
+          emergencyAction: m.emergencyAction,
+          peRestrictions: m.peRestrictions,
+          dietaryRestrictions: m.dietaryRestrictions,
+          familyDoctor: m.doctorName ? { name: m.doctorName, phone: m.doctorPhone, clinic: m.doctorClinic } : undefined,
+        });
+      }
+
+      return student;
     } catch (err: any) {
       // A real, readable message (e.g. "firstName is required") instead of
       // an unhandled exception bubbling into a generic 500 - the previous
