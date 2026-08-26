@@ -14,6 +14,7 @@ import { PTMMeeting, PTMMeetingSchema } from './schemas/ptm-meeting.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { EmailModule } from '../../email/email.module';
+import { PdfModule } from '../../pdf/pdf.module';
 import { SubstitutionService } from './substitution.service';
 import { SubstitutionController } from './substitution.controller';
 import { PTMService } from './ptm.service';
@@ -35,6 +36,7 @@ import { PTMController } from './ptm.controller';
       { name: Student.name, schema: StudentSchema },
     ]),
     EmailModule,
+    PdfModule,
   ],
   controllers: [TeachingController, SubstitutionController, PTMController],
   providers: [TeachingService, SubstitutionService, PTMService],

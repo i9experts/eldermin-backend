@@ -9,6 +9,7 @@ import { PeriodTemplate, PeriodTemplateDocument } from './schemas/period-templat
 import { Assignment, AssignmentDocument } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.schema';
 import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
+import { PdfService } from '../../pdf/pdf.service';
 
 @Injectable()
 export class TeachingService {
@@ -20,6 +21,7 @@ export class TeachingService {
     @InjectModel(PeriodTemplate.name) private periodTemplateModel: Model<PeriodTemplateDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(BehaviourNote.name) private behaviourModel: Model<BehaviourNoteDocument>,
+    private readonly pdfService: PdfService,
   ) {}
 
   private tid(t: string) { return t; }
@@ -224,6 +226,21 @@ export class TeachingService {
       { new: true },
     ).lean();
     return { ...updated, conflicts };
+  }
+
+  async generateTimetablePdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string) {
+    const timetable = await this.timetableModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!timetable) throw new NotFoundException('Timetable not found');
+    // Reconstruct this class's own period times from its stored periods
+    // (schools can set a custom start time/break placement per class via
+    // the wizard) rather than assuming a fixed default schedule.
+    const periodsPerDay = timetable.periodsPerDay || 8;
+    const periodTimes = Array.from({ length: periodsPerDay }, (_, i) => {
+      const pNo = i + 1;
+      const p = (timetable.periods || []).find((x: any) => x.periodNo === pNo && x.startTime);
+      return { periodNo: pNo, startTime: p?.startTime || '', endTime: p?.endTime || '' };
+    });
+    return this.pdfService.generateTimetablePdf(schoolSlug, timetable, periodTimes, userId, templateId);
   }
 
   async getTeacherTimetable(tenantId: string, staffId: string) {
