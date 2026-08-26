@@ -25,6 +25,16 @@ export class Timetable {
       teacherName: String,
       roomNo: String,
       type: { type: String, enum: ['regular', 'lab', 'pe', 'break', 'assembly', 'free'], default: 'regular' },
+      // Pinned during "Regenerate Open Slots" - the partial-regenerate pass
+      // treats a locked period as a fixed obstacle and only redistributes
+      // unlocked ones around it.
+      locked: { type: Boolean, default: false },
+      // Groups 2+ contiguous same-day periods into one double/triple
+      // (block) period - e.g. a 2-period science lab. All periods sharing
+      // a blockId carry identical subject/teacher/roomNo/type; the one
+      // with the lowest periodNo is the block's "start" for display and
+      // PDF rendering (rowspan) purposes.
+      blockId: { type: String, default: null },
       _id: false,
     }],
     default: [],

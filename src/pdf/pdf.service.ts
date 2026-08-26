@@ -1057,6 +1057,7 @@ export class PdfService {
       attendance_sheet: 'Attendance Sheet',
       admission_letter: 'Admission Letter',
       contract: 'Employment Contract',
+      timetable: 'Class Timetable',
       custom: 'Document',
     };
     return map[type] || 'Document';
@@ -1418,6 +1419,135 @@ ${css}
       type,
       referenceId: templateId || (template._id ? String(template._id) : ''),
       referenceName: data.documentNumber || data.receiptNumber || data.voucherNumber || template.name || type,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Renders a class/teacher/room timetable grid as a branded PDF, pulling
+   * letterhead (logo, school name/address, colours) from the school's
+   * 'timetable' ReportTemplate the same way every other document type
+   * does. A day-by-period grid doesn't fit the generic table/key_value/
+   * text section vocabulary the rest of this file's sections engine uses
+   * (those are built for a list of line items, not a 2D schedule), so
+   * this builds its own HTML table directly instead of going through
+   * renderTemplateDrivenPdf/buildSectionHtml - only the `letterhead`
+   * portion of a 'timetable' report template is actually used here; any
+   * sections a school adds to one in the Designer are not rendered onto
+   * the actual timetable PDF.
+   */
+  async generateTimetablePdf(
+    schoolSlug: string,
+    timetable: any,
+    periodTimes: { periodNo: number; startTime: string; endTime: string }[],
+    userId: string,
+    templateId?: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const template = await this.getTemplateForType(schoolSlug, 'timetable', templateId);
+    const letterheadHtml = this.buildLetterheadHtml(template, school as any);
+    const primaryColor = template.letterhead?.primaryColor || '#0C447C';
+    const accentColor = template.letterhead?.accentColor || '#EF9F27';
+
+    const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const days: number[] = timetable.workingDays?.length ? timetable.workingDays : [1, 2, 3, 4, 5];
+    const periodsPerDay: number = timetable.periodsPerDay || 8;
+    const periods: any[] = timetable.periods || [];
+
+    // Build a day->periodNo lookup, marking the second+ period of a block
+    // (blockId shared, higher periodNo) as 'skip' so its <td> is omitted -
+    // the block's first row's rowspan already covers that grid position,
+    // exactly how an HTML table expresses a merged cell.
+    const cellAt: Record<string, any> = {};
+    const skip = new Set<string>();
+    for (const d of days) {
+      const dayPeriods = periods.filter((p) => p.day === d).sort((a, b) => a.periodNo - b.periodNo);
+      for (const p of dayPeriods) cellAt[`${d}-${p.periodNo}`] = p;
+      for (const p of dayPeriods) {
+        if (!p.blockId) continue;
+        const isStart = !dayPeriods.some((o) => o.blockId === p.blockId && o.periodNo < p.periodNo);
+        if (!isStart) skip.add(`${d}-${p.periodNo}`);
+      }
+    }
+    const blockSpan = (d: number, pNo: number, blockId: string) =>
+      periods.filter((p) => p.day === d && p.blockId === blockId).length || 1;
+
+    const headerCells = days.map((d) => `<th class="day">${DAY_NAMES[d]}</th>`).join('');
+    const rows = Array.from({ length: periodsPerDay }, (_, i) => {
+      const pNo = i + 1;
+      const pt = periodTimes.find((t) => t.periodNo === pNo);
+      const timeStr = pt ? `${pt.startTime}–${pt.endTime}` : `P${pNo}`;
+      const cells = days.map((d) => {
+        const key = `${d}-${pNo}`;
+        if (skip.has(key)) return '';
+        const p = cellAt[key];
+        if (!p) return `<td class="empty">—</td>`;
+        const span = p.blockId ? blockSpan(d, pNo, p.blockId) : 1;
+        const rowspanAttr = span > 1 ? ` rowspan="${span}"` : '';
+        if (['break', 'assembly', 'free'].includes(p.type)) {
+          return `<td class="special"${rowspanAttr}>${p.label || p.type}</td>`;
+        }
+        return `<td${rowspanAttr}>
+          <div class="subj">${p.subject || '—'}${span > 1 ? ' <span class="block-badge">Block</span>' : ''}</div>
+          <div class="meta">${p.teacherName || ''}</div>
+          <div class="meta faint">${p.roomNo || ''}</div>
+        </td>`;
+      }).join('');
+      return `<tr><td class="time-col"><div class="pno">P${pNo}</div><div class="ptime">${timeStr}</div></td>${cells}</tr>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; margin: 0; padding: 18mm 14mm; }
+  h1 { font-size: 18px; margin: 18px 0 2px; color: ${primaryColor}; }
+  .sub { font-size: 12px; color: #6B7A90; margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { border: 1px solid #E2E8F0; padding: 6px 8px; text-align: left; vertical-align: top; }
+  thead th { background: ${primaryColor}; color: #fff; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  th.time-col, td.time-col { width: 78px; background: #F8FAFC; text-align: center; }
+  .pno { font-weight: 700; font-size: 11px; }
+  .ptime { font-size: 9.5px; color: #94A3B8; }
+  td.empty { color: #CBD5E1; text-align: center; }
+  td.special { text-align: center; font-style: italic; color: #6B7A90; background: #F8FAFC; }
+  .subj { font-weight: 600; font-size: 11.5px; }
+  .meta { font-size: 10px; color: #64748B; }
+  .meta.faint { color: #94A3B8; }
+  .block-badge { font-size: 8px; font-weight: 600; color: ${accentColor}; border: 1px solid ${accentColor}; border-radius: 8px; padding: 1px 5px; vertical-align: middle; }
+  .foot { margin-top: 16px; font-size: 9.5px; color: #94A3B8; }
+</style>
+</head>
+<body>
+  ${letterheadHtml}
+  <h1>${timetable.gradeLevel} — Section ${timetable.sectionName}</h1>
+  <p class="sub">${timetable.academicYearLabel || ''} &nbsp;|&nbsp; ${days.map((d) => DAY_NAMES[d]).join(', ')}</p>
+  <table>
+    <thead><tr><th class="time-col">Period</th>${headerCells}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <p class="foot">Generated ${new Date().toLocaleDateString('en-GB')}</p>
+</body>
+</html>`;
+
+    const pdf = await this.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      landscape: true,
+      printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'timetable',
+      referenceId: String(timetable._id || ''),
+      referenceName: `${timetable.gradeLevel} ${timetable.sectionName}`,
       generatedBy: userId,
       status: 'success',
       fileSizeKb: Math.round(pdf.length / 1024),
