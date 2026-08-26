@@ -947,6 +947,32 @@ export class PdfService {
   /** Minimal hardcoded fallback so rendering never hard-fails for a
    *  school that hasn't seeded/configured any report templates yet. */
   private getDefaultTemplateObject(type: string): any {
+    // Every other type falls back to a generic table+signature layout,
+    // which reads data.items as table rows - meaningless for a contract
+    // (no line items, just a field list and a body of terms). A school
+    // that hasn't created its own contract report template yet still
+    // gets a sensible-looking PDF instead of an empty/garbled table.
+    const sections = type === 'contract'
+      ? [
+          { id: 'default-fields', type: 'key_value', order: 1, visible: true, config: {
+            fields: [
+              { label: 'Contract Type', field: 'contractTypeLabel' },
+              { label: 'Designation', field: 'designation' },
+              { label: 'Department', field: 'department' },
+              { label: 'Start Date', field: 'startDateLabel' },
+              { label: 'End Date', field: 'endDateLabel' },
+              { label: 'Gross Salary', field: 'grossSalaryLabel' },
+              { label: 'Notice Period', field: 'noticePeriodLabel' },
+              { label: 'Working Hours', field: 'workingHoursLabel' },
+            ],
+          } },
+          { id: 'default-terms', type: 'text', order: 2, visible: true, config: { content: '{{termsAndConditions}}' } },
+          { id: 'default-signature', type: 'signature_block', order: 3, visible: true, config: { labels: ['Employee Signature', 'Authorized Signatory'] } },
+        ]
+      : [
+          { id: 'default-table', type: 'table', order: 1, visible: true, config: {} },
+          { id: 'default-signature', type: 'signature_block', order: 2, visible: true, config: {} },
+        ];
     return {
       _id: null,
       schoolSlug: '',
@@ -977,22 +1003,7 @@ export class PdfService {
         showAcademicYear: false,
         customFields: [],
       },
-      sections: [
-        {
-          id: 'default-table',
-          type: 'table',
-          order: 1,
-          visible: true,
-          config: {},
-        },
-        {
-          id: 'default-signature',
-          type: 'signature_block',
-          order: 2,
-          visible: true,
-          config: {},
-        },
-      ],
+      sections,
       footer: {
         showPageNumber: false,
         showPrintDate: true,
@@ -1026,6 +1037,7 @@ export class PdfService {
       result_card: 'Result Card',
       attendance_sheet: 'Attendance Sheet',
       admission_letter: 'Admission Letter',
+      contract: 'Employment Contract',
       custom: 'Document',
     };
     return map[type] || 'Document';

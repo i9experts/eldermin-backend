@@ -17,6 +17,7 @@ export const REPORT_TEMPLATE_TYPES = [
   'result_card',
   'attendance_sheet',
   'admission_letter',
+  'contract',
   'custom',
 ] as const;
 

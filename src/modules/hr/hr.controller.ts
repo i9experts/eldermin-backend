@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile, Res, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Request, UseGuards, UseInterceptors, UploadedFile, Res, HttpStatus } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
@@ -368,6 +368,24 @@ export class HrController {
   @Post('training/:id/enroll')
   enrollTraining(@Request() req, @Param('id') id: string, @Body() body: { staffId: string; staffName: string }) { return this.hrService.enrollInTraining(req.user.tenantId, id, body.staffId, body.staffName); }
 
+  // ── CONTRACT WORDING TEMPLATES ──────────────────────────────────────
+  // Registered before the plain 'contracts' routes below purely for
+  // readability - 'contract-templates' is its own distinct literal path
+  // segment so there's no NestJS route-ordering conflict with 'contracts'
+  // or 'contracts/:id' either way.
+
+  @Get('contract-templates')
+  getContractTemplates(@Request() req) { return this.hrService.getContractTemplates(req.user.tenantId); }
+
+  @Post('contract-templates')
+  createContractTemplate(@Request() req, @Body() body: any) { return this.hrService.createContractTemplate(req.user.tenantId, req.user.schoolSlug, body, req.user.userId); }
+
+  @Put('contract-templates/:id')
+  updateContractTemplate(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateContractTemplate(req.user.tenantId, id, body); }
+
+  @Delete('contract-templates/:id')
+  deleteContractTemplate(@Request() req, @Param('id') id: string) { return this.hrService.deleteContractTemplate(req.user.tenantId, id); }
+
   // ── CONTRACTS ─────────────────────────────────────────────────────────
 
   @Get('contracts/stats')
@@ -384,7 +402,7 @@ export class HrController {
 
   @Get('contracts/:id/pdf')
   async downloadContractPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
-    const pdf = await this.hrService.generateContractPdf(id, req.user.tenantId, req.user.schoolSlug);
+    const pdf = await this.hrService.generateContractPdf(id, req.user.tenantId, req.user.schoolSlug, req.user.userId);
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="contract-${id}.pdf"`, 'Content-Length': pdf.length });
     res.end(pdf);
   }

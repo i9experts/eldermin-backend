@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { UploadModule } from '../../upload/upload.module';
 import { FinanceModule } from '../../finance/finance.module';
 import { EmailModule } from '../../email/email.module';
+import { PdfModule } from '../../pdf/pdf.module';
 import { HrController } from './hr.controller';
 import { HrService } from './hr.service';
 import { Staff, StaffSchema } from './schemas/staff.schema';
@@ -23,6 +24,7 @@ import { SalaryTemplate, SalaryTemplateSchema } from './schemas/salary-template.
 import { PerformanceReview, PerformanceReviewSchema } from './schemas/performance-review.schema';
 import { Training, TrainingSchema } from './schemas/training.schema';
 import { StaffContract, StaffContractSchema } from './schemas/staff-contract.schema';
+import { ContractTemplate, ContractTemplateSchema } from './schemas/contract-template.schema';
 import { OfferLetter, OfferLetterSchema } from './schemas/offer-letter.schema';
 import { AppointmentLetter, AppointmentLetterSchema } from './schemas/appointment-letter.schema';
 import { ExitRecord, ExitRecordSchema } from './schemas/exit-record.schema';
@@ -45,6 +47,7 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
     UploadModule,
     FinanceModule,
     EmailModule,
+    PdfModule,
     MongooseModule.forFeature([
       { name: Staff.name, schema: StaffSchema },
       { name: Designation.name, schema: DesignationSchema },
@@ -64,6 +67,7 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: PerformanceReview.name, schema: PerformanceReviewSchema },
       { name: Training.name, schema: TrainingSchema },
       { name: StaffContract.name, schema: StaffContractSchema },
+      { name: ContractTemplate.name, schema: ContractTemplateSchema },
       { name: OfferLetter.name, schema: OfferLetterSchema },
       { name: AppointmentLetter.name, schema: AppointmentLetterSchema },
       { name: ExitRecord.name, schema: ExitRecordSchema },
