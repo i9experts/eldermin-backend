@@ -127,6 +127,25 @@ export function sampleDataForType(type: string): Record<string, any> {
         admissionNo: 'ADM-2026-0099',
         guardianName: 'Ahmed Raza',
       };
+    case 'contract':
+      // Field names must match what HrService.generateContractPdf actually
+      // passes as `data` (contractTypeLabel, startDateLabel, etc, not the
+      // raw contract.type/startDate) - otherwise a template's Preview
+      // button would render fine here but show blank fields on every real
+      // contract, or vice versa.
+      return {
+        ...common,
+        recipientName: 'Ali Raza',
+        contractTypeLabel: 'Permanent',
+        designation: 'Senior Teacher',
+        department: 'Academics',
+        startDateLabel: '01 August 2026',
+        endDateLabel: 'Open-ended',
+        grossSalaryLabel: 'PKR 85,000/month',
+        noticePeriodLabel: '30 days',
+        workingHoursLabel: '40 hours/week',
+        termsAndConditions: 'Your employment is subject to the standard policies and code of conduct of the institution, as may be amended from time to time.',
+      };
     default:
       return {
         ...common,
