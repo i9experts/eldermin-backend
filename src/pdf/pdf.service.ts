@@ -433,7 +433,7 @@ export class PdfService {
    */
   private launchBrowser() {
     return puppeteer.launch({
-      headless: true,
+      headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
