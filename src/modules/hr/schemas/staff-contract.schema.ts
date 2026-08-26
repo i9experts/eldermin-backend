@@ -20,6 +20,12 @@ export class StaffContract {
   @Prop({ default: 30 }) noticePeriodDays: number;
   @Prop({ default: 40 }) workingHoursPerWeek: number;
   @Prop() termsAndConditions: string;
+  // Which wording template (ContractTemplate) was used to draft this
+  // contract's termsAndConditions, and which ReportTemplate (letterhead/
+  // layout) its PDF is generated with - kept for provenance/re-editing
+  // even though termsAndConditions itself is already the rendered text.
+  @Prop({ type: Types.ObjectId, ref: 'ContractTemplate' }) contractTemplateId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'ReportTemplate' }) reportTemplateId: Types.ObjectId;
   @Prop() contractS3Key: string;
   @Prop({ enum: ['draft','sent','signed','active','expired','terminated'], default: 'draft' }) status: string;
   @Prop() signedAt: Date;

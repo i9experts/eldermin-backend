@@ -30,6 +30,8 @@ import * as fontkit from '@pdf-lib/fontkit';
 import * as fs from 'fs';
 import { School, SchoolDocument } from '../../organization/schemas/organization.schema';
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
+import { ContractTemplate, ContractTemplateDocument } from './schemas/contract-template.schema';
+import { PdfService } from '../../pdf/pdf.service';
 import { OfferLetter, OfferLetterDocument } from './schemas/offer-letter.schema';
 import { AppointmentLetter, AppointmentLetterDocument } from './schemas/appointment-letter.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
@@ -67,6 +69,7 @@ export class HrService {
     @InjectModel(PerformanceReview.name) private performanceModel: Model<PerformanceReviewDocument>,
     @InjectModel(Training.name) private trainingModel: Model<TrainingDocument>,
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
+    @InjectModel(ContractTemplate.name) private contractTemplateModel: Model<ContractTemplateDocument>,
     @InjectModel(OfferLetter.name) private offerLetterModel: Model<OfferLetterDocument>,
     @InjectModel(AppointmentLetter.name) private appointmentLetterModel: Model<AppointmentLetterDocument>,
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
@@ -86,6 +89,7 @@ export class HrService {
     private readonly uploadService: UploadService,
     private readonly emailService: EmailService,
     private readonly financeService: FinanceService,
+    private readonly pdfService: PdfService,
   ) {}
 
   // Ledger postings must never block the underlying HR transaction (payroll
@@ -1772,6 +1776,39 @@ export class HrService {
     return this.contractModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
+  // ── Contract wording templates ──────────────────────────────────────
+  // Every institution phrases its contracts differently - this is the
+  // reusable {{variable}} body an admin picks from and fills in when
+  // creating a new contract, distinct from a ReportTemplate (which only
+  // controls the printed PDF's letterhead/branding, not its wording).
+  async getContractTemplates(tenantId: string) {
+    return this.contractTemplateModel.find({ tenantId: this.newTid(tenantId) }).sort({ name: 1 }).lean();
+  }
+
+  async createContractTemplate(tenantId: string, schoolSlug: string, data: any, userId: string) {
+    if (!data?.name?.trim()) throw new BadRequestException('Template name is required.');
+    if (!data?.body?.trim()) throw new BadRequestException('Template body is required.');
+    return this.contractTemplateModel.create({
+      ...data, schoolSlug,
+      tenantId: this.newTid(tenantId),
+      createdBy: this.newTid(userId),
+    });
+  }
+
+  async updateContractTemplate(tenantId: string, id: string, data: any) {
+    const updated = await this.contractTemplateModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) }, { $set: data }, { new: true },
+    ).lean();
+    if (!updated) throw new NotFoundException('Contract template not found');
+    return updated;
+  }
+
+  async deleteContractTemplate(tenantId: string, id: string) {
+    const result = await this.contractTemplateModel.deleteOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (result.deletedCount === 0) throw new NotFoundException('Contract template not found');
+    return { success: true };
+  }
+
   async createContract(tenantId: string, institutionId: string, schoolSlug: string, data: any, userId: string) {
     const count = await this.contractModel.countDocuments({ tenantId: this.newTid(tenantId) });
     const contractNo = `CON-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
@@ -1801,12 +1838,40 @@ export class HrService {
     return { active, expiringSoon, expired };
   }
 
-  async generateContractPdf(id: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
+  async generateContractPdf(id: string, tenantId: string, schoolSlug: string, userId?: string): Promise<Buffer> {
     const contract = await this.contractModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
     if (!contract) throw new NotFoundException('Contract not found');
     const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
     const schoolName = (school as any)?.name || 'Eldermin School';
     const typeLabels: Record<string, string> = { permanent: 'Permanent', fixed_term: 'Fixed Term', probationary: 'Probationary', part_time: 'Part Time', visiting: 'Visiting', renewal: 'Renewal' };
+    const termsText = contract.termsAndConditions || 'Your employment is subject to the standard policies and code of conduct of the institution, as may be amended from time to time.';
+
+    // Prefer the school's own contract ReportTemplate (letterhead/branding,
+    // and whichever one was selected when this contract was created) so
+    // every institution's contracts can actually look like their own
+    // letterhead instead of one fixed hardcoded layout. A custom
+    // template's render must never be able to make a contract simply fail
+    // to generate, though - same defensive fallback pattern already used
+    // for fee receipts/report cards elsewhere in this codebase.
+    try {
+      return await this.pdfService.generateFromTemplate(schoolSlug, 'contract', {
+        documentNumber: contract.contractNo,
+        date: new Date().toLocaleDateString('en-GB'),
+        recipientName: contract.staffName || 'Employee',
+        contractTypeLabel: typeLabels[contract.type] || contract.type,
+        designation: contract.designation || '—',
+        department: contract.department || '—',
+        startDateLabel: new Date(contract.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }),
+        endDateLabel: contract.endDate ? new Date(contract.endDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Open-ended',
+        grossSalaryLabel: `${contract.currency} ${(contract.grossSalary || 0).toLocaleString()}/month`,
+        noticePeriodLabel: `${contract.noticePeriodDays} days`,
+        workingHoursLabel: `${contract.workingHoursPerWeek} hours/week`,
+        termsAndConditions: termsText,
+      }, userId || 'system', contract.reportTemplateId ? String(contract.reportTemplateId) : undefined);
+    } catch {
+      // fall through to the fixed pdf-lib layout below
+    }
+
     const buffer = await this.buildLetterPdf(schoolName, {
       title: 'Employment Contract',
       refNo: contract.contractNo,
@@ -1814,7 +1879,7 @@ export class HrService {
       recipientName: contract.staffName || 'Employee',
       bodyParagraphs: [
         `This Employment Contract sets out the terms and conditions of your ${typeLabels[contract.type] || contract.type} employment with ${schoolName}, effective from the start date specified below.`,
-        contract.termsAndConditions || 'Your employment is subject to the standard policies and code of conduct of the institution, as may be amended from time to time.',
+        termsText,
       ],
       fields: [
         { label: 'Contract Type', value: typeLabels[contract.type] || contract.type },
