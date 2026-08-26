@@ -1446,6 +1446,11 @@ ${css}
     periodTimes: { periodNo: number; startTime: string; endTime: string }[],
     userId: string,
     templateId?: string,
+    // 'A' or 'B' prints only that alternating week (weekCycle 'both'
+    // periods still show on either); omitted/undefined prints every period
+    // regardless of week, which is the right default for timetables that
+    // don't use the A/B cycle at all.
+    weekFilter?: 'A' | 'B',
   ): Promise<Buffer> {
     const school = await this.getSchool(schoolSlug);
     const template = await this.getTemplateForType(schoolSlug, 'timetable', templateId);
@@ -1456,7 +1461,9 @@ ${css}
     const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const days: number[] = timetable.workingDays?.length ? timetable.workingDays : [1, 2, 3, 4, 5];
     const periodsPerDay: number = timetable.periodsPerDay || 8;
-    const periods: any[] = timetable.periods || [];
+    const periods: any[] = (timetable.periods || []).filter(
+      (p: any) => !weekFilter || !p.weekCycle || p.weekCycle === 'both' || p.weekCycle === weekFilter,
+    );
 
     // Build a day->periodNo lookup, marking the second+ period of a block
     // (blockId shared, higher periodNo) as 'skip' so its <td> is omitted -
@@ -1491,8 +1498,24 @@ ${css}
         if (['break', 'assembly', 'free'].includes(p.type)) {
           return `<td class="special"${rowspanAttr}>${p.label || p.type}</td>`;
         }
+        const badges = [
+          span > 1 ? '<span class="block-badge">Block</span>' : '',
+          p.electiveGroupId ? '<span class="block-badge">Elective</span>' : '',
+          p.weekCycle && p.weekCycle !== 'both' ? `<span class="block-badge">Wk ${p.weekCycle}</span>` : '',
+        ].filter(Boolean).join(' ');
+        if (Array.isArray(p.splitGroups) && p.splitGroups.length >= 2) {
+          const groups = p.splitGroups.map((g: any) => `
+            <div class="split-group">
+              <div class="meta"><b>${g.label || 'Group'}</b> — ${g.teacherName || ''}</div>
+              <div class="meta faint">${g.roomNo || ''}</div>
+            </div>`).join('');
+          return `<td${rowspanAttr}>
+            <div class="subj">${p.subject || '—'} ${badges}</div>
+            ${groups}
+          </td>`;
+        }
         return `<td${rowspanAttr}>
-          <div class="subj">${p.subject || '—'}${span > 1 ? ' <span class="block-badge">Block</span>' : ''}</div>
+          <div class="subj">${p.subject || '—'} ${badges}</div>
           <div class="meta">${p.teacherName || ''}</div>
           <div class="meta faint">${p.roomNo || ''}</div>
         </td>`;
@@ -1520,13 +1543,15 @@ ${css}
   .subj { font-weight: 600; font-size: 11.5px; }
   .meta { font-size: 10px; color: #64748B; }
   .meta.faint { color: #94A3B8; }
-  .block-badge { font-size: 8px; font-weight: 600; color: ${accentColor}; border: 1px solid ${accentColor}; border-radius: 8px; padding: 1px 5px; vertical-align: middle; }
+  .block-badge { font-size: 8px; font-weight: 600; color: ${accentColor}; border: 1px solid ${accentColor}; border-radius: 8px; padding: 1px 5px; vertical-align: middle; margin-left: 3px; }
+  .split-group { border-top: 1px dashed #E2E8F0; padding-top: 3px; margin-top: 3px; }
+  .split-group:first-of-type { border-top: none; margin-top: 4px; padding-top: 0; }
   .foot { margin-top: 16px; font-size: 9.5px; color: #94A3B8; }
 </style>
 </head>
 <body>
   ${letterheadHtml}
-  <h1>${timetable.gradeLevel} — Section ${timetable.sectionName}</h1>
+  <h1>${timetable.gradeLevel} — Section ${timetable.sectionName}${weekFilter ? ` (Week ${weekFilter})` : ''}</h1>
   <p class="sub">${timetable.academicYearLabel || ''} &nbsp;|&nbsp; ${days.map((d) => DAY_NAMES[d]).join(', ')}</p>
   <table>
     <thead><tr><th class="time-col">Period</th>${headerCells}</tr></thead>

@@ -11,6 +11,8 @@ import { Assignment, AssignmentSchema } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteSchema } from './schemas/behaviour-note.schema';
 import { Substitution, SubstitutionSchema } from './schemas/substitution.schema';
 import { PTMMeeting, PTMMeetingSchema } from './schemas/ptm-meeting.schema';
+import { ElectiveGroup, ElectiveGroupSchema } from './schemas/elective-group.schema';
+import { DutyRoster, DutyRosterSchema } from './schemas/duty-roster.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { EmailModule } from '../../email/email.module';
@@ -32,6 +34,8 @@ import { PTMController } from './ptm.controller';
       { name: BehaviourNote.name, schema: BehaviourNoteSchema },
       { name: Substitution.name, schema: SubstitutionSchema },
       { name: PTMMeeting.name, schema: PTMMeetingSchema },
+      { name: ElectiveGroup.name, schema: ElectiveGroupSchema },
+      { name: DutyRoster.name, schema: DutyRosterSchema },
       { name: Staff.name, schema: StaffSchema },
       { name: Student.name, schema: StudentSchema },
     ]),

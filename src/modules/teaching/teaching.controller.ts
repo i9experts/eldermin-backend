@@ -69,11 +69,40 @@ export class TeachingController {
   updateTimetable(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateTimetable(req.user.tenantId, id, body); }
 
   @Get('timetable/:id/pdf')
-  async downloadTimetablePdf(@Request() req, @Param('id') id: string, @Query('templateId') templateId: string, @Res() res: Response) {
-    const pdf = await this.teachingService.generateTimetablePdf(req.user.tenantId, req.user.schoolSlug, id, req.user.userId, templateId || undefined);
+  async downloadTimetablePdf(@Request() req, @Param('id') id: string, @Query('templateId') templateId: string, @Query('week') week: string, @Res() res: Response) {
+    const weekFilter = week === 'A' || week === 'B' ? week : undefined;
+    const pdf = await this.teachingService.generateTimetablePdf(req.user.tenantId, req.user.schoolSlug, id, req.user.userId, templateId || undefined, weekFilter);
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="timetable-${id}.pdf"`, 'Content-Length': pdf.length });
     res.end(pdf);
   }
+
+  // ── ELECTIVE / CROSS-CLASS GROUPS ───────────────────────────────────────────────
+
+  @Get('electives')
+  getElectiveGroups(@Request() req, @Query() q: any) { return this.teachingService.getElectiveGroups(req.user.tenantId, q); }
+
+  @Post('electives')
+  createElectiveGroup(@Request() req, @Body() body: any) { return this.teachingService.createElectiveGroup(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Patch('electives/:id')
+  updateElectiveGroup(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateElectiveGroup(req.user.tenantId, id, body); }
+
+  @Delete('electives/:id')
+  deleteElectiveGroup(@Request() req, @Param('id') id: string) { return this.teachingService.deleteElectiveGroup(req.user.tenantId, id); }
+
+  // ── DUTY ROSTER ──────────────────────────────────────────────────────────────────
+
+  @Get('duty-roster')
+  getDutyRoster(@Request() req, @Query() q: any) { return this.teachingService.getDutyRoster(req.user.tenantId, q); }
+
+  @Post('duty-roster')
+  createDutyRoster(@Request() req, @Body() body: any) { return this.teachingService.createDutyRoster(req.user.tenantId, req.user.institutionId, body, req.user.userId); }
+
+  @Patch('duty-roster/:id')
+  updateDutyRoster(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateDutyRoster(req.user.tenantId, id, body); }
+
+  @Delete('duty-roster/:id')
+  deleteDutyRoster(@Request() req, @Param('id') id: string) { return this.teachingService.deleteDutyRoster(req.user.tenantId, id); }
 
   // ── ROOMS ──────────────────────────────────────────────────────────────────────
 
