@@ -8,6 +8,8 @@ import { Room, RoomDocument } from './schemas/room.schema';
 import { PeriodTemplate, PeriodTemplateDocument } from './schemas/period-template.schema';
 import { Assignment, AssignmentDocument } from './schemas/assignment.schema';
 import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.schema';
+import { ElectiveGroup, ElectiveGroupDocument } from './schemas/elective-group.schema';
+import { DutyRoster, DutyRosterDocument } from './schemas/duty-roster.schema';
 import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
 import { PdfService } from '../../pdf/pdf.service';
 
@@ -21,6 +23,8 @@ export class TeachingService {
     @InjectModel(PeriodTemplate.name) private periodTemplateModel: Model<PeriodTemplateDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(BehaviourNote.name) private behaviourModel: Model<BehaviourNoteDocument>,
+    @InjectModel(ElectiveGroup.name) private electiveGroupModel: Model<ElectiveGroupDocument>,
+    @InjectModel(DutyRoster.name) private dutyRosterModel: Model<DutyRosterDocument>,
     private readonly pdfService: PdfService,
   ) {}
 
@@ -228,7 +232,7 @@ export class TeachingService {
     return { ...updated, conflicts };
   }
 
-  async generateTimetablePdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string) {
+  async generateTimetablePdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string, weekFilter?: 'A' | 'B') {
     const timetable = await this.timetableModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!timetable) throw new NotFoundException('Timetable not found');
     // Reconstruct this class's own period times from its stored periods
@@ -240,7 +244,7 @@ export class TeachingService {
       const p = (timetable.periods || []).find((x: any) => x.periodNo === pNo && x.startTime);
       return { periodNo: pNo, startTime: p?.startTime || '', endTime: p?.endTime || '' };
     });
-    return this.pdfService.generateTimetablePdf(schoolSlug, timetable, periodTimes, userId, templateId);
+    return this.pdfService.generateTimetablePdf(schoolSlug, timetable, periodTimes, userId, templateId, weekFilter);
   }
 
   async getTeacherTimetable(tenantId: string, staffId: string) {
@@ -262,6 +266,27 @@ export class TeachingService {
     return aStart < bEnd && bStart < aEnd;
   }
 
+  // Two slots on the same day/time only actually clash if some week runs
+  // both of them. 'both' runs every week; 'A' and 'B' each run on their
+  // own alternating week, so an 'A'-only slot and a 'B'-only slot never
+  // occupy the same real lesson even though they share a day/time.
+  private weekCyclesClash(a: string = 'both', b: string = 'both'): boolean {
+    if (a === 'both' || b === 'both') return true;
+    return a === b;
+  }
+
+  // A period is normally one teacher/room booking, but a split lesson
+  // (splitGroups.length >= 2) is several concurrent sub-bookings sharing
+  // one day/time slot - each sub-group needs its own conflict check
+  // against the rest of the school. A plain period yields exactly one slot.
+  private *expandBookableSlots(p: any): Generator<{ teacherId: any; teacherName: string; roomNo: string }> {
+    if (Array.isArray(p.splitGroups) && p.splitGroups.length >= 2) {
+      for (const g of p.splitGroups) yield { teacherId: g.teacherId, teacherName: g.teacherName, roomNo: g.roomNo };
+    } else {
+      yield { teacherId: p.teacherId, teacherName: p.teacherName, roomNo: p.roomNo };
+    }
+  }
+
   async checkConflicts(tenantId: string, excludeTimetableId: string | null, periods: any[]) {
     const tid = this.tid(tenantId);
     const others = await this.timetableModel.find({
@@ -270,31 +295,226 @@ export class TeachingService {
       ...(excludeTimetableId ? { _id: { $ne: excludeTimetableId } } : {}),
     }).lean();
 
-    const conflicts: { day: number; periodNo: number; type: 'teacher' | 'room'; message: string }[] = [];
+    const conflicts: { day: number; periodNo: number; type: 'teacher' | 'room' | 'duty'; message: string }[] = [];
 
     for (const p of periods) {
-      if (!p.teacherId && !p.roomNo) continue;
-      for (const other of others as any[]) {
-        for (const op of other.periods || []) {
-          if (op.day !== p.day) continue;
-          if (!this.timesOverlap(p.startTime, p.endTime, op.startTime, op.endTime)) continue;
+      for (const slot of this.expandBookableSlots(p)) {
+        if (!slot.teacherId && !slot.roomNo) continue;
 
-          if (p.teacherId && op.teacherId && String(p.teacherId) === String(op.teacherId)) {
-            conflicts.push({
-              day: p.day, periodNo: p.periodNo, type: 'teacher',
-              message: `${p.teacherName || 'Teacher'} is already booked for ${other.gradeLevel} ${other.sectionName} at this time`,
-            });
+        for (const other of others as any[]) {
+          for (const op of other.periods || []) {
+            if (op.day !== p.day) continue;
+            if (!this.timesOverlap(p.startTime, p.endTime, op.startTime, op.endTime)) continue;
+            if (!this.weekCyclesClash(p.weekCycle, op.weekCycle)) continue;
+            // Periods sharing an electiveGroupId are the same cross-class
+            // booking by design (e.g. the same teacher/room drawing
+            // students from 3 sections at once) - not a real clash.
+            if (p.electiveGroupId && op.electiveGroupId && String(p.electiveGroupId) === String(op.electiveGroupId)) continue;
+
+            for (const opSlot of this.expandBookableSlots(op)) {
+              if (slot.teacherId && opSlot.teacherId && String(slot.teacherId) === String(opSlot.teacherId)) {
+                conflicts.push({
+                  day: p.day, periodNo: p.periodNo, type: 'teacher',
+                  message: `${slot.teacherName || 'Teacher'} is already booked for ${other.gradeLevel} ${other.sectionName} at this time`,
+                });
+              }
+              if (slot.roomNo && opSlot.roomNo && slot.roomNo.toLowerCase() === opSlot.roomNo.toLowerCase()) {
+                conflicts.push({
+                  day: p.day, periodNo: p.periodNo, type: 'room',
+                  message: `${slot.roomNo} is already booked for ${other.gradeLevel} ${other.sectionName} at this time`,
+                });
+              }
+            }
           }
-          if (p.roomNo && op.roomNo && p.roomNo.toLowerCase() === op.roomNo.toLowerCase()) {
+        }
+
+        if (slot.teacherId) {
+          const duties = await this.dutyRosterModel.find({ tenantId: tid, teacherId: slot.teacherId, day: p.day }).lean();
+          for (const d of duties) {
+            if (!this.timesOverlap(p.startTime, p.endTime, d.startTime, d.endTime)) continue;
+            if (!this.weekCyclesClash(p.weekCycle, d.weekCycle)) continue;
             conflicts.push({
-              day: p.day, periodNo: p.periodNo, type: 'room',
-              message: `${p.roomNo} is already booked for ${other.gradeLevel} ${other.sectionName} at this time`,
+              day: p.day, periodNo: p.periodNo, type: 'duty',
+              message: `${slot.teacherName || 'Teacher'} is on ${d.title} duty at this time`,
             });
           }
         }
       }
     }
     return conflicts;
+  }
+
+  // ── ELECTIVE / CROSS-CLASS GROUPS ───────────────────────────────────────────
+
+  async getElectiveGroups(tenantId: string, query: any = {}) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.academicYearId) filter.academicYearId = new Types.ObjectId(query.academicYearId);
+    return this.electiveGroupModel.find(filter).lean();
+  }
+
+  // Builds the Period this group projects into each member timetable.
+  // Kept a plain regular period type so the existing grid/PDF/drag-and-drop
+  // code doesn't need to special-case electives at all - only the
+  // electiveGroupId + electiveGroupName on the period distinguish it.
+  private electiveGroupPeriod(group: any) {
+    return {
+      day: group.day,
+      periodNo: group.periodNo,
+      startTime: group.startTime,
+      endTime: group.endTime,
+      subject: group.subject,
+      teacherId: group.teacherId || null,
+      teacherName: group.teacherName || '',
+      roomNo: group.roomNo || '',
+      type: group.type || 'regular',
+      locked: false,
+      blockId: null,
+      weekCycle: group.weekCycle || 'both',
+      electiveGroupId: group._id,
+      electiveGroupName: group.name,
+      splitGroups: [],
+    };
+  }
+
+  // Removes any existing period for this slot/group from every timetable
+  // that's no longer (or not yet) a member, then upserts the group's period
+  // into each current member's periods array, replacing whatever was in
+  // that exact day/periodNo slot for that class.
+  private async syncElectiveGroupPeriods(group: any, previousMemberIds: string[] = []) {
+    const currentIds = group.members.map((m: any) => String(m.timetableId));
+    const removedIds = previousMemberIds.filter((id) => !currentIds.includes(id));
+
+    for (const id of removedIds) {
+      await this.timetableModel.updateOne(
+        { _id: id },
+        { $pull: { periods: { electiveGroupId: group._id } } },
+      );
+    }
+
+    const period = this.electiveGroupPeriod(group);
+    for (const id of currentIds) {
+      await this.timetableModel.updateOne(
+        { _id: id },
+        { $pull: { periods: { day: group.day, periodNo: group.periodNo } } },
+      );
+      await this.timetableModel.updateOne(
+        { _id: id },
+        { $push: { periods: period } },
+      );
+    }
+  }
+
+  async createElectiveGroup(tenantId: string, institutionId: string, data: any, userId: string) {
+    const conflicts = await this.checkConflicts(tenantId, null, [this.electiveGroupPeriod({ ...data, _id: new Types.ObjectId() })]);
+    const group = await this.electiveGroupModel.create({
+      ...data,
+      tenantId: this.tid(tenantId),
+      institutionId: new Types.ObjectId(institutionId),
+      createdBy: new Types.ObjectId(userId),
+    });
+    await this.syncElectiveGroupPeriods(group.toObject());
+    return { ...group.toObject(), conflicts };
+  }
+
+  async updateElectiveGroup(tenantId: string, id: string, data: any) {
+    const existing = await this.electiveGroupModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!existing) throw new NotFoundException('Elective group not found');
+    const previousMemberIds = existing.members.map((m: any) => String(m.timetableId));
+
+    const conflicts = await this.checkConflicts(tenantId, null, [this.electiveGroupPeriod({ ...existing, ...data, _id: existing._id })]);
+    const updated = await this.electiveGroupModel.findOneAndUpdate(
+      { _id: id, tenantId: this.tid(tenantId) },
+      { $set: data },
+      { new: true },
+    ).lean();
+    await this.syncElectiveGroupPeriods(updated, previousMemberIds);
+    return { ...updated, conflicts };
+  }
+
+  async deleteElectiveGroup(tenantId: string, id: string) {
+    const group = await this.electiveGroupModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!group) throw new NotFoundException('Elective group not found');
+    for (const m of group.members) {
+      await this.timetableModel.updateOne(
+        { _id: m.timetableId },
+        { $pull: { periods: { electiveGroupId: group._id } } },
+      );
+    }
+    await this.electiveGroupModel.deleteOne({ _id: id, tenantId: this.tid(tenantId) });
+    return { deleted: true };
+  }
+
+  // ── DUTY ROSTER ──────────────────────────────────────────────────────────────
+
+  async getDutyRoster(tenantId: string, query: any = {}) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.academicYearId) filter.academicYearId = new Types.ObjectId(query.academicYearId);
+    if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
+    return this.dutyRosterModel.find(filter).sort({ day: 1, startTime: 1 }).lean();
+  }
+
+  // Duties run through the same conflict engine as lessons: a teacher
+  // already teaching (or on another duty) at this day/time can't also be
+  // put on duty here.
+  private async checkDutyConflicts(tenantId: string, excludeDutyId: string | null, duty: any) {
+    const tid = this.tid(tenantId);
+    const conflicts: { type: 'teacher' | 'duty'; message: string }[] = [];
+
+    const timetables = await this.timetableModel.find({ tenantId: tid, status: { $ne: 'archived' } }).lean();
+    for (const tt of timetables) {
+      for (const p of tt.periods || []) {
+        if (p.day !== duty.day) continue;
+        if (!this.timesOverlap(duty.startTime, duty.endTime, p.startTime, p.endTime)) continue;
+        if (!this.weekCyclesClash(duty.weekCycle, p.weekCycle)) continue;
+        for (const slot of this.expandBookableSlots(p)) {
+          if (slot.teacherId && String(slot.teacherId) === String(duty.teacherId)) {
+            conflicts.push({ type: 'teacher', message: `${duty.teacherName} is scheduled to teach ${tt.gradeLevel} ${tt.sectionName} at this time` });
+          }
+        }
+      }
+    }
+
+    const others = await this.dutyRosterModel.find({
+      tenantId: tid,
+      teacherId: duty.teacherId,
+      day: duty.day,
+      ...(excludeDutyId ? { _id: { $ne: excludeDutyId } } : {}),
+    }).lean();
+    for (const d of others) {
+      if (!this.timesOverlap(duty.startTime, duty.endTime, d.startTime, d.endTime)) continue;
+      if (!this.weekCyclesClash(duty.weekCycle, d.weekCycle)) continue;
+      conflicts.push({ type: 'duty', message: `${duty.teacherName} is already on ${d.title} duty at this time` });
+    }
+
+    return conflicts;
+  }
+
+  async createDutyRoster(tenantId: string, institutionId: string, data: any, userId: string) {
+    const conflicts = await this.checkDutyConflicts(tenantId, null, data);
+    const duty = await this.dutyRosterModel.create({
+      ...data,
+      tenantId: this.tid(tenantId),
+      institutionId: new Types.ObjectId(institutionId),
+      createdBy: new Types.ObjectId(userId),
+    });
+    return { ...duty.toObject(), conflicts };
+  }
+
+  async updateDutyRoster(tenantId: string, id: string, data: any) {
+    const existing = await this.dutyRosterModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!existing) throw new NotFoundException('Duty not found');
+    const conflicts = await this.checkDutyConflicts(tenantId, id, { ...existing, ...data });
+    const updated = await this.dutyRosterModel.findOneAndUpdate(
+      { _id: id, tenantId: this.tid(tenantId) },
+      { $set: data },
+      { new: true },
+    ).lean();
+    return { ...updated, conflicts };
+  }
+
+  async deleteDutyRoster(tenantId: string, id: string) {
+    await this.dutyRosterModel.deleteOne({ _id: id, tenantId: this.tid(tenantId) });
+    return { deleted: true };
   }
 
   // ── Rooms ──────────────────────────────────────────────────────────────────
