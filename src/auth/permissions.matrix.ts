@@ -5,6 +5,11 @@ export type Permission =
   | 'org:read' | 'org:write' | 'org:delete'
   // HR
   | 'hr:read' | 'hr:write' | 'hr:delete'
+  // Narrow, non-admin self-service permission: lets a staff member read/write
+  // only their OWN leave balance/history/requests (resolved server-side via
+  // their own Staff record) — distinct from hr:read/hr:write, which expose
+  // the full HR admin console for every staff member.
+  | 'leave:self'
   // Finance
   | 'finance:read' | 'finance:write' | 'finance:delete'
   // Students
@@ -113,6 +118,9 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'students:read',
     'academics:read',
     'behaviour:read', 'behaviour:write',
+    // Self-service leave (My Leave page): NOT hr:read/hr:write — a Teacher
+    // still cannot see the HR admin console or any other staff's records.
+    'leave:self',
   ],
 
   [UserRole.LIBRARIAN]: [
