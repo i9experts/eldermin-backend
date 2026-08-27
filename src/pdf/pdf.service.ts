@@ -821,10 +821,12 @@ export class PdfService {
       guardianName: guardian?.name || '',
       items: (invoice.items || []).map((it: any) => ({
         description: it.description,
+        discount: it.discount || 0,
         netAmount: it.netAmount ?? (it.amount || 0) - (it.discount || 0),
       })),
       totalAmount: invoice.totalAmount || 0,
       lateFine: invoice.lateFine || 0,
+      totalDiscount: (invoice.items || []).reduce((sum: number, it: any) => sum + (it.discount || 0), 0),
     };
   }
 
@@ -899,19 +901,33 @@ export class PdfService {
       page.drawText(`For the month of: ${data.monthLabel}`, { x: colX + colWidth * 0.5, y, size: 6.5, font, color: black });
       y -= 13;
 
+      const hasDiscount = data.items.some((it: any) => (it.discount || 0) > 0);
+      const discColX = colX + colWidth - 78;
       page.drawRectangle({ x: colX, y: y - 10, width: colWidth, height: 12, color: lightGray });
       page.drawText('Description', { x: colX + 3, y: y - 8, size: 6.5, font: bold, color: black });
+      if (hasDiscount) {
+        page.drawText('Discount', { x: discColX, y: y - 8, size: 6.5, font: bold, color: black });
+      }
       page.drawText('Amount', { x: colX + colWidth - 38, y: y - 8, size: 6.5, font: bold, color: black });
       y -= 10;
 
       for (const item of data.items) {
         y -= 11;
-        page.drawText(String(item.description || '').slice(0, 42), { x: colX + 3, y, size: 6.5, font, color: black });
+        page.drawText(String(item.description || '').slice(0, hasDiscount ? 32 : 42), { x: colX + 3, y, size: 6.5, font, color: black });
+        if (hasDiscount && item.discount > 0) {
+          page.drawText(`- ${item.discount.toLocaleString()}`, { x: discColX, y, size: 6.5, font, color: rgb(0.06, 0.5, 0.2) });
+        }
         page.drawText((item.netAmount || 0).toLocaleString(), { x: colX + colWidth - 38, y, size: 6.5, font, color: black });
       }
       y -= 8;
       page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
       y -= 12;
+
+      if (data.totalDiscount > 0) {
+        page.drawText('Total Discount:', { x: colX, y, size: 6.5, font, color: rgb(0.06, 0.5, 0.2) });
+        page.drawText(`- ${data.totalDiscount.toLocaleString()}`, { x: colX + colWidth - 38, y, size: 6.5, font, color: rgb(0.06, 0.5, 0.2) });
+        y -= 11;
+      }
 
       page.drawText(`Payable by: ${data.dueDateLabel}`, { x: colX, y, size: 7, font: bold, color: black });
       page.drawText(data.totalAmount.toLocaleString(), { x: colX + colWidth - 38, y, size: 7, font: bold, color: black });

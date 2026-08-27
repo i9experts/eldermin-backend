@@ -214,6 +214,11 @@ export class FinanceController {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.recordPayment(id, schoolSlug, { ...dto, collectedBy: dto.collectedBy || userName });
   }
+  @Patch('invoices/:id')
+  async updateInvoice(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateInvoice(id, schoolSlug, { ...dto, updatedBy: dto.updatedBy || userName });
+  }
 
   // Payments
   @Get('payments') async getPayments(@Request() req: any) {
