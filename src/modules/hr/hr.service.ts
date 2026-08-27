@@ -20,6 +20,7 @@ import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.sche
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { computeSalaryStructure, validateSalaryComponentGraph, CircularSalaryComponentError, ComputedSalaryLine } from './salary-calc.util';
 import { renderOfferLetterTemplate } from './offer-letter-template.util';
+import { sanitizeSelfLeaveInput } from './leave-self.util';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { PayrollPayment, PayrollPaymentDocument } from './schemas/payroll-payment.schema';
 import { BankAccount, BankAccountDocument } from '../../finance/schemas/finance.schema';
@@ -977,6 +978,23 @@ export class HrService {
     return this.leaveBalanceModel.findOne({ tenantId: this.newTid(tenantId), staffId: this.newTid(staffId) }).lean();
   }
 
+  // Shared formatting for a single staff member's leave balance — used by
+  // both the HR admin bulk view (getAllLeaveBalances) and the Teacher
+  // self-service view (getMyLeaveBalance), so the two never drift apart.
+  private formatLeaveBalance(s: any, bal: any, hasPolicy: boolean) {
+    return {
+      staffId: s._id, staffName: `${s.firstName} ${s.lastName}`, employeeId: s.employeeId,
+      department: s.department || s.designationId?.name || '—',
+      annual: { entitled: bal.annualEntitled ?? 0, used: bal.annualUsed ?? 0, remaining: (bal.annualEntitled ?? 0) - (bal.annualUsed ?? 0) },
+      sick: { entitled: bal.sickEntitled ?? 0, used: bal.sickUsed ?? 0, remaining: (bal.sickEntitled ?? 0) - (bal.sickUsed ?? 0) },
+      casual: { entitled: bal.casualEntitled ?? 0, used: bal.casualUsed ?? 0, remaining: (bal.casualEntitled ?? 0) - (bal.casualUsed ?? 0) },
+      maternity: { entitled: bal.maternityEntitled ?? 0, used: bal.maternityUsed ?? 0, remaining: (bal.maternityEntitled ?? 0) - (bal.maternityUsed ?? 0) },
+      paternity: { entitled: bal.paternityEntitled ?? 0, used: bal.paternityUsed ?? 0, remaining: (bal.paternityEntitled ?? 0) - (bal.paternityUsed ?? 0) },
+      hajj: { entitled: bal.hajjEntitled ?? 0, used: bal.hajjUsed ?? 0, remaining: (bal.hajjEntitled ?? 0) - (bal.hajjUsed ?? 0) },
+      hasPolicy,
+    };
+  }
+
   async getAllLeaveBalances(tenantId: string) {
     const tid = this.newTid(tenantId);
     const [staffList, balances] = await Promise.all([
@@ -984,19 +1002,45 @@ export class HrService {
       this.leaveBalanceModel.find({ tenantId: tid }).lean(),
     ]);
     const byStaff = new Map((balances as any[]).map((b: any) => [String(b.staffId), b]));
-    return (staffList as any[]).map((s: any) => {
-      const bal: any = byStaff.get(String(s._id)) || {};
-      return {
-        staffId: s._id, staffName: `${s.firstName} ${s.lastName}`, employeeId: s.employeeId,
-        department: s.department || s.designationId?.name || '—',
-        annual: { entitled: bal.annualEntitled ?? 0, used: bal.annualUsed ?? 0, remaining: (bal.annualEntitled ?? 0) - (bal.annualUsed ?? 0) },
-        sick: { entitled: bal.sickEntitled ?? 0, used: bal.sickUsed ?? 0, remaining: (bal.sickEntitled ?? 0) - (bal.sickUsed ?? 0) },
-        casual: { entitled: bal.casualEntitled ?? 0, used: bal.casualUsed ?? 0, remaining: (bal.casualEntitled ?? 0) - (bal.casualUsed ?? 0) },
-        maternity: { entitled: bal.maternityEntitled ?? 0, used: bal.maternityUsed ?? 0, remaining: (bal.maternityEntitled ?? 0) - (bal.maternityUsed ?? 0) },
-        paternity: { entitled: bal.paternityEntitled ?? 0, used: bal.paternityUsed ?? 0, remaining: (bal.paternityEntitled ?? 0) - (bal.paternityUsed ?? 0) },
-        hajj: { entitled: bal.hajjEntitled ?? 0, used: bal.hajjUsed ?? 0, remaining: (bal.hajjEntitled ?? 0) - (bal.hajjUsed ?? 0) },
-        hasPolicy: byStaff.has(String(s._id)),
-      };
+    return (staffList as any[]).map((s: any) =>
+      this.formatLeaveBalance(s, byStaff.get(String(s._id)) || {}, byStaff.has(String(s._id))),
+    );
+  }
+
+  // ── Self-service (leave:self) ───────────────────────────────────────
+  // Resolves the caller's OWN Staff record from req.user.userId — never
+  // from a client-supplied staff/employee id — so a Teacher can only ever
+  // read or write their own leave data via these methods.
+
+  async getOwnStaffRecord(tenantId: string, userId: string): Promise<StaffDocument> {
+    const staff = await this.staffModel.findOne({ tenantId: this.newTid(tenantId), userId: this.newTid(userId) });
+    if (!staff) throw new NotFoundException('No staff record is linked to your account. Contact HR to have your login connected to your employee record.');
+    return staff;
+  }
+
+  async getMyLeaveBalance(tenantId: string, userId: string) {
+    const staff = await this.getOwnStaffRecord(tenantId, userId);
+    const bal = await this.leaveBalanceModel.findOne({ tenantId: this.newTid(tenantId), staffId: staff._id }).lean();
+    return this.formatLeaveBalance(staff, bal || {}, !!bal);
+  }
+
+  async getMyLeaveApplications(tenantId: string, userId: string) {
+    const staff = await this.getOwnStaffRecord(tenantId, userId);
+    return this.getLeaveApplications(tenantId, { staffId: String(staff._id) });
+  }
+
+  async createMyLeaveApplication(tenantId: string, institutionId: string, userId: string, data: any) {
+    const staff = await this.getOwnStaffRecord(tenantId, userId);
+    const safe = sanitizeSelfLeaveInput(data);
+    // staffId/staffName/staffEmployeeId/department are always taken from the
+    // server-resolved Staff record, never from client input — this is what
+    // makes the endpoint "self only" rather than "any staff id the client sends".
+    return this.createLeaveApplication(tenantId, institutionId, {
+      ...safe,
+      staffId: String(staff._id),
+      staffName: `${staff.firstName} ${staff.lastName}`,
+      staffEmployeeId: staff.employeeId,
+      department: staff.department,
     });
   }
 

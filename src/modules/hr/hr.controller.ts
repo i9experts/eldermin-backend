@@ -3,6 +3,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { HrService } from './hr.service';
+import { RequirePermission } from '../../auth/decorators';
 
 @Controller('hr')
 @UseGuards(AuthGuard('jwt'))
@@ -195,6 +196,28 @@ export class HrController {
   importAttendance(@Request() req, @UploadedFile() file: Express.Multer.File) { return this.hrService.importAttendanceCsv(req.user.tenantId, this.iid(req), file, req.user.schoolSlug); }
 
   // ── LEAVE ─────────────────────────────────────────────────────────────
+
+  // ── Self-service "My Leave" (leave:self) — narrowly scoped: a Teacher (or
+  // any staff member without hr:read/hr:write) can read/write only their
+  // OWN leave balance & requests. Ownership is resolved server-side from
+  // req.user.userId → the caller's own Staff record; no client-supplied
+  // staff/employee id is ever trusted here. Must stay ahead of the generic
+  // 'leave/:...' routes below only in the sense that 'leave/self/...' is its
+  // own static path — it never doubles as a way to read/write another
+  // staff member's data.
+  @RequirePermission('leave:self')
+  @Get('leave/self/balance')
+  getMyLeaveBalance(@Request() req) { return this.hrService.getMyLeaveBalance(req.user.tenantId, req.user.userId); }
+
+  @RequirePermission('leave:self')
+  @Get('leave/self/history')
+  getMyLeaveHistory(@Request() req) { return this.hrService.getMyLeaveApplications(req.user.tenantId, req.user.userId); }
+
+  @RequirePermission('leave:self')
+  @Post('leave/self')
+  createMyLeave(@Request() req, @Body() body: any) {
+    return this.hrService.createMyLeaveApplication(req.user.tenantId, this.iid(req), req.user.userId, body);
+  }
 
   @Get('leave/stats')
   getLeaveStats(@Request() req) { return this.hrService.getLeaveStats(req.user.tenantId); }
