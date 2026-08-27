@@ -57,7 +57,7 @@ export class SalaryComponent {
   // silently broken, but PayrollService.postPayslipToLedger refuses to post
   // any payslip that uses a component with no accountCode configured -
   // see PAY-03.
-  @Prop({ default: null }) accountCode: string | null;
+  @Prop({ type: String, default: null }) accountCode: string | null;
 
   // Employer-side contribution (e.g. employer's matching PF share) - a real
   // cost to the school that isn't deducted from the employee at all, so it
@@ -65,8 +65,8 @@ export class SalaryComponent {
   // component above.
   @Prop({ default: false }) hasEmployerContribution: boolean;
   @Prop() employerContributionPercentage: number; // % of this component's own employee-side amount
-  @Prop({ default: null }) employerContributionExpenseAccountCode: string | null;
-  @Prop({ default: null }) employerContributionPayableAccountCode: string | null;
+  @Prop({ type: String, default: null }) employerContributionExpenseAccountCode: string | null;
+  @Prop({ type: String, default: null }) employerContributionPayableAccountCode: string | null;
 }
 
 export const SalaryComponentSchema = SchemaFactory.createForClass(SalaryComponent);

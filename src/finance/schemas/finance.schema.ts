@@ -85,7 +85,7 @@ export class FeeStructure {
   // with effectiveFrom so a structure's active window is fully explicit,
   // and so a superseding version (see below) can be given a clean
   // effectiveFrom without the two versions' windows overlapping.
-  @Prop({ default: null }) effectiveTo: Date | null;
+  @Prop({ type: Date, default: null }) effectiveTo: Date | null;
   @Prop() campus: string;
   @Prop({ default: false }) isTaxable: boolean;
   @Prop({ default: true }) isActive: boolean;
@@ -129,14 +129,14 @@ export class StudentFeeAssignment {
   @Prop() feeStructureName: string; // denormalized
   @Prop({ required: true }) academicYear: string;
   @Prop({ required: true }) effectiveFrom: Date;
-  @Prop({ default: null }) effectiveTo: Date | null;
+  @Prop({ type: Date, default: null }) effectiveTo: Date | null;
   @Prop() assignedBy: string;
   @Prop() notes: string;
   @Prop({ default: true }) isActive: boolean;
   // Set false (never deleted) when superseded by a later assignment for
   // the same student/period, so assignment history is fully preserved -
   // see FinanceService.assignFeeStructure's overlap handling.
-  @Prop({ default: null }) replacedAt: Date | null;
+  @Prop({ type: Date, default: null }) replacedAt: Date | null;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
