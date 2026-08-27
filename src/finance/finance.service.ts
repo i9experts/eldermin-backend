@@ -1522,14 +1522,25 @@ export class FinanceService {
 
   // ── Invoices ─────────────────────────────────────────────
   async getInvoices(schoolSlug: string, query: any) {
-    const { page = 1, limit = 20, status, grade, month, studentId, academicYear } = query;
+    const { page = 1, limit = 20, status, grade, section, month, studentId, academicYear, campus, from, to } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug, isDeleted: { $ne: true } };
     if (status) filter.status = status;
     if (grade) filter.grade = grade;
+    if (section) filter.section = section;
     if (month) filter.month = month;
     if (academicYear) filter.academicYear = academicYear;
+    if (campus) filter.campus = campus;
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    // FEE-07: dedicated Fee & Challan Report reuses this endpoint with a
+    // createdAt date-range filter (in addition to the existing `month`
+    // filter, which stays exact-match for the other tabs' use of this
+    // same endpoint).
+    if (from || to) {
+      filter.createdAt = {};
+      if (from) filter.createdAt.$gte = new Date(from);
+      if (to) filter.createdAt.$lte = new Date(to);
+    }
     const [data, total] = await Promise.all([
       this.invoiceModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.invoiceModel.countDocuments(filter),
@@ -2871,8 +2882,9 @@ export class FinanceService {
     scopeType?: 'all' | 'class' | 'section' | 'campus' | 'student';
     scopeValue?: string;
     createdBy?: string;
+    dryRun?: boolean;
   }) {
-    const { month, academicYear, scopeType = 'all', scopeValue, createdBy } = params;
+    const { month, academicYear, scopeType = 'all', scopeValue, createdBy, dryRun = false } = params;
     if (!month) throw new BadRequestException('month is required (e.g. 2026-03)');
     if (!academicYear) throw new BadRequestException('academicYear is required');
 
@@ -2887,12 +2899,12 @@ export class FinanceService {
       studentMatch._id = new Types.ObjectId(scopeValue);
     } else if (scopeType === 'campus' && scopeValue) {
       const campus = await this.campusModel.findOne({ schoolSlug, name: scopeValue }).lean();
-      if (!campus) return { created: 0, skipped: 0, errors: [`Campus "${scopeValue}" not found`] };
+      if (!campus) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], errors: [`Campus "${scopeValue}" not found`], totalStudents: 0 };
       studentMatch.campusId = String((campus as any)._id);
     }
 
     const students = await this.studentModel.find(studentMatch).lean();
-    if (students.length === 0) return { created: 0, skipped: 0, errors: ['No matching active students found for this scope'] };
+    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
 
     const [feeStructures, assignments, discountPrograms, campuses, studentFeeAssignments] = await Promise.all([
       // Match on isActive + grade/section/campus only, not academicYear.
@@ -3027,6 +3039,14 @@ export class FinanceService {
         );
         const totalAmount = Math.round((netBeforeTax + totalTax) * 100) / 100;
 
+        // Dry-run: we've already run the full matching/eligibility logic
+        // above (explicit assignment vs auto-match, discounts, tax) so the
+        // willCreate/skipped counts and noMatchBreakdown are exactly what a
+        // real run would produce - we just stop short of persisting
+        // anything, so nothing below this point (Invoice.save, GL posting)
+        // ever runs in dry-run mode.
+        if (dryRun) { created++; continue; }
+
         const [y, m] = month.split('-').map(Number);
         const dueDate = y && m ? new Date(y, m - 1, Math.min(dueDay, 28)) : undefined;
 
@@ -3056,7 +3076,9 @@ export class FinanceService {
     }
 
     return {
-      created,
+      dryRun,
+      created: dryRun ? 0 : created,
+      willCreate: dryRun ? created : created,
       skipped: skippedAlreadyBilled + skippedNoMatch,
       skippedAlreadyBilled,
       skippedNoMatch,
