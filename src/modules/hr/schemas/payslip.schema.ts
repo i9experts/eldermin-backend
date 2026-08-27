@@ -32,6 +32,24 @@ export class Payslip {
   @Prop({ default: 0 }) absentDays: number;
   @Prop({ default: 0 }) leaveDays: number;
   @Prop({ default: 'PKR' }) currency: string;
+
+  // Itemized detail for every salary component actually used on this
+  // payslip - including custom components beyond the canonical Basic/HRA/
+  // Transport/Medical/Tax/PF six, which previously collapsed anonymously
+  // into otherAllowances/otherDeductions with no way to tell them apart
+  // later or post them to their own GL account (see PAY-01/PAY-03).
+  // Additive: the fixed columns above are still populated from this array
+  // for the canonical components, so every existing payslip, payroll
+  // report, and UI reading those fields keeps working unchanged.
+  @Prop({
+    type: [{
+      code: String, name: String, type: { type: String, enum: ['earning', 'deduction'] },
+      amount: Number, accountCode: String,
+      _id: false,
+    }],
+    default: [],
+  })
+  componentLines: { code: string; name: string; type: 'earning' | 'deduction'; amount: number; accountCode?: string }[];
   @Prop({ enum: ['draft','issued','paid'], default: 'draft' }) status: string;
   @Prop() paidAt: Date;
   @Prop() s3Key: string;

@@ -379,6 +379,15 @@ export class FinanceService {
       { code: '4100', name: 'Admission Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
       { code: '4200', name: 'Transport Fee Revenue', type: 'revenue', subType: 'operating_revenue' },
       { code: '5000', name: 'Salaries & Wages', type: 'expense', subType: 'operating_expense' },
+      // Itemized default GL mapping for the canonical payroll components
+      // seeded by HrService.DEFAULT_SALARY_COMPONENTS (HRA/Transport/
+      // Medical) - see PAY-03. Distinct from the lump 5000 "Salaries &
+      // Wages" (still used for Basic Salary) so each earning component
+      // posts to its own expense line instead of one undifferentiated
+      // total.
+      { code: '5010', name: 'Housing Allowance Expense', type: 'expense', subType: 'operating_expense' },
+      { code: '5020', name: 'Transport Allowance Expense', type: 'expense', subType: 'operating_expense' },
+      { code: '5030', name: 'Medical Allowance Expense', type: 'expense', subType: 'operating_expense' },
       { code: '5100', name: 'Utilities', type: 'expense', subType: 'operating_expense' },
       { code: '5200', name: 'Maintenance & Repairs', type: 'expense', subType: 'operating_expense' },
       { code: '5300', name: 'Academic Supplies', type: 'expense', subType: 'operating_expense' },
