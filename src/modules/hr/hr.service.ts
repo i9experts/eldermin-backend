@@ -21,6 +21,7 @@ import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { computeSalaryStructure, validateSalaryComponentGraph, CircularSalaryComponentError, ComputedSalaryLine } from './salary-calc.util';
 import { renderOfferLetterTemplate } from './offer-letter-template.util';
 import { sanitizeSelfLeaveInput } from './leave-self.util';
+import { countLeaveDays, DAY_CODES } from './leave-days.util';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { PayrollPayment, PayrollPaymentDocument } from './schemas/payroll-payment.schema';
 import { BankAccount, BankAccountDocument } from '../../finance/schemas/finance.schema';
@@ -337,6 +338,47 @@ export class HrService {
       .lean();
     if (!staff) throw new NotFoundException('Staff member not found');
     return staff;
+  }
+
+  /** #1: there was no way to remove a staff record at all - no controller
+   * route, no service method (deleteStaffAttendance only deletes attendance
+   * rows for a date, unrelated). A staff row is routinely referenced by
+   * real payroll/payslip/attendance/leave history, so this is a SOFT delete
+   * - it reuses Staff's existing status enum (no new boolean) rather than
+   * a hard Mongo delete, so nothing referencing this staff member is ever
+   * orphaned. 'terminated' is used for an explicit admin-initiated removal
+   * (as distinct from 'resigned', which the Employee Directory already uses
+   * for a staff-initiated departure) - isActive is also flipped to false so
+   * every existing `isActive: true` filter across this service (staff
+   * lists, leave balance allocation, etc) already excludes it with no
+   * further changes needed. A genuinely-unused, never-touched record (e.g.
+   * created by mistake) can still be hard-deleted via `hardDelete: true`. */
+  async deleteStaff(tenantId: string, staffId: string, hardDelete = false) {
+    const tid = this.newTid(tenantId);
+    const sid = this.newTid(staffId);
+    const staff = await this.staffModel.findOne({ _id: sid, tenantId: tid }).lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+
+    if (hardDelete) {
+      const [payslipCount, attendanceCount, leaveCount] = await Promise.all([
+        this.payslipModel.countDocuments({ tenantId: tid, staffId: sid }),
+        this.staffAttendanceModel.countDocuments({ tenantId: tid, staffId: sid }),
+        this.leaveApplicationModel.countDocuments({ tenantId: tid, staffId: sid }),
+      ]);
+      if (payslipCount > 0 || attendanceCount > 0 || leaveCount > 0) {
+        throw new BadRequestException(
+          'This staff member has payroll, attendance, or leave history and cannot be permanently deleted - use a regular (soft) delete instead.',
+        );
+      }
+      await this.staffModel.deleteOne({ _id: sid, tenantId: tid });
+      return { deleted: true, hardDeleted: true };
+    }
+
+    await this.staffModel.updateOne(
+      { _id: sid, tenantId: tid },
+      { $set: { status: 'terminated', isActive: false } },
+    );
+    return { deleted: true, hardDeleted: false, status: 'terminated' };
   }
 
   async uploadStaffPhoto(tenantId: string, staffId: string, file: Express.Multer.File, schoolSlug: string) {
@@ -929,15 +971,57 @@ export class HrService {
 
   // ── LEAVE ─────────────────────────────────────────────────────────────
 
+  // Best-effort resolution of "which LeavePolicy applies to this staff
+  // member" - there's no direct staffId -> policyId assignment stored
+  // today (assignLeavePolicy/bulkAssignLeavePolicy only copy the policy's
+  // day counts onto LeaveBalance, not a reference back to the policy
+  // itself), so this maps Staff.employmentType onto LeavePolicy.applicableTo
+  // the same way seedLeavePolicies' own defaults are labelled, preferring
+  // an exact match, then an 'all' policy, then whichever policy is marked
+  // isDefault. Returns null if this tenant has no leave policies at all
+  // (e.g. never ran seed-defaults) - callers treat that as excludeWeekends=false.
+  private async resolveLeavePolicyForStaff(tenantId: string, staff: any) {
+    const tid = this.newTid(tenantId);
+    const applicableMap: Record<string, string> = {
+      full_time: 'permanent', contract: 'contract', part_time: 'part_time', visiting: 'part_time',
+    };
+    const applicableTo = applicableMap[staff?.employmentType];
+    return (
+      (applicableTo && await this.leavePolicyModel.findOne({ tenantId: tid, isActive: true, applicableTo }).lean()) ||
+      await this.leavePolicyModel.findOne({ tenantId: tid, isActive: true, applicableTo: 'all' }).lean() ||
+      await this.leavePolicyModel.findOne({ tenantId: tid, isActive: true, isDefault: true }).lean() ||
+      null
+    );
+  }
+
+  /** Resolves whether a staff member's leave should be counted in working
+   * days only (per their applicable LeavePolicy.excludeWeekends), and if so
+   * which days count as "working" (from AttendanceSettings.workingDays,
+   * reusing the exact same weekend definition the Attendance module already
+   * uses, instead of hardcoding Sat/Sun). */
+  private async resolveWorkingDaysConfig(tenantId: string, staff: any): Promise<{ excludeWeekends: boolean; workingDays?: string[] }> {
+    const policy = staff ? await this.resolveLeavePolicyForStaff(tenantId, staff) : null;
+    if (!policy?.excludeWeekends) return { excludeWeekends: false };
+    const settings = await this.attendanceSettingsModel.findOne({ tenantId: this.newTid(tenantId) }).lean();
+    return { excludeWeekends: true, workingDays: settings?.workingDays };
+  }
+
   async createLeaveApplication(tenantId: string, institutionId: string, data: any) {
-    const count = await this.leaveApplicationModel.countDocuments({ tenantId: this.newTid(tenantId) });
+    const tid = this.newTid(tenantId);
+    const count = await this.leaveApplicationModel.countDocuments({ tenantId: tid });
     const leaveNo = `LV-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
-    const totalDays = Math.ceil(
-      (new Date(data.toDate).getTime() - new Date(data.fromDate).getTime()) / (1000 * 60 * 60 * 24),
-    ) + 1;
+
+    // #2: count working days only when this staff member's applicable
+    // LeavePolicy has excludeWeekends turned on - default false, so this is
+    // a pure calendar-day count (today's exact behaviour) unless a school
+    // has explicitly opted in.
+    const staff = data.staffId ? await this.staffModel.findOne({ _id: this.newTid(data.staffId), tenantId: tid }).lean() : null;
+    const { excludeWeekends, workingDays } = await this.resolveWorkingDaysConfig(tenantId, staff);
+    const totalDays = countLeaveDays(data.fromDate, data.toDate, excludeWeekends, workingDays);
+
     return this.leaveApplicationModel.create({
       ...data, leaveNo, totalDays,
-      tenantId: this.newTid(tenantId),
+      tenantId: tid,
       institutionId: this.newTid(institutionId),
     });
   }
@@ -971,7 +1055,64 @@ export class HrService {
       );
     }
 
+    // #3: keep Attendance in sync with the leave decision - approving used
+    // to only touch the LeaveBalance counters above and never mark the
+    // employee's daily register, so Attendance silently disagreed with an
+    // approved leave. Reversing a previously-approved leave (rejected/
+    // cancelled after the fact) removes the on_leave marks this same
+    // approval created.
+    if (isApproved && !wasApproved) {
+      await this.syncAttendanceForApprovedLeave(tenantId, existing);
+    } else if (!isApproved && wasApproved) {
+      // Only remove records still marked 'on_leave' - never touch a day
+      // someone has since manually re-marked with a real status, so this
+      // can't clobber a genuine, later attendance correction.
+      await this.staffAttendanceModel.deleteMany({
+        tenantId: tid, staffId: existing.staffId, status: 'on_leave',
+        date: { $gte: new Date(existing.fromDate), $lte: new Date(existing.toDate) },
+      });
+    }
+
     return updated;
+  }
+
+  /** Upserts an Attendance record marking 'on_leave' for every day (or every
+   * working day, if this staff's leave policy has excludeWeekends on) in an
+   * approved leave's date range. Leave approval is the authoritative record
+   * for that day, so this intentionally overwrites whatever the day was
+   * previously marked (e.g. an earlier Present entry that's now retroactively
+   * covered by an approved leave) - the leave approval workflow is the more
+   * authoritative source for that day than a prior manual mark. */
+  private async syncAttendanceForApprovedLeave(tenantId: string, leave: any) {
+    const tid = this.newTid(tenantId);
+    const staff = await this.staffModel.findOne({ _id: leave.staffId, tenantId: tid }).lean();
+    const { excludeWeekends, workingDays } = await this.resolveWorkingDaysConfig(tenantId, staff);
+    const workingSet = new Set((workingDays || ['mon', 'tue', 'wed', 'thu', 'fri']).map((d: string) => d.toLowerCase()));
+
+    const from = new Date(leave.fromDate);
+    const to = new Date(leave.toDate);
+    const fromUtc = Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate());
+    const toUtc = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+
+    const ops: any[] = [];
+    for (let day = fromUtc; day <= toUtc; day += 24 * 60 * 60 * 1000) {
+      if (excludeWeekends && !workingSet.has(DAY_CODES[new Date(day).getUTCDay()])) continue;
+      const date = new Date(day);
+      ops.push({
+        updateOne: {
+          filter: { tenantId: tid, staffId: leave.staffId, date },
+          update: {
+            $set: {
+              status: 'on_leave', tenantId: tid, staffId: leave.staffId,
+              institutionId: leave.institutionId, date,
+              notes: `Auto-marked from approved leave ${leave.leaveNo || ''}`.trim(),
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+    if (ops.length > 0) await this.staffAttendanceModel.bulkWrite(ops);
   }
 
   async getLeaveBalance(tenantId: string, staffId: string) {
@@ -1312,6 +1453,11 @@ export class HrService {
     if (query.staffId) filter.staffId = this.newTid(query.staffId);
     if (query.month) filter.month = parseInt(query.month);
     if (query.year) filter.year = parseInt(query.year);
+    // Payslip.staffName is denormalized at creation (see createPayslip), so
+    // this filters directly on it rather than needing a populate/join -
+    // case-insensitive partial match, same convention as other name search
+    // filters in this codebase (e.g. staff search elsewhere in this file).
+    if (query.staffName) filter.staffName = { $regex: String(query.staffName).trim(), $options: 'i' };
     return this.payslipModel.find(filter).sort({ year: -1, month: -1 }).lean();
   }
 
