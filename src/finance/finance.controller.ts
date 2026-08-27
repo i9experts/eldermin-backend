@@ -534,6 +534,7 @@ export class FinanceController {
       scopeType: dto.scopeType,
       scopeValue: dto.scopeValue,
       createdBy: userName,
+      dryRun: !!dto.dryRun,
     });
   }
 
