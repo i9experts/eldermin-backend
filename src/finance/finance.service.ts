@@ -11,7 +11,9 @@ import {
   BankAccount, BankAccountDocument,
   DiscountProgram, DiscountProgramDocument,
   FeeAssignment, FeeAssignmentDocument,
+  StudentFeeAssignment, StudentFeeAssignmentDocument,
 } from './schemas/finance.schema';
+import { findConflictingAssignments } from './fee-assignment.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -87,6 +89,7 @@ export class FinanceService {
     @InjectModel(BankAccount.name) private bankModel: Model<BankAccountDocument>,
     @InjectModel(DiscountProgram.name) private discountProgramModel: Model<DiscountProgramDocument>,
     @InjectModel(FeeAssignment.name) private feeAssignmentModel: Model<FeeAssignmentDocument>,
+    @InjectModel(StudentFeeAssignment.name) private studentFeeAssignmentModel: Model<StudentFeeAssignmentDocument>,
     @InjectModel(FiscalYear.name) private fiscalYearModel: Model<FiscalYearDocument>,
     @InjectModel(AccountingPeriod.name) private periodModel: Model<AccountingPeriodDocument>,
     @InjectModel(CostCenter.name) private costCenterModel: Model<CostCenterDocument>,
@@ -1454,8 +1457,12 @@ export class FinanceService {
   }
 
   // ── Fee Structures ───────────────────────────────────────
-  async getFeeStructures(schoolSlug: string, grade?: string, year?: string) {
+  // Superseded versions are hidden by default (see updateFeeStructure) - a
+  // school picking a structure to assign or bill from should only ever see
+  // the current one, not every historical version stacked on top of it.
+  async getFeeStructures(schoolSlug: string, grade?: string, year?: string, includeSuperseded = false) {
     const filter: any = { schoolSlug, isActive: true };
+    if (!includeSuperseded) filter.status = { $ne: 'superseded' };
     if (grade) filter.grade = grade;
     if (year) filter.academicYear = year;
     return this.feeStructModel.find(filter).sort({ grade: 1 });
@@ -1467,8 +1474,50 @@ export class FinanceService {
     return fs.save();
   }
 
+  // Pricing-relevant fields that, if changed on a structure that has
+  // already billed real invoices, must NOT be mutated in place - see
+  // FEE-01. Non-pricing edits (name typo, isActive toggle, notes) on an
+  // already-billed structure are still safe to apply directly, since they
+  // don't retroactively change what anyone was actually charged.
+  private readonly FEE_STRUCTURE_PRICING_FIELDS = ['items', 'totalAmount', 'dueDay', 'lateFinePerDay', 'lateFeeAmount', 'gracePeriodDays', 'frequency', 'isTaxable'];
+
   async updateFeeStructure(id: string, schoolSlug: string, data: any) {
-    return this.feeStructModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    const existing = await this.feeStructModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Fee structure not found');
+
+    const changesPricing = this.FEE_STRUCTURE_PRICING_FIELDS.some(f => f in data && JSON.stringify(data[f]) !== JSON.stringify((existing as any)[f]));
+    const hasInvoices = changesPricing && await this.invoiceModel.exists({ schoolSlug, 'items.feeStructureId': id, isDeleted: { $ne: true } });
+
+    if (!hasInvoices) {
+      const total = data.items ? data.items.reduce((a: number, i: any) => a + (i.amount - (i.discount || 0)), 0) : undefined;
+      return this.feeStructModel.findOneAndUpdate(
+        { _id: id, schoolSlug },
+        { $set: { ...data, ...(total !== undefined ? { totalAmount: total } : {}) } },
+        { new: true },
+      );
+    }
+
+    // Real financial history exists against this exact pricing - version
+    // instead of overwriting it. The old document is marked superseded
+    // (kept forever, still readable on every already-issued challan/report
+    // that references it) and a new document carries the change forward.
+    const merged = { ...existing, ...data };
+    delete (merged as any)._id;
+    delete (merged as any).createdAt;
+    delete (merged as any).updatedAt;
+    const total = merged.items ? merged.items.reduce((a: number, i: any) => a + (i.amount - (i.discount || 0)), 0) : existing.totalAmount;
+    const nextVersion = await this.feeStructModel.create({
+      ...merged, totalAmount: total,
+      version: (existing.version || 1) + 1,
+      previousVersionId: existing._id,
+      status: 'active',
+      effectiveFrom: data.effectiveFrom ? new Date(data.effectiveFrom) : new Date(),
+    });
+    await this.feeStructModel.updateOne(
+      { _id: id },
+      { $set: { status: 'superseded', isActive: false, effectiveTo: nextVersion.effectiveFrom } },
+    );
+    return nextVersion;
   }
 
   // ── Invoices ─────────────────────────────────────────────
@@ -2691,12 +2740,119 @@ export class FinanceService {
     } else if (!data.overrideValueType || data.overrideValue == null) {
       throw new BadRequestException('Either a discount program or an override value/type is required');
     }
+    // A manual (non-programme) override is validated here - see FEE-03. A
+    // programme-based assignment is trusted (the programme itself was
+    // already validated when created), and the per-item cap that stops a
+    // discount exceeding the actual fee is enforced at invoice-generation
+    // time (generateInvoices), since it depends on the real billed amount.
+    if (!data.discountProgramId) {
+      if (data.overrideValue < 0) throw new BadRequestException('Discount value cannot be negative');
+      if (data.overrideValueType === 'percentage' && data.overrideValue > 100) {
+        throw new BadRequestException('A percentage discount cannot exceed 100%');
+      }
+    }
     const assignment = new this.feeAssignmentModel(data);
     return assignment.save();
   }
 
   async deleteFeeAssignment(id: string, schoolSlug: string) {
     const assignment = await this.feeAssignmentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
+    if (!assignment) throw new NotFoundException('Fee assignment not found');
+    return { message: 'Fee assignment removed' };
+  }
+
+  // ============================================================
+  // STUDENT FEE ASSIGNMENT (the real "Assign Fee" workflow - FEE-02)
+  // A student's explicit fee-structure assignment, distinct from
+  // FeeAssignment above (which only ever assigns a discount). Two students
+  // in the same class/section can each carry a different one of these and
+  // bill correctly - see generateInvoices' preference for this over the
+  // grade/section/campus auto-match.
+  // ============================================================
+  async getStudentFeeAssignments(schoolSlug: string, studentId?: string) {
+    const filter: any = { schoolSlug };
+    if (studentId) filter.studentId = studentId;
+    return this.studentFeeAssignmentModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  /** Assigns a fee structure to one student for a period. If an active
+   * assignment already covers an overlapping window, this returns a
+   * conflict description instead of silently stacking two structures on
+   * top of each other - the caller (UI) shows the warning and, only if the
+   * user deliberately confirms, resends with replace:true. Replacing never
+   * deletes the old assignment - it's deactivated and dated, preserving
+   * assignment history exactly as required. */
+  async assignFeeStructure(schoolSlug: string, data: {
+    studentId: string; feeStructureId: string; academicYear: string;
+    effectiveFrom: string | Date; effectiveTo?: string | Date | null;
+    assignedBy?: string; notes?: string; replace?: boolean;
+  }) {
+    const structure = await this.feeStructModel.findOne({ _id: data.feeStructureId, schoolSlug }).lean();
+    if (!structure) throw new BadRequestException('Fee structure not found');
+    const student = await this.studentModel.findOne({ _id: data.studentId, schoolSlug }).lean();
+    if (!student) throw new BadRequestException('Student not found');
+
+    const from = new Date(data.effectiveFrom);
+    const to = data.effectiveTo ? new Date(data.effectiveTo) : null;
+
+    const existingActive = await this.studentFeeAssignmentModel.find({
+      schoolSlug, studentId: data.studentId, isActive: true, academicYear: data.academicYear,
+    }).lean();
+    const conflicting = findConflictingAssignments(existingActive as any[], from, to);
+
+    if (conflicting.length > 0 && !data.replace) {
+      return {
+        conflict: true,
+        message: `${(student as any).firstName || ''} ${(student as any).lastName || ''} already has an active fee assignment (${conflicting.map((c: any) => c.feeStructureName).join(', ')}) covering this period. Confirm to replace it.`,
+        conflicting,
+      };
+    }
+
+    if (conflicting.length > 0) {
+      await this.studentFeeAssignmentModel.updateMany(
+        { _id: { $in: conflicting.map((c: any) => c._id) } },
+        { $set: { isActive: false, replacedAt: new Date(), effectiveTo: from } },
+      );
+    }
+
+    const assignment = await this.studentFeeAssignmentModel.create({
+      studentId: data.studentId,
+      studentName: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(),
+      feeStructureId: data.feeStructureId,
+      feeStructureName: structure.name,
+      academicYear: data.academicYear,
+      effectiveFrom: from, effectiveTo: to,
+      assignedBy: data.assignedBy, notes: data.notes,
+      schoolSlug,
+    });
+    return { conflict: false, assignment };
+  }
+
+  /** Bulk convenience for assigning the same structure to many students at
+   * once (a whole class, a filtered selection, etc - see FEE-02). Runs each
+   * student through the same single-assignment conflict logic rather than
+   * a raw insertMany, so a student who already has a conflicting
+   * assignment is reported, not silently overwritten or silently skipped. */
+  async bulkAssignFeeStructure(schoolSlug: string, data: {
+    studentIds: string[]; feeStructureId: string; academicYear: string;
+    effectiveFrom: string | Date; effectiveTo?: string | Date | null;
+    assignedBy?: string; notes?: string; replace?: boolean;
+  }) {
+    const results: { studentId: string; conflict: boolean; message?: string }[] = [];
+    for (const studentId of data.studentIds) {
+      const result = await this.assignFeeStructure(schoolSlug, { ...data, studentId });
+      results.push({ studentId, conflict: !!result.conflict, message: result.conflict ? result.message : undefined });
+    }
+    return {
+      assigned: results.filter(r => !r.conflict).length,
+      conflicts: results.filter(r => r.conflict),
+    };
+  }
+
+  async deleteStudentFeeAssignment(id: string, schoolSlug: string) {
+    const assignment = await this.studentFeeAssignmentModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: { isActive: false, replacedAt: new Date() } },
+    );
     if (!assignment) throw new NotFoundException('Fee assignment not found');
     return { message: 'Fee assignment removed' };
   }
@@ -2738,7 +2894,7 @@ export class FinanceService {
     const students = await this.studentModel.find(studentMatch).lean();
     if (students.length === 0) return { created: 0, skipped: 0, errors: ['No matching active students found for this scope'] };
 
-    const [feeStructures, assignments, discountPrograms, campuses] = await Promise.all([
+    const [feeStructures, assignments, discountPrograms, campuses, studentFeeAssignments] = await Promise.all([
       // Match on isActive + grade/section/campus only, not academicYear.
       // FeeStructure.academicYear reflects whatever year happened to be
       // "current" at creation time (which, for structures made before the
@@ -2750,10 +2906,29 @@ export class FinanceService {
       this.feeAssignmentModel.find({ schoolSlug, isActive: true }).lean(),
       this.discountProgramModel.find({ schoolSlug, isActive: true }).lean(),
       this.campusModel.find({ schoolSlug }).lean(),
+      // Explicit per-student fee-structure assignments (see FEE-01/FEE-02) -
+      // when a student has one covering this month, it takes over from the
+      // grade/section/campus auto-match entirely, which is exactly what
+      // lets two students in the identical class bill from different
+      // structures.
+      this.studentFeeAssignmentModel.find({ schoolSlug, isActive: true, academicYear }).lean(),
     ]);
     const programById = new Map(discountPrograms.map((p: any) => [String(p._id), p]));
     const campusIdToName = new Map(campuses.map((c: any) => [String(c._id), c.name]));
+    const feeStructureById = new Map(feeStructures.map((fs: any) => [String(fs._id), fs]));
+    const studentFeeAssignmentsByStudent = new Map<string, any[]>();
+    for (const a of studentFeeAssignments as any[]) {
+      const key = String(a.studentId);
+      (studentFeeAssignmentsByStudent.get(key) ?? studentFeeAssignmentsByStudent.set(key, []).get(key)!).push(a);
+    }
     const now = new Date();
+    // Anchor "which billing month is this" to the middle of the requested
+    // month rather than the real current date, so generating (or
+    // regenerating) a challan for a past or future month still correctly
+    // picks the assignment that was/will be in force THEN, not whichever
+    // happens to be active today.
+    const [billYear, billMonthNum] = month.split('-').map(Number);
+    const billingMonthAnchor = billYear && billMonthNum ? new Date(billYear, billMonthNum - 1, 15) : now;
 
     // Batch-fetch which students already have an invoice for this month -
     // one query for the whole run instead of one findOne() per student.
@@ -2775,11 +2950,21 @@ export class FinanceService {
 
         const studentCampusName = campusIdToName.get(String((student as any).campusId)) || '';
 
-        const applicableStructures = feeStructures.filter((fs: any) =>
-          fs.grade === (student as any).currentGrade &&
-          (!fs.section || fs.section === (student as any).currentSection) &&
-          (!fs.campus || fs.campus === studentCampusName)
-        );
+        // Explicit assignment (see FEE-01/FEE-02) wins outright when one
+        // covers this billing month - falls back to the class/section/
+        // campus auto-match only when the student has no explicit
+        // assignment in force, so a school that never touches "Assign Fee"
+        // sees zero behaviour change.
+        const explicitAssignments = (studentFeeAssignmentsByStudent.get(String(student._id)) || []).filter((a: any) =>
+          new Date(a.effectiveFrom) <= billingMonthAnchor && (!a.effectiveTo || new Date(a.effectiveTo) >= billingMonthAnchor));
+
+        const applicableStructures = explicitAssignments.length > 0
+          ? explicitAssignments.map((a: any) => feeStructureById.get(String(a.feeStructureId))).filter(Boolean)
+          : feeStructures.filter((fs: any) =>
+              fs.grade === (student as any).currentGrade &&
+              (!fs.section || fs.section === (student as any).currentSection) &&
+              (!fs.campus || fs.campus === studentCampusName)
+            );
         if (applicableStructures.length === 0) {
           skippedNoMatch++;
           const key = `${(student as any).currentGrade || 'Unknown'}${(student as any).currentSection ? ' - ' + (student as any).currentSection : ''}`;
@@ -2788,8 +2973,8 @@ export class FinanceService {
         }
 
         const studentAssignments = assignments.filter((a: any) => {
-          if (a.effectiveFrom && new Date(a.effectiveFrom) > now) return false;
-          if (a.effectiveTo && new Date(a.effectiveTo) < now) return false;
+          if (a.effectiveFrom && new Date(a.effectiveFrom) > billingMonthAnchor) return false;
+          if (a.effectiveTo && new Date(a.effectiveTo) < billingMonthAnchor) return false;
           if (a.targetType === 'student') return a.targetValue === String(student._id);
           if (a.targetType === 'family') return (student as any).familyId && a.targetValue === String((student as any).familyId);
           if (a.targetType === 'class') return a.targetValue === (student as any).currentGrade;
@@ -2826,6 +3011,8 @@ export class FinanceService {
               amount: baseAmount,
               discount: Math.round(discount),
               netAmount: Math.round(baseAmount - discount),
+              feeStructureId: fs._id,
+              feeHead: item.feeHead,
             });
           }
         }
