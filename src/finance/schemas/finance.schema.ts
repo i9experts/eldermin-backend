@@ -62,7 +62,13 @@ const FeeLineItemSchema = SchemaFactory.createForClass(FeeLineItem);
 @Schema({ timestamps: true, collection: 'fee_structures' })
 export class FeeStructure {
   @Prop({ required: true }) name: string;
-  @Prop({ required: true }) grade: string;
+  // Grade/section stay as an optional ELIGIBILITY filter (used to suggest
+  // or auto-match a structure when a student has no explicit
+  // StudentFeeAssignment - see generateInvoices) - they are no longer the
+  // only way a structure attaches to a student. A structure with no grade
+  // at all is valid and can only ever be reached via an explicit
+  // assignment (see FEE-01/FEE-02).
+  @Prop() grade: string;
   @Prop() section: string;
   @Prop({ required: true }) academicYear: string;
   // Free-form (not a strict enum) so schools can define their own billing cycles
@@ -75,9 +81,22 @@ export class FeeStructure {
   @Prop({ default: 0 }) gracePeriodDays: number;
   @Prop({ default: 0 }) lateFeeAmount: number; // flat late fee (distinct from the daily fine above)
   @Prop() effectiveFrom: Date;
+  // Optional expiry - an unset effectiveTo means "still in force". Paired
+  // with effectiveFrom so a structure's active window is fully explicit,
+  // and so a superseding version (see below) can be given a clean
+  // effectiveFrom without the two versions' windows overlapping.
+  @Prop({ default: null }) effectiveTo: Date | null;
   @Prop() campus: string;
   @Prop({ default: false }) isTaxable: boolean;
   @Prop({ default: true }) isActive: boolean;
+  // Versioning (see FEE-01): editing a structure that has already generated
+  // real invoices creates a NEW document (version = previous + 1,
+  // previousVersionId pointing back) instead of mutating the priced-and-
+  // billed original - see FinanceService.updateFeeStructure. A structure
+  // with no invoices yet can still be safely edited in place.
+  @Prop({ default: 1 }) version: number;
+  @Prop({ type: Types.ObjectId, ref: 'FeeStructure', default: null }) previousVersionId: Types.ObjectId | null;
+  @Prop({ enum: ['active', 'superseded', 'draft'], default: 'active' }) status: string;
   // Phase 8 — optional link to a Terms & Conditions template (see
   // schemas/terms-template.schema.ts). Unset means no T&C attached,
   // exactly matching every pre-Phase-8 fee structure.
@@ -87,6 +106,43 @@ export class FeeStructure {
 
 export const FeeStructureSchema = SchemaFactory.createForClass(FeeStructure);
 FeeStructureSchema.index({ schoolSlug: 1, grade: 1, academicYear: 1 });
+FeeStructureSchema.index({ schoolSlug: 1, status: 1 });
+
+// ============================================================
+// STUDENT FEE ASSIGNMENT
+// The real per-student fee-structure assignment that was completely
+// missing (see FEE-01/FEE-02): FeeStructure.grade/section is only ever an
+// ELIGIBILITY filter now, not the sole ownership mechanism - two students
+// in the identical class/section can carry two different explicit
+// assignments here and each bills correctly. A student with no active
+// assignment here still falls back to the old grade/section/campus
+// auto-match in generateInvoices, so a school that never uses this screen
+// sees no change in behaviour at all.
+// ============================================================
+export type StudentFeeAssignmentDocument = StudentFeeAssignment & Document;
+
+@Schema({ timestamps: true, collection: 'student_fee_assignments' })
+export class StudentFeeAssignment {
+  @Prop({ required: true, type: Types.ObjectId, ref: 'Student', index: true }) studentId: Types.ObjectId;
+  @Prop() studentName: string; // denormalized for display without a populate
+  @Prop({ required: true, type: Types.ObjectId, ref: 'FeeStructure' }) feeStructureId: Types.ObjectId;
+  @Prop() feeStructureName: string; // denormalized
+  @Prop({ required: true }) academicYear: string;
+  @Prop({ required: true }) effectiveFrom: Date;
+  @Prop({ default: null }) effectiveTo: Date | null;
+  @Prop() assignedBy: string;
+  @Prop() notes: string;
+  @Prop({ default: true }) isActive: boolean;
+  // Set false (never deleted) when superseded by a later assignment for
+  // the same student/period, so assignment history is fully preserved -
+  // see FinanceService.assignFeeStructure's overlap handling.
+  @Prop({ default: null }) replacedAt: Date | null;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+
+export const StudentFeeAssignmentSchema = SchemaFactory.createForClass(StudentFeeAssignment);
+StudentFeeAssignmentSchema.index({ schoolSlug: 1, studentId: 1, isActive: 1 });
+StudentFeeAssignmentSchema.index({ schoolSlug: 1, academicYear: 1 });
 
 // ============================================================
 // INVOICE
@@ -100,6 +156,13 @@ class InvoiceLineItem {
   @Prop({ default: 0 }) discount: number;
   @Prop() taxRate: number;
   @Prop() netAmount: number;
+  // Which FeeStructure (and specific fee head within it) this line was
+  // billed from - lets FinanceService.updateFeeStructure detect that a
+  // structure has already generated real invoices and must version
+  // instead of mutating in place (see FEE-01). Optional/nullable so every
+  // invoice generated before this field existed keeps working unchanged.
+  @Prop({ type: Types.ObjectId, ref: 'FeeStructure', default: null }) feeStructureId: Types.ObjectId | null;
+  @Prop() feeHead: string;
 }
 const InvoiceLineItemSchema = SchemaFactory.createForClass(InvoiceLineItem);
 

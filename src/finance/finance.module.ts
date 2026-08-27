@@ -12,6 +12,7 @@ import {
   BankAccount, BankAccountSchema,
   DiscountProgram, DiscountProgramSchema,
   FeeAssignment, FeeAssignmentSchema,
+  StudentFeeAssignment, StudentFeeAssignmentSchema,
 } from './schemas/finance.schema';
 import {
   FiscalYear, FiscalYearSchema,
@@ -76,6 +77,7 @@ import { FeeDefaulterController } from './fee-defaulter.controller';
       { name: BankAccount.name, schema: BankAccountSchema },
       { name: DiscountProgram.name, schema: DiscountProgramSchema },
       { name: FeeAssignment.name, schema: FeeAssignmentSchema },
+      { name: StudentFeeAssignment.name, schema: StudentFeeAssignmentSchema },
       { name: FiscalYear.name, schema: FiscalYearSchema },
       { name: AccountingPeriod.name, schema: AccountingPeriodSchema },
       { name: CostCenter.name, schema: CostCenterSchema },

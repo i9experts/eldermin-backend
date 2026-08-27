@@ -499,6 +499,31 @@ export class FinanceController {
     return this.service.deleteFeeAssignment(id, schoolSlug);
   }
 
+  // ── Student Fee Assignments (assign a FEE STRUCTURE to a student - the
+  // real "Assign Fee" workflow, distinct from the discount assignments
+  // above - see FEE-01/FEE-02) ──
+  @Get('student-fee-assignments') async getStudentFeeAssignments(@Request() req: any, @Query('studentId') studentId?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getStudentFeeAssignments(schoolSlug, studentId);
+  }
+
+  @Post('student-fee-assignments') @HttpCode(HttpStatus.CREATED)
+  async assignFeeStructure(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    return this.service.assignFeeStructure(schoolSlug, { ...dto, academicYear: dto.academicYear || academicYear, assignedBy: dto.assignedBy || userName });
+  }
+
+  @Post('student-fee-assignments/bulk') @HttpCode(HttpStatus.CREATED)
+  async bulkAssignFeeStructure(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    return this.service.bulkAssignFeeStructure(schoolSlug, { ...dto, academicYear: dto.academicYear || academicYear, assignedBy: dto.assignedBy || userName });
+  }
+
+  @Delete('student-fee-assignments/:id') async deleteStudentFeeAssignment(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteStudentFeeAssignment(id, schoolSlug);
+  }
+
   // ── Challan / Invoice Generation ─────────────────────────────
   @Post('invoices/generate') @HttpCode(HttpStatus.CREATED)
   async generateInvoices(@Body() dto: any, @Request() req: any) {
