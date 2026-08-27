@@ -22,18 +22,51 @@ export class SalaryComponent {
 
   // How the amount for this component actually gets determined:
   // - fixed: a flat amount, the same for whoever it's assigned to unless overridden
-  // - percentage_of_basic: computed live from that employee's own Basic Salary
   // - manual: no default at all — entered fresh for each payroll run/each employee
-  @Prop({ required: true, enum: ['fixed', 'percentage_of_basic', 'manual'], default: 'fixed' })
+  // - percentage_of_basic: computed live from that employee's own Basic Salary
+  // - percentage_of_gross: computed from gross salary (the sum of every
+  //   non-percentage_of_gross earning component - see SalaryCalcEngine for
+  //   why: a component can't safely be a percentage of a total that
+  //   includes itself)
+  // - percentage_of_components: computed from one or more OTHER named
+  //   components (basisComponentCodes), e.g. "PF = 10% of (Basic + HRA)"
+  @Prop({
+    required: true,
+    enum: ['fixed', 'manual', 'percentage_of_basic', 'percentage_of_gross', 'percentage_of_components'],
+    default: 'fixed',
+  })
   calculationType: string;
 
   @Prop() defaultAmount: number; // used when calculationType is 'fixed'
-  @Prop() percentageValue: number; // used when calculationType is 'percentage_of_basic', e.g. 40 = 40%
+  @Prop() percentageValue: number; // used by every percentage_* type, e.g. 40 = 40%
+  // Which other components' amounts this one is a percentage of, by code -
+  // only used/required when calculationType is 'percentage_of_components'.
+  // SalaryCalcEngine computes components in dependency order and rejects a
+  // cycle (e.g. A depends on B and B depends on A) outright.
+  @Prop({ type: [String], default: [] }) basisComponentCodes: string[];
 
   @Prop({ default: true }) isTaxable: boolean;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ default: 0 }) displayOrder: number;
   @Prop() description: string;
+
+  // Chart of Accounts mapping - where this component posts to when payroll
+  // is approved. Earnings post a debit here (an expense account); deductions
+  // post a credit here (a payable/liability, or occasionally a receivable
+  // for a recovery). Left blank at creation time so existing schools aren't
+  // silently broken, but PayrollService.postPayslipToLedger refuses to post
+  // any payslip that uses a component with no accountCode configured -
+  // see PAY-03.
+  @Prop({ default: null }) accountCode: string | null;
+
+  // Employer-side contribution (e.g. employer's matching PF share) - a real
+  // cost to the school that isn't deducted from the employee at all, so it
+  // needs its own expense + payable pair distinct from the employee-facing
+  // component above.
+  @Prop({ default: false }) hasEmployerContribution: boolean;
+  @Prop() employerContributionPercentage: number; // % of this component's own employee-side amount
+  @Prop({ default: null }) employerContributionExpenseAccountCode: string | null;
+  @Prop({ default: null }) employerContributionPayableAccountCode: string | null;
 }
 
 export const SalaryComponentSchema = SchemaFactory.createForClass(SalaryComponent);

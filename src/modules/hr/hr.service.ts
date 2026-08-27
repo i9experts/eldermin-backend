@@ -18,6 +18,7 @@ import { StaffAttendance, StaffAttendanceDocument } from './schemas/staff-attend
 import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
 import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
+import { computeSalaryStructure, validateSalaryComponentGraph, CircularSalaryComponentError, ComputedSalaryLine } from './salary-calc.util';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { PayrollPayment, PayrollPaymentDocument } from './schemas/payroll-payment.schema';
 import { BankAccount, BankAccountDocument } from '../../finance/schemas/finance.schema';
@@ -1104,6 +1105,13 @@ export class HrService {
         throw new BadRequestException('bankAccountId is required for a non-cash payment method');
       }
     }
+    // Block the transition (and therefore all posting) outright if any
+    // component actually used on this run's payslips has no GL mapping -
+    // see PAY-03. Thrown before the status update below, so an incomplete
+    // mapping never leaves the run half-approved or partially posted.
+    if (status === 'approved') {
+      await this.validatePayrollRunAccountMappings(tenantId, schoolSlug || '', id);
+    }
     const update: any = { status };
     // Only a genuine approval actually stamps who approved it and when -
     // every other transition (marking paid, cancelling, etc) leaves that
@@ -1251,8 +1259,23 @@ export class HrService {
     const grossSalary = (data.grossSalary || 0) + reimbursement;
     const netSalary = grossSalary - totalDeductions;
 
+    // Itemized component detail (see PAY-01/PAY-03) - the payroll grid
+    // sends one line per configured SalaryComponent actually used on this
+    // payslip (Basic, HRA, ... plus whichever dynamic components were
+    // added), which is what lets postPayslipToLedger post each one to its
+    // own configured GL account instead of one lump Salary Expense line.
+    // A caller that doesn't send componentLines (an older client, or a
+    // direct API call) still works exactly as before - GL posting falls
+    // back to the legacy lump-sum behaviour for that payslip specifically.
+    const componentLines = Array.isArray(data.componentLines)
+      ? data.componentLines.map((l: any) => ({ code: l.code, name: l.name, type: l.type, amount: l.amount }))
+      : [];
+    if (reimbursement > 0) {
+      componentLines.push({ code: 'REIMBURSEMENT', name: 'Expense Reimbursement', type: 'earning', amount: reimbursement });
+    }
+
     const payslip = await this.payslipModel.create({
-      ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary,
+      ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary, componentLines,
       tenantId: this.newTid(tenantId),
       institutionId: this.newTid(institutionId),
     });
@@ -1276,11 +1299,60 @@ export class HrService {
     return payslip;
   }
 
+  /** Resolves each of the given SalaryComponent codes to its currently
+   * configured GL accountCode. Used both to validate a whole payroll run
+   * before it's allowed to be approved (see validatePayrollRunAccountMappings)
+   * and, defensively, again at the moment each payslip is actually posted -
+   * see PAY-03. Looked up fresh (not from whatever was cached on the
+   * payslip at creation time) so a mapping fixed after payslips were
+   * created but before the run is approved is picked up correctly. */
+  private async resolveComponentAccountCodes(schoolSlug: string, codes: string[]): Promise<{ byCode: Record<string, string>; missing: string[] }> {
+    const comps = await this.salaryComponentModel.find({ schoolSlug, code: { $in: codes } }).lean();
+    const byCode: Record<string, string> = {};
+    const missing: string[] = [];
+    for (const code of codes) {
+      const comp: any = comps.find((c: any) => c.code === code);
+      if (comp?.accountCode) byCode[code] = comp.accountCode;
+      else missing.push(comp?.name || code);
+    }
+    return { byCode, missing };
+  }
+
+  /** Blocks a payroll run from being approved (and therefore posted) if any
+   * salary component actually used on its payslips has no Chart of
+   * Accounts mapping configured - see PAY-03. Checked once, up front,
+   * before the run's status changes or anything is posted, rather than
+   * discovered payslip-by-payslip mid-approval. A run made up entirely of
+   * legacy (pre-componentLines) payslips has nothing to itemize-validate
+   * and is left exactly as before. */
+  async validatePayrollRunAccountMappings(tenantId: string, schoolSlug: string, payrollRunId: string) {
+    const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(payrollRunId) }).lean();
+    const codes = new Set<string>();
+    for (const p of payslips) for (const l of (p as any).componentLines || []) if (l.code !== 'REIMBURSEMENT') codes.add(l.code);
+    if (codes.size === 0) return;
+    const { missing } = await this.resolveComponentAccountCodes(schoolSlug, [...codes]);
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `Cannot approve payroll — the following salary component(s) have no Chart of Accounts mapping: ${[...new Set(missing)].join(', ')}. `
+        + `Set an account for each in Payroll Settings → Salary Components before approving.`,
+      );
+    }
+  }
+
   /** Posts one payslip's salary expense / Salaries Payable (and any
    * advance-linked claim settlement) to the GL. Called only when the
    * payslip's parent run is actually approved - never at creation time.
    * Idempotent via `postedToFinance`, so re-approving (or a retry after a
-   * partial failure) never double-posts. */
+   * partial failure) never double-posts.
+   *
+   * Itemizes by each component's own mapped account when the payslip
+   * carries componentLines (see PAY-01/PAY-03) - Basic, HRA, Transport,
+   * Medical, Tax, PF, and any school-added custom component each post to
+   * their own configured GL line instead of one lump Salary Expense debit.
+   * A payslip created before componentLines existed (componentLines empty)
+   * falls back to the exact original lump-sum behaviour, so historical
+   * records already sitting at 'completed' when this change deploys still
+   * post identically to how they always would have. */
   private async postPayslipToLedger(schoolSlug: string | undefined, payslip: any) {
     if (payslip.postedToFinance) return;
 
@@ -1288,17 +1360,50 @@ export class HrService {
     const advanceLinkedClaims = settledClaims.filter((c: any) => c.advanceId);
     const nonAdvanceClaims = settledClaims.filter((c: any) => !c.advanceId);
     const reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
-
-    const baseSalaryExpense = (payslip.grossSalary || 0) - reimbursement;
     const nonTaxDeductions = (payslip.loanDeduction || 0) + (payslip.leaveDeduction || 0) + (payslip.otherDeductions || 0);
     const staffId = String(payslip.staffId || '');
-    const lines: any[] = [
-      { accountCode: '5000', debit: baseSalaryExpense, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department },
-    ];
-    if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
-    lines.push({ accountCode: '2100', credit: (payslip.netSalary || 0) + nonTaxDeductions, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
-    if (payslip.incomeTax) lines.push({ accountCode: '2200', credit: payslip.incomeTax, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
-    if (payslip.providentFund) lines.push({ accountCode: '2300', credit: payslip.providentFund, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    const partner = { partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department };
+
+    const componentLines: any[] = ((payslip.componentLines || []) as any[]).filter(l => l.code !== 'REIMBURSEMENT' && l.amount);
+    let lines: any[];
+
+    if (componentLines.length > 0) {
+      const codes = [...new Set(componentLines.map((l: any) => l.code))];
+      const { byCode: accountByCode, missing } = await this.resolveComponentAccountCodes(schoolSlug!, codes);
+      if (missing.length > 0) {
+        // Defense-in-depth only - validatePayrollRunAccountMappings should
+        // already have blocked the run from reaching 'approved' at all.
+        throw new BadRequestException(`Cannot post payslip for ${payslip.staffName} — missing account mapping for: ${missing.join(', ')}`);
+      }
+      const debitTotals = new Map<string, number>();
+      const creditTotals = new Map<string, number>();
+      for (const l of componentLines) {
+        const acct = accountByCode[l.code];
+        const bucket = l.type === 'earning' ? debitTotals : creditTotals;
+        bucket.set(acct, (bucket.get(acct) || 0) + (l.amount || 0));
+      }
+      // Any earning amount not represented by a named component (the
+      // legacy freeform "Other Allowances" manual entry) still needs a
+      // home - it isn't itself a configured, mappable component, so it
+      // rides on the generic Salaries & Wages expense line, same as it
+      // always implicitly did before components were itemized at all.
+      const earningComponentsTotal = componentLines.filter((l: any) => l.type === 'earning').reduce((s: number, l: any) => s + (l.amount || 0), 0);
+      const residualOtherAllowances = Math.max(0, Math.round(((payslip.grossSalary || 0) - reimbursement - earningComponentsTotal) * 100) / 100);
+      if (residualOtherAllowances > 0) debitTotals.set('5000', (debitTotals.get('5000') || 0) + residualOtherAllowances);
+
+      lines = [];
+      for (const [accountCode, debit] of debitTotals) lines.push({ accountCode, debit, ...partner });
+      if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, ...partner });
+      lines.push({ accountCode: '2100', credit: (payslip.netSalary || 0) + nonTaxDeductions, ...partner });
+      for (const [accountCode, credit] of creditTotals) lines.push({ accountCode, credit, ...partner });
+    } else {
+      const baseSalaryExpense = (payslip.grossSalary || 0) - reimbursement;
+      lines = [{ accountCode: '5000', debit: baseSalaryExpense, ...partner }];
+      if (reimbursement > 0) lines.push({ accountCode: '5500', debit: reimbursement, ...partner });
+      lines.push({ accountCode: '2100', credit: (payslip.netSalary || 0) + nonTaxDeductions, ...partner });
+      if (payslip.incomeTax) lines.push({ accountCode: '2200', credit: payslip.incomeTax, ...partner });
+      if (payslip.providentFund) lines.push({ accountCode: '2300', credit: payslip.providentFund, ...partner });
+    }
 
     await this.safePostJournal(schoolSlug, {
       date: new Date(), reference: payslip.periodLabel, narration: `Payroll — ${payslip.staffName || ''} — ${payslip.periodLabel}`,
@@ -1325,7 +1430,9 @@ export class HrService {
    * already booked, leaving a cancelled run's numbers permanently sitting
    * in Finance. Posts the exact mirror image (debit/credit swapped) of
    * the original entry rather than deleting it, preserving the audit
-   * trail - a reversing entry, not a correction. */
+   * trail - a reversing entry, not a correction. Mirrors
+   * postPayslipToLedger's itemized-vs-legacy branching exactly, so the
+   * reversal always matches whatever was actually originally posted. */
   private async reversePayslipLedgerEntry(schoolSlug: string | undefined, payslip: any) {
     if (!payslip.postedToFinance) return;
 
@@ -1333,17 +1440,41 @@ export class HrService {
     const advanceLinkedClaims = settledClaims.filter((c: any) => c.advanceId);
     const nonAdvanceClaims = settledClaims.filter((c: any) => !c.advanceId);
     const reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
-
-    const baseSalaryExpense = (payslip.grossSalary || 0) - reimbursement;
     const nonTaxDeductions = (payslip.loanDeduction || 0) + (payslip.leaveDeduction || 0) + (payslip.otherDeductions || 0);
     const staffId = String(payslip.staffId || '');
-    const lines: any[] = [
-      { accountCode: '5000', credit: baseSalaryExpense, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department },
-    ];
-    if (reimbursement > 0) lines.push({ accountCode: '5500', credit: reimbursement, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
-    lines.push({ accountCode: '2100', debit: (payslip.netSalary || 0) + nonTaxDeductions, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
-    if (payslip.incomeTax) lines.push({ accountCode: '2200', debit: payslip.incomeTax, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
-    if (payslip.providentFund) lines.push({ accountCode: '2300', debit: payslip.providentFund, partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department });
+    const partner = { partnerType: 'staff', partnerId: staffId, partnerName: payslip.staffName, costCenterName: payslip.department };
+
+    const componentLines: any[] = ((payslip.componentLines || []) as any[]).filter(l => l.code !== 'REIMBURSEMENT' && l.amount);
+    let lines: any[];
+
+    if (componentLines.length > 0) {
+      const codes = [...new Set(componentLines.map((l: any) => l.code))];
+      const { byCode: accountByCode } = await this.resolveComponentAccountCodes(schoolSlug!, codes);
+      const debitTotals = new Map<string, number>(); // credit side of the original → debit here
+      const creditTotals = new Map<string, number>(); // debit side of the original → credit here
+      for (const l of componentLines) {
+        const acct = accountByCode[l.code];
+        if (!acct) continue; // shouldn't happen for anything that was actually posted, but never let a reversal itself throw
+        const bucket = l.type === 'earning' ? creditTotals : debitTotals;
+        bucket.set(acct, (bucket.get(acct) || 0) + (l.amount || 0));
+      }
+      const earningComponentsTotal = componentLines.filter((l: any) => l.type === 'earning').reduce((s: number, l: any) => s + (l.amount || 0), 0);
+      const residualOtherAllowances = Math.max(0, Math.round(((payslip.grossSalary || 0) - reimbursement - earningComponentsTotal) * 100) / 100);
+      if (residualOtherAllowances > 0) creditTotals.set('5000', (creditTotals.get('5000') || 0) + residualOtherAllowances);
+
+      lines = [];
+      for (const [accountCode, credit] of creditTotals) lines.push({ accountCode, credit, ...partner });
+      if (reimbursement > 0) lines.push({ accountCode: '5500', credit: reimbursement, ...partner });
+      lines.push({ accountCode: '2100', debit: (payslip.netSalary || 0) + nonTaxDeductions, ...partner });
+      for (const [accountCode, debit] of debitTotals) lines.push({ accountCode, debit, ...partner });
+    } else {
+      const baseSalaryExpense = (payslip.grossSalary || 0) - reimbursement;
+      lines = [{ accountCode: '5000', credit: baseSalaryExpense, ...partner }];
+      if (reimbursement > 0) lines.push({ accountCode: '5500', credit: reimbursement, ...partner });
+      lines.push({ accountCode: '2100', debit: (payslip.netSalary || 0) + nonTaxDeductions, ...partner });
+      if (payslip.incomeTax) lines.push({ accountCode: '2200', debit: payslip.incomeTax, ...partner });
+      if (payslip.providentFund) lines.push({ accountCode: '2300', debit: payslip.providentFund, ...partner });
+    }
 
     await this.safePostJournal(schoolSlug, {
       date: new Date(), reference: payslip.periodLabel, narration: `Payroll cancelled — reversal — ${payslip.staffName || ''} — ${payslip.periodLabel}`,
@@ -1369,32 +1500,67 @@ export class HrService {
   // schools run genuinely different payroll structures instead of every
   // school being forced into one hardcoded Basic/HRA/Transport/Medical
   // shape baked into the app.
+  // Default GL account mapping for the canonical components - see PAY-03.
+  // Kept as a lookup so getSalaryComponents can also self-heal an
+  // already-seeded school's components that predate this mapping (created
+  // before accountCode existed on the schema), the same self-heal
+  // convention as safePostJournal's COA auto-seed above: idempotent, only
+  // ever fills in a currently-null value, never overwrites a school's own
+  // configuration.
+  private readonly DEFAULT_ACCOUNT_CODE_BY_COMPONENT_CODE: Record<string, string> = {
+    BASIC: '5000', HRA: '5010', TRANSPORT: '5020', MEDICAL: '5030', TAX: '2200', PF: '2300',
+  };
+
   private readonly DEFAULT_SALARY_COMPONENTS = [
-    { name: 'Basic Salary', code: 'BASIC', type: 'earning', calculationType: 'manual', isTaxable: true, displayOrder: 1 },
-    { name: 'House Rent Allowance', code: 'HRA', type: 'earning', calculationType: 'percentage_of_basic', percentageValue: 40, isTaxable: true, displayOrder: 2 },
-    { name: 'Transport Allowance', code: 'TRANSPORT', type: 'earning', calculationType: 'fixed', defaultAmount: 1000, isTaxable: false, displayOrder: 3 },
-    { name: 'Medical Allowance', code: 'MEDICAL', type: 'earning', calculationType: 'fixed', defaultAmount: 500, isTaxable: false, displayOrder: 4 },
-    { name: 'Income Tax', code: 'TAX', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 5 },
-    { name: 'Provident Fund', code: 'PF', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 6 },
+    { name: 'Basic Salary', code: 'BASIC', type: 'earning', calculationType: 'manual', isTaxable: true, displayOrder: 1, accountCode: '5000' },
+    { name: 'House Rent Allowance', code: 'HRA', type: 'earning', calculationType: 'percentage_of_basic', percentageValue: 40, isTaxable: true, displayOrder: 2, accountCode: '5010' },
+    { name: 'Transport Allowance', code: 'TRANSPORT', type: 'earning', calculationType: 'fixed', defaultAmount: 1000, isTaxable: false, displayOrder: 3, accountCode: '5020' },
+    { name: 'Medical Allowance', code: 'MEDICAL', type: 'earning', calculationType: 'fixed', defaultAmount: 500, isTaxable: false, displayOrder: 4, accountCode: '5030' },
+    { name: 'Income Tax', code: 'TAX', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 5, accountCode: '2200' },
+    { name: 'Provident Fund', code: 'PF', type: 'deduction', calculationType: 'manual', isTaxable: false, displayOrder: 6, accountCode: '2300' },
   ];
 
   async getSalaryComponents(tenantId: string, schoolSlug: string) {
     const existing = await this.salaryComponentModel.find({ schoolSlug }).sort({ displayOrder: 1 }).lean();
-    if (existing.length > 0) return existing;
-    // First time this school has opened Salary Components — seed sensible,
-    // fully editable/deletable starting defaults rather than showing a
-    // completely blank, intimidating screen. Nothing here is locked in;
-    // every one of these can be renamed, reconfigured, or removed.
-    const seeded = await this.salaryComponentModel.insertMany(
-      this.DEFAULT_SALARY_COMPONENTS.map(c => ({ ...c, tenantId: this.newTid(tenantId), schoolSlug, isActive: true })),
-    );
-    return seeded;
+    if (existing.length === 0) {
+      // First time this school has opened Salary Components — seed
+      // sensible, fully editable/deletable starting defaults rather than
+      // showing a completely blank, intimidating screen. Nothing here is
+      // locked in; every one of these can be renamed, reconfigured, or
+      // removed.
+      return this.salaryComponentModel.insertMany(
+        this.DEFAULT_SALARY_COMPONENTS.map(c => ({ ...c, tenantId: this.newTid(tenantId), schoolSlug, isActive: true })),
+      );
+    }
+    // Self-heal: a school that seeded its components before accountCode
+    // existed has canonical components sitting with no GL mapping, which
+    // would otherwise permanently block payroll approval (see PAY-03) for
+    // a component the school never actually touched or renamed. Only fills
+    // a currently-null accountCode on an untouched canonical code/name
+    // pair - a school that renamed or reconfigured a component is left
+    // alone.
+    const toHeal = existing.filter((c: any) =>
+      !c.accountCode && this.DEFAULT_ACCOUNT_CODE_BY_COMPONENT_CODE[c.code]
+      && this.DEFAULT_SALARY_COMPONENTS.some(d => d.code === c.code && d.name === c.name));
+    if (toHeal.length > 0) {
+      await Promise.all(toHeal.map((c: any) =>
+        this.salaryComponentModel.updateOne({ _id: c._id }, { $set: { accountCode: this.DEFAULT_ACCOUNT_CODE_BY_COMPONENT_CODE[c.code] } })));
+      for (const c of toHeal) (existing.find((e: any) => e._id === c._id) as any).accountCode = this.DEFAULT_ACCOUNT_CODE_BY_COMPONENT_CODE[c.code];
+    }
+    return existing;
+  }
+
+  private async validateComponentGraphOrThrow(schoolSlug: string, changed: any) {
+    const others = await this.salaryComponentModel.find({ schoolSlug, isActive: true, _id: { $ne: changed._id || null } }).lean();
+    const errors = validateSalaryComponentGraph([...others, changed] as any);
+    if (errors.length > 0) throw new BadRequestException(errors.join('; '));
   }
 
   async createSalaryComponent(tenantId: string, schoolSlug: string, dto: any) {
     const code = (dto.code || dto.name || '').toUpperCase().replace(/[^A-Z0-9]/g, '_').slice(0, 30);
     const existing = await this.salaryComponentModel.findOne({ schoolSlug, code });
     if (existing) throw new BadRequestException(`A component with code "${code}" already exists`);
+    await this.validateComponentGraphOrThrow(schoolSlug, { ...dto, code });
     return this.salaryComponentModel.create({ ...dto, code, tenantId: this.newTid(tenantId), schoolSlug });
   }
 
@@ -1407,6 +1573,9 @@ export class HrService {
       const clash = await this.salaryComponentModel.findOne({ schoolSlug, code: dto.code, _id: { $ne: this.newTid(id) } }).lean();
       if (clash) throw new BadRequestException(`A component with code "${dto.code}" already exists`);
     }
+    const existing = await this.salaryComponentModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Salary component not found');
+    await this.validateComponentGraphOrThrow(schoolSlug, { ...existing, ...dto, _id: id });
     const component = await this.salaryComponentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
     if (!component) throw new NotFoundException('Salary component not found');
     return component;
@@ -1456,24 +1625,31 @@ export class HrService {
   async setStaffSalaryStructure(staffId: string, tenantId: string, schoolSlug: string, lines: { componentId: string; amount: number }[]) {
     const components = await this.salaryComponentModel.find({ schoolSlug, _id: { $in: lines.map(l => this.newTid(l.componentId)) } }).lean();
     const componentMap = new Map(components.map((c: any) => [String(c._id), c]));
-
-    const basicLine = lines.find(l => componentMap.get(l.componentId)?.code === 'BASIC');
-    const basicAmount = basicLine?.amount || 0;
-
-    const salaryStructure = lines.map(l => {
+    const overrideByCode: Record<string, number> = {};
+    for (const l of lines) {
       const comp = componentMap.get(l.componentId);
-      if (!comp) return null;
-      const amount = comp.calculationType === 'percentage_of_basic'
-        ? Math.round(basicAmount * ((comp.percentageValue || 0) / 100))
-        : l.amount;
-      return { componentId: comp._id, code: comp.code, name: comp.name, type: comp.type, amount };
-    }).filter(Boolean);
+      if (comp) overrideByCode[comp.code] = l.amount;
+    }
 
-    const grossSalary = salaryStructure.filter((l: any) => l.type === 'earning').reduce((s: number, l: any) => s + (l.amount || 0), 0);
+    // Shared calculation engine (see salary-calc.util.ts, PAY-02) - handles
+    // fixed/manual/percentage-of-basic/percentage-of-gross/percentage-of-
+    // other-components uniformly, in a predictable dependency order, and
+    // throws on a circular dependency rather than producing a wrong number.
+    let result;
+    try {
+      result = computeSalaryStructure(components as any, overrideByCode);
+    } catch (err) {
+      if (err instanceof CircularSalaryComponentError) throw new BadRequestException(err.message);
+      throw err;
+    }
+
+    const salaryStructure = result.lines
+      .filter(l => componentMap.has(String(l.componentId)))
+      .map(l => ({ componentId: l.componentId, code: l.code, name: l.name, type: l.type, amount: l.amount }));
 
     const staff = await this.staffModel.findOneAndUpdate(
       { _id: staffId, tenantId: this.newTid(tenantId) },
-      { $set: { salaryStructure, salary: grossSalary } },
+      { $set: { salaryStructure, salary: result.grossSalary } },
       { new: true },
     );
     if (!staff) throw new NotFoundException('Staff member not found');
