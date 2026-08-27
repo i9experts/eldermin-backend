@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { TeacherProfile, TeacherProfileDocument } from './schemas/teacher-profile.schema';
@@ -205,10 +205,21 @@ export class TeachingService {
       try { campusId = new Types.ObjectId(data.campusId); } catch { campusId = null; }
     }
 
+    // `force` (or the raw data body itself, if a caller doesn't strip it
+    // before persisting) is a request-only flag, never a schema field.
+    const { force, ...rest } = data;
+
     try {
-      const conflicts = await this.checkConflicts(tenantId, null, data.periods || []);
+      const conflicts = await this.checkConflicts(tenantId, null, rest.periods || []);
+      // Advisory-only would let a double-booking save silently; enforce it
+      // unless the caller has explicitly confirmed with force:true. Callers
+      // that don't send `force` at all keep exactly today's behavior when
+      // there happen to be no conflicts (2xx, conflicts: []).
+      if (conflicts.length > 0 && force !== true) {
+        throw new ConflictException({ message: 'Timetable conflicts detected', conflicts });
+      }
       const timetable = await this.timetableModel.create({
-        ...data,
+        ...rest,
         academicYearId,
         campusId,
         tenantId: this.tid(tenantId),
@@ -217,16 +228,21 @@ export class TeachingService {
       });
       return { ...timetable.toObject(), conflicts };
     } catch (err: any) {
+      if (err instanceof ConflictException) throw err;
       if (err.name === 'ValidationError') throw new BadRequestException(err.message);
       throw err;
     }
   }
 
   async updateTimetable(tenantId: string, id: string, data: any) {
-    const conflicts = data.periods ? await this.checkConflicts(tenantId, id, data.periods) : [];
+    const { force, ...rest } = data;
+    const conflicts = rest.periods ? await this.checkConflicts(tenantId, id, rest.periods) : [];
+    if (conflicts.length > 0 && force !== true) {
+      throw new ConflictException({ message: 'Timetable conflicts detected', conflicts });
+    }
     const updated = await this.timetableModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
-      { $set: data },
+      { $set: rest },
       { new: true },
     ).lean();
     return { ...updated, conflicts };
