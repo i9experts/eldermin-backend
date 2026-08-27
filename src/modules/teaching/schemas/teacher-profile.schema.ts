@@ -41,6 +41,16 @@ export class TeacherProfile {
   @Prop({ type: [String], default: [] }) certifications: string[];
   @Prop({ type: [String], default: [] }) specializations: string[];
 
+  // Soft-constraint scheduling preferences, read by the whole-school
+  // timetable solver (TimetableSolverService). Unlike a hard constraint
+  // (double-booking), violating these doesn't invalidate a generated
+  // timetable - it costs penalty points the solver tries to minimize, so a
+  // school with too many teachers all wanting Friday off still gets a
+  // schedule, just not necessarily everyone's favourite one.
+  @Prop({ type: [Number], default: [] }) preferredFreeDays: number[]; // 0=Sun..6=Sat
+  @Prop({ default: 4 }) maxConsecutivePeriods: number;
+  @Prop({ default: true }) avoidGaps: boolean; // penalize idle periods between this teacher's lessons on a day
+
   @Prop({ default: 'active', enum: ['active', 'on_leave', 'absent', 'inactive'] }) status: string;
   @Prop({ default: 0 }) attendancePct: number;
   @Prop({ default: 0 }) lessonPlanCompliancePct: number;
