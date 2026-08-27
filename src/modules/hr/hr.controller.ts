@@ -21,7 +21,7 @@ export class HrController {
   }
 
   @Post('staff')
-  createStaff(@Request() req, @Body() body: any) { return this.hrService.createStaff(req.user.tenantId, body); }
+  createStaff(@Request() req, @Body() body: any) { return this.hrService.createStaff(req.user.tenantId, body, req.user.schoolSlug); }
 
   @Post('staff/:id/create-login')
   createLoginForStaff(@Request() req, @Param('id') id: string) {
@@ -407,6 +407,21 @@ export class HrController {
     res.end(pdf);
   }
 
+  // ── OFFER LETTER WORDING TEMPLATES (HR-02) ────────────────────────────
+  // Same route-ordering rationale as contract-templates above.
+
+  @Get('offer-letter-templates')
+  getOfferLetterTemplates(@Request() req) { return this.hrService.getOfferLetterTemplates(req.user.tenantId); }
+
+  @Post('offer-letter-templates')
+  createOfferLetterTemplate(@Request() req, @Body() body: any) { return this.hrService.createOfferLetterTemplate(req.user.tenantId, req.user.schoolSlug, body, req.user.userId); }
+
+  @Put('offer-letter-templates/:id')
+  updateOfferLetterTemplate(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateOfferLetterTemplate(req.user.tenantId, id, body); }
+
+  @Delete('offer-letter-templates/:id')
+  deleteOfferLetterTemplate(@Request() req, @Param('id') id: string) { return this.hrService.deleteOfferLetterTemplate(req.user.tenantId, id); }
+
   // ── OFFER LETTERS ────────────────────────────────────────────────────
 
   @Get('offer-letters')
@@ -424,7 +439,7 @@ export class HrController {
 
   @Get('offer-letters/:id/pdf')
   async downloadOfferLetterPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
-    const pdf = await this.hrService.generateOfferLetterPdf(id, req.user.schoolSlug);
+    const pdf = await this.hrService.generateOfferLetterPdf(id, req.user.schoolSlug, req.user.userId);
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="offer-letter-${id}.pdf"`, 'Content-Length': pdf.length });
     res.end(pdf);
   }

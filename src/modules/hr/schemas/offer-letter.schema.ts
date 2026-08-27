@@ -37,6 +37,16 @@ export class OfferLetter {
 
   @Prop() pdfS3Key: string; // the actual generated letter, not a manually-uploaded file
   @Prop({ type: Types.ObjectId, ref: 'User' }) createdBy: Types.ObjectId;
+
+  // Which named OfferLetterTemplate (wording, {{placeholders}}) to render
+  // this offer with. Optional/additive - null falls back to the legacy
+  // single HiringSettings.offerLetterTemplate free-text field, then to a
+  // hardcoded default body, exactly preserving pre-HR-02 behaviour.
+  @Prop({ type: Types.ObjectId, ref: 'OfferLetterTemplate', default: null }) offerLetterTemplateId: Types.ObjectId | null;
+  // Which ReportTemplate (letterhead/branding for the PDF) to use, same
+  // pattern as StaffContract.reportTemplateId. Optional - null uses the
+  // school's default 'offer_letter' ReportTemplate if one exists.
+  @Prop({ type: Types.ObjectId, ref: 'ReportTemplate', default: null }) reportTemplateId: Types.ObjectId | null;
 }
 
 export const OfferLetterSchema = SchemaFactory.createForClass(OfferLetter);

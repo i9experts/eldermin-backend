@@ -26,6 +26,7 @@ import { Training, TrainingSchema } from './schemas/training.schema';
 import { StaffContract, StaffContractSchema } from './schemas/staff-contract.schema';
 import { ContractTemplate, ContractTemplateSchema } from './schemas/contract-template.schema';
 import { OfferLetter, OfferLetterSchema } from './schemas/offer-letter.schema';
+import { OfferLetterTemplate, OfferLetterTemplateSchema } from './schemas/offer-letter-template.schema';
 import { AppointmentLetter, AppointmentLetterSchema } from './schemas/appointment-letter.schema';
 import { ExitRecord, ExitRecordSchema } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicySchema } from './schemas/leave-policy.schema';
@@ -69,6 +70,7 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: StaffContract.name, schema: StaffContractSchema },
       { name: ContractTemplate.name, schema: ContractTemplateSchema },
       { name: OfferLetter.name, schema: OfferLetterSchema },
+      { name: OfferLetterTemplate.name, schema: OfferLetterTemplateSchema },
       { name: AppointmentLetter.name, schema: AppointmentLetterSchema },
       { name: ExitRecord.name, schema: ExitRecordSchema },
       { name: LeavePolicy.name, schema: LeavePolicySchema },
