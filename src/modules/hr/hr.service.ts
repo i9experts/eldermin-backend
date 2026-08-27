@@ -19,6 +19,7 @@ import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../au
 import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { computeSalaryStructure, validateSalaryComponentGraph, CircularSalaryComponentError, ComputedSalaryLine } from './salary-calc.util';
+import { renderOfferLetterTemplate } from './offer-letter-template.util';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { PayrollPayment, PayrollPaymentDocument } from './schemas/payroll-payment.schema';
 import { BankAccount, BankAccountDocument } from '../../finance/schemas/finance.schema';
@@ -34,6 +35,7 @@ import { StaffContract, StaffContractDocument } from './schemas/staff-contract.s
 import { ContractTemplate, ContractTemplateDocument } from './schemas/contract-template.schema';
 import { PdfService } from '../../pdf/pdf.service';
 import { OfferLetter, OfferLetterDocument } from './schemas/offer-letter.schema';
+import { OfferLetterTemplate, OfferLetterTemplateDocument } from './schemas/offer-letter-template.schema';
 import { AppointmentLetter, AppointmentLetterDocument } from './schemas/appointment-letter.schema';
 import { ExitRecord, ExitRecordDocument } from './schemas/exit-record.schema';
 import { LeavePolicy, LeavePolicyDocument } from './schemas/leave-policy.schema';
@@ -72,6 +74,7 @@ export class HrService {
     @InjectModel(StaffContract.name) private contractModel: Model<StaffContractDocument>,
     @InjectModel(ContractTemplate.name) private contractTemplateModel: Model<ContractTemplateDocument>,
     @InjectModel(OfferLetter.name) private offerLetterModel: Model<OfferLetterDocument>,
+    @InjectModel(OfferLetterTemplate.name) private offerLetterTemplateModel: Model<OfferLetterTemplateDocument>,
     @InjectModel(AppointmentLetter.name) private appointmentLetterModel: Model<AppointmentLetterDocument>,
     @InjectModel(ExitRecord.name) private exitRecordModel: Model<ExitRecordDocument>,
     @InjectModel(LeavePolicy.name) private leavePolicyModel: Model<LeavePolicyDocument>,
@@ -152,7 +155,41 @@ export class HrService {
       .lean();
   }
 
-  async createStaff(tenantId: string, data: any) {
+  // Shared by createStaff (HR-01: optional salary structure at enrollment
+  // time) and setStaffSalaryStructure (Payroll tab, pre-existing) so both
+  // go through the exact same calculation engine and validation rather than
+  // duplicating the amount-resolution logic. See salary-calc.util.ts.
+  private async resolveSalaryStructureFromLines(schoolSlug: string, lines: { componentId: string; amount: number }[]) {
+    const components = await this.salaryComponentModel.find({ schoolSlug, _id: { $in: lines.map(l => this.newTid(l.componentId)) } }).lean();
+    const componentMap = new Map(components.map((c: any) => [String(c._id), c]));
+    const overrideByCode: Record<string, number> = {};
+    for (const l of lines) {
+      const comp = componentMap.get(l.componentId);
+      if (comp) overrideByCode[comp.code] = l.amount;
+    }
+    let result;
+    try {
+      result = computeSalaryStructure(components as any, overrideByCode);
+    } catch (err) {
+      if (err instanceof CircularSalaryComponentError) throw new BadRequestException(err.message);
+      throw err;
+    }
+    const salaryStructure = result.lines
+      .filter(l => componentMap.has(String(l.componentId)))
+      .map(l => ({ componentId: l.componentId, code: l.code, name: l.name, type: l.type, amount: l.amount }));
+    return { salaryStructure, grossSalary: result.grossSalary };
+  }
+
+  // HR-01: enrollment can now optionally assign real salary-structure
+  // components (data.salaryStructureLines: {componentId, amount}[], built
+  // from this school's own SalaryComponent list, same shape Payroll's
+  // "Assign Structure" sends) at creation time, going through the exact
+  // same computeSalaryStructure engine/validation Payroll already uses.
+  // Strictly additive: when salaryStructureLines is absent/empty, behaviour
+  // is byte-for-byte the same as before this change - only a flat
+  // data.salary is stored, and structure stays assignable later via
+  // Payroll exactly as today.
+  async createStaff(tenantId: string, data: any, schoolSlug?: string) {
     let employeeId = data.employeeId;
     if (!employeeId) {
       const last = await this.staffModel
@@ -162,7 +199,15 @@ export class HrService {
       const lastNum = last?.employeeId ? parseInt(last.employeeId.match(/(\d+)$/)?.[1] ?? '0', 10) : 0;
       employeeId = `EMP-${String(lastNum + 1).padStart(3, '0')}`;
     }
-    return this.staffModel.create({ ...data, employeeId, tenantId: this.newTid(tenantId) });
+
+    const { salaryStructureLines, ...rest } = data;
+    let extra: any = {};
+    if (Array.isArray(salaryStructureLines) && salaryStructureLines.length > 0 && schoolSlug) {
+      const { salaryStructure, grossSalary } = await this.resolveSalaryStructureFromLines(schoolSlug, salaryStructureLines);
+      extra = { salaryStructure, salary: grossSalary };
+    }
+
+    return this.staffModel.create({ ...rest, ...extra, employeeId, tenantId: this.newTid(tenantId) });
   }
 
   private generateTempPassword(): string {
@@ -1623,33 +1668,16 @@ export class HrService {
   // built from this school's own configured components rather than a
   // one-size-fits-all default.
   async setStaffSalaryStructure(staffId: string, tenantId: string, schoolSlug: string, lines: { componentId: string; amount: number }[]) {
-    const components = await this.salaryComponentModel.find({ schoolSlug, _id: { $in: lines.map(l => this.newTid(l.componentId)) } }).lean();
-    const componentMap = new Map(components.map((c: any) => [String(c._id), c]));
-    const overrideByCode: Record<string, number> = {};
-    for (const l of lines) {
-      const comp = componentMap.get(l.componentId);
-      if (comp) overrideByCode[comp.code] = l.amount;
-    }
-
-    // Shared calculation engine (see salary-calc.util.ts, PAY-02) - handles
-    // fixed/manual/percentage-of-basic/percentage-of-gross/percentage-of-
-    // other-components uniformly, in a predictable dependency order, and
-    // throws on a circular dependency rather than producing a wrong number.
-    let result;
-    try {
-      result = computeSalaryStructure(components as any, overrideByCode);
-    } catch (err) {
-      if (err instanceof CircularSalaryComponentError) throw new BadRequestException(err.message);
-      throw err;
-    }
-
-    const salaryStructure = result.lines
-      .filter(l => componentMap.has(String(l.componentId)))
-      .map(l => ({ componentId: l.componentId, code: l.code, name: l.name, type: l.type, amount: l.amount }));
+    // Shared calculation engine (see salary-calc.util.ts, PAY-02, and
+    // resolveSalaryStructureFromLines above) - handles fixed/manual/
+    // percentage-of-basic/percentage-of-gross/percentage-of-other-components
+    // uniformly, in a predictable dependency order, and throws on a
+    // circular dependency rather than producing a wrong number.
+    const { salaryStructure, grossSalary } = await this.resolveSalaryStructureFromLines(schoolSlug, lines);
 
     const staff = await this.staffModel.findOneAndUpdate(
       { _id: staffId, tenantId: this.newTid(tenantId) },
-      { $set: { salaryStructure, salary: result.grossSalary } },
+      { $set: { salaryStructure, salary: grossSalary } },
       { new: true },
     );
     if (!staff) throw new NotFoundException('Staff member not found');
@@ -2072,6 +2100,40 @@ export class HrService {
     return buffer;
   }
 
+  // ── OFFER LETTER WORDING TEMPLATES (HR-02) ────────────────────────────
+  // Mirrors the Contract wording-template CRUD above exactly (same shape,
+  // same {{variable}} convention) - multiple named, managed templates
+  // instead of the single free-text HiringSettings.offerLetterTemplate
+  // field, which is left untouched as a legacy fallback (see
+  // generateOfferLetterPdf below) for schools that never adopt this.
+  async getOfferLetterTemplates(tenantId: string) {
+    return this.offerLetterTemplateModel.find({ tenantId: this.newTid(tenantId) }).sort({ name: 1 }).lean();
+  }
+
+  async createOfferLetterTemplate(tenantId: string, schoolSlug: string, data: any, userId: string) {
+    if (!data?.name?.trim()) throw new BadRequestException('Template name is required.');
+    if (!data?.body?.trim()) throw new BadRequestException('Template body is required.');
+    return this.offerLetterTemplateModel.create({
+      ...data, schoolSlug,
+      tenantId: this.newTid(tenantId),
+      createdBy: this.newTid(userId),
+    });
+  }
+
+  async updateOfferLetterTemplate(tenantId: string, id: string, data: any) {
+    const updated = await this.offerLetterTemplateModel.findOneAndUpdate(
+      { _id: id, tenantId: this.newTid(tenantId) }, { $set: data }, { new: true },
+    ).lean();
+    if (!updated) throw new NotFoundException('Offer letter template not found');
+    return updated;
+  }
+
+  async deleteOfferLetterTemplate(tenantId: string, id: string) {
+    const result = await this.offerLetterTemplateModel.deleteOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (result.deletedCount === 0) throw new NotFoundException('Offer letter template not found');
+    return { success: true };
+  }
+
   // ── OFFER LETTERS ────────────────────────────────────────────────────
   async getOfferLetters(schoolSlug: string, query: any = {}) {
     const filter: any = { schoolSlug };
@@ -2096,21 +2158,64 @@ export class HrService {
     return offer;
   }
 
-  async generateOfferLetterPdf(id: string, schoolSlug: string): Promise<Buffer> {
+  // HR-02: an offer letter's wording now comes from (in priority order)
+  // 1) the OfferLetterTemplate picked on this specific offer, 2) the
+  // legacy single free-text HiringSettings.offerLetterTemplate (unchanged
+  // field, still fully supported), 3) the original hardcoded paragraphs -
+  // so an institution that never adopts template management sees no
+  // behaviour change at all. Letterhead/branding is resolved the same way
+  // StaffContract PDFs already do: the school's default (or offer-picked)
+  // 'offer_letter' ReportTemplate via pdfService.generateFromTemplate,
+  // falling back to the fixed pdf-lib layout if that ever fails.
+  async generateOfferLetterPdf(id: string, schoolSlug: string, userId?: string): Promise<Buffer> {
     const offer = await this.offerLetterModel.findOne({ _id: id, schoolSlug }).lean();
     if (!offer) throw new NotFoundException('Offer letter not found');
     const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
     const schoolName = (school as any)?.name || 'Eldermin School';
+
+    let rawBody: string | null = null;
+    if ((offer as any).offerLetterTemplateId) {
+      const tpl = await this.offerLetterTemplateModel.findOne({ _id: (offer as any).offerLetterTemplateId, schoolSlug }).lean();
+      if (tpl) rawBody = tpl.body;
+    }
+    if (!rawBody) {
+      const hiring = await this.hiringSettingsModel.findOne({ schoolSlug }).lean();
+      if (hiring?.offerLetterTemplate) rawBody = hiring.offerLetterTemplate;
+    }
+
+    const defaultParagraphs = [
+      `We are pleased to offer you the position of ${offer.designation} at ${schoolName}. We were impressed by your background and believe you will be a valuable addition to our team.`,
+      `This offer is valid until ${new Date(offer.offerValidUntil).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}. Please confirm your acceptance by this date.`,
+      offer.additionalTerms || '',
+    ].filter(Boolean);
+
+    const letterBody = rawBody
+      ? renderOfferLetterTemplate(rawBody, offer, schoolName)
+      : defaultParagraphs.join('\n\n');
+
+    try {
+      return await this.pdfService.generateFromTemplate(schoolSlug, 'offer_letter', {
+        documentNumber: offer.offerNo,
+        date: new Date().toLocaleDateString('en-GB'),
+        recipientName: offer.candidateName,
+        designation: offer.designation,
+        department: offer.department || '—',
+        proposedSalaryLabel: `${offer.currency} ${(offer.proposedSalary || 0).toLocaleString()}/month`,
+        joiningDateLabel: new Date(offer.proposedJoiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' }),
+        letterBody,
+      }, userId || 'system', (offer as any).reportTemplateId ? String((offer as any).reportTemplateId) : undefined);
+    } catch {
+      // fall through to the fixed pdf-lib layout below - a custom
+      // template's render must never make an offer letter simply fail to
+      // generate, same defensive pattern generateContractPdf already uses.
+    }
+
     return this.buildLetterPdf(schoolName, {
       title: 'Offer of Employment',
       refNo: offer.offerNo,
       date: new Date(),
       recipientName: offer.candidateName,
-      bodyParagraphs: [
-        `We are pleased to offer you the position of ${offer.designation} at ${schoolName}. We were impressed by your background and believe you will be a valuable addition to our team.`,
-        `This offer is valid until ${new Date(offer.offerValidUntil).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}. Please confirm your acceptance by this date.`,
-        offer.additionalTerms || '',
-      ].filter(Boolean),
+      bodyParagraphs: rawBody ? letterBody.split(/\n\n+/).filter(Boolean) : defaultParagraphs,
       fields: [
         { label: 'Designation', value: offer.designation },
         { label: 'Department', value: offer.department || '—' },

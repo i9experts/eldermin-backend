@@ -146,6 +146,18 @@ export function sampleDataForType(type: string): Record<string, any> {
         workingHoursLabel: '40 hours/week',
         termsAndConditions: 'Your employment is subject to the standard policies and code of conduct of the institution, as may be amended from time to time.',
       };
+    case 'offer_letter':
+      // Field names must match what HrService.generateOfferLetterPdf
+      // actually passes as `data` - see that method for the real mapping.
+      return {
+        ...common,
+        recipientName: 'Ali Raza',
+        designation: 'Senior Teacher',
+        department: 'Academics',
+        proposedSalaryLabel: 'PKR 85,000/month',
+        joiningDateLabel: '01 August 2026',
+        letterBody: 'We are pleased to offer you the position of Senior Teacher. We were impressed by your background and believe you will be a valuable addition to our team.\n\nThis offer is valid until 15 July 2026. Please confirm your acceptance by this date.',
+      };
     default:
       return {
         ...common,
@@ -988,6 +1000,25 @@ export class PdfService {
           { id: 'default-terms', type: 'text', order: 2, visible: true, config: { content: '{{termsAndConditions}}' } },
           { id: 'default-signature', type: 'signature_block', order: 3, visible: true, config: { labels: ['Employee Signature', 'Authorized Signatory'] } },
         ]
+      : type === 'offer_letter'
+      // HR-02: same key_value + free-text-body + signature layout as
+      // 'contract' above (a school without a custom Offer Letter report
+      // template yet still gets a sensible-looking PDF), but the body
+      // comes from the selected OfferLetterTemplate (or the legacy
+      // HiringSettings.offerLetterTemplate) with {{placeholders}} already
+      // resolved into `letterBody` by generateOfferLetterPdf.
+      ? [
+          { id: 'default-fields', type: 'key_value', order: 1, visible: true, config: {
+            fields: [
+              { label: 'Designation', field: 'designation' },
+              { label: 'Department', field: 'department' },
+              { label: 'Proposed Salary', field: 'proposedSalaryLabel' },
+              { label: 'Proposed Joining Date', field: 'joiningDateLabel' },
+            ],
+          } },
+          { id: 'default-body', type: 'text', order: 2, visible: true, config: { content: '{{letterBody}}' } },
+          { id: 'default-signature', type: 'signature_block', order: 3, visible: true, config: { labels: ['Candidate Signature', 'Authorized Signatory'] } },
+        ]
       : [
           { id: 'default-table', type: 'table', order: 1, visible: true, config: {} },
           { id: 'default-signature', type: 'signature_block', order: 2, visible: true, config: {} },
@@ -1057,6 +1088,7 @@ export class PdfService {
       attendance_sheet: 'Attendance Sheet',
       admission_letter: 'Admission Letter',
       contract: 'Employment Contract',
+      offer_letter: 'Offer Letter',
       timetable: 'Class Timetable',
       custom: 'Document',
     };
