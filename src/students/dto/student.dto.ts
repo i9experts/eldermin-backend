@@ -14,7 +14,17 @@ import { PartialType } from '@nestjs/mapped-types';
 // ── Pagination ────────────────────────────────────────────────
 export class PaginationDto {
   @IsOptional() @Type(() => Number) page?: number = 1;
-  @IsOptional() @Type(() => Number) @Min(1) @Max(100) limit?: number = 20;
+  // Was capped at 100, which silently 400'd (whitelist:true validation
+  // rejects the whole request before it reaches the service) any "whole
+  // class roster" query - fee-structure bulk-assign preview, attendance
+  // roll call, OMR sheet generation - all of which legitimately ask for
+  // limit:200-500 to get every active student in a grade/section in one
+  // page rather than paginating a single class. React Query then just
+  // sees an errored query with `.data` undefined, which every call site
+  // defaults to `[]` -> a silent "0 students" instead of a visible error.
+  // Raised to a generous cap that still bounds accidental unpaginated
+  // scans, not to the exact number a class could hold.
+  @IsOptional() @Type(() => Number) @Min(1) @Max(1000) limit?: number = 20;
   @IsOptional() @IsString() search?: string;
   @IsOptional() @IsString() sortBy?: string = 'createdAt';
   @IsOptional() @IsEnum(['asc', 'desc']) sortOrder?: 'asc' | 'desc' = 'desc';
