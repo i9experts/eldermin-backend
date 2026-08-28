@@ -15,6 +15,7 @@ import {
 } from './schemas/finance.schema';
 import { findConflictingAssignments } from './fee-assignment.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
+import { reverseJournalLines, isReversible } from './ledger-reversal.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -1480,7 +1481,7 @@ export class FinanceService {
   // FEE-01. Non-pricing edits (name typo, isActive toggle, notes) on an
   // already-billed structure are still safe to apply directly, since they
   // don't retroactively change what anyone was actually charged.
-  private readonly FEE_STRUCTURE_PRICING_FIELDS = ['items', 'totalAmount', 'dueDay', 'lateFinePerDay', 'lateFeeAmount', 'gracePeriodDays', 'frequency', 'isTaxable'];
+  private readonly FEE_STRUCTURE_PRICING_FIELDS = ['items', 'totalAmount', 'dueDay', 'lateFinePerDay', 'lateFeeAmount', 'gracePeriodDays', 'frequency', 'isTaxable', 'defaultDiscountType', 'defaultDiscountValue'];
 
   async updateFeeStructure(id: string, schoolSlug: string, data: any) {
     const existing = await this.feeStructModel.findOne({ _id: id, schoolSlug }).lean();
@@ -2470,14 +2471,124 @@ export class FinanceService {
     }
   }
 
+  /** Deletes a single invoice/challan - the individual-record counterpart
+   * to bulkDeleteInvoices' "Undo Challans" flow (which already carries its
+   * own confirmation and is unaffected here). This is the fix for the
+   * accounting-integrity gap reported by the admin: deleting a fee record
+   * used to succeed silently with no restriction at all, even when a
+   * receipt had already been collected against it and its invoice/payment
+   * postings were already sitting in the ledger.
+   *
+   * Two guards now apply, mirroring updateInvoice's existing
+   * "cannot mutate a fully paid invoice" rule:
+   *   1. A fully `paid` invoice is financial history and can never be
+   *      deleted outright - the admin must first reverse every payment
+   *      collected against it (see reversePayment) so nothing paid is
+   *      ever silently erased.
+   *   2. A partially-paid invoice (`status === 'partial'`) still has an
+   *      active receipt sitting against it, so it's blocked the same way
+   *      unless force-deleted with every payment reversed first.
+   *
+   * Once deletion is actually allowed, any GL postings this invoice made
+   * (postFeeInvoiceJournal's `fee_invoice` entry) are reversed via the
+   * same mirror-image convention as cancelVoucher/reversePayslipLedgerEntry
+   * - never just left dangling in Trial Balance/Chart of Accounts. */
   async softDeleteInvoice(id: string, schoolSlug: string, deletedBy: string, reason?: string) {
-    const invoice = await this.invoiceModel.findOneAndUpdate(
-      { _id: id, schoolSlug },
-      { $set: { isDeleted: true, deletedAt: new Date(), deletedBy, deleteReason: reason } },
-      { new: true },
-    );
+    const invoice = await this.invoiceModel.findOne({ _id: id, schoolSlug, isDeleted: { $ne: true } });
     if (!invoice) throw new NotFoundException('Invoice not found');
+
+    if (invoice.status === 'paid' || invoice.status === 'partial' || (invoice.paidAmount || 0) > 0) {
+      const activePayments = await this.paymentModel.countDocuments({
+        invoiceId: invoice._id, schoolSlug, isRefunded: { $ne: true },
+      });
+      if (activePayments > 0) {
+        throw new BadRequestException(
+          `Cannot delete invoice ${invoice.invoiceNumber} - ${activePayments} receipt(s) have already been collected ` +
+          `against it. Revert/reverse the payment(s) first (see Payments > Revert Receipt), then delete.`,
+        );
+      }
+    }
+
+    await this.reverseLedgerForSource(
+      schoolSlug, 'fee_invoice', String(invoice._id),
+      `Invoice ${invoice.invoiceNumber} deleted — ${reason || 'no reason given'}`,
+      deletedBy,
+    );
+
+    invoice.isDeleted = true;
+    invoice.deletedAt = new Date();
+    invoice.deletedBy = deletedBy;
+    if (reason) invoice.deleteReason = reason;
+    await invoice.save();
     return invoice;
+  }
+
+  /** Reverses ('reverts') an already-collected receipt instead of ever
+   * deleting it - the explicit, auditable alternative the admin asked for
+   * ("should ask to revert receive fee"). Un-applies the payment from its
+   * invoice's paid/balance totals, reverses the payment's own `fee_payment`
+   * ledger posting (mirror-image entry, same convention as every other
+   * reversal in this file), and flags the payment itself via the existing
+   * (previously unused) isRefunded/refundDate/refundReason fields rather
+   * than inventing a parallel concept. The reversed payment record is kept
+   * for audit, never deleted. */
+  async reversePayment(id: string, schoolSlug: string, reversedBy: string, reason?: string) {
+    const payment = await this.paymentModel.findOne({ _id: id, schoolSlug });
+    if (!payment) throw new NotFoundException('Payment not found');
+    if (payment.isRefunded) throw new BadRequestException('This payment has already been reverted');
+
+    const invoice = await this.invoiceModel.findOne({ _id: payment.invoiceId, schoolSlug });
+    if (invoice) {
+      const newPaid = Math.max(0, (invoice.paidAmount || 0) - payment.amount);
+      const newBalance = Math.max(0, invoice.totalAmount - newPaid);
+      const newStatus = newBalance <= 0 && invoice.totalAmount > 0
+        ? 'paid'
+        : newPaid > 0 ? 'partial' : 'sent';
+      await this.invoiceModel.updateOne(
+        { _id: invoice._id },
+        { $set: { paidAmount: newPaid, balanceDue: newBalance, status: newStatus } },
+      );
+    }
+
+    await this.reverseLedgerForSource(
+      schoolSlug, 'fee_payment', String(payment._id),
+      `Receipt ${payment.receiptNumber} reverted — ${reason || 'no reason given'}`,
+      reversedBy,
+    );
+
+    payment.isRefunded = true;
+    payment.refundDate = new Date();
+    payment.refundReason = reason || `Reverted by ${reversedBy}`;
+    await payment.save();
+    return payment;
+  }
+
+  /** Reverses every still-active JournalEntry posted for one source record
+   * (sourceType+sourceId): posts the mirror-image entry (debit/credit
+   * swapped, everything else unchanged - see ledger-reversal.util) and
+   * marks the original 'reversed'. Never deletes a posting, only reverses
+   * it, matching cancelVoucher/reversePayslipLedgerEntry's convention. A
+   * record that was never actually posted to the ledger (e.g. a draft fee
+   * structure/invoice with no GL entry yet) simply has nothing to reverse -
+   * this is a safe no-op in that case, exactly as the task calls for. */
+  private async reverseLedgerForSource(
+    schoolSlug: string, sourceType: string, sourceId: string, narration: string, postedBy?: string,
+  ): Promise<number> {
+    const originals = await this.journalModel.find({ schoolSlug, sourceType, sourceId }).lean();
+    const toReverse = originals.filter(isReversible);
+    for (const original of toReverse) {
+      await this.postJournalEntry(schoolSlug, {
+        date: new Date(),
+        reference: original.reference,
+        narration,
+        sourceType: `${sourceType}_reversal`,
+        sourceId,
+        postedBy,
+        lines: reverseJournalLines((original.lines || []) as any) as any,
+      });
+      await this.journalModel.updateOne({ _id: original._id }, { $set: { status: 'reversed' } });
+    }
+    return toReverse.length;
   }
 
   /**
@@ -3058,6 +3169,16 @@ export class FinanceService {
               let thisDiscount = valueType === 'percentage' ? (baseAmount * (value || 0)) / 100 : (value || 0);
               if (maxAmount != null) thisDiscount = Math.min(thisDiscount, maxAmount);
               discount += thisDiscount;
+            }
+            // Structure-level default discount (see FeeStructure.defaultDiscountType/
+            // defaultDiscountValue) - a simple, optional discount that applies to
+            // every invoice this structure generates, distinct from and stacked
+            // on top of the per-student DiscountProgram/override discounts above.
+            // 'none' (the default for every pre-existing structure) contributes 0.
+            if (fs.defaultDiscountType === 'percent') {
+              discount += (baseAmount * (fs.defaultDiscountValue || 0)) / 100;
+            } else if (fs.defaultDiscountType === 'flat') {
+              discount += fs.defaultDiscountValue || 0;
             }
             discount = Math.min(discount, baseAmount); // never let stacked discounts exceed the item itself
             items.push({

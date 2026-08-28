@@ -101,6 +101,15 @@ export class FeeStructure {
   // schemas/terms-template.schema.ts). Unset means no T&C attached,
   // exactly matching every pre-Phase-8 fee structure.
   @Prop({ type: Types.ObjectId, ref: 'TermsTemplate', default: null }) termsTemplateId: Types.ObjectId | null;
+  // Optional default discount for THIS structure as a whole (distinct from
+  // the separate ad-hoc per-student DiscountProgram/discount-assignment
+  // workflow, which stays untouched). Unset/'none' means no default
+  // discount applies, matching every structure that existed before this
+  // field - fully additive. When set, generateInvoices/updateFeeStructure's
+  // totalAmount math applies it on top of the per-line discounts already
+  // supported by FeeLineItem.discount.
+  @Prop({ enum: ['none', 'flat', 'percent'], default: 'none' }) defaultDiscountType: string;
+  @Prop({ default: 0 }) defaultDiscountValue: number;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 

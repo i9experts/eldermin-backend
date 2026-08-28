@@ -241,6 +241,15 @@ export class FinanceController {
     });
   }
 
+  // Reverts ("undoes") an already-collected receipt — the explicit,
+  // auditable alternative to ever deleting a receipted payment. Un-applies
+  // it from the invoice and reverses whatever it posted to the ledger.
+  @Post('payments/:id/reverse') @HttpCode(HttpStatus.OK)
+  async reversePayment(@Param('id') id: string, @Body('reason') reason: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.reversePayment(id, schoolSlug, userName, reason);
+  }
+
   // Expenses
   @Get('expenses') async getExpenses(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
