@@ -233,8 +233,8 @@ export class StudentsController {
   /** GET /api/v1/students/guardians/list */
   @Get('guardians/list')
   async getGuardians(@Query('studentId') studentId: string, @Query('search') search: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getAllGuardians(schoolSlug, studentId, search);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.studentsService.getAllGuardians(schoolSlug, studentId, search, requestingUser);
   }
 
   /** POST /api/v1/students/guardians - requires studentId (guardians are

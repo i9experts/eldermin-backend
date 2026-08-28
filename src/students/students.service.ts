@@ -88,9 +88,27 @@ export class StudentsService {
   // across that same data rather than maintaining a second, parallel
   // Guardian collection that would silently diverge from it - a
   // guardian added via the wizard must show up here, and vice versa.
-  async getAllGuardians(schoolSlug: string, studentId?: string, search?: string) {
+  async getAllGuardians(schoolSlug: string, studentId?: string, search?: string, requestingUser?: ScopedUser) {
     const matchStage: any = { schoolSlug };
     if (studentId) matchStage._id = new Types.ObjectId(studentId);
+    // Root cause of the "5 identical rows" report: this never applied the
+    // campus scope every other student-listing endpoint (getStudents,
+    // dashboard stats, reports, etc.) applies via resolveCampusScope. A
+    // campus-scoped admin's Student Directory search correctly shows only
+    // their own campus's record for a child - but this unwind ran over
+    // every student in the whole school, across every campus, with no
+    // scoping at all. If the same child/guardian data exists on more than
+    // one campus (e.g. duplicate enrollment records left over from a
+    // multi-campus import), the admin sees all of them here even though
+    // their own Student Directory - and their role - only grants visibility
+    // into one campus. Matches getStudents' pattern exactly: no requested
+    // campusId here, so resolveCampusScope falls back to the caller's own
+    // assigned campus for campus-/department-scoped roles, undefined (no
+    // restriction) for institution/platform-level roles.
+    if (requestingUser) {
+      const scopedCampusId = resolveCampusScope(requestingUser, undefined);
+      if (scopedCampusId) matchStage.campusId = scopedCampusId;
+    }
 
     const pipeline: any[] = [
       { $match: matchStage },
