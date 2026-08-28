@@ -18,6 +18,8 @@ import {
   CreateAssessmentResultDto,
 } from './dto/student.dto';
 import { resolveClassSectionScope } from '../auth/scope.util';
+import { Roles } from '../auth/decorators';
+import { UserRole } from '../auth/roles.enum';
 
 @Controller('students')
 export class StudentsController {
@@ -145,6 +147,30 @@ export class StudentsController {
   async getStudent360(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getStudent360(id, schoolSlug);
+  }
+
+  /**
+   * GET /api/v1/students/:id/debug-guardians-raw
+   *
+   * TEMPORARY / DIAGNOSTIC ONLY - added to investigate the guardian
+   * duplication mystery around student 6a6a2b6ca08864e4e84bbe96 (Guardian
+   * Directory showing 5 identical rows vs the Profile tab showing 2 vs
+   * the dedupe tool reporting nothing to fix). Returns the raw, unprojected
+   * `guardians` array exactly as stored/hydrated - no aggregation, no
+   * .map(), no dedup, no summarization - plus schoolSlug/campusId and a
+   * same-content duplicate check. Deliberately does NOT filter by
+   * schoolSlug so a school-scope mismatch on this specific document can't
+   * hide it. Remove this route once the investigation is closed.
+   *
+   * SUPERADMIN-gated: reuses the exact @Roles(UserRole.SUPER_ADMIN) +
+   * global RolesGuard pattern already used for super-admin-only routes
+   * elsewhere (see leads.controller.ts) - this is a raw data-exposure
+   * risk and must never be reachable by a school-level user.
+   */
+  @Roles(UserRole.SUPER_ADMIN)
+  @Get(':id/debug-guardians-raw')
+  async debugGuardiansRaw(@Param('id') id: string) {
+    return this.studentsService.debugGuardiansRaw(id);
   }
 
   // ============================================================
