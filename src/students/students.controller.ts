@@ -162,15 +162,26 @@ export class StudentsController {
    * schoolSlug so a school-scope mismatch on this specific document can't
    * hide it. Remove this route once the investigation is closed.
    *
-   * SUPERADMIN-gated: reuses the exact @Roles(UserRole.SUPER_ADMIN) +
-   * global RolesGuard pattern already used for super-admin-only routes
-   * elsewhere (see leads.controller.ts) - this is a raw data-exposure
-   * risk and must never be reachable by a school-level user.
+   * Gated to SUPER_ADMIN or INSTITUTION_OWNER (the two roles that could
+   * plausibly need to run this while the investigation is live - a
+   * school owner testing their own data included). Because the raw dump
+   * deliberately skips a schoolSlug filter (so a scope mismatch can't
+   * hide it from a super admin), a non-SUPER_ADMIN caller's own
+   * schoolSlug is checked against the returned document's schoolSlug
+   * here in the controller and rejected on mismatch, so an institution
+   * owner can only ever pull their own school's data.
    */
-  @Roles(UserRole.SUPER_ADMIN)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER)
   @Get(':id/debug-guardians-raw')
-  async debugGuardiansRaw(@Param('id') id: string) {
-    return this.studentsService.debugGuardiansRaw(id);
+  async debugGuardiansRaw(@Param('id') id: string, @Request() req: any) {
+    const result = await this.studentsService.debugGuardiansRaw(id);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    const isSuperAdmin = requestingUser?.role === UserRole.SUPER_ADMIN
+      || requestingUser?.primaryRole === UserRole.SUPER_ADMIN;
+    if (!isSuperAdmin && result?.schoolSlug && result.schoolSlug !== schoolSlug) {
+      throw new BadRequestException('Student not found in your school');
+    }
+    return result;
   }
 
   // ============================================================
