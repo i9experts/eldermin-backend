@@ -4,7 +4,7 @@
 // ============================================================
 
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException,
+  Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -59,6 +59,8 @@ const percentToGrade = (pct: number): string => {
 
 @Injectable()
 export class StudentsService {
+  private logger = new Logger('StudentsService');
+
   constructor(
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(StudentAttendance.name) private attendanceModel: Model<StudentAttendanceDocument>,
@@ -197,24 +199,130 @@ export class StudentsService {
    * summary rather than silently running, so an admin can see exactly
    * what was affected. */
   async deduplicateGuardians(schoolSlug: string) {
+    // NOTE (raw-dump investigation): this filter only matches documents
+    // where the top-level `guardians` field is actually a BSON array with
+    // a second element - `'guardians.1': { $exists: true }` is evaluated
+    // against the raw stored shape, before Mongoose casting/hydration ever
+    // runs. If a document's `guardians` were ever stored as something
+    // other than a plain array (null, a single embedded object left over
+    // from old data, etc.) this query would simply not match it - the
+    // document is silently excluded from `students` below, with no error,
+    // no log line, nothing in the returned summary. That's a real gap:
+    // an admin reading "no duplicate guardian entries found" cannot tell
+    // the difference between "genuinely no duplicates" and "some students
+    // were never examined because their guardians field isn't shaped like
+    // a normal array." Left as-is for now (no confirmed case of this in
+    // production data - the debug-guardians-raw endpoint below is how we
+    // check), but flagging here since it was asked for specifically.
     const students = await this.studentModel.find({ schoolSlug, 'guardians.1': { $exists: true } });
     let studentsFixed = 0;
     let duplicatesRemoved = 0;
+    let errors = 0;
     const affected: { studentId: string; studentName: string; removedCount: number }[] = [];
 
     for (const student of students) {
-      const deduped = dedupeGuardians(student.guardians as any[]);
-      const removed = student.guardians.length - deduped.length;
-      if (removed > 0) {
-        student.guardians = deduped as any;
-        await student.save();
-        studentsFixed++;
-        duplicatesRemoved += removed;
-        affected.push({ studentId: String(student._id), studentName: `${student.firstName} ${student.lastName}`, removedCount: removed });
+      try {
+        const deduped = dedupeGuardians(student.guardians as any[]);
+        const removed = student.guardians.length - deduped.length;
+        if (removed > 0) {
+          student.guardians = deduped as any;
+          await student.save();
+          studentsFixed++;
+          duplicatesRemoved += removed;
+          affected.push({ studentId: String(student._id), studentName: `${student.firstName} ${student.lastName}`, removedCount: removed });
+        }
+      } catch (err: any) {
+        // Previously any save() failure here (e.g. a validation error
+        // tripped by the now-deduped array) would propagate straight out
+        // of the whole batch, aborting the loop for every student not yet
+        // processed and discarding the summary of everyone already fixed
+        // - the caller would just see a bare 500 with no indication which
+        // student caused it or that earlier fixes had already landed.
+        // Log it explicitly and keep going so one bad document can't hide
+        // the results for the rest of the school.
+        errors++;
+        this.logger.error(
+          `deduplicateGuardians: failed to save student ${student._id} (${student.firstName} ${student.lastName}): ${err?.message || err}`,
+          err?.stack,
+        );
       }
     }
 
-    return { studentsFixed, duplicatesRemoved, affected };
+    return { studentsFixed, duplicatesRemoved, errors, affected };
+  }
+
+  // ============================================================
+  // TEMPORARY DEBUG ENDPOINT — remove once the guardian-duplication
+  // mystery on student 6a6a2b6ca08864e4e84bbe96 is resolved. Returns the
+  // RAW, unprojected `guardians` array exactly as Mongoose/MongoDB gives
+  // it back, plus a same-content duplicate check across the array - no
+  // aggregation, no dedupe, no summarization. SUPERADMIN-gated (see
+  // @Roles(UserRole.SUPER_ADMIN) on the controller route).
+  // ============================================================
+  async debugGuardiansRaw(id: string) {
+    // Two reads on purpose: a hydrated Mongoose document (so we can see
+    // what the app's normal read paths - getStudentById, the Profile tab
+    // - actually receive after casting), and a .lean() plain-object read
+    // (so we see exactly what's on disk, with no Mongoose defaults/casting
+    // applied on top). If these two ever disagree, that's the fault line.
+    const hydrated = await this.studentModel.findById(id);
+    const lean = await this.studentModel.findById(id).lean();
+
+    if (!hydrated || !lean) {
+      throw new NotFoundException(`Student ${id} not found (checked with no schoolSlug filter)`);
+    }
+
+    const buildDump = (guardiansRaw: any) => {
+      const isArray = Array.isArray(guardiansRaw);
+      const guardians = isArray ? guardiansRaw : guardiansRaw == null ? [] : [guardiansRaw];
+
+      // The Guardian sub-schema is declared `@Schema({ _id: false })` (see
+      // src/students/schemas/student.schema.ts), so guardian sub-documents
+      // do NOT get an auto-generated _id - there is nothing to disambiguate
+      // two pushes of identical data. Recorded here explicitly rather than
+      // assumed, since the investigation asked to verify this rather than
+      // take it on faith.
+      const subdocIds = guardians.map((g: any) => (g && typeof g === 'object' ? g._id : undefined));
+      const hasAnySubdocId = subdocIds.some((v: any) => v !== undefined && v !== null);
+
+      // Duplicate check on VISIBLE field content (name/relation/phone/email/
+      // isPrimary), independent of any _id - this is what would make two
+      // array entries genuinely indistinguishable to a human looking at the
+      // Guardian Directory or the Profile tab.
+      const contentKeyOf = (g: any) =>
+        JSON.stringify({
+          name: g?.name, relation: g?.relation, phone: g?.phone, email: g?.email,
+          occupation: g?.occupation, employer: g?.employer,
+          isPrimary: g?.isPrimary, isEmergencyContact: g?.isEmergencyContact,
+        });
+      const contentCounts = new Map<string, number>();
+      for (const g of guardians) {
+        const key = contentKeyOf(g);
+        contentCounts.set(key, (contentCounts.get(key) || 0) + 1);
+      }
+      const duplicateContentGroups = [...contentCounts.entries()]
+        .filter(([, count]) => count > 1)
+        .map(([key, count]) => ({ count, guardian: JSON.parse(key) }));
+
+      return {
+        guardiansFieldWasAnArray: isArray,
+        guardiansFieldRawType: guardiansRaw === null ? 'null' : typeof guardiansRaw,
+        length: guardians.length,
+        guardians, // full raw entries, every field, untouched
+        guardianSubSchemaHasIdDisabled: true, // @Schema({ _id: false }) - see student.schema.ts
+        anySubdocumentHasAnId: hasAnySubdocId,
+        subdocumentIds: subdocIds,
+        duplicateContentGroups,
+      };
+    };
+
+    return {
+      studentId: id,
+      schoolSlug: (lean as any).schoolSlug,
+      campusId: (lean as any).campusId,
+      hydrated: buildDump((hydrated as any).guardians),
+      lean: buildDump((lean as any).guardians),
+    };
   }
 
   async createStudent(dto: CreateStudentDto): Promise<Student> {
