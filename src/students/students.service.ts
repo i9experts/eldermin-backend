@@ -38,6 +38,7 @@ import {
   CreateAssessmentResultDto,
 } from './dto/student.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -143,7 +144,8 @@ export class StudentsService {
     // student is never legitimate.
     const newPhone = (data.phone || '').trim();
     if (newPhone) {
-      const alreadyLinked = student.guardians.some((g: any) => (g.phone || '').trim() === newPhone);
+      const newKey = guardianDedupeKey({ phone: newPhone });
+      const alreadyLinked = student.guardians.some((g: any) => guardianDedupeKey(g) === newKey);
       if (alreadyLinked) {
         throw new BadRequestException(`This guardian (${newPhone}) is already linked to this student.`);
       }
@@ -163,10 +165,17 @@ export class StudentsService {
     return student;
   }
 
-  /** One-time cleanup for the real damage already done by the missing
-   * duplicate check above - scans every student's guardians[] array and
-   * removes exact duplicates (same phone, or same name if no phone was
-   * ever recorded), keeping the first occurrence of each. Returns a
+  /** Cleanup for the real damage already done by the missing duplicate
+   * check above (and by the generic updateStudent path re-saving a
+   * guardians[] array built client-side) - scans every student's
+   * guardians[] array and collapses duplicates (same phone, or same name
+   * if no phone was ever recorded) down to one entry each, keeping the
+   * most complete record per duplicate (see guardian-dedupe.util.ts) so a
+   * phone/email/occupation captured on one duplicate isn't lost just
+   * because an earlier, sparser entry happened to be added first. Only
+   * ever collapses duplicates within one student's own array - a guardian
+   * linked to two different children (siblings) is untouched. Safe to run
+   * repeatedly: already-deduped students are simply skipped. Returns a
    * summary rather than silently running, so an admin can see exactly
    * what was affected. */
   async deduplicateGuardians(schoolSlug: string) {
@@ -176,14 +185,7 @@ export class StudentsService {
     const affected: { studentId: string; studentName: string; removedCount: number }[] = [];
 
     for (const student of students) {
-      const seen = new Set<string>();
-      const deduped: any[] = [];
-      for (const g of student.guardians as any[]) {
-        const key = (g.phone || '').trim() || `name:${(g.name || '').trim().toLowerCase()}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(g);
-      }
+      const deduped = dedupeGuardians(student.guardians as any[]);
       const removed = student.guardians.length - deduped.length;
       if (removed > 0) {
         student.guardians = deduped as any;
@@ -399,6 +401,19 @@ export class StudentsService {
       for (const [key, value] of Object.entries(medical)) {
         if (value !== undefined) setDoc[`medical.${key}`] = value;
       }
+    }
+    // Student Profile's own "Add/Edit Guardian" flow saves via this
+    // generic PUT rather than the guardian-specific POST /guardians
+    // endpoint, so it never went through addGuardianToStudent's
+    // duplicate-phone guard - this was the second, unguarded write path
+    // that let the same guardian get linked to the same student multiple
+    // times over. Run the whole array through the same dedupe logic the
+    // cleanup pass uses whenever guardians is part of this update, so a
+    // duplicate can never be persisted here either, no matter how the
+    // array was built client-side. Only touches this student's own array,
+    // never a guardian's link to a different child.
+    if (Array.isArray(setDoc.guardians)) {
+      setDoc.guardians = dedupeGuardians(setDoc.guardians);
     }
     const student = await this.studentModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: setDoc }, { new: true },
