@@ -39,6 +39,7 @@ import { EceModule } from './ece/ece.module';
 import { ComplaintsModule } from './complaints/complaints.module';
 import { ParentPortalModule } from './parent-portal/parent-portal.module';
 import { ResellersModule } from './resellers/resellers.module';
+import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { ResellersModule } from './resellers/resellers.module';
     ComplaintsModule,
     ParentPortalModule,
     ResellersModule,
+    KnowledgeBaseModule,
   ],
   controllers: [AppController],
   providers: [
