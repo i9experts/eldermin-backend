@@ -14,6 +14,7 @@ import {
   StudentFeeAssignment, StudentFeeAssignmentDocument,
 } from './schemas/finance.schema';
 import { findConflictingAssignments } from './fee-assignment.util';
+import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -1672,6 +1673,47 @@ export class FinanceService {
 
   async getPayments(schoolSlug: string) {
     return this.paymentModel.find({ schoolSlug }).sort({ paymentDate: -1 }).limit(100);
+  }
+
+  /** Narrow, additive edit for an already-generated invoice/challan. This
+   * deliberately does NOT let a caller rewrite the original fee-matched
+   * line items (those came out of the fee-matching engine and must stay
+   * auditable) - it only allows (a) extending/changing the due date and
+   * (b) appending a signed manual adjustment line (late-fee waiver,
+   * correction, etc) using the same `items` shape every other line uses,
+   * with `feeStructureId: null` / `feeHead: 'adjustment'` marking it as
+   * manually added rather than fee-matched. A fully `paid` invoice is
+   * financial history at that point (like every other posted record in
+   * this app) and can never be mutated here - same guard as recordPayment. */
+  async updateInvoice(invoiceId: string, schoolSlug: string, data: {
+    dueDate?: string | Date; adjustment?: { description: string; amount: number; reason?: string };
+    updatedBy?: string;
+  }) {
+    const invoice = await this.invoiceModel.findOne({ _id: invoiceId, schoolSlug, isDeleted: { $ne: true } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    if (invoice.status === 'paid') throw new BadRequestException('Cannot edit a fully paid invoice');
+
+    if (data.dueDate) {
+      invoice.dueDate = new Date(data.dueDate);
+    }
+
+    if (data.adjustment) {
+      try {
+        invoice.items.push(buildAdjustmentLine(data.adjustment) as any);
+      } catch (e: any) {
+        throw new BadRequestException(e.message);
+      }
+
+      const totals = recomputeInvoiceTotals(invoice.items as any[], invoice.totalTax || 0, invoice.paidAmount || 0);
+      invoice.subtotal = totals.subtotal;
+      invoice.totalDiscount = totals.totalDiscount;
+      invoice.totalAmount = totals.totalAmount;
+      invoice.balanceDue = totals.balanceDue;
+      if (totals.status) invoice.status = totals.status;
+    }
+
+    await invoice.save();
+    return invoice;
   }
 
   // ── Expenses ─────────────────────────────────────────────
