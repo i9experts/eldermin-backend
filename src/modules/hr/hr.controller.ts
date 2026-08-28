@@ -40,6 +40,11 @@ export class HrController {
   @Patch('staff/:id')
   updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
 
+  @Delete('staff/:id')
+  deleteStaff(@Request() req, @Param('id') id: string, @Query('hardDelete') hardDelete?: string) {
+    return this.hrService.deleteStaff(req.user.tenantId, id, hardDelete === 'true');
+  }
+
   @Get('staff/:id/attendance')
   getStaffAttendanceById(@Request() req, @Param('id') id: string) {
     return this.hrService.getStaffAttendance(req.user.tenantId, { staffId: id });

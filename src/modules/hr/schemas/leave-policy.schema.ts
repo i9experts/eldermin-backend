@@ -25,6 +25,11 @@ export class LeavePolicy {
   @Prop({ default: 0 })  maxEncashmentDays: number;
   @Prop({ default: false }) allowedDuringProbation: boolean;
   @Prop({ default: 0 })  probationAnnualDays: number;
+  // Off by default so every existing policy/school keeps today's exact
+  // inclusive-calendar-day leave counting behaviour unless explicitly
+  // opted in. When true, createLeaveApplication counts only working days
+  // (per AttendanceSettings.workingDays) instead of every calendar day.
+  @Prop({ default: false }) excludeWeekends: boolean;
 }
 
 export const LeavePolicySchema = SchemaFactory.createForClass(LeavePolicy);
