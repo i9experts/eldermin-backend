@@ -15,7 +15,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import { getModelToken } from '@nestjs/mongoose';
 
-const hrArticles = [
+export const hrArticles = [
   {
     module: 'hr', tabKey: 'dashboard', order: 1,
     title: 'Dashboard',
@@ -230,7 +230,14 @@ async function seedKbArticles() {
   process.exit(0);
 }
 
-seedKbArticles().catch((err) => {
-  console.error('KB articles seed failed:', err);
-  process.exit(1);
-});
+// Only self-run when executed directly (`npm run seed:kb`), not when
+// `hrArticles` is imported elsewhere (e.g. by the KnowledgeBaseService's
+// HTTP-triggerable seedDefaults() bootstrap) - otherwise importing this
+// module anywhere (including in tests) would try to boot a second Nest
+// app and connect to a real database as a side effect of import alone.
+if (require.main === module) {
+  seedKbArticles().catch((err) => {
+    console.error('KB articles seed failed:', err);
+    process.exit(1);
+  });
+}

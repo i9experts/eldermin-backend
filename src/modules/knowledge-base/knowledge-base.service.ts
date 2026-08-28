@@ -13,6 +13,7 @@ import { Model } from 'mongoose';
 import { KbArticle, KbArticleDocument } from './schemas/kb-article.schema';
 import { CreateKbArticleDto, UpdateKbArticleDto } from './dto/kb-article.dto';
 import { buildKbSearchMongoFilter, normalizeQuery } from './kb-search.util';
+import { hrArticles } from '../../seed/seed-kb-articles';
 
 @Injectable()
 export class KnowledgeBaseService {
@@ -66,5 +67,27 @@ export class KnowledgeBaseService {
       throw new NotFoundException(`KB article ${id} not found`);
     }
     return { deleted: true };
+  }
+
+  /**
+   * POST /kb/seed-defaults — one-time bootstrap for environments where
+   * `npm run seed:kb` was never run against the database (e.g. no CLI/shell
+   * access to the deployed environment). Reuses the exact same article data
+   * and upsert-by-(module,tabKey) logic as the standalone seed script, via
+   * this already-running app's own injected model instead of spinning up a
+   * second Nest application context. Idempotent - safe to call more than
+   * once, running it again just refreshes the seeded copy.
+   */
+  async seedDefaults(): Promise<{ seeded: number; titles: string[] }> {
+    const titles: string[] = [];
+    for (const article of hrArticles) {
+      const result = await this.kbArticleModel.findOneAndUpdate(
+        { module: article.module, tabKey: article.tabKey },
+        { $set: article },
+        { upsert: true, new: true },
+      );
+      titles.push(result!.title);
+    }
+    return { seeded: hrArticles.length, titles };
   }
 }
