@@ -57,4 +57,21 @@ export class KnowledgeBaseController {
   async remove(@Param('id') id: string) {
     return this.kbService.remove(id);
   }
+
+  /**
+   * POST /api/v1/kb/seed-defaults
+   *
+   * Bootstraps the default Staff & HR articles in environments where
+   * `npm run seed:kb` was never run against the database (no CLI/shell
+   * access to the deployed environment). Idempotent - safe to call more
+   * than once. Gated to SUPER_ADMIN or INSTITUTION_OWNER (same widened
+   * gating used for the guardian-debug diagnostic route) so a school
+   * owner can trigger this once themselves without needing platform
+   * access, even though the content itself remains global/shared.
+   */
+  @Post('seed-defaults')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER)
+  async seedDefaults() {
+    return this.kbService.seedDefaults();
+  }
 }
