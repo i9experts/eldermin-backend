@@ -7,7 +7,7 @@
 // KbArticle collection.
 // ============================================================
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { KbArticle, KbArticleDocument } from './schemas/kb-article.schema';
@@ -16,10 +16,32 @@ import { buildKbSearchMongoFilter, normalizeQuery } from './kb-search.util';
 import { hrArticles } from '../../seed/seed-kb-articles';
 
 @Injectable()
-export class KnowledgeBaseService {
+export class KnowledgeBaseService implements OnModuleInit {
+  private readonly logger = new Logger(KnowledgeBaseService.name);
+
   constructor(
     @InjectModel(KbArticle.name) private readonly kbArticleModel: Model<KbArticleDocument>,
   ) {}
+
+  /**
+   * Was: a manual POST /kb/seed-defaults someone with SUPER_ADMIN/
+   * INSTITUTION_OWNER had to trigger from the browser console, because
+   * there was no DB shell access to the deployed environment to run
+   * `npm run seed:kb` directly. That's still true for the very first
+   * deploy, so instead of relying on a human remembering to click it,
+   * run the same idempotent upsert automatically on every app boot.
+   * Failure here must never block startup - the KB is a nice-to-have,
+   * not something the app depends on to serve requests - so any error
+   * (e.g. Mongo not reachable yet) is logged as a warning and swallowed.
+   */
+  async onModuleInit() {
+    try {
+      const { seeded } = await this.seedDefaults();
+      this.logger.log(`Knowledge base auto-seed complete (${seeded} article(s)).`);
+    } catch (err: any) {
+      this.logger.warn(`Knowledge base auto-seed failed, continuing startup: ${err?.message || err}`);
+    }
+  }
 
   /** GET /kb/articles?module=hr — sorted by order */
   async list(moduleFilter?: string): Promise<KbArticle[]> {
