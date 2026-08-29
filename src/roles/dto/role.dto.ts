@@ -4,6 +4,9 @@ import { Type } from 'class-transformer';
 export class ModuleAccessDto {
   @IsString() @IsNotEmpty() moduleKey: string;
   @IsIn(['view', 'manage']) level: 'view' | 'manage';
+  // Omit for a module-wide entry (applies to every sub-module) — see
+  // ModuleAccess in role.schema.ts.
+  @IsOptional() @IsString() subModuleKey?: string;
 }
 
 export class CreateRoleDto {
