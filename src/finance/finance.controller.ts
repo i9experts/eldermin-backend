@@ -186,6 +186,13 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.getTrialBalance(schoolSlug, asOf);
   }
+  // Item 42 — Balance Sheet, "as of" a date rather than a range (it's a
+  // point-in-time position statement, not a period-activity report).
+  @RequireModuleAccess('finance', 'ledger', 'view')
+  @Get('reports/balance-sheet') async getBalanceSheet(@Request() req: any, @Query('asOf') asOf?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBalanceSheet(schoolSlug, asOf);
+  }
   @RequireModuleAccess('finance', 'ledger', 'view')
   @Get('reports/general-ledger') async getGeneralLedger(@Request() req: any, @Query('accountCode') accountCode: string, @Query('from') from?: string, @Query('to') to?: string) {
     const { schoolSlug } = this.ctx(req);

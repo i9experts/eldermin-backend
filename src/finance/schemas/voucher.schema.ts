@@ -56,6 +56,14 @@ export class PaymentVoucher {
   // 7. Accounts — Account paid to / Account paid from (denormalized, same
   // pattern as every other line in this ledger), Account currency, Amount,
   // Party Balance (snapshotted at creation, not live — see below).
+  //
+  // Item 41 — field names kept as paidFrom/paidToAccountCode (renaming
+  // would be a data migration, not a labeling fix), but in accounting
+  // terms: paidFromAccountCode is the account CREDITED (money left it) and
+  // paidToAccountCode is the account DEBITED (money landed in it) — see
+  // createVoucher below, which always posts Dr paidToAccountCode / Cr
+  // paidFromAccountCode. The frontend now labels these "Credit Account"
+  // and "Debit Account" accordingly.
   @Prop({ required: true }) paidFromAccountCode: string;
   @Prop({ required: true }) paidFromAccountName: string;
   @Prop({ required: true }) paidToAccountCode: string;
