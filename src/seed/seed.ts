@@ -1,5 +1,8 @@
 import { webcrypto } from 'crypto';
-(global as any).crypto = webcrypto;
+// Guarded like main.ts - Node 20+ already defines globalThis.crypto as a
+// read-only getter, so an unconditional assignment throws the moment this
+// module is ever imported (not just run standalone).
+if (!(global as any).crypto) { (global as any).crypto = webcrypto; }
 
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
