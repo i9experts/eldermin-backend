@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Role, RoleDocument, ASSIGNABLE_MODULES } from './schemas/role.schema';
+import { Role, RoleDocument, ASSIGNABLE_MODULES, SUB_MODULES } from './schemas/role.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { CreateRoleDto, UpdateRoleDto } from './dto/role.dto';
 
@@ -45,8 +45,15 @@ export class RolesService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) {}
 
+  // Nests each module's real sub-modules under it, from the single shared
+  // SUB_MODULES registry (role.schema.ts) — the frontend's Edit Role tree
+  // and this guard's own resolution logic both read from that same source,
+  // so they can never drift out of sync with each other.
   getAssignableModules() {
-    return ASSIGNABLE_MODULES;
+    return ASSIGNABLE_MODULES.map(m => ({
+      ...m,
+      subModules: SUB_MODULES[m.key] || [],
+    }));
   }
 
   private async ensureSystemDefaults(schoolSlug: string) {
@@ -132,11 +139,19 @@ export class RolesService {
   // frontend's canAccess() already understands ('hr:view', 'hr:manage', ...)
   // — 'manage' implies 'view' too, matching the existing hardcoded matrix's
   // convention for standard enum roles.
-  static toPermissions(moduleAccess: { moduleKey: string; level: string }[]): string[] {
+  //
+  // An entry WITH a subModuleKey emits the granular 3-part form
+  // ('finance:payable:view' / 'finance:payable:manage') ONLY — it does
+  // NOT also grant the bare module-wide form, so a sub-module-specific
+  // grant never widens into "the whole module". canAccess() on the
+  // frontend checks the 3-part form first and falls back to the 2-part
+  // module-wide form, mirroring resolveAccessLevel() on the backend.
+  static toPermissions(moduleAccess: { moduleKey: string; level: string; subModuleKey?: string | null }[]): string[] {
     const perms: string[] = [];
     for (const m of moduleAccess || []) {
-      perms.push(`${m.moduleKey}:view`);
-      if (m.level === 'manage') perms.push(`${m.moduleKey}:manage`);
+      const prefix = m.subModuleKey ? `${m.moduleKey}:${m.subModuleKey}` : m.moduleKey;
+      perms.push(`${prefix}:view`);
+      if (m.level === 'manage') perms.push(`${prefix}:manage`);
     }
     return perms;
   }
