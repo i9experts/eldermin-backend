@@ -23,6 +23,8 @@ function makeService(existingPeriods: any[]) {
     find: jest.fn().mockReturnValue({ lean: () => Promise.resolve([otherTimetable]) }),
     create: jest.fn((doc: any) => Promise.resolve({ ...doc, _id: new Types.ObjectId(), toObject() { return this; } })),
     findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.resolve({ _id: 'tt1', ...existingPeriods }) }),
+    findOne: jest.fn().mockReturnValue({ lean: () => Promise.resolve(null) }),
+    deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
   };
   const dutyRosterModel: any = { find: jest.fn().mockReturnValue({ lean: () => Promise.resolve([]) }) };
   const noop: any = {};
@@ -124,6 +126,32 @@ describe('TeachingService conflict enforcement', () => {
       const result: any = await service.updateTimetable('tenant1', 'tt-id', { gradeLevel: '6' });
       expect(timetableModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
       expect(result.conflicts).toEqual([]);
+    });
+  });
+
+  describe('deleteTimetable', () => {
+    it('refuses to delete an active timetable', async () => {
+      const { service, timetableModel } = makeService([]);
+      timetableModel.findOne.mockReturnValue({ lean: () => Promise.resolve({ _id: 'tt-id', status: 'active' }) });
+
+      await expect(service.deleteTimetable('tenant1', 'tt-id')).rejects.toThrow(
+        'Cannot delete an active timetable. Set it to Draft first, then delete.',
+      );
+      expect(timetableModel.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('deletes a draft timetable', async () => {
+      const { service, timetableModel } = makeService([]);
+      timetableModel.findOne.mockReturnValue({ lean: () => Promise.resolve({ _id: 'tt-id', status: 'draft' }) });
+
+      const result = await service.deleteTimetable('tenant1', 'tt-id');
+      expect(timetableModel.deleteOne).toHaveBeenCalledWith({ _id: 'tt-id', tenantId: 'tenant1' });
+      expect(result).toEqual({ deleted: true });
+    });
+
+    it('throws NotFoundException when the timetable does not exist', async () => {
+      const { service } = makeService([]);
+      await expect(service.deleteTimetable('tenant1', 'missing-id')).rejects.toThrow('Timetable not found');
     });
   });
 });
