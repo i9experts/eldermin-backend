@@ -16,6 +16,7 @@ import {
 import { findConflictingAssignments } from './fee-assignment.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
+import { canResyncInvoiceDiscount, discountActuallyChanged } from './discount-resync.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -1397,6 +1398,46 @@ export class FinanceService {
     return { rows, totalDebit, totalCredit, isBalanced: Math.abs(totalDebit - totalCredit) < 0.01 };
   }
 
+  /** Balance Sheet — Assets = Liabilities + Equity, as of a single date
+   * (item 42). A balance sheet is a snapshot of financial POSITION, not a
+   * period activity report like Trial Balance's debit/credit columns, so
+   * this deliberately takes only `asOf` and never a from/to range - there
+   * is no accounting meaning to "assets between two dates." Reuses the
+   * exact same account-balance computation as getTrialBalance (posted
+   * journal lines through `asOf`, plus any per-fiscal-year opening
+   * balances) rather than duplicating that logic, then groups by account
+   * type. Revenue and Expense accounts aren't balance-sheet lines on their
+   * own - their net (this year's not-yet-closed income/loss) is rolled
+   * into Equity as "Retained Earnings (current period)," same as any
+   * real accounting system does before a formal year-end closing entry. */
+  async getBalanceSheet(schoolSlug: string, asOf?: string) {
+    const tb = await this.getTrialBalance(schoolSlug, asOf);
+    const assets = tb.rows.filter(r => r.type === 'asset');
+    const liabilities = tb.rows.filter(r => r.type === 'liability');
+    const equity = tb.rows.filter(r => r.type === 'equity');
+    const revenue = tb.rows.filter(r => r.type === 'revenue');
+    const expense = tb.rows.filter(r => r.type === 'expense');
+
+    const sum = (rows: typeof tb.rows) => rows.reduce((s, r) => s + r.balance, 0);
+    const totalAssets = sum(assets);
+    const totalLiabilities = sum(liabilities);
+    const netIncome = sum(revenue) - sum(expense);
+    const totalEquity = sum(equity) + netIncome;
+
+    return {
+      asOf: asOf || null,
+      assets,
+      liabilities,
+      equity,
+      currentPeriodNetIncome: Math.round(netIncome * 100) / 100,
+      totalAssets: Math.round(totalAssets * 100) / 100,
+      totalLiabilities: Math.round(totalLiabilities * 100) / 100,
+      totalEquity: Math.round(totalEquity * 100) / 100,
+      // Should be ~0 for a healthy ledger: Assets - (Liabilities + Equity).
+      isBalanced: Math.abs(totalAssets - (totalLiabilities + totalEquity)) < 0.01,
+    };
+  }
+
   async getGeneralLedger(schoolSlug: string, accountCode: string, from?: string, to?: string) {
     const dateFilter: any = {};
     if (from) dateFilter.$gte = new Date(from);
@@ -1467,7 +1508,25 @@ export class FinanceService {
     if (!includeSuperseded) filter.status = { $ne: 'superseded' };
     if (grade) filter.grade = grade;
     if (year) filter.academicYear = year;
-    return this.feeStructModel.find(filter).sort({ grade: 1 });
+    const structures = await this.feeStructModel.find(filter).sort({ grade: 1 }).lean();
+
+    // Item 40 — let the edit UI warn UP FRONT (before the admin even opens
+    // Save) whether this structure already has real invoices billed
+    // against it, so a pricing-relevant edit's consequences are explained
+    // before committing rather than only in the small caption text under
+    // the form. One aggregation for the whole list instead of an
+    // exists()-per-structure round trip.
+    const billedCounts = await this.invoiceModel.aggregate([
+      { $match: { schoolSlug, isDeleted: { $ne: true }, 'items.feeStructureId': { $in: structures.map((s: any) => s._id) } } },
+      { $unwind: '$items' },
+      { $match: { 'items.feeStructureId': { $in: structures.map((s: any) => s._id) } } },
+      { $group: { _id: '$items.feeStructureId', count: { $sum: 1 } } },
+    ]);
+    const billedCountByStructureId = new Map(billedCounts.map((b: any) => [String(b._id), b.count]));
+    return structures.map((s: any) => ({
+      ...s,
+      billedInvoiceCount: billedCountByStructureId.get(String(s._id)) || 0,
+    }));
   }
 
   async createFeeStructure(data: any) {
@@ -3101,17 +3160,31 @@ export class FinanceService {
     // DB round-trips, easily timing out the request (the same class of
     // bug already found once before in the bulk student import).
     const existingInvoices = await this.invoiceModel
-      .find({ schoolSlug, month, academicYear, isDeleted: { $ne: true } }, { studentId: 1 })
+      .find({ schoolSlug, month, academicYear, isDeleted: { $ne: true } },
+        { studentId: 1, paidAmount: 1, status: 1, totalDiscount: 1 })
       .lean();
     const alreadyInvoiced = new Set(existingInvoices.map((inv: any) => String(inv.studentId)));
+    const existingInvoiceByStudent = new Map(existingInvoices.map((inv: any) => [String(inv.studentId), inv]));
 
-    let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0;
+    let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, discountsSynced = 0;
     const errors: string[] = [];
     const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
 
     for (const student of students) {
       try {
-        if (alreadyInvoiced.has(String(student._id))) { skippedAlreadyBilled++; continue; }
+        // A student who already has an invoice for this month is normally
+        // skipped outright (idempotency). The one exception: an UNPAID
+        // invoice (nothing collected against it yet - status neither
+        // 'paid' nor 'partial') whose discount would compute differently
+        // today than it did at generation time - e.g. a discount/scholarship
+        // (see DiscountProgram/FeeAssignment - item 36) was assigned to this
+        // student AFTER "Generate Challan" already ran once. In that one
+        // case only, we resync the existing invoice's items/discount below
+        // instead of silently leaving the stale, undiscounted challan in
+        // place - never touching an invoice with money already against it.
+        const existingInvoiceForStudent = existingInvoiceByStudent.get(String(student._id));
+        const canResyncDiscount = !!existingInvoiceForStudent && canResyncInvoiceDiscount(existingInvoiceForStudent);
+        if (alreadyInvoiced.has(String(student._id)) && !canResyncDiscount) { skippedAlreadyBilled++; continue; }
 
         const studentCampusName = campusIdToName.get(String((student as any).campusId)) || '';
 
@@ -3202,6 +3275,40 @@ export class FinanceService {
         );
         const totalAmount = Math.round((netBeforeTax + totalTax) * 100) / 100;
 
+        if (canResyncDiscount) {
+          // This student already has an unpaid invoice this month - only
+          // touch it if the freshly-computed discount actually differs
+          // (a program/assignment created after the original generation),
+          // otherwise leave it alone exactly like the old skip behaviour.
+          if (!discountActuallyChanged(totalDiscount, existingInvoiceForStudent!.totalDiscount || 0)) {
+            skippedAlreadyBilled++;
+            continue;
+          }
+          if (dryRun) { discountsSynced++; continue; }
+
+          const invoiceDoc = await this.invoiceModel.findOne({ _id: existingInvoiceForStudent!._id, schoolSlug });
+          if (!invoiceDoc) { skippedAlreadyBilled++; continue; }
+          // Reverse the original fee_invoice posting before re-posting with
+          // the new totals - never mutate a posted journal entry in place
+          // (see reverseLedgerForSource/reversePayment convention).
+          await this.reverseLedgerForSource(
+            schoolSlug, 'fee_invoice', String(invoiceDoc._id),
+            `Invoice ${invoiceDoc.invoiceNumber} resynced - discount/scholarship assigned after original generation`,
+            createdBy,
+          );
+          invoiceDoc.items = items as any;
+          invoiceDoc.subtotal = subtotal;
+          invoiceDoc.totalDiscount = totalDiscount;
+          invoiceDoc.totalTax = totalTax;
+          invoiceDoc.totalAmount = totalAmount;
+          invoiceDoc.balanceDue = totalAmount - (invoiceDoc.paidAmount || 0);
+          invoiceDoc.lateFine = lateFine;
+          await invoiceDoc.save();
+          await this.postFeeInvoiceJournal(schoolSlug, invoiceDoc, taxTemplate);
+          discountsSynced++;
+          continue;
+        }
+
         // Dry-run: we've already run the full matching/eligibility logic
         // above (explicit assignment vs auto-match, discounts, tax) so the
         // willCreate/skipped counts and noMatchBreakdown are exactly what a
@@ -3242,6 +3349,12 @@ export class FinanceService {
       dryRun,
       created: dryRun ? 0 : created,
       willCreate: dryRun ? created : created,
+      // Item 36: invoices whose discount was resynced because a discount/
+      // scholarship was assigned to the student AFTER their challan was
+      // originally generated (only ever touches unpaid invoices - see
+      // canResyncDiscount above).
+      discountsSynced: dryRun ? 0 : discountsSynced,
+      willSyncDiscounts: dryRun ? discountsSynced : discountsSynced,
       skipped: skippedAlreadyBilled + skippedNoMatch,
       skippedAlreadyBilled,
       skippedNoMatch,
