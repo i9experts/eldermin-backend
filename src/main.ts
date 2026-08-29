@@ -63,6 +63,14 @@ async function bootstrap() {
   const port = process.env.PORT || 3001;
   await app.listen(port, '0.0.0.0');
   console.log(`Eldermin backend running on port ${port}`);
-  console.log(`MongoDB: ${process.env.MONGODB_URI}`);
+  // Never log the raw connection string - it embeds the DB username and
+  // password in plaintext and would otherwise land in Railway's log
+  // history (and anywhere those logs get copy-pasted). Log only the host,
+  // which is enough to confirm which cluster the app connected to.
+  const mongoHost = (() => {
+    try { return new URL(process.env.MONGODB_URI || '').host || 'unknown'; }
+    catch { return 'unknown'; }
+  })();
+  console.log(`MongoDB host: ${mongoHost}`);
 }
 bootstrap();
