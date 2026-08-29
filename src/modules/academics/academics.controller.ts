@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Body,
+  Controller, Get, Post, Patch, Delete, Body,
   Param, Query, Request, UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
@@ -21,7 +21,7 @@ export class AcademicsController {
 
   @Get('subjects')
   getSubjects(@Request() req, @Query() q: any) {
-    return this.academicsService.getSubjects(req.user.tenantId, q);
+    return this.academicsService.getSubjects(req.user.tenantId, q, req.user);
   }
 
   @Post('subjects/seed-defaults')
@@ -31,12 +31,51 @@ export class AcademicsController {
 
   @Post('subjects')
   createSubject(@Request() req, @Body() body: any) {
-    return this.academicsService.createSubject(req.user.tenantId, req.user.institutionId, body);
+    return this.academicsService.createSubject(req.user.tenantId, req.user.institutionId, body, req.user);
   }
 
   @Patch('subjects/:id')
   updateSubject(@Request() req, @Param('id') id: string, @Body() body: any) {
-    return this.academicsService.updateSubject(req.user.tenantId, id, body);
+    return this.academicsService.updateSubject(req.user.tenantId, id, body, req.user);
+  }
+
+  @Delete('subjects/:id')
+  deleteSubject(@Request() req, @Param('id') id: string) {
+    return this.academicsService.deleteSubject(req.user.tenantId, id);
+  }
+
+  @Post('subjects/assign-to-class')
+  assignSubjectsToClass(@Request() req, @Body() body: any) {
+    return this.academicsService.assignSubjectsToClass(
+      req.user.tenantId, body.subjectIds || [], body.gradeLevel, body.sectionName, req.user,
+    );
+  }
+
+  // ─── SUBJECT GROUPS ───────────────────────────────────────────────────────────
+
+  @Get('subject-groups')
+  getSubjectGroups(@Request() req, @Query() q: any) {
+    return this.academicsService.getSubjectGroups(req.user.tenantId, q, req.user);
+  }
+
+  @Post('subject-groups')
+  createSubjectGroup(@Request() req, @Body() body: any) {
+    return this.academicsService.createSubjectGroup(req.user.tenantId, req.user.institutionId, body, req.user.userId, req.user);
+  }
+
+  @Patch('subject-groups/:id')
+  updateSubjectGroup(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.updateSubjectGroup(req.user.tenantId, id, body, req.user);
+  }
+
+  @Delete('subject-groups/:id')
+  deleteSubjectGroup(@Request() req, @Param('id') id: string) {
+    return this.academicsService.deleteSubjectGroup(req.user.tenantId, id);
+  }
+
+  @Post('subject-groups/:id/assign')
+  assignSubjectGroupToClass(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.assignSubjectGroupToClass(req.user.tenantId, id, body, req.user);
   }
 
   // ─── CURRICULUM ───────────────────────────────────────────────────────────────
