@@ -2,20 +2,28 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Subject, SubjectDocument } from './schemas/subject.schema';
+import { SubjectGroup, SubjectGroupDocument } from './schemas/subject-group.schema';
 import { Curriculum, CurriculumDocument } from './schemas/curriculum.schema';
 import { Syllabus, SyllabusDocument } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookDocument } from './schemas/book.schema';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
+import { Timetable, TimetableDocument } from '../teaching/schemas/timetable.schema';
+import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/elective-group.schema';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
+import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
+import { mergeClassAssignment } from './subject-assign.util';
 
 @Injectable()
 export class AcademicsService {
   constructor(
     @InjectModel(Subject.name)   private subjectModel:    Model<SubjectDocument>,
+    @InjectModel(SubjectGroup.name) private subjectGroupModel: Model<SubjectGroupDocument>,
     @InjectModel(Curriculum.name) private curriculumModel: Model<CurriculumDocument>,
     @InjectModel(Syllabus.name)  private syllabusModel:   Model<SyllabusDocument>,
     @InjectModel(Book.name)      private bookModel:       Model<BookDocument>,
     @InjectModel(BookIssue.name) private issueModel:      Model<BookIssueDocument>,
+    @InjectModel(Timetable.name) private timetableModel:  Model<TimetableDocument>,
+    @InjectModel(ElectiveGroup.name) private electiveGroupModel: Model<ElectiveGroupDocument>,
   ) {}
 
   private tid(t: string) { return t; }
@@ -47,36 +55,86 @@ export class AcademicsService {
 
   // ─── SUBJECTS ─────────────────────────────────────────────────────────────────
 
-  async getSubjects(tenantId: string, query: any = {}) {
+  async getSubjects(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.gradeLevel) filter.gradeLevels = query.gradeLevel;
     if (query.category)   filter.category = query.category;
-    if (query.isActive !== undefined) filter.isActive = query.isActive !== 'false';
+    // Default to active-only, same as the dashboard count already does -
+    // a deactivated subject should actually disappear from the default
+    // list rather than linger looking exactly like delete silently failed.
+    // Pass isActive=false explicitly, or includeInactive=true, to see them.
+    if (query.isActive !== undefined) {
+      filter.isActive = query.isActive !== 'false';
+    } else if (query.includeInactive !== 'true') {
+      filter.isActive = true;
+    }
     if (query.search) {
       filter.$or = [
         { name: { $regex: query.search, $options: 'i' } },
         { code: { $regex: query.search, $options: 'i' } },
       ];
     }
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
     return this.subjectModel.find(filter).sort({ name: 1 }).lean();
   }
 
-  async createSubject(tenantId: string, institutionId: string, data: any) {
+  async createSubject(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, data.campusId) : data.campusId;
     try {
       return await this.subjectModel.create({
         ...data,
         tenantId:      this.tid(tenantId),
         institutionId: this.oid(institutionId),
+        campusId:      effectiveCampusId ? this.oid(effectiveCampusId) : null,
       });
     } catch (e: any) { throw new BadRequestException(e.message); }
   }
 
-  async updateSubject(tenantId: string, id: string, data: any) {
+  async updateSubject(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    const update: any = { ...data };
+    if (data.campusId !== undefined) {
+      const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, data.campusId) : data.campusId;
+      update.campusId = effectiveCampusId ? this.oid(effectiveCampusId) : null;
+    }
     const doc = await this.subjectModel
-      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: data }, { new: true })
+      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: update }, { new: true })
       .lean();
     if (!doc) throw new NotFoundException('Subject not found');
     return doc;
+  }
+
+  /**
+   * Hard-deletes a subject once confirmed unreferenced. Subjects are
+   * catalog/config data (not financial records), so a real delete is
+   * appropriate - but only after checking every collection that points at
+   * one, either by its ObjectId (Curriculum, Syllabus, SubjectGroup) or,
+   * for the older modules that predate Subject having stable ids, by its
+   * name (Timetable periods, ElectiveGroup). Mirrors Teaching's
+   * deleteTimetable convention of blocking a destructive action on
+   * in-use records with a clear, specific reason.
+   */
+  async deleteSubject(tenantId: string, id: string) {
+    const tid = this.tid(tenantId);
+    const subject = await this.subjectModel.findOne({ _id: id, tenantId: tid }).lean();
+    if (!subject) throw new NotFoundException('Subject not found');
+
+    const subjectOid = this.oid(id);
+    const [curricula, syllabi, timetablePeriods, electiveGroups, subjectGroups] = await Promise.all([
+      this.curriculumModel.countDocuments({ tenantId: tid, subjectId: subjectOid }),
+      this.syllabusModel.countDocuments({ tenantId: tid, subjectId: subjectOid }),
+      this.timetableModel.countDocuments({ tenantId: tid, 'periods.subject': subject.name }),
+      this.electiveGroupModel.countDocuments({ tenantId: tid, subject: subject.name }),
+      this.subjectGroupModel.countDocuments({ tenantId: tid, subjectIds: subjectOid }),
+    ]);
+
+    const reasons = describeSubjectBlockers({ curricula, syllabi, timetablePeriods, electiveGroups, subjectGroups });
+    if (reasons.length > 0) {
+      throw new BadRequestException(buildSubjectInUseMessage(reasons));
+    }
+
+    await this.subjectModel.deleteOne({ _id: id, tenantId: tid });
+    return { deleted: true };
   }
 
   async seedDefaultSubjects(tenantId: string, institutionId: string) {
@@ -110,6 +168,99 @@ export class AcademicsService {
     }));
     await this.subjectModel.insertMany(docs);
     return { message: `${defaults.length} default subjects created`, count: defaults.length };
+  }
+
+  // ─── SUBJECT GROUPS ───────────────────────────────────────────────────────────
+
+  async getSubjectGroups(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    const groups = await this.subjectGroupModel.find(filter).sort({ name: 1 }).lean();
+    const allSubjectIds = Array.from(new Set(groups.flatMap(g => (g.subjectIds || []).map(String))));
+    const subjects = allSubjectIds.length
+      ? await this.subjectModel.find({ tenantId: this.tid(tenantId), _id: { $in: allSubjectIds } }).lean()
+      : [];
+    const byId = new Map(subjects.map(s => [String(s._id), s]));
+    return groups.map(g => ({
+      ...g,
+      subjects: (g.subjectIds || []).map(id => byId.get(String(id))).filter(Boolean),
+    }));
+  }
+
+  async createSubjectGroup(tenantId: string, institutionId: string, data: any, userId: string, requestingUser?: ScopedUser) {
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, data.campusId) : data.campusId;
+    try {
+      return await this.subjectGroupModel.create({
+        ...data,
+        subjectIds:    (data.subjectIds || []).map((id: string) => this.oid(id)),
+        tenantId:      this.tid(tenantId),
+        institutionId: this.oid(institutionId),
+        campusId:      effectiveCampusId ? this.oid(effectiveCampusId) : null,
+        createdBy:     userId ? this.oid(userId) : undefined,
+      });
+    } catch (e: any) { throw new BadRequestException(e.message); }
+  }
+
+  async updateSubjectGroup(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    const update: any = { ...data };
+    if (data.subjectIds) update.subjectIds = data.subjectIds.map((sid: string) => this.oid(sid));
+    if (data.campusId !== undefined) {
+      const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, data.campusId) : data.campusId;
+      update.campusId = effectiveCampusId ? this.oid(effectiveCampusId) : null;
+    }
+    const doc = await this.subjectGroupModel
+      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: update }, { new: true })
+      .lean();
+    if (!doc) throw new NotFoundException('Subject group not found');
+    return doc;
+  }
+
+  async deleteSubjectGroup(tenantId: string, id: string) {
+    // A subject group is just a saved bundle/shortcut, not a source of
+    // truth for any other record (unlike Subject itself, which curricula
+    // and syllabi genuinely point at) - so there's nothing to guard here,
+    // deleting the group never orphans anything else.
+    const doc = await this.subjectGroupModel.findOneAndDelete({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!doc) throw new NotFoundException('Subject group not found');
+    return { deleted: true };
+  }
+
+  /**
+   * Adds one class (grade, optionally a section) to every member subject
+   * of this group in one action - the actual "easily assign to classes"
+   * feature. Reuses updateSubject's own persistence rather than
+   * duplicating the findOneAndUpdate/campus-scope logic.
+   */
+  async assignSubjectGroupToClass(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    const group = await this.subjectGroupModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!group) throw new NotFoundException('Subject group not found');
+    if (!data.gradeLevel) throw new BadRequestException('gradeLevel is required');
+
+    return this.assignSubjectsToClass(tenantId, (group.subjectIds || []).map(String), data.gradeLevel, data.sectionName, requestingUser);
+  }
+
+  /**
+   * Same merge behavior as assignSubjectGroupToClass, but for an
+   * explicitly-picked list of subject ids - backs the Subjects table's
+   * bulk "Assign Selected to Class" action, for subjects an admin doesn't
+   * want to formally group.
+   */
+  async assignSubjectsToClass(tenantId: string, subjectIds: string[], gradeLevel: string, sectionName: string | undefined, requestingUser?: ScopedUser) {
+    if (!gradeLevel) throw new BadRequestException('gradeLevel is required');
+    const tid = this.tid(tenantId);
+    const subjects = await this.subjectModel.find({ tenantId: tid, _id: { $in: subjectIds } }).lean();
+
+    const updated = await Promise.all(subjects.map(s => {
+      const merged = mergeClassAssignment(
+        { gradeLevels: s.gradeLevels || [], sections: s.sections || [] },
+        gradeLevel,
+        sectionName,
+      );
+      return this.updateSubject(tenantId, String(s._id), merged, requestingUser);
+    }));
+
+    return { updated: updated.length, subjects: updated };
   }
 
   // ─── CURRICULUM ───────────────────────────────────────────────────────────────
