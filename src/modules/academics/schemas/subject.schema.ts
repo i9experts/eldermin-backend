@@ -12,7 +12,13 @@ export class Subject {
   @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop({ required: true }) name: string;
   @Prop({ required: true }) code: string;
-  @Prop({ enum: ['core','elective','co_curricular','islamic','language','stem','arts','pe','other'], default: 'core' }) category: string;
+  // Was a fixed Mongoose enum of 9 hardcoded values - relaxed to a plain
+  // String so schools can add their own categories (SubjectCategory.code)
+  // without a DB-layer rejection. Backward-compatible: every subject's
+  // existing stored value came from that same 9-value set, and those exact
+  // codes get seeded as this school's default SubjectCategory docs, so
+  // nothing already saved changes meaning. See subject-category.schema.ts.
+  @Prop({ type: String, required: true, default: 'core' }) category: string;
   @Prop({ type: [String], default: [] }) gradeLevels: string[];
   // Optional section-level narrowing within a gradeLevel. No entry here for
   // a given grade implicitly means "all sections of that grade" - existing

@@ -51,6 +51,33 @@ export class AcademicsController {
     );
   }
 
+  // ─── SUBJECT CATEGORIES ───────────────────────────────────────────────────────
+
+  @Get('subject-categories')
+  getSubjectCategories(@Request() req, @Query() q: any) {
+    return this.academicsService.getSubjectCategories(req.user.tenantId, q);
+  }
+
+  @Post('subject-categories/seed-defaults')
+  seedSubjectCategories(@Request() req) {
+    return this.academicsService.seedDefaultSubjectCategories(req.user.tenantId, req.user.institutionId);
+  }
+
+  @Post('subject-categories')
+  createSubjectCategory(@Request() req, @Body() body: any) {
+    return this.academicsService.createSubjectCategory(req.user.tenantId, req.user.institutionId, body);
+  }
+
+  @Patch('subject-categories/:id')
+  updateSubjectCategory(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.updateSubjectCategory(req.user.tenantId, id, body);
+  }
+
+  @Delete('subject-categories/:id')
+  deleteSubjectCategory(@Request() req, @Param('id') id: string) {
+    return this.academicsService.deleteSubjectCategory(req.user.tenantId, id);
+  }
+
   // ─── SUBJECT GROUPS ───────────────────────────────────────────────────────────
 
   @Get('subject-groups')

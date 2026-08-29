@@ -11,6 +11,8 @@ import { Timetable, TimetableDocument } from '../teaching/schemas/timetable.sche
 import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/elective-group.schema';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
+import { buildSubjectCategoryInUseMessage } from './subject-category-reference.util';
+import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
 import { mergeClassAssignment } from './subject-assign.util';
 
 @Injectable()
@@ -24,6 +26,7 @@ export class AcademicsService {
     @InjectModel(BookIssue.name) private issueModel:      Model<BookIssueDocument>,
     @InjectModel(Timetable.name) private timetableModel:  Model<TimetableDocument>,
     @InjectModel(ElectiveGroup.name) private electiveGroupModel: Model<ElectiveGroupDocument>,
+    @InjectModel(SubjectCategory.name) private subjectCategoryModel: Model<SubjectCategoryDocument>,
   ) {}
 
   private tid(t: string) { return t; }
@@ -168,6 +171,96 @@ export class AcademicsService {
     }));
     await this.subjectModel.insertMany(docs);
     return { message: `${defaults.length} default subjects created`, count: defaults.length };
+  }
+
+  // ─── SUBJECT CATEGORIES ───────────────────────────────────────────────────────
+  // Configurable replacement for the old hardcoded SUBJECT_CATEGORIES list -
+  // same {tenantId, name, code, isActive} + unique (tenantId, code) shape as
+  // Designation (hr/schemas/designation.schema.ts), no campus-scoping, same
+  // as that precedent.
+
+  async getSubjectCategories(tenantId: string, query: any = {}) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.isActive !== undefined) {
+      filter.isActive = query.isActive !== 'false';
+    } else if (query.includeInactive !== 'true') {
+      filter.isActive = true;
+    }
+    return this.subjectCategoryModel.find(filter).sort({ order: 1, name: 1 }).lean();
+  }
+
+  async createSubjectCategory(tenantId: string, institutionId: string, data: any) {
+    try {
+      return await this.subjectCategoryModel.create({
+        ...data,
+        tenantId: this.tid(tenantId),
+        institutionId: institutionId ? this.oid(institutionId) : undefined,
+      });
+    } catch (e: any) { throw new BadRequestException(e.message); }
+  }
+
+  async updateSubjectCategory(tenantId: string, id: string, data: any) {
+    const doc = await this.subjectCategoryModel
+      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: data }, { new: true })
+      .lean();
+    if (!doc) throw new NotFoundException('Subject category not found');
+    return doc;
+  }
+
+  /**
+   * Blocks deleting a category still in use by any Subject - Subject.category
+   * stores the category's `code` as a plain string (not an ObjectId ref, same
+   * convention as Timetable periods' `subject` name-reference), so the check
+   * is a simple count of subjects with that code. Mirrors deleteSubject's own
+   * in-use guard (subject-reference.util.ts) and Teaching's deleteTimetable
+   * active-status guard: name what's blocking it rather than failing silently.
+   */
+  async deleteSubjectCategory(tenantId: string, id: string) {
+    const tid = this.tid(tenantId);
+    const category = await this.subjectCategoryModel.findOne({ _id: id, tenantId: tid }).lean();
+    if (!category) throw new NotFoundException('Subject category not found');
+
+    const subjectCount = await this.subjectModel.countDocuments({ tenantId: tid, category: category.code });
+    if (subjectCount > 0) {
+      throw new BadRequestException(buildSubjectCategoryInUseMessage(subjectCount));
+    }
+
+    await this.subjectCategoryModel.deleteOne({ _id: id, tenantId: tid });
+    return { deleted: true };
+  }
+
+  /**
+   * POST /academics/subject-categories/seed-defaults - seeds exactly the 9
+   * values that used to be hardcoded in Subject.category's enum (and in the
+   * frontend's SUBJECT_CATEGORIES array) as this school's starting,
+   * editable/extensible category list. Idempotent upsert-by-code, same
+   * pattern as KnowledgeBaseService.seedDefaults - safe to call more than
+   * once (e.g. auto-triggered by the frontend on first load), running it
+   * again just refreshes the seeded copies rather than duplicating them.
+   */
+  async seedDefaultSubjectCategories(tenantId: string, institutionId: string) {
+    const defaults = [
+      { name: 'Core',           code: 'core',          order: 1 },
+      { name: 'Elective',       code: 'elective',      order: 2 },
+      { name: 'Co-Curricular',  code: 'co_curricular', order: 3 },
+      { name: 'Islamic',        code: 'islamic',       order: 4 },
+      { name: 'Language',      code: 'language',       order: 5 },
+      { name: 'STEM',           code: 'stem',           order: 6 },
+      { name: 'Arts',           code: 'arts',           order: 7 },
+      { name: 'Physical Education', code: 'pe',         order: 8 },
+      { name: 'Other',          code: 'other',          order: 9 },
+    ];
+    const tid = this.tid(tenantId);
+    const names: string[] = [];
+    for (const cat of defaults) {
+      const result = await this.subjectCategoryModel.findOneAndUpdate(
+        { tenantId: tid, code: cat.code },
+        { $set: { ...cat, tenantId: tid, institutionId: institutionId ? this.oid(institutionId) : undefined, isActive: true } },
+        { upsert: true, new: true },
+      );
+      names.push(result!.name);
+    }
+    return { message: `${defaults.length} default subject categories seeded`, count: defaults.length, names };
   }
 
   // ─── SUBJECT GROUPS ───────────────────────────────────────────────────────────
