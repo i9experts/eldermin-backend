@@ -248,6 +248,24 @@ export class TeachingService {
     return { ...updated, conflicts };
   }
 
+  // Timetables are scheduling/draft data (no isDeleted field on the
+  // schema, unlike financial records such as invoices), so a hard delete
+  // is appropriate here - same precedent as
+  // TimetableVariantService.deleteVariant. An 'active' timetable is the
+  // one currently in effect for that grade/section though, so it's
+  // blocked until the admin demotes it to draft via the existing
+  // status-toggle button, same guard style as other destructive actions
+  // on in-use records elsewhere in the codebase.
+  async deleteTimetable(tenantId: string, id: string) {
+    const timetable = await this.timetableModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!timetable) throw new NotFoundException('Timetable not found');
+    if (timetable.status === 'active') {
+      throw new BadRequestException('Cannot delete an active timetable. Set it to Draft first, then delete.');
+    }
+    await this.timetableModel.deleteOne({ _id: id, tenantId: this.tid(tenantId) });
+    return { deleted: true };
+  }
+
   async generateTimetablePdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string, weekFilter?: 'A' | 'B') {
     const timetable = await this.timetableModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!timetable) throw new NotFoundException('Timetable not found');

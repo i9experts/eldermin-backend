@@ -68,6 +68,14 @@ export class TeachingController {
   @Patch('timetable/:id')
   updateTimetable(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateTimetable(req.user.tenantId, id, body); }
 
+  /** DELETE /api/v1/teaching/timetable/:id - hard-deletes a draft/archived
+   * timetable. Refuses to delete an 'active' one (see
+   * TeachingService.deleteTimetable) so an admin can't yank the schedule
+   * currently being relied on out from under a school without first
+   * demoting it to draft via the status toggle. */
+  @Delete('timetable/:id')
+  deleteTimetable(@Request() req, @Param('id') id: string) { return this.teachingService.deleteTimetable(req.user.tenantId, id); }
+
   @Get('timetable/:id/pdf')
   async downloadTimetablePdf(@Request() req, @Param('id') id: string, @Query('templateId') templateId: string, @Query('week') week: string, @Res() res: Response) {
     const weekFilter = week === 'A' || week === 'B' ? week : undefined;
