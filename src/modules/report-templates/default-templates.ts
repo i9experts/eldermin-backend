@@ -16,6 +16,73 @@
 //      newly signed-up school actually gets out of the box.
 // ============================================================
 
+import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from './procurement-report-sections';
+
+const PROCUREMENT_REPORT_LETTERHEAD = {
+  showLogo: true,
+  logoPosition: 'left',
+  logoSize: 'medium',
+  schoolName: { show: true, fontSize: 20, bold: true, color: '#0C447C' },
+  schoolAddress: { show: true, fontSize: 11 },
+  schoolPhone: { show: true },
+  schoolEmail: { show: true },
+  schoolWebsite: { show: false },
+  tagline: { show: false, text: '' },
+  borderStyle: 'single',
+  backgroundColor: '#ffffff',
+  primaryColor: '#0C447C',
+  accentColor: '#EF9F27',
+};
+
+const PROCUREMENT_REPORT_PAGE = {
+  size: 'A4',
+  orientation: 'landscape' as const,
+  marginTop: 12,
+  marginBottom: 12,
+  marginLeft: 12,
+  marginRight: 12,
+  watermark: { show: false, text: '', opacity: 0.08 },
+};
+
+const PROCUREMENT_REPORT_FOOTER = {
+  showPageNumber: true,
+  showPrintDate: true,
+  leftText: '',
+  centerText: '',
+  rightText: '',
+  showSignatureLines: false,
+  signatureLabels: [],
+  showStampArea: false,
+  borderTop: true,
+};
+
+/** Default seeded ReportTemplate row for each of the 8 Procurement report
+ *  types — table-heavy, landscape by default (these are data-dense reports,
+ *  not single-page vouchers), sections/columns sourced from
+ *  procurement-report-sections.ts so pdf.service.ts's in-code fallback for
+ *  an unseeded school renders identically. */
+function defaultProcurementReportTemplates(schoolSlug: string) {
+  return Object.keys(PROCUREMENT_REPORT_TITLES).map((type) => ({
+    schoolSlug,
+    name: PROCUREMENT_REPORT_TITLES[type],
+    type,
+    isDefault: true,
+    isActive: true,
+    letterhead: PROCUREMENT_REPORT_LETTERHEAD,
+    header: {
+      title: { show: true, text: PROCUREMENT_REPORT_TITLES[type], fontSize: 16, alignment: 'center' },
+      subtitle: { show: false, text: '' },
+      showDocumentNumber: false,
+      showDate: true,
+      showAcademicYear: false,
+      customFields: [],
+    },
+    sections: procurementReportSections(type),
+    footer: PROCUREMENT_REPORT_FOOTER,
+    page: PROCUREMENT_REPORT_PAGE,
+  }));
+}
+
 export function defaultReportTemplates(schoolSlug: string) {
   return [
     {
@@ -346,5 +413,6 @@ export function defaultReportTemplates(schoolSlug: string) {
         watermark: { show: false, text: '', opacity: 0.08 },
       },
     },
+    ...defaultProcurementReportTemplates(schoolSlug),
   ];
 }

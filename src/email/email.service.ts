@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
-  SESClient, SendEmailCommand,
+  SESClient, SendEmailCommand, SendRawEmailCommand,
 } from '@aws-sdk/client-ses';
 
 export interface EmailOptions {
@@ -9,6 +9,12 @@ export interface EmailOptions {
   html: string;
   text?: string;
   replyTo?: string;
+}
+
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
 }
 
 @Injectable()
@@ -58,6 +64,58 @@ export class EmailService {
       return { sent: true, messageId: response.MessageId };
     } catch (err: any) {
       this.logger.error(`Email rejected by SES immediately: ${err.message}`);
+      return { sent: false, error: err.message };
+    }
+  }
+
+  /**
+   * SendEmailCommand (above) has no attachment support at all — SES's
+   * "simple" send API only accepts a Subject + HTML/Text body. An
+   * attachment (a generated report PDF/Excel/CSV, here) requires the "raw"
+   * API instead: a hand-built MIME multipart/mixed message, base64-encoded
+   * per RFC 2045, that SES parses itself. This is the standard SES pattern
+   * for attachments — there's no higher-level helper in the AWS SDK for it.
+   */
+  async sendEmailWithAttachment(options: EmailOptions & { attachment: EmailAttachment }): Promise<{ sent: boolean; messageId?: string; error?: string }> {
+    const toList = Array.isArray(options.to) ? options.to : [options.to];
+    const boundary = `----ElderminBoundary${Date.now().toString(36)}`;
+
+    try {
+      const attachmentB64 = options.attachment.content.toString('base64').replace(/(.{76})/g, '$1\r\n');
+
+      const raw = [
+        `From: Eldermin ERP <${this.fromEmail}>`,
+        `To: ${toList.join(', ')}`,
+        `Subject: ${options.subject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/html; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        '',
+        options.html,
+        '',
+        `--${boundary}`,
+        `Content-Type: ${options.attachment.contentType}; name="${options.attachment.filename}"`,
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="${options.attachment.filename}"`,
+        '',
+        attachmentB64,
+        '',
+        `--${boundary}--`,
+      ].join('\r\n');
+
+      const command = new SendRawEmailCommand({
+        Destinations: toList,
+        RawMessage: { Data: Buffer.from(raw, 'utf-8') },
+      });
+
+      const response = await this.ses.send(command);
+      this.logger.log(`Email with attachment accepted by SES for: ${toList.join(', ')} | Subject: ${options.subject} | Attachment: ${options.attachment.filename} | MessageId: ${response.MessageId}`);
+      return { sent: true, messageId: response.MessageId };
+    } catch (err: any) {
+      this.logger.error(`Email with attachment rejected by SES immediately: ${err.message}`);
       return { sent: false, error: err.message };
     }
   }

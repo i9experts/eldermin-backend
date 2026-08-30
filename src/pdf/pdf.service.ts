@@ -5,6 +5,7 @@ import * as puppeteer from 'puppeteer';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { IsString, IsOptional, IsMongoId } from 'class-validator';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
+import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules/report-templates/procurement-report-sections';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -157,6 +158,106 @@ export function sampleDataForType(type: string): Record<string, any> {
         proposedSalaryLabel: 'PKR 85,000/month',
         joiningDateLabel: '01 August 2026',
         letterBody: 'We are pleased to offer you the position of Senior Teacher. We were impressed by your background and believe you will be a valuable addition to our team.\n\nThis offer is valid until 15 July 2026. Please confirm your acceptance by this date.',
+      };
+    // Procurement reporting engine — field names here must match exactly
+    // what ProcurementReportsService's aggregation methods build (see that
+    // service's header comment), so a template's Preview button renders
+    // the same shape a real generated report will.
+    case 'procurement_summary':
+      return {
+        ...common,
+        periodLabel: '01 Jul 2026 – 30 Jul 2026',
+        totalPRs: 42, totalPOs: 31, activeVendors: 18,
+        totalSpend: 2450000, pendingPayments: 340000, avgPOValue: 79032,
+        topCategories: [
+          { category: 'IT Equipment', poCount: 8, totalSpend: 820000 },
+          { category: 'Furniture', poCount: 6, totalSpend: 510000 },
+          { category: 'Stationery', poCount: 10, totalSpend: 220000 },
+        ],
+        topVendors: [
+          { name: 'Al-Noor Traders', poCount: 6, totalSpend: 610000 },
+          { name: 'City Furnishers', poCount: 4, totalSpend: 480000 },
+        ],
+      };
+    case 'vendor_performance':
+      return {
+        ...common,
+        periodLabel: '01 Jul 2026 – 30 Jul 2026',
+        totalVendors: 18, totalSpend: 2450000,
+        vendors: [
+          { name: 'Al-Noor Traders', category: 'IT Equipment', rating: 4.5, poCount: 6, totalSpend: 610000, outstandingBalance: 45000, status: 'active' },
+          { name: 'City Furnishers', category: 'Furniture', rating: 4, poCount: 4, totalSpend: 480000, outstandingBalance: 0, status: 'active' },
+        ],
+      };
+    case 'requisition_status':
+      return {
+        ...common,
+        periodLabel: '01 Jul 2026 – 30 Jul 2026',
+        draftCount: 5, submittedCount: 9, approvedCount: 20, rejectedCount: 2,
+        poRaisedCount: 15, completedCount: 12, cancelledCount: 1, totalValue: 1980000,
+        requisitions: [
+          { prNumber: 'PR-2026-0031', title: 'Lab Equipment Restock', category: 'it_equipment', priority: 'high', status: 'approved', estimatedTotal: 185000, requestedBy: 'Sana Iqbal', createdAtLabel: '05 Jul 2026' },
+          { prNumber: 'PR-2026-0032', title: 'Classroom Furniture', category: 'furniture', priority: 'medium', status: 'po_raised', estimatedTotal: 240000, requestedBy: 'Bilal Khan', createdAtLabel: '08 Jul 2026' },
+        ],
+      };
+    case 'spend_analysis':
+      return {
+        ...common,
+        periodLabel: '01 Jan 2026 – 30 Jul 2026',
+        totalSpend: 2450000, totalPOs: 31,
+        byCategory: [
+          { category: 'IT Equipment', poCount: 8, totalSpend: 820000, pctOfTotal: '33.5%' },
+          { category: 'Furniture', poCount: 6, totalSpend: 510000, pctOfTotal: '20.8%' },
+        ],
+        byMonth: [
+          { monthLabel: 'May 2026', poCount: 9, totalSpend: 680000 },
+          { monthLabel: 'Jun 2026', poCount: 11, totalSpend: 890000 },
+          { monthLabel: 'Jul 2026', poCount: 11, totalSpend: 880000 },
+        ],
+      };
+    case 'grn_report':
+      return {
+        ...common,
+        periodLabel: '01 Jul 2026 – 30 Jul 2026',
+        totalGRNs: 14, totalReceivedQty: 620, totalRejectedQty: 8, verifiedCount: 12,
+        grns: [
+          { grnNumber: 'GRN-2026-0021', poNumber: 'PO-2026-0018', vendorName: 'Al-Noor Traders', receivedDateLabel: '10 Jul 2026', receivedQty: 50, rejectedQty: 0, verifiedLabel: 'Yes', receiptType: 'full' },
+          { grnNumber: 'GRN-2026-0022', poNumber: 'PO-2026-0019', vendorName: 'City Furnishers', receivedDateLabel: '12 Jul 2026', receivedQty: 30, rejectedQty: 2, verifiedLabel: 'No', receiptType: 'partial' },
+        ],
+      };
+    case 'asset_register':
+      return {
+        ...common,
+        periodLabel: 'As of 30 Jul 2026',
+        totalAssets: 96, totalValue: 5400000,
+        assets: [
+          { tag: 'AST-2026-0012', name: 'Dell Laptop', category: 'IT Equipment', campusName: 'Main Campus', price: 145000, purchaseDateLabel: '12 Feb 2026', condition: 'Good', status: 'Active', depreciation: 'Straight Line' },
+          { tag: 'AST-2026-0013', name: 'Office Desk', category: 'Furniture', campusName: 'Main Campus', price: 35000, purchaseDateLabel: '03 Mar 2026', condition: 'Excellent', status: 'Active', depreciation: 'Straight Line' },
+        ],
+      };
+    case 'inventory_valuation':
+      return {
+        ...common,
+        periodLabel: 'As of 30 Jul 2026',
+        totalItems: 214, totalValue: 1120000,
+        byCategory: [
+          { category: 'Stationery', itemCount: 80, totalValue: 210000 },
+          { category: 'Cleaning Supplies', itemCount: 45, totalValue: 95000 },
+        ],
+        items: [
+          { code: 'ITM-014', name: 'A4 Paper Ream', category: 'Stationery', currentStock: 320, unit: 'Ream', unitCost: 450, totalValue: 144000, status: 'in_stock' },
+          { code: 'ITM-015', name: 'Whiteboard Marker', category: 'Stationery', currentStock: 12, unit: 'Box', unitCost: 800, totalValue: 9600, status: 'low_stock' },
+        ],
+      };
+    case 'budget_vs_actual':
+      return {
+        ...common,
+        periodLabel: '2025-26',
+        totalAllocated: 3000000, totalActual: 2450000, totalVariance: 550000, variancePct: '18.3%',
+        lines: [
+          { budgetName: 'Annual Procurement Budget 2025-26', category: 'IT Equipment', allocated: 1000000, actual: 820000, variance: 180000, variancePctLabel: '18.0%', statusLabel: 'Under Budget' },
+          { budgetName: 'Annual Procurement Budget 2025-26', category: 'Furniture', allocated: 600000, actual: 650000, variance: -50000, variancePctLabel: '-8.3%', statusLabel: 'Over Budget' },
+        ],
       };
     default:
       return {
@@ -994,6 +1095,55 @@ export class PdfService {
   /** Minimal hardcoded fallback so rendering never hard-fails for a
    *  school that hasn't seeded/configured any report templates yet. */
   private getDefaultTemplateObject(type: string): any {
+    if (PROCUREMENT_REPORT_TITLES[type]) {
+      return {
+        _id: null,
+        schoolSlug: '',
+        name: `Default ${PROCUREMENT_REPORT_TITLES[type]}`,
+        type,
+        isDefault: true,
+        isActive: true,
+        letterhead: {
+          showLogo: true,
+          logoPosition: 'left',
+          logoSize: 'medium',
+          schoolName: { show: true, fontSize: 20, bold: true, color: '#0C447C' },
+          schoolAddress: { show: true, fontSize: 11 },
+          schoolPhone: { show: true },
+          schoolEmail: { show: true },
+          schoolWebsite: { show: false },
+          tagline: { show: false, text: '' },
+          borderStyle: 'single',
+          backgroundColor: '#ffffff',
+          primaryColor: '#0C447C',
+          accentColor: '#EF9F27',
+        },
+        header: {
+          title: { show: true, text: PROCUREMENT_REPORT_TITLES[type], fontSize: 16, alignment: 'center' },
+          subtitle: { show: false, text: '' },
+          showDocumentNumber: false,
+          showDate: true,
+          showAcademicYear: false,
+          customFields: [],
+        },
+        sections: procurementReportSections(type),
+        footer: {
+          showPageNumber: true,
+          showPrintDate: true,
+          leftText: '', centerText: '', rightText: '',
+          showSignatureLines: false,
+          signatureLabels: [],
+          showStampArea: false,
+          borderTop: true,
+        },
+        page: {
+          size: 'A4',
+          orientation: 'landscape',
+          marginTop: 12, marginBottom: 12, marginLeft: 12, marginRight: 12,
+          watermark: { show: false, text: '', opacity: 0.08 },
+        },
+      };
+    }
     // Every other type falls back to a generic table+signature layout,
     // which reads data.items as table rows - meaningless for a contract
     // (no line items, just a field list and a body of terms). A school
@@ -1107,6 +1257,7 @@ export class PdfService {
       offer_letter: 'Offer Letter',
       timetable: 'Class Timetable',
       custom: 'Document',
+      ...PROCUREMENT_REPORT_TITLES,
     };
     return map[type] || 'Document';
   }
