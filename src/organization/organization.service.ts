@@ -436,7 +436,17 @@ export class OrganizationService {
   async getDepartments(schoolSlug: string, campusId?: string, requestingUser?: ScopedUser) {
     const filter: any = { schoolSlug, isActive: true };
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
-    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // campusId: null on a Department means "applies to all campuses" (see
+    // the schema comment) — an exact-match filter silently hid those
+    // school-wide departments (e.g. central Admin/Finance) the moment a
+    // specific campus was selected, even though they apply there too.
+    if (effectiveCampusId) {
+      filter.$or = [
+        { campusId: effectiveCampusId },
+        { campusId: null },
+        { campusId: { $exists: false } },
+      ];
+    }
     return this.deptModel.find(filter).sort({ name: 1 });
   }
 
