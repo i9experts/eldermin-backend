@@ -428,15 +428,35 @@ export class ProcurementService {
   }
 
   async updateInventoryItem(id: string, schoolSlug: string, data: any) {
-    // Auto-update status based on stock
-    if (data.currentStock !== undefined) {
-      data.totalValue = data.currentStock * (data.unitCost || 0);
-      data.status = data.currentStock <= 0 ? 'out_of_stock'
-        : data.currentStock <= (data.minimumStock || 0) ? 'low_stock' : 'in_stock';
+    // code is server-generated on create (see createInventoryItem) and must
+    // never be overwritten by an edit — same pattern updateAsset uses for tag.
+    const { code, ...rest } = data;
+    if (rest.currentStock !== undefined || rest.unitCost !== undefined) {
+      const existing = await this.inventoryModel.findOne({ _id: id, schoolSlug });
+      if (!existing) throw new NotFoundException('Item not found');
+      const currentStock = rest.currentStock !== undefined ? rest.currentStock : existing.currentStock;
+      const unitCost = rest.unitCost !== undefined ? rest.unitCost : existing.unitCost;
+      rest.totalValue = currentStock * unitCost;
+      if (rest.currentStock !== undefined) {
+        const minimumStock = rest.minimumStock !== undefined ? rest.minimumStock : existing.minimumStock;
+        rest.status = currentStock <= 0 ? 'out_of_stock'
+          : currentStock <= (minimumStock || 0) ? 'low_stock' : 'in_stock';
+      }
     }
-    return this.inventoryModel.findOneAndUpdate(
-      { _id: id, schoolSlug }, { $set: data }, { new: true },
+    const item = await this.inventoryModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: rest }, { new: true },
     );
+    if (!item) throw new NotFoundException('Item not found');
+    return item;
+  }
+
+  async deleteInventoryItem(id: string, schoolSlug: string) {
+    // Hard delete — catalog/register data, not a financial ledger record.
+    // No in-use guard needed: PR/PO/GRN line items carry an optional,
+    // loosely-coupled inventoryItemId string, not a real enforced FK.
+    const item = await this.inventoryModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!item) throw new NotFoundException('Item not found');
+    return { deleted: true };
   }
 
   async adjustStock(id: string, schoolSlug: string, adjustment: number, reason: string) {

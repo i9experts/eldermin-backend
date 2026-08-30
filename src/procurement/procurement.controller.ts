@@ -198,6 +198,12 @@ export class ProcurementController {
     return this.service.adjustStock(id, schoolSlug, dto.adjustment, dto.reason);
   }
 
+  @Delete('inventory/:id')
+  async deleteInventoryItem(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteInventoryItem(id, schoolSlug);
+  }
+
   // Assets
   @Get('assets')
   async getAssets(@Request() req: any, @Query() query: any) {
