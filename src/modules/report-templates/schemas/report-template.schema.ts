@@ -20,6 +20,18 @@ export const REPORT_TEMPLATE_TYPES = [
   'contract',
   'timetable',
   'custom',
+  // Procurement reporting engine — see procurement-report-sections.ts for
+  // the default sections/columns each of these renders with, shared by
+  // both this module's seeded defaults and pdf.service.ts's in-code
+  // fallback for a school that hasn't customized one yet.
+  'procurement_summary',
+  'vendor_performance',
+  'requisition_status',
+  'spend_analysis',
+  'grn_report',
+  'asset_register',
+  'inventory_valuation',
+  'budget_vs_actual',
 ] as const;
 
 // ── Nested: Letterhead ───────────────────────────────────────
