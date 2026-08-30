@@ -192,6 +192,38 @@ export class ProcurementController {
     return this.service.adjustStock(id, schoolSlug, dto.adjustment, dto.reason);
   }
 
+  // Assets
+  @Get('assets')
+  async getAssets(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getAssets(schoolSlug, query);
+  }
+
+  @Get('assets/:id')
+  async getAsset(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getAssetById(id, schoolSlug);
+  }
+
+  @Post('assets')
+  @HttpCode(HttpStatus.CREATED)
+  async createAsset(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createAsset({ ...dto, schoolSlug });
+  }
+
+  @Put('assets/:id')
+  async updateAsset(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateAsset(id, schoolSlug, dto);
+  }
+
+  @Delete('assets/:id')
+  async deleteAsset(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteAsset(id, schoolSlug);
+  }
+
   // ============================================================
   // MASTER SETTINGS — school-configurable Vendor/Item/Asset categories,
   // Units of Measure, Payment Terms, Depreciation Methods (replaces the

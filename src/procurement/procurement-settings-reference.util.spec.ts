@@ -1,6 +1,7 @@
 import {
   buildVendorCategoryInUseMessage,
   buildItemCategoryInUseMessage,
+  buildAssetCategoryInUseMessage,
 } from './procurement-settings-reference.util';
 
 describe('buildVendorCategoryInUseMessage', () => {
@@ -27,6 +28,20 @@ describe('buildItemCategoryInUseMessage', () => {
   it('does not pluralize for exactly one item', () => {
     expect(buildItemCategoryInUseMessage(1)).toBe(
       'Cannot delete this item category - it is still used by 1 inventory item. Reassign those items to a different category first, or deactivate the category instead.',
+    );
+  });
+});
+
+describe('buildAssetCategoryInUseMessage', () => {
+  it('pluralizes for more than one asset', () => {
+    expect(buildAssetCategoryInUseMessage(4)).toBe(
+      'Cannot delete this asset category - it is still used by 4 assets. Reassign those assets to a different category first, or deactivate the category instead.',
+    );
+  });
+
+  it('does not pluralize for exactly one asset', () => {
+    expect(buildAssetCategoryInUseMessage(1)).toBe(
+      'Cannot delete this asset category - it is still used by 1 asset. Reassign those assets to a different category first, or deactivate the category instead.',
     );
   });
 });

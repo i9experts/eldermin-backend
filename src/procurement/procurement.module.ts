@@ -10,6 +10,7 @@ import {
   GRN, GRNSchema,
   InventoryItem, InventoryItemSchema,
 } from './procurement.schema';
+import { Asset, AssetSchema } from './asset.schema';
 import {
   VendorCategory, VendorCategorySchema,
   ItemCategory, ItemCategorySchema,
@@ -30,6 +31,7 @@ import {
       { name: PurchaseOrder.name, schema: PurchaseOrderSchema },
       { name: GRN.name, schema: GRNSchema },
       { name: InventoryItem.name, schema: InventoryItemSchema },
+      { name: Asset.name, schema: AssetSchema },
       { name: VendorCategory.name, schema: VendorCategorySchema },
       { name: ItemCategory.name, schema: ItemCategorySchema },
       { name: AssetCategory.name, schema: AssetCategorySchema },

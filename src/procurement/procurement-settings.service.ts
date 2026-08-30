@@ -10,9 +10,11 @@ import {
   DepreciationMethod, DepreciationMethodDocument,
 } from './procurement-settings.schema';
 import { Vendor, VendorDocument, InventoryItem, InventoryItemDocument } from './procurement.schema';
+import { Asset, AssetDocument } from './asset.schema';
 import {
   buildVendorCategoryInUseMessage,
   buildItemCategoryInUseMessage,
+  buildAssetCategoryInUseMessage,
 } from './procurement-settings-reference.util';
 
 // ============================================================
@@ -37,6 +39,7 @@ export class ProcurementSettingsService {
     @InjectModel(DepreciationMethod.name) private depreciationMethodModel: Model<DepreciationMethodDocument>,
     @InjectModel(Vendor.name) private vendorModel: Model<VendorDocument>,
     @InjectModel(InventoryItem.name) private inventoryModel: Model<InventoryItemDocument>,
+    @InjectModel(Asset.name) private assetModel: Model<AssetDocument>,
   ) {}
 
   // ── generic list/create/update helpers (shared shape across all six) ──
@@ -104,10 +107,10 @@ export class ProcurementSettingsService {
   }
 
   // ── ASSET CATEGORIES ──────────────────────────────────────
-  // No Asset schema/collection exists in procurement.schema.ts yet (Assets
-  // are still frontend-only mock data), so there is nothing to count
-  // against — no in-use guard here. See the class comment in
-  // procurement-settings.schema.ts.
+  // Real Asset collection now exists (see asset.schema.ts) — deleteAssetCategory
+  // guards the same way deleteVendorCategory/deleteItemCategory do, matching
+  // by the category name currently stored on Asset.category. See the class
+  // comment in procurement-settings.schema.ts.
   getAssetCategories(schoolSlug: string, query?: any) {
     return this.list(this.assetCategoryModel, schoolSlug, query);
   }
@@ -118,8 +121,11 @@ export class ProcurementSettingsService {
     return this.update(this.assetCategoryModel, schoolSlug, id, data, 'Asset category not found');
   }
   async deleteAssetCategory(schoolSlug: string, id: string) {
-    const doc = await this.assetCategoryModel.findOneAndDelete({ _id: id, schoolSlug }).lean();
-    if (!doc) throw new NotFoundException('Asset category not found');
+    const category = await this.assetCategoryModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!category) throw new NotFoundException('Asset category not found');
+    const assetCount = await this.assetModel.countDocuments({ schoolSlug, category: category.name });
+    if (assetCount > 0) throw new BadRequestException(buildAssetCategoryInUseMessage(assetCount));
+    await this.assetCategoryModel.deleteOne({ _id: id, schoolSlug });
     return { deleted: true };
   }
 

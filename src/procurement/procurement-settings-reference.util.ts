@@ -5,11 +5,11 @@
 // Mongoose models.
 //
 // VendorCategory/ItemCategory/AssetCategory are referenced by
-// Vendor.category / InventoryItem.category (plain strings matched by
-// name, not a code ref) so a delete can be blocked by "how many
-// vendors/items still use this name". UnitOfMeasure/PaymentTerm/
-// DepreciationMethod are used inline as free strings with no formal
-// FK anywhere, so they have no equivalent guard — see
+// Vendor.category / InventoryItem.category / Asset.category (plain
+// strings matched by name, not a code ref) so a delete can be blocked by
+// "how many vendors/items/assets still use this name". UnitOfMeasure/
+// PaymentTerm/DepreciationMethod are used inline as free strings with no
+// formal FK anywhere, so they have no equivalent guard — see
 // procurement-settings.schema.ts's per-collection comments.
 
 /**
@@ -24,4 +24,11 @@ export function buildVendorCategoryInUseMessage(vendorCount: number): string {
  */
 export function buildItemCategoryInUseMessage(itemCount: number): string {
   return `Cannot delete this item category - it is still used by ${itemCount} inventory item${itemCount === 1 ? '' : 's'}. Reassign those items to a different category first, or deactivate the category instead.`;
+}
+
+/**
+ * "Cannot delete this asset category — it is still used by N asset(s)."
+ */
+export function buildAssetCategoryInUseMessage(assetCount: number): string {
+  return `Cannot delete this asset category - it is still used by ${assetCount} asset${assetCount === 1 ? '' : 's'}. Reassign those assets to a different category first, or deactivate the category instead.`;
 }
