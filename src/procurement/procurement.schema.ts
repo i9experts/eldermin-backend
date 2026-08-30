@@ -299,9 +299,25 @@ export class InventoryItem {
   })
   status: string;
   @Prop({ default: false }) isConsumable: boolean;
+  // Real Campus _id (see AssetSchema/PurchaseOrder's campusId) — optional,
+  // "not yet assigned to a specific campus" is a legitimate state.
+  @Prop() campusId: string;
+  // Scannable code value (Code128/EAN13 payload, or an arbitrary SKU string
+  // if no physical barcode exists yet). Distinct from `code`, which is the
+  // server-generated ITM-### catalog number.
+  @Prop() barcode: string;
+  @Prop() imageUrl: string;
+  @Prop() imageKey: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 
 export const InventoryItemSchema = SchemaFactory.createForClass(InventoryItem);
 InventoryItemSchema.index({ schoolSlug: 1, status: 1 });
 InventoryItemSchema.index({ schoolSlug: 1, category: 1 });
+// Sparse/partial unique index: two items in the same school can't share a
+// barcode, but items with no barcode set (the common case pre-migration)
+// don't collide with each other.
+InventoryItemSchema.index(
+  { schoolSlug: 1, barcode: 1 },
+  { unique: true, partialFilterExpression: { barcode: { $exists: true, $ne: '' } } },
+);
