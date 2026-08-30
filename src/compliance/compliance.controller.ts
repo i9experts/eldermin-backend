@@ -5,10 +5,16 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ComplianceService } from './compliance.service';
+import { AttendanceComplianceService } from './attendance-compliance.service';
+import { GovernanceRollupService } from './governance-rollup.service';
 
 @Controller('compliance')
 export class ComplianceController {
-  constructor(private readonly service: ComplianceService) {}
+  constructor(
+    private readonly service: ComplianceService,
+    private readonly attendanceComplianceService: AttendanceComplianceService,
+    private readonly governanceRollupService: GovernanceRollupService,
+  ) {}
 
   private ctx(req: any) {
     return {
@@ -225,5 +231,31 @@ export class ComplianceController {
   async deleteDsarRequest(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteDsarRequest(id, schoolSlug);
+  }
+
+  // ── Attendance Compliance ─────────────────────────────────────
+  @Get('attendance/settings')
+  async getAttendanceSettings(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.attendanceComplianceService.getSettings(schoolSlug);
+  }
+
+  @Put('attendance/settings')
+  async updateAttendanceSettings(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.attendanceComplianceService.updateSettings(schoolSlug, dto);
+  }
+
+  @Get('attendance/compliance')
+  async getAttendanceCompliance(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.attendanceComplianceService.getAttendanceComplianceData(schoolSlug, query);
+  }
+
+  // ── Governance: Multi-Campus Rollup ──────────────────────────
+  @Get('governance/rollup')
+  async getGovernanceRollup(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.governanceRollupService.getGovernanceRollup(schoolSlug);
   }
 }
