@@ -3,7 +3,8 @@
 // ============================================================
 
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document, Model, Types } from 'mongoose';
+import { formatPrNumber } from './pr-number.util';
 
 // ============================================================
 // VENDOR
@@ -72,7 +73,10 @@ const PRLineItemSchema = SchemaFactory.createForClass(PRLineItem);
 
 @Schema({ timestamps: true, collection: 'purchase_requests' })
 export class PurchaseRequest {
-  @Prop({ required: true, unique: true }) prNumber: string;    // PR-2025-0001
+  // Uniqueness is enforced by the compound (schoolSlug, prNumber) index below,
+  // not here — prNumber alone is only unique per tenant, matching how it's
+  // generated (see the pre('validate') hook).
+  @Prop({ required: true }) prNumber: string;    // PR-2025-0001
   @Prop({ required: true }) title: string;
   @Prop() description: string;
   @Prop({
@@ -109,11 +113,23 @@ export class PurchaseRequest {
 export const PurchaseRequestSchema = SchemaFactory.createForClass(PurchaseRequest);
 PurchaseRequestSchema.index({ schoolSlug: 1, status: 1 });
 PurchaseRequestSchema.index({ schoolSlug: 1, priority: 1 });
-PurchaseRequestSchema.pre('validate', function () {
+PurchaseRequestSchema.index({ schoolSlug: 1, prNumber: 1 }, { unique: true });
+PurchaseRequestSchema.pre('validate', async function () {
   if (this.isNew && !this.prNumber) {
     const y = new Date().getFullYear();
-    const r = Math.floor(1000 + Math.random() * 9000);
-    this.prNumber = `PR-${y}-${r}`;
+    const Model = this.constructor as Model<PurchaseRequestDocument>;
+    // Sequential per (school, year) — same countDocuments()-then-increment
+    // pattern already used by createVendor/createInventoryItem in
+    // ProcurementService, and by student/HR/academics number generators
+    // elsewhere in this codebase. Not perfectly race-proof under concurrent
+    // creates (no atomic counter document), same caveat those share, but it
+    // replaces a random 4-digit draw that could — and, being unique across
+    // *all* schools, regularly would — collide and fail the insert.
+    const count = await Model.countDocuments({
+      schoolSlug: this.schoolSlug,
+      prNumber: { $regex: `^PR-${y}-` },
+    });
+    this.prNumber = formatPrNumber(y, count + 1);
   }
 });
 
