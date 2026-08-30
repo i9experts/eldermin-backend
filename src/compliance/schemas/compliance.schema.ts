@@ -239,3 +239,83 @@ export class ApprovalRequest {
 }
 export const ApprovalRequestSchema = SchemaFactory.createForClass(ApprovalRequest);
 ApprovalRequestSchema.index({ schoolSlug: 1, status: 1 });
+
+// ── Data Privacy: ConsentRecord ──────────────────────────────────
+// Tracks a single consent decision (granted/withdrawn) for one data
+// subject and one purpose - the practical GDPR building block behind
+// "can we use this student's photo", "can we share this staff member's
+// data with a third party", etc. One row per subject+consentType, not
+// a single blanket "consent" flag.
+export type ConsentRecordDocument = ConsentRecord & Document;
+
+@Schema({ timestamps: true, collection: 'data_privacy_consent_records' })
+export class ConsentRecord {
+  @Prop({ enum: ['student', 'staff', 'parent'], required: true }) subjectType: string;
+  @Prop({ required: true }) subjectName: string;
+  // Optional link to the actual Student/User record - not every subject
+  // (e.g. a parent who isn't also a staff/portal user) necessarily has one.
+  @Prop({ type: Types.ObjectId, refPath: 'subjectRefModel' }) subjectRef: Types.ObjectId;
+  @Prop({ enum: ['Student', 'User'] }) subjectRefModel: string;
+  @Prop({
+    enum: ['photo_video_use', 'third_party_data_sharing', 'marketing_communications',
+           'biometric_data', 'medical_information_sharing', 'other'],
+    required: true,
+  })
+  consentType: string;
+  @Prop({ enum: ['granted', 'withdrawn'], default: 'granted' }) status: string;
+  @Prop({ required: true }) dateGranted: Date;
+  @Prop() dateWithdrawn: Date;
+  @Prop() recordedBy: string;
+  @Prop() notes: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
+}
+export const ConsentRecordSchema = SchemaFactory.createForClass(ConsentRecord);
+ConsentRecordSchema.index({ schoolSlug: 1, status: 1, consentType: 1 });
+
+// ── Data Privacy: RetentionPolicy ────────────────────────────────
+// How long a CATEGORY of data is kept, not a document - distinct from
+// the school-policy-document concept in Policy/PoliciesTab above.
+export type RetentionPolicyDocument = RetentionPolicy & Document;
+
+@Schema({ timestamps: true, collection: 'data_privacy_retention_policies' })
+export class RetentionPolicy {
+  @Prop({ required: true }) category: string;
+  @Prop({ required: true, type: Number }) retentionValue: number;
+  @Prop({ enum: ['days', 'months', 'years'], required: true }) retentionUnit: string;
+  @Prop({ enum: ['review', 'archive', 'delete'], default: 'review' }) actionOnExpiry: string;
+  @Prop() legalBasis: string;
+  @Prop() ownerRole: string;
+  @Prop({ default: true }) isActive: boolean;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+}
+export const RetentionPolicySchema = SchemaFactory.createForClass(RetentionPolicy);
+RetentionPolicySchema.index({ schoolSlug: 1, category: 1 }, { unique: true });
+
+// ── Data Privacy: DataSubjectRequest (DSAR) ──────────────────────
+export type DataSubjectRequestDocument = DataSubjectRequest & Document;
+
+@Schema({ timestamps: true, collection: 'data_privacy_dsar' })
+export class DataSubjectRequest {
+  @Prop({
+    enum: ['access', 'rectification', 'erasure', 'portability', 'restriction'],
+    required: true,
+  })
+  requestType: string;
+  @Prop({ required: true }) requesterName: string;
+  @Prop() requesterRelationship: string;
+  @Prop({ required: true }) dataSubjectName: string;
+  @Prop({ enum: ['student', 'staff'], required: true }) dataSubjectType: string;
+  @Prop({ required: true }) dateReceived: Date;
+  // Auto-computed as dateReceived + 30 days (the standard GDPR statutory
+  // response window) on create, but stays editable afterwards.
+  @Prop({ required: true }) dueDate: Date;
+  @Prop({ enum: ['received', 'in_progress', 'completed', 'rejected'], default: 'received' }) status: string;
+  @Prop() completionDate: Date;
+  @Prop() completionNotes: string;
+  @Prop() handledBy: string;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
+}
+export const DataSubjectRequestSchema = SchemaFactory.createForClass(DataSubjectRequest);
+DataSubjectRequestSchema.index({ schoolSlug: 1, status: 1 });

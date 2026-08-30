@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Put,
+  Controller, Get, Post, Put, Delete,
   Body, Param, Query, Request, HttpCode, HttpStatus,
   UseInterceptors, UploadedFile,
 } from '@nestjs/common';
@@ -141,5 +141,89 @@ export class ComplianceController {
   async updateAccreditation(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateAccreditation(id, schoolSlug, dto);
+  }
+
+  // ── Data Privacy: Consent Records ────────────────────────────
+  @Get('data-privacy/consent-records')
+  async getConsentRecords(@Request() req: any, @Query() query: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getConsentRecords(schoolSlug, query, requestingUser);
+  }
+
+  @Post('data-privacy/consent-records')
+  @HttpCode(HttpStatus.CREATED)
+  async createConsentRecord(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.createConsentRecord({ ...dto, schoolSlug, recordedBy: dto.recordedBy || userName }, requestingUser);
+  }
+
+  @Put('data-privacy/consent-records/:id')
+  async updateConsentRecord(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateConsentRecord(id, schoolSlug, dto);
+  }
+
+  @Delete('data-privacy/consent-records/:id')
+  async deleteConsentRecord(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteConsentRecord(id, schoolSlug);
+  }
+
+  // ── Data Privacy: Retention Policies ─────────────────────────
+  @Get('data-privacy/retention-policies')
+  async getRetentionPolicies(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getRetentionPolicies(schoolSlug, query);
+  }
+
+  @Post('data-privacy/retention-policies')
+  @HttpCode(HttpStatus.CREATED)
+  async createRetentionPolicy(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createRetentionPolicy({ ...dto, schoolSlug });
+  }
+
+  @Put('data-privacy/retention-policies/:id')
+  async updateRetentionPolicy(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateRetentionPolicy(id, schoolSlug, dto);
+  }
+
+  @Delete('data-privacy/retention-policies/:id')
+  async deleteRetentionPolicy(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteRetentionPolicy(id, schoolSlug);
+  }
+
+  @Post('data-privacy/retention-policies/seed-defaults')
+  async seedRetentionPolicyDefaults(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.seedDefaultRetentionPolicies(schoolSlug);
+  }
+
+  // ── Data Privacy: Data Subject Requests (DSAR) ───────────────
+  @Get('data-privacy/dsar')
+  async getDsarRequests(@Request() req: any, @Query() query: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getDsarRequests(schoolSlug, query, requestingUser);
+  }
+
+  @Post('data-privacy/dsar')
+  @HttpCode(HttpStatus.CREATED)
+  async createDsarRequest(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.createDsarRequest({ ...dto, schoolSlug, handledBy: dto.handledBy || userName }, requestingUser);
+  }
+
+  @Put('data-privacy/dsar/:id')
+  async updateDsarRequest(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateDsarRequest(id, schoolSlug, dto);
+  }
+
+  @Delete('data-privacy/dsar/:id')
+  async deleteDsarRequest(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteDsarRequest(id, schoolSlug);
   }
 }

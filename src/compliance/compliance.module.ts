@@ -7,6 +7,9 @@ import {
   AuditLog, AuditLogSchema,
   Accreditation, AccreditationSchema,
   ApprovalRequest, ApprovalRequestSchema,
+  ConsentRecord, ConsentRecordSchema,
+  RetentionPolicy, RetentionPolicySchema,
+  DataSubjectRequest, DataSubjectRequestSchema,
 } from './schemas/compliance.schema';
 import { ComplianceController } from './compliance.controller';
 import { ComplianceService } from './compliance.service';
@@ -22,6 +25,9 @@ import { UploadModule } from '../upload/upload.module';
       { name: AuditLog.name, schema: AuditLogSchema },
       { name: Accreditation.name, schema: AccreditationSchema },
       { name: ApprovalRequest.name, schema: ApprovalRequestSchema },
+      { name: ConsentRecord.name, schema: ConsentRecordSchema },
+      { name: RetentionPolicy.name, schema: RetentionPolicySchema },
+      { name: DataSubjectRequest.name, schema: DataSubjectRequestSchema },
     ]),
   ],
   controllers: [ComplianceController],
