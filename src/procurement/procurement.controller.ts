@@ -86,6 +86,12 @@ export class ProcurementController {
     });
   }
 
+  @Put('requests/:id')
+  async updatePR(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updatePR(id, schoolSlug, dto);
+  }
+
   @Patch('requests/:id/submit')
   async submitPR(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);

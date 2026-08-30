@@ -164,6 +164,10 @@ export class PurchaseOrder {
   @Prop({ required: true }) title: string;
   @Prop() description: string;
   @Prop() category: string;
+  // Real Campus _id (see AssetSchema/PurchaseRequestSchema's campusId) — was
+  // missing entirely, so the old hardcoded-string Campus <select> in the
+  // frontend's POModal had nowhere real to persist to.
+  @Prop() campusId: string;
 
   @Prop({ type: [POLineItemSchema], default: [] }) items: POLineItem[];
 

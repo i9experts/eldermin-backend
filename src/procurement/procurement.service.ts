@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -177,6 +177,33 @@ export class ProcurementService {
 
   async getPRById(id: string, schoolSlug: string) {
     const pr = await this.prModel.findOne({ _id: id, schoolSlug });
+    if (!pr) throw new NotFoundException('Purchase Request not found');
+    return pr;
+  }
+
+  async updatePR(id: string, schoolSlug: string, data: any) {
+    // Only draft PRs are editable — once submitted, a PR is awaiting
+    // approval and its content shouldn't shift out from under the approver.
+    // There is no "return to draft" transition anywhere in this service, so
+    // an edit past draft is simply rejected rather than inventing one.
+    const existing = await this.prModel.findOne({ _id: id, schoolSlug });
+    if (!existing) throw new NotFoundException('Purchase Request not found');
+    if (existing.status !== 'draft') {
+      throw new BadRequestException(
+        'Cannot edit a requisition that has already been submitted for approval — contact an approver to have it returned to draft.',
+      );
+    }
+    // prNumber is server-generated on create and never regenerated after —
+    // strip it out of updates so an edit can't accidentally overwrite it
+    // (same pattern updateAsset uses for tag).
+    const { prNumber, ...rest } = data;
+    if (rest.items) {
+      rest.estimatedTotal = (rest.items || []).reduce((a: number, i: any) =>
+        a + ((i.estimatedUnitPrice || 0) * (i.quantity || 0)), 0);
+    }
+    const pr = await this.prModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: rest }, { new: true },
+    );
     if (!pr) throw new NotFoundException('Purchase Request not found');
     return pr;
   }
