@@ -3,13 +3,17 @@ import {
   Body, Param, Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ProcurementService } from './procurement.service';
+import { ProcurementSettingsService } from './procurement-settings.service';
 
 // ============================================================
 // PROCUREMENT CONTROLLER
 // ============================================================
 @Controller('procurement')
 export class ProcurementController {
-  constructor(private readonly service: ProcurementService) {}
+  constructor(
+    private readonly service: ProcurementService,
+    private readonly settings: ProcurementSettingsService,
+  ) {}
 
   private ctx(req: any) {
     return {
@@ -186,5 +190,157 @@ export class ProcurementController {
   async adjustStock(@Param('id') id: string, @Body() dto: { adjustment: number; reason: string }, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.adjustStock(id, schoolSlug, dto.adjustment, dto.reason);
+  }
+
+  // ============================================================
+  // MASTER SETTINGS — school-configurable Vendor/Item/Asset categories,
+  // Units of Measure, Payment Terms, Depreciation Methods (replaces the
+  // old hardcoded VENDOR_CATS/ITEM_CATS/ASSET_CATS/UOM_OPTIONS/
+  // PAYMENT_TERMS_LIST/DEPRECIATION_METHODS arrays in the frontend).
+  // ============================================================
+
+  @Post('settings/seed-defaults')
+  @HttpCode(HttpStatus.OK)
+  async seedSettingsDefaults(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.seedDefaults(schoolSlug);
+  }
+
+  // Vendor categories
+  @Get('settings/vendor-categories')
+  async getVendorCategories(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.getVendorCategories(schoolSlug, query);
+  }
+  @Post('settings/vendor-categories')
+  @HttpCode(HttpStatus.CREATED)
+  async createVendorCategory(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.createVendorCategory(schoolSlug, dto);
+  }
+  @Put('settings/vendor-categories/:id')
+  async updateVendorCategory(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.updateVendorCategory(schoolSlug, id, dto);
+  }
+  @Delete('settings/vendor-categories/:id')
+  async deleteVendorCategory(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.deleteVendorCategory(schoolSlug, id);
+  }
+
+  // Item categories
+  @Get('settings/item-categories')
+  async getItemCategories(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.getItemCategories(schoolSlug, query);
+  }
+  @Post('settings/item-categories')
+  @HttpCode(HttpStatus.CREATED)
+  async createItemCategory(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.createItemCategory(schoolSlug, dto);
+  }
+  @Put('settings/item-categories/:id')
+  async updateItemCategory(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.updateItemCategory(schoolSlug, id, dto);
+  }
+  @Delete('settings/item-categories/:id')
+  async deleteItemCategory(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.deleteItemCategory(schoolSlug, id);
+  }
+
+  // Asset categories
+  @Get('settings/asset-categories')
+  async getAssetCategories(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.getAssetCategories(schoolSlug, query);
+  }
+  @Post('settings/asset-categories')
+  @HttpCode(HttpStatus.CREATED)
+  async createAssetCategory(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.createAssetCategory(schoolSlug, dto);
+  }
+  @Put('settings/asset-categories/:id')
+  async updateAssetCategory(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.updateAssetCategory(schoolSlug, id, dto);
+  }
+  @Delete('settings/asset-categories/:id')
+  async deleteAssetCategory(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.deleteAssetCategory(schoolSlug, id);
+  }
+
+  // Units of measure
+  @Get('settings/units-of-measure')
+  async getUnitsOfMeasure(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.getUnitsOfMeasure(schoolSlug, query);
+  }
+  @Post('settings/units-of-measure')
+  @HttpCode(HttpStatus.CREATED)
+  async createUnitOfMeasure(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.createUnitOfMeasure(schoolSlug, dto);
+  }
+  @Put('settings/units-of-measure/:id')
+  async updateUnitOfMeasure(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.updateUnitOfMeasure(schoolSlug, id, dto);
+  }
+  @Delete('settings/units-of-measure/:id')
+  async deleteUnitOfMeasure(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.deleteUnitOfMeasure(schoolSlug, id);
+  }
+
+  // Payment terms
+  @Get('settings/payment-terms')
+  async getPaymentTerms(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.getPaymentTerms(schoolSlug, query);
+  }
+  @Post('settings/payment-terms')
+  @HttpCode(HttpStatus.CREATED)
+  async createPaymentTerm(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.createPaymentTerm(schoolSlug, dto);
+  }
+  @Put('settings/payment-terms/:id')
+  async updatePaymentTerm(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.updatePaymentTerm(schoolSlug, id, dto);
+  }
+  @Delete('settings/payment-terms/:id')
+  async deletePaymentTerm(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.deletePaymentTerm(schoolSlug, id);
+  }
+
+  // Depreciation methods
+  @Get('settings/depreciation-methods')
+  async getDepreciationMethods(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.getDepreciationMethods(schoolSlug, query);
+  }
+  @Post('settings/depreciation-methods')
+  @HttpCode(HttpStatus.CREATED)
+  async createDepreciationMethod(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.createDepreciationMethod(schoolSlug, dto);
+  }
+  @Put('settings/depreciation-methods/:id')
+  async updateDepreciationMethod(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.updateDepreciationMethod(schoolSlug, id, dto);
+  }
+  @Delete('settings/depreciation-methods/:id')
+  async deleteDepreciationMethod(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.settings.deleteDepreciationMethod(schoolSlug, id);
   }
 }
