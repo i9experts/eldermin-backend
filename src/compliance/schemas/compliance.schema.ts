@@ -319,3 +319,17 @@ export class DataSubjectRequest {
 }
 export const DataSubjectRequestSchema = SchemaFactory.createForClass(DataSubjectRequest);
 DataSubjectRequestSchema.index({ schoolSlug: 1, status: 1 });
+
+// ── Attendance Compliance: Settings ──────────────────────────────
+// One doc per school - the school-adjustable statutory/institutional
+// attendance-rate thresholds the Attendance Compliance overlay flags
+// students/staff against. Defaults reflect common real-world minimums.
+export type AttendanceComplianceSettingsDocument = AttendanceComplianceSettings & Document;
+
+@Schema({ timestamps: true, collection: 'attendance_compliance_settings' })
+export class AttendanceComplianceSettings {
+  @Prop({ required: true, unique: true, index: true }) schoolSlug: string;
+  @Prop({ default: 90 }) minStudentAttendancePercent: number;
+  @Prop({ default: 95 }) minStaffAttendancePercent: number;
+}
+export const AttendanceComplianceSettingsSchema = SchemaFactory.createForClass(AttendanceComplianceSettings);
