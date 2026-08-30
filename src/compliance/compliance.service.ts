@@ -8,9 +8,13 @@ import {
   AuditLog, AuditLogDocument,
   Accreditation, AccreditationDocument,
   ApprovalRequest, ApprovalRequestDocument,
+  ConsentRecord, ConsentRecordDocument,
+  RetentionPolicy, RetentionPolicyDocument,
+  DataSubjectRequest, DataSubjectRequestDocument,
 } from './schemas/compliance.schema';
 import { UploadService } from '../upload/upload.service';
 import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { computeDsarDueDate } from './data-privacy.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -23,6 +27,9 @@ export class ComplianceService {
     @InjectModel(AuditLog.name) private auditModel: Model<AuditLogDocument>,
     @InjectModel(Accreditation.name) private accreditationModel: Model<AccreditationDocument>,
     @InjectModel(ApprovalRequest.name) private approvalModel: Model<ApprovalRequestDocument>,
+    @InjectModel(ConsentRecord.name) private consentModel: Model<ConsentRecordDocument>,
+    @InjectModel(RetentionPolicy.name) private retentionModel: Model<RetentionPolicyDocument>,
+    @InjectModel(DataSubjectRequest.name) private dsarModel: Model<DataSubjectRequestDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -300,5 +307,149 @@ export class ComplianceService {
       data.readinessPercentage = total > 0 ? Math.round((done / total) * 100) : 0;
     }
     return this.accreditationModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+  }
+
+  // ── Data Privacy: Consent Records ────────────────────────────
+  async getConsentRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, subjectType, consentType, status, campusId } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (subjectType) filter.subjectType = subjectType;
+    if (consentType) filter.consentType = consentType;
+    if (status) filter.status = status;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    const [data, total] = await Promise.all([
+      this.consentModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      this.consentModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit } };
+  }
+
+  async createConsentRecord(data: any, requestingUser?: ScopedUser) {
+    const record = new this.consentModel({
+      ...data,
+      dateGranted: new Date(data.dateGranted || Date.now()),
+      dateWithdrawn: data.dateWithdrawn ? new Date(data.dateWithdrawn) : undefined,
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
+    });
+    return record.save();
+  }
+
+  async updateConsentRecord(id: string, schoolSlug: string, data: any) {
+    // Withdrawing consent should record when it happened, unless the
+    // caller already supplied their own dateWithdrawn explicitly.
+    if (data.status === 'withdrawn' && !data.dateWithdrawn) {
+      data.dateWithdrawn = new Date();
+    }
+    const record = await this.consentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!record) throw new NotFoundException('Consent record not found');
+    return record;
+  }
+
+  async deleteConsentRecord(id: string, schoolSlug: string) {
+    const result = await this.consentModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Consent record not found');
+    return { deleted: true };
+  }
+
+  // ── Data Privacy: Retention Policies ─────────────────────────
+  async getRetentionPolicies(schoolSlug: string, query: any = {}) {
+    const filter: any = { schoolSlug };
+    if (query.isActive !== undefined) filter.isActive = query.isActive === 'true' || query.isActive === true;
+    return this.retentionModel.find(filter).sort({ category: 1 });
+  }
+
+  async createRetentionPolicy(data: any) {
+    const policy = new this.retentionModel(data);
+    return policy.save();
+  }
+
+  async updateRetentionPolicy(id: string, schoolSlug: string, data: any) {
+    const policy = await this.retentionModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!policy) throw new NotFoundException('Retention policy not found');
+    return policy;
+  }
+
+  async deleteRetentionPolicy(id: string, schoolSlug: string) {
+    const result = await this.retentionModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Retention policy not found');
+    return { deleted: true };
+  }
+
+  /**
+   * Seeds a small set of sensible default retention categories for a
+   * school's first-ever visit to this list - idempotent upsert-by-category
+   * (like seedDefaultSubjectCategories/ProcurementSettingsService.seedDefaults),
+   * so re-running it just refreshes the seeded copies rather than duplicating.
+   * Periods reflect common real-world practice; safeguarding records get a
+   * deliberately much longer period than ordinary academic/financial records
+   * since child-protection data typically needs to be kept until well into
+   * the child's adulthood.
+   */
+  async seedDefaultRetentionPolicies(schoolSlug: string) {
+    const defaults = [
+      { category: 'Student Academic Records', retentionValue: 7, retentionUnit: 'years', actionOnExpiry: 'archive', legalBasis: 'Kept until the student would turn 25, or 7 years after leaving, to support references and re-enrolment.', ownerRole: 'Registrar' },
+      { category: 'Staff HR Files', retentionValue: 6, retentionUnit: 'years', actionOnExpiry: 'review', legalBasis: 'Standard employment-record retention after a staff member leaves, to cover reference and dispute-limitation periods.', ownerRole: 'HR Manager' },
+      { category: 'Financial Records', retentionValue: 7, retentionUnit: 'years', actionOnExpiry: 'archive', legalBasis: 'Statutory minimum for tax and audit records in most jurisdictions.', ownerRole: 'Finance Manager' },
+      { category: 'Safeguarding Case Records', retentionValue: 25, retentionUnit: 'years', actionOnExpiry: 'review', legalBasis: 'Child-protection records are kept far longer than routine records - until the child turns 25, reflecting standard safeguarding retention guidance.', ownerRole: 'Designated Safeguarding Lead' },
+      { category: 'Medical Records', retentionValue: 10, retentionUnit: 'years', actionOnExpiry: 'review', legalBasis: 'Kept until the student turns 25 (or longer for specific conditions) to support ongoing care and any future claims.', ownerRole: 'School Nurse / Health Officer' },
+      { category: 'CCTV Footage', retentionValue: 30, retentionUnit: 'days', actionOnExpiry: 'delete', legalBasis: 'Short routine retention unless footage is flagged as evidence for an active incident or investigation.', ownerRole: 'Facilities / Security Manager' },
+    ];
+    const names: string[] = [];
+    for (const d of defaults) {
+      const result = await this.retentionModel.findOneAndUpdate(
+        { schoolSlug, category: d.category },
+        { $set: { ...d, schoolSlug, isActive: true } },
+        { upsert: true, new: true },
+      );
+      names.push(result!.category);
+    }
+    return { message: `${defaults.length} default retention policies seeded`, count: defaults.length, names };
+  }
+
+  // ── Data Privacy: Data Subject Requests (DSAR) ───────────────
+  async getDsarRequests(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20, status, requestType, dataSubjectType, campusId } = query;
+    const { skip } = paged(page, limit);
+    const filter: any = { schoolSlug };
+    if (status) filter.status = status;
+    if (requestType) filter.requestType = requestType;
+    if (dataSubjectType) filter.dataSubjectType = dataSubjectType;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    const [data, total] = await Promise.all([
+      this.dsarModel.find(filter).sort({ dueDate: 1 }).skip(skip).limit(limit),
+      this.dsarModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit } };
+  }
+
+  async createDsarRequest(data: any, requestingUser?: ScopedUser) {
+    const dateReceived = new Date(data.dateReceived || Date.now());
+    const dsar = new this.dsarModel({
+      ...data,
+      dateReceived,
+      dueDate: data.dueDate ? new Date(data.dueDate) : computeDsarDueDate(dateReceived),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
+    });
+    return dsar.save();
+  }
+
+  async updateDsarRequest(id: string, schoolSlug: string, data: any) {
+    if (data.dateReceived) data.dateReceived = new Date(data.dateReceived);
+    if (data.dueDate) data.dueDate = new Date(data.dueDate);
+    if ((data.status === 'completed' || data.status === 'rejected') && !data.completionDate) {
+      data.completionDate = new Date();
+    }
+    const dsar = await this.dsarModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!dsar) throw new NotFoundException('Data subject request not found');
+    return dsar;
+  }
+
+  async deleteDsarRequest(id: string, schoolSlug: string) {
+    const result = await this.dsarModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!result) throw new NotFoundException('Data subject request not found');
+    return { deleted: true };
   }
 }
