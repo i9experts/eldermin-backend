@@ -61,12 +61,10 @@ export const ItemCategorySchema = SchemaFactory.createForClass(ItemCategory);
 applyCommonIndex(ItemCategorySchema);
 
 // ============================================================
-// ASSET CATEGORY — replaces ASSET_CATS. NOTE: there is no Asset schema/
-// collection anywhere in procurement.schema.ts today — Assets are
-// frontend-only mock data (see procurement/index.tsx). There is nothing
-// to guard a delete against yet, so deleteAssetCategory has no in-use
-// check (pre-existing gap, flagged in the PR description; wiring an
-// actual Asset schema is out of scope for this phase).
+// ASSET CATEGORY — replaces ASSET_CATS. Delete guard matches by name
+// against Asset.category (see asset.schema.ts, also a plain string) —
+// same "match by the value currently stored" approach as VendorCategory/
+// ItemCategory above.
 // ============================================================
 export type AssetCategoryDocument = AssetCategory & Document;
 
