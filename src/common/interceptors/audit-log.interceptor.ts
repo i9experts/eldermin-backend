@@ -10,6 +10,7 @@ import { Model } from 'mongoose';
 import { Observable } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { AuditLog, AuditLogDocument } from '../../compliance/schemas/compliance.schema';
+import { deriveAuditModule } from './audit-log-module.util';
 
 // Routes that should never generate an audit entry for themselves - avoids
 // recursive noise (logging the act of reading/writing logs) and excludes
@@ -104,7 +105,7 @@ export class AuditLogInterceptor implements NestInterceptor {
       undefined;
     const userAgent = req.headers?.['user-agent'];
 
-    const module = this.deriveModule(path);
+    const module = deriveAuditModule(path);
     const resourceId = req.params?.id || response?._id || response?.id;
     const resourceTitle = this.deriveResourceTitle(req.body, response);
     const type = METHOD_TO_TYPE[method] || 'other';
@@ -122,14 +123,6 @@ export class AuditLogInterceptor implements NestInterceptor {
       userAgent,
       type,
     });
-  }
-
-  // Derives a human-readable module name from the request path, e.g.
-  // /api/v1/students/123 -> "Students", /api/v1/finance/invoices -> "Finance"
-  private deriveModule(path: string): string {
-    const cleaned = path.split('?')[0].replace(/^\/api\/v1\//, '');
-    const segment = cleaned.split('/')[0] || 'System';
-    return segment.charAt(0).toUpperCase() + segment.slice(1);
   }
 
   // Best-effort human-readable label for what was acted on - checks common
