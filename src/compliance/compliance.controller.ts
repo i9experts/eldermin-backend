@@ -7,6 +7,12 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ComplianceService } from './compliance.service';
 import { AttendanceComplianceService } from './attendance-compliance.service';
 import { GovernanceRollupService } from './governance-rollup.service';
+// Child safeguarding case records are the most sensitive data in the
+// system — gated separately from the rest of this controller (which relies
+// on the same app-wide "any authenticated staff member" model every other
+// module uses) by the dedicated safeguarding:read/write permission, granted
+// only to designated-safeguarding-lead roles (see permissions.matrix.ts).
+import { RequirePermission } from '../auth/decorators';
 
 @Controller('compliance')
 export class ComplianceController {
@@ -92,12 +98,18 @@ export class ComplianceController {
     return this.service.decideApprovalStage(id, schoolSlug, dto.decision, dto.comments || '', userName);
   }
 
+  @RequirePermission('safeguarding:read')
   @Get('safeguarding')
   async getSafeguarding(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getSafeguardingCases(schoolSlug, query, requestingUser);
   }
 
+  // Broad on purpose — any staff member can file a safeguarding concern,
+  // matching the statutory "all staff can raise a concern" requirement.
+  // Viewing the case list/detail or managing a case stays behind
+  // safeguarding:read/write below.
+  @RequirePermission('safeguarding:report')
   @Post('safeguarding')
   @HttpCode(HttpStatus.CREATED)
   async createSafeguarding(@Body() dto: any, @Request() req: any) {
@@ -105,12 +117,14 @@ export class ComplianceController {
     return this.service.createSafeguardingCase({ ...dto, schoolSlug, reportedBy: dto.reportedBy || userName }, requestingUser);
   }
 
+  @RequirePermission('safeguarding:write')
   @Put('safeguarding/:id')
   async updateSafeguarding(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateSafeguardingCase(id, schoolSlug, dto);
   }
 
+  @RequirePermission('safeguarding:write')
   @Post('safeguarding/:id/note')
   async addNote(@Param('id') id: string, @Body('note') note: string, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);

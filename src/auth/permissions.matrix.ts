@@ -28,6 +28,16 @@ export type Permission =
   | 'procurement:read' | 'procurement:write' | 'procurement:delete'
   // Compliance
   | 'compliance:read' | 'compliance:write' | 'compliance:delete'
+  // Safeguarding — deliberately separate from compliance:read/write. Child
+  // protection case records are the most sensitive data in the system and
+  // must be restricted to designated safeguarding leads, not every role
+  // that can see general compliance/policy/audit data. 'safeguarding:report'
+  // is intentionally broad (any staff member, matching the statutory
+  // "all staff can raise a concern" requirement) and only lets a role file
+  // a new incident — it does NOT grant visibility into the case list/detail
+  // or the ability to manage/update a case, which stay behind
+  // safeguarding:read/write.
+  | 'safeguarding:read' | 'safeguarding:write' | 'safeguarding:report'
   // Behaviour
   | 'behaviour:read' | 'behaviour:write' | 'behaviour:delete'
   // Campus
@@ -52,6 +62,7 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'documents:read', 'documents:write', 'documents:delete',
     'procurement:read', 'procurement:write', 'procurement:delete',
     'compliance:read', 'compliance:write', 'compliance:delete',
+    'safeguarding:read', 'safeguarding:write', 'safeguarding:report',
     'behaviour:read', 'behaviour:write', 'behaviour:delete',
     'campus:read', 'campus:write', 'campus:delete',
   ],
@@ -67,6 +78,8 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'assessment:read', 'assessment:write',
     'documents:read', 'documents:write',
     'compliance:read', 'compliance:write',
+    // Principal is the default Designated Safeguarding Lead in most schools.
+    'safeguarding:read', 'safeguarding:write', 'safeguarding:report',
     'behaviour:read', 'behaviour:write',
     'campus:read', 'campus:write',
   ],
@@ -77,6 +90,9 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'academics:read', 'academics:write',
     'teaching:read', 'teaching:write',
     'assessment:read', 'assessment:write',
+    // Commonly the deputy Designated Safeguarding Lead alongside the
+    // Principal — matches VP already handling pastoral/behaviour cases.
+    'safeguarding:read', 'safeguarding:write', 'safeguarding:report',
     'behaviour:read', 'behaviour:write',
     'documents:read',
     'campus:read',
@@ -90,6 +106,9 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'admissions:read', 'admissions:write',
     'documents:read', 'documents:write',
     'campus:read', 'campus:write',
+    // Any staff member can raise a safeguarding concern — that does not
+    // extend to seeing the case list or managing a case (safeguarding:read/write).
+    'safeguarding:report',
   ],
 
   [UserRole.ACADEMIC_COORDINATOR]: [
@@ -98,18 +117,21 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     'assessment:read', 'assessment:write',
     'students:read',
     'documents:read',
+    'safeguarding:report',
   ],
 
   [UserRole.FINANCE_MANAGER]: [
     'finance:read', 'finance:write', 'finance:delete',
     'procurement:read', 'procurement:write',
     'documents:read',
+    'safeguarding:report',
   ],
 
   [UserRole.HR_MANAGER]: [
     'hr:read', 'hr:write', 'hr:delete',
     'documents:read', 'documents:write',
     'compliance:read',
+    'safeguarding:report',
   ],
 
   [UserRole.TEACHER]: [
@@ -121,11 +143,15 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     // Self-service leave (My Leave page): NOT hr:read/hr:write — a Teacher
     // still cannot see the HR admin console or any other staff's records.
     'leave:self',
+    // A teacher is often the first person to witness a concern — must be
+    // able to file it even without safeguarding:read/write.
+    'safeguarding:report',
   ],
 
   [UserRole.LIBRARIAN]: [
     'documents:read', 'documents:write',
     'students:read',
+    'safeguarding:report',
   ],
 
   [UserRole.PARENT]: [
@@ -143,6 +169,7 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
   [UserRole.SUPPORT_STAFF]: [
     'org:read',
     'campus:read',
+    'safeguarding:report',
   ],
 
   // Eldermin Partner Network — Reseller Portal v1. Platform-level roles
