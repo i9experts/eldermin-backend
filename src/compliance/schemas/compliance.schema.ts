@@ -320,6 +320,57 @@ export class DataSubjectRequest {
 export const DataSubjectRequestSchema = SchemaFactory.createForClass(DataSubjectRequest);
 DataSubjectRequestSchema.index({ schoolSlug: 1, status: 1 });
 
+// ── Data Privacy: DataBreachLog ──────────────────────────────────
+// A GDPR Article 33/34-shaped breach register: what happened, who's
+// affected, the risk assessment, containment/remedial actions, and whether
+// the supervisory authority (Art 33, within 72h of becoming aware) and/or
+// the affected individuals (Art 34, required only when the breach is likely
+// to result in a HIGH risk to their rights) have been notified. Deliberately
+// has no delete endpoint (see ComplianceService) - a breach register is a
+// legal record that must never be erased, only ever updated/closed, unlike
+// ConsentRecord/RetentionPolicy/DataSubjectRequest above.
+export type DataBreachLogDocument = DataBreachLog & Document;
+
+@Schema({ timestamps: true, collection: 'data_privacy_breaches' })
+export class DataBreachLog {
+  @Prop({ required: true }) title: string;
+  @Prop({ required: true }) description: string;
+  @Prop({
+    enum: ['unauthorized_access', 'data_loss', 'data_theft', 'accidental_disclosure',
+           'phishing', 'ransomware_malware', 'misdirected_communication', 'physical_loss', 'other'],
+    required: true,
+  })
+  breachType: string;
+  // When the school became aware of the breach - this is what the 72-hour
+  // Article 33 notification clock runs from, NOT necessarily when the
+  // breach actually happened (occurredDate, often unknown or earlier).
+  @Prop({ required: true }) discoveredDate: Date;
+  @Prop() occurredDate: Date;
+  @Prop({ enum: ['student', 'staff', 'parent', 'multiple'], required: true }) affectedSubjectType: string;
+  @Prop({ default: 0 }) affectedCount: number;
+  @Prop({ type: [String], default: [] }) dataCategoriesAffected: string[];
+  // Risk TO THE INDIVIDUALS affected, not to the institution - the central
+  // GDPR concept driving whether Art 33/34 notification is required.
+  @Prop({ enum: ['low', 'medium', 'high', 'critical'], required: true }) severity: string;
+  @Prop() riskAssessment: string;
+  @Prop() containmentActions: string;
+  @Prop() rootCause: string;
+  @Prop() remedialActions: string;
+  @Prop({ enum: ['open', 'contained', 'investigating', 'resolved', 'closed'], default: 'open' }) status: string;
+  @Prop({ default: false }) regulatorNotificationRequired: boolean;
+  @Prop() regulatorNotifiedDate: Date;
+  @Prop() regulatorNotificationReference: string;
+  @Prop({ default: false }) subjectsNotificationRequired: boolean;
+  @Prop() subjectsNotifiedDate: Date;
+  @Prop() reportedBy: string;
+  @Prop() handledBy: string;
+  @Prop() closedDate: Date;
+  @Prop({ required: true, index: true }) schoolSlug: string;
+  @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
+}
+export const DataBreachLogSchema = SchemaFactory.createForClass(DataBreachLog);
+DataBreachLogSchema.index({ schoolSlug: 1, status: 1, discoveredDate: -1 });
+
 // ── Attendance Compliance: Settings ──────────────────────────────
 // One doc per school - the school-adjustable statutory/institutional
 // attendance-rate thresholds the Attendance Compliance overlay flags

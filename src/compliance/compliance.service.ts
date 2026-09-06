@@ -11,6 +11,7 @@ import {
   ConsentRecord, ConsentRecordDocument,
   RetentionPolicy, RetentionPolicyDocument,
   DataSubjectRequest, DataSubjectRequestDocument,
+  DataBreachLog, DataBreachLogDocument,
 } from './schemas/compliance.schema';
 import { UploadService } from '../upload/upload.service';
 import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
@@ -30,6 +31,7 @@ export class ComplianceService {
     @InjectModel(ConsentRecord.name) private consentModel: Model<ConsentRecordDocument>,
     @InjectModel(RetentionPolicy.name) private retentionModel: Model<RetentionPolicyDocument>,
     @InjectModel(DataSubjectRequest.name) private dsarModel: Model<DataSubjectRequestDocument>,
+    @InjectModel(DataBreachLog.name) private breachModel: Model<DataBreachLogDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -451,5 +453,38 @@ export class ComplianceService {
     const result = await this.dsarModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!result) throw new NotFoundException('Data subject request not found');
     return { deleted: true };
+  }
+
+  // ── Data Privacy: Data Breach Log ────────────────────────────
+  // Deliberately no delete method - a breach register is a legal record
+  // that must never be erased, only ever updated (status changes,
+  // notification dates, remedial actions) or closed.
+  async getDataBreaches(schoolSlug: string, query: any = {}) {
+    const filter: any = { schoolSlug };
+    if (query.status) filter.status = query.status;
+    if (query.severity) filter.severity = query.severity;
+    return this.breachModel.find(filter).sort({ discoveredDate: -1 });
+  }
+
+  async createDataBreach(data: any) {
+    const breach = new this.breachModel({
+      ...data,
+      discoveredDate: new Date(data.discoveredDate || Date.now()),
+      occurredDate: data.occurredDate ? new Date(data.occurredDate) : undefined,
+    });
+    return breach.save();
+  }
+
+  async updateDataBreach(id: string, schoolSlug: string, data: any) {
+    if (data.discoveredDate) data.discoveredDate = new Date(data.discoveredDate);
+    if (data.occurredDate) data.occurredDate = new Date(data.occurredDate);
+    if (data.regulatorNotifiedDate) data.regulatorNotifiedDate = new Date(data.regulatorNotifiedDate);
+    if (data.subjectsNotifiedDate) data.subjectsNotifiedDate = new Date(data.subjectsNotifiedDate);
+    if ((data.status === 'resolved' || data.status === 'closed') && !data.closedDate) {
+      data.closedDate = new Date();
+    }
+    const breach = await this.breachModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (!breach) throw new NotFoundException('Data breach record not found');
+    return breach;
   }
 }
