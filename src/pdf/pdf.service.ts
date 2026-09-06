@@ -255,8 +255,8 @@ export function sampleDataForType(type: string): Record<string, any> {
         periodLabel: '2025-26',
         totalAllocated: 3000000, totalActual: 2450000, totalVariance: 550000, variancePct: '18.3%',
         lines: [
-          { budgetName: 'Annual Procurement Budget 2025-26', category: 'IT Equipment', allocated: 1000000, actual: 820000, variance: 180000, variancePctLabel: '18.0%', statusLabel: 'Under Budget' },
-          { budgetName: 'Annual Procurement Budget 2025-26', category: 'Furniture', allocated: 600000, actual: 650000, variance: -50000, variancePctLabel: '-8.3%', statusLabel: 'Over Budget' },
+          { budgetName: 'Annual Procurement Budget 2025-26', category: 'IT Equipment', costCenterName: 'IT Department', allocated: 1000000, actual: 820000, variance: 180000, variancePctLabel: '18.0%', statusLabel: 'Under Budget' },
+          { budgetName: 'Annual Procurement Budget 2025-26', category: 'Furniture', costCenterName: 'Facilities', allocated: 600000, actual: 650000, variance: -50000, variancePctLabel: '-8.3%', statusLabel: 'Over Budget' },
         ],
       };
     default:

@@ -29,6 +29,12 @@ import { Budget, BudgetSchema } from '../finance/schemas/finance.schema';
 import { Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { PdfModule } from '../pdf/pdf.module';
 import { EmailModule } from '../email/email.module';
+// FinanceService.computeBudgetVsActual is the real ledger-grounded "actual
+// spend" computation (posted journal lines by Cost Center) — reused by the
+// Budget vs Actual report below instead of re-deriving a weaker figure from
+// a free-text PurchaseOrder.category match against Budget.lines[].category.
+// No circular dependency: FinanceModule never imports ProcurementModule.
+import { FinanceModule } from '../finance/finance.module';
 
 // ============================================================
 // PROCUREMENT MODULE
@@ -54,6 +60,7 @@ import { EmailModule } from '../email/email.module';
     ]),
     PdfModule,
     EmailModule,
+    FinanceModule,
   ],
   controllers: [ProcurementController, ProcurementReportsController],
   providers: [ProcurementService, ProcurementSettingsService, ProcurementReportsService],
