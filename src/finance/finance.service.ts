@@ -1905,10 +1905,20 @@ export class FinanceService {
   }
 
   // Core budget-vs-actual computation shared by getBudgetVsActual (per
-  // budget, line-level detail) and getBudgetSummaryAcrossAll (portfolio
-  // totals only) — one aggregation logic, two views on top of it.
-  private async computeBudgetVsActual(schoolSlug: string, budget: BudgetDocument) {
-    const { from, to } = await this.resolveBudgetDateRange(schoolSlug, budget);
+  // budget, line-level detail), getBudgetSummaryAcrossAll (portfolio totals
+  // only), and ProcurementReportsService's Budget vs Actual report (which
+  // reuses this directly rather than re-deriving "actual" from a free-text
+  // PurchaseOrder.category match against Budget.lines[].category — those
+  // two taxonomies are independently free-text and were never guaranteed to
+  // agree, so matching by real Cost Center against posted ledger data, the
+  // actual source of truth below, is what closes that gap). Public so it can
+  // be called cross-module; overrideRange lets a caller (e.g. a report's
+  // explicit from/to filter) take precedence over the budget's own resolved
+  // academic-year/fiscal-year range.
+  async computeBudgetVsActual(schoolSlug: string, budget: BudgetDocument, overrideRange?: { from?: string; to?: string }) {
+    const resolved = await this.resolveBudgetDateRange(schoolSlug, budget);
+    const from = overrideRange?.from || resolved.from;
+    const to = overrideRange?.to || resolved.to;
     // getCostCenterReport aggregates real posted journal lines grouped by
     // costCenterName — this IS the "actual spend" source of truth, never a
     // placeholder/estimated figure.

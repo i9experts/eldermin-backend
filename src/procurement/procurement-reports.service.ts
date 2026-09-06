@@ -32,6 +32,7 @@ import { Asset, AssetDocument } from './asset.schema';
 import { ScheduledReport, ScheduledReportDocument } from './procurement-reports.schema';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
+import { FinanceService } from '../finance/finance.service';
 import { PROCUREMENT_REPORT_TITLES } from '../modules/report-templates/procurement-report-sections';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -94,6 +95,7 @@ export class ProcurementReportsService {
     @InjectModel(ScheduledReport.name) private scheduledReportModel: Model<ScheduledReportDocument>,
     private pdfService: PdfService,
     private emailService: EmailService,
+    private financeService: FinanceService,
   ) {}
 
   // ── shared campus-name lookup ────────────────────────────────
@@ -381,41 +383,43 @@ export class ProcurementReportsService {
   // cancelled), matched to each budget line's category and, when set, the
   // budget's own campus.
   // ============================================================
+  // "Actual" here is computed via FinanceService.computeBudgetVsActual — the
+  // same real, ledger-grounded (posted journal lines by Cost Center) figure
+  // Finance's own Budgeting tab already shows for these budgets. This used
+  // to independently re-derive "actual" from a free-text PurchaseOrder.category
+  // match against Budget.lines[].category, but those are two unrelated
+  // free-text taxonomies (e.g. PR/PO categories are a fixed enum like
+  // 'it_equipment', budget-line categories are whatever a Finance user typed,
+  // e.g. "IT Equipment") that were never guaranteed to agree, so a committed
+  // PO's spend could silently fail to match its own budget line and read as
+  // 0 with no error. Reusing the Cost Center-based ledger figure closes that
+  // gap entirely by never depending on a category-string match for money.
   async getBudgetVsActualData(schoolSlug: string, filters: ReportFilters) {
     const budgetBase: any = { schoolSlug, status: { $in: ['approved', 'active'] } };
     if (filters.campusId) budgetBase.campusId = filters.campusId;
 
-    const budgets = await this.budgetModel.find(budgetBase).lean();
+    const budgets = await this.budgetModel.find(budgetBase);
+    const overrideRange = (filters.from || filters.to) ? { from: filters.from, to: filters.to } : undefined;
 
-    const poCommittedStatuses = ['sent', 'acknowledged', 'partially_received', 'fully_received', 'invoiced', 'paid'];
     const lines: any[] = [];
     let totalAllocated = 0, totalActual = 0;
 
     for (const budget of budgets) {
-      for (const line of budget.lines || []) {
-        const poMatch: any = {
-          schoolSlug, category: line.category, status: { $in: poCommittedStatuses },
-        };
-        if (budget.campusId) poMatch.campusId = budget.campusId;
-        if (filters.from || filters.to) Object.assign(poMatch, dateRangeMatch(filters, 'orderDate'));
+      const result = await this.financeService.computeBudgetVsActual(schoolSlug, budget, overrideRange);
+      totalAllocated += result.totalAllocated;
+      totalActual += result.totalActual;
 
-        const actualAgg = await this.poModel.aggregate([
-          { $match: poMatch },
-          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
-        ]);
-        const actual = actualAgg[0]?.total || 0;
-        const allocated = line.allocatedAmount || 0;
-        const variance = allocated - actual;
-        const variancePct = allocated > 0 ? (variance / allocated) * 100 : 0;
-
-        totalAllocated += allocated;
-        totalActual += actual;
-
+      for (const line of result.lines) {
+        const variancePct = line.allocatedAmount > 0 ? (line.variance / line.allocatedAmount) * 100 : 0;
         lines.push({
-          budgetName: budget.name, category: line.category,
-          allocated, actual, variance,
+          budgetName: (budget as any).name,
+          category: line.category,
+          costCenterName: line.costCenterName,
+          allocated: line.allocatedAmount,
+          actual: line.actualAmount,
+          variance: line.variance,
           variancePctLabel: `${variancePct.toFixed(1)}%`,
-          statusLabel: variance >= 0 ? 'Under Budget' : 'Over Budget',
+          statusLabel: line.variance >= 0 ? 'Under Budget' : 'Over Budget',
         });
       }
     }

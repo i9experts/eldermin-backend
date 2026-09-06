@@ -296,6 +296,7 @@ export function procurementReportSections(type: string): any[] {
             columns: [
               { label: 'Budget', field: 'budgetName' },
               { label: 'Category', field: 'category' },
+              { label: 'Cost Center', field: 'costCenterName' },
               { label: 'Allocated (PKR)', field: 'allocated' },
               { label: 'Actual (PKR)', field: 'actual' },
               { label: 'Variance (PKR)', field: 'variance' },
