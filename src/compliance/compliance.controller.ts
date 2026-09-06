@@ -247,6 +247,28 @@ export class ComplianceController {
     return this.service.deleteDsarRequest(id, schoolSlug);
   }
 
+  // ── Data Privacy: Data Breach Log ────────────────────────────
+  // No DELETE route by design - a breach register is a legal record that
+  // must never be erased, only ever updated (see ComplianceService).
+  @Get('data-privacy/breaches')
+  async getDataBreaches(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getDataBreaches(schoolSlug, query);
+  }
+
+  @Post('data-privacy/breaches')
+  @HttpCode(HttpStatus.CREATED)
+  async createDataBreach(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createDataBreach({ ...dto, schoolSlug, reportedBy: dto.reportedBy || userName });
+  }
+
+  @Put('data-privacy/breaches/:id')
+  async updateDataBreach(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateDataBreach(id, schoolSlug, dto);
+  }
+
   // ── Attendance Compliance ─────────────────────────────────────
   @Get('attendance/settings')
   async getAttendanceSettings(@Request() req: any) {

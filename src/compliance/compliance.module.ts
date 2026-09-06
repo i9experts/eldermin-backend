@@ -10,6 +10,7 @@ import {
   ConsentRecord, ConsentRecordSchema,
   RetentionPolicy, RetentionPolicySchema,
   DataSubjectRequest, DataSubjectRequestSchema,
+  DataBreachLog, DataBreachLogSchema,
   AttendanceComplianceSettings, AttendanceComplianceSettingsSchema,
 } from './schemas/compliance.schema';
 import { ComplianceController } from './compliance.controller';
@@ -37,6 +38,7 @@ import { StaffAttendance, StaffAttendanceSchema } from '../modules/hr/schemas/st
       { name: ConsentRecord.name, schema: ConsentRecordSchema },
       { name: RetentionPolicy.name, schema: RetentionPolicySchema },
       { name: DataSubjectRequest.name, schema: DataSubjectRequestSchema },
+      { name: DataBreachLog.name, schema: DataBreachLogSchema },
       { name: AttendanceComplianceSettings.name, schema: AttendanceComplianceSettingsSchema },
       // Read-only cross-module reads, same precedent as Procurement Reports
       // reading Finance's Budget / PdfModule reading Finance's Invoice.
