@@ -1451,6 +1451,7 @@ export class HrService {
   async getPayslips(tenantId: string, query: any = {}) {
     const filter: any = { tenantId: this.newTid(tenantId) };
     if (query.staffId) filter.staffId = this.newTid(query.staffId);
+    if (query.payrollRunId) filter.payrollRunId = this.newTid(query.payrollRunId);
     if (query.month) filter.month = parseInt(query.month);
     if (query.year) filter.year = parseInt(query.year);
     // Payslip.staffName is denormalized at creation (see createPayslip), so
