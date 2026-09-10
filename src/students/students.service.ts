@@ -39,6 +39,7 @@ import {
 } from './dto/student.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
+import { normalizePhone } from '../common/utils/phone.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -162,7 +163,12 @@ export class StudentsService {
     // person" - name alone risks false negatives on minor formatting
     // differences, but the same phone number linked twice to the same
     // student is never legitimate.
-    const newPhone = (data.phone || '').trim();
+    // Stored in canonical E.164-style form (see phone.util.ts) so every
+    // guardian phone written from here on is directly comparable - both to
+    // other guardian records (this dedupe check) and to the number a
+    // parent types into the parent app's WhatsApp login, which normalizes
+    // the same way before querying guardians.phone.
+    const newPhone = normalizePhone(data.phone);
     if (newPhone) {
       const newKey = guardianDedupeKey({ phone: newPhone });
       const alreadyLinked = student.guardians.some((g: any) => guardianDedupeKey(g) === newKey);
@@ -174,7 +180,7 @@ export class StudentsService {
     student.guardians.push({
       name: `${data.firstName} ${data.lastName}`.trim(),
       relation: data.relation || 'guardian',
-      phone: data.phone || undefined,
+      phone: newPhone || undefined,
       email: data.email || undefined,
       occupation: data.occupation || undefined,
       employer: data.employer || undefined,
@@ -539,7 +545,13 @@ export class StudentsService {
     // array was built client-side. Only touches this student's own array,
     // never a guardian's link to a different child.
     if (Array.isArray(setDoc.guardians)) {
-      setDoc.guardians = dedupeGuardians(setDoc.guardians);
+      // Normalize each guardian's phone to the same canonical form
+      // addGuardianToStudent uses (see phone.util.ts), so a guardian
+      // edited via this generic form is just as reachable from the parent
+      // app's WhatsApp login as one added via the dedicated endpoint.
+      setDoc.guardians = dedupeGuardians(
+        setDoc.guardians.map((g: any) => ({ ...g, phone: normalizePhone(g?.phone) || undefined })),
+      );
     }
     const student = await this.studentModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: setDoc }, { new: true },
@@ -2143,7 +2155,7 @@ export class StudentsService {
       const guardians = row.data.guardianName ? [{
         name: row.data.guardianName,
         relation: allowedRelations.includes(normalizedRelation) ? normalizedRelation : 'guardian',
-        phone: row.data.guardianPhone,
+        phone: normalizePhone(row.data.guardianPhone) || undefined,
         email: row.data.guardianEmail,
         isPrimary: true,
       }] : [];

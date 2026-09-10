@@ -1,8 +1,13 @@
 import { dedupeGuardians, guardianDedupeKey, pickMoreCompleteGuardian } from './guardian-dedupe.util';
 
 describe('guardianDedupeKey', () => {
-  it('keys by trimmed phone when present', () => {
-    expect(guardianDedupeKey({ name: 'Jane Doe', phone: ' 0300-1234567 ' })).toBe('phone:0300-1234567');
+  it('keys by the normalized phone when present', () => {
+    expect(guardianDedupeKey({ name: 'Jane Doe', phone: ' 0300-1234567 ' })).toBe('phone:+923001234567');
+  });
+
+  it('keys two different-format entries for the same real number identically', () => {
+    expect(guardianDedupeKey({ phone: '03001234567' })).toBe(guardianDedupeKey({ phone: '+923001234567' }));
+    expect(guardianDedupeKey({ phone: '03001234567' })).toBe(guardianDedupeKey({ phone: '923001234567' }));
   });
 
   it('falls back to a case-insensitive name key when no phone is on record', () => {

@@ -8,6 +8,7 @@ import { User, UserDocument } from '../modules/organization/schemas/user.schema'
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { WhatsAppService } from '../email/whatsapp.service';
+import { normalizePhone, phoneMatchCandidates } from '../common/utils/phone.util';
 
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
@@ -26,14 +27,6 @@ export class ParentAuthService {
     private whatsAppService: WhatsAppService,
   ) {}
 
-  private normalizePhone(raw: string): string {
-    const digits = raw.replace(/[^\d+]/g, '');
-    if (digits.startsWith('+')) return digits;
-    if (digits.startsWith('0')) return `+92${digits.slice(1)}`;
-    if (digits.startsWith('92')) return `+${digits}`;
-    return `+${digits}`;
-  }
-
   private async resolveSchoolForPhone(phone: string): Promise<{ schoolSlug: string; existingUser: UserDocument | null }> {
     const existingUser = await this.userModel.findOne({ phone });
     if (existingUser) {
@@ -41,7 +34,15 @@ export class ParentAuthService {
       return { schoolSlug: (tenant as any)?.slug, existingUser };
     }
 
-    const student = await this.studentModel.findOne({ 'guardians.phone': phone }).select('schoolSlug').lean();
+    // Guardian phones can be saved to the dashboard in any of the common
+    // local formats (see phone.util.ts) - match against every
+    // representation of this number, not just the canonical one, so a
+    // guardian added before write-side normalization existed (or via a
+    // school's bulk import) can still log in without needing a data fix.
+    const student = await this.studentModel
+      .findOne({ 'guardians.phone': { $in: phoneMatchCandidates(phone) } })
+      .select('schoolSlug')
+      .lean();
     if (!student) {
       throw new NotFoundException("No student record found with this WhatsApp number. Please contact your school to have it registered against your child's profile first.");
     }
@@ -49,7 +50,7 @@ export class ParentAuthService {
   }
 
   async requestOtp(rawPhone: string) {
-    const phone = this.normalizePhone(rawPhone);
+    const phone = normalizePhone(rawPhone);
     const { schoolSlug } = await this.resolveSchoolForPhone(phone);
 
     const recent = await this.otpModel.findOne({ phone }).sort({ createdAt: -1 }).lean();
@@ -82,7 +83,7 @@ export class ParentAuthService {
   }
 
   async verifyOtp(rawPhone: string, code: string) {
-    const phone = this.normalizePhone(rawPhone);
+    const phone = normalizePhone(rawPhone);
     const otp = await this.otpModel.findOne({ phone, consumedAt: null }).sort({ createdAt: -1 });
     if (!otp) throw new BadRequestException('No pending verification code for this number. Request a new one.');
     if (otp.expiresAt < new Date()) throw new BadRequestException('This code has expired. Request a new one.');
@@ -102,7 +103,8 @@ export class ParentAuthService {
   }
 
   private async issueSessionForPhone(phone: string) {
-    const matchingStudents = await this.studentModel.find({ 'guardians.phone': phone }).lean();
+    const candidates = phoneMatchCandidates(phone);
+    const matchingStudents = await this.studentModel.find({ 'guardians.phone': { $in: candidates } }).lean();
     if (matchingStudents.length === 0) {
       throw new NotFoundException('No student record found with this WhatsApp number.');
     }
@@ -114,7 +116,7 @@ export class ParentAuthService {
     let user = await this.userModel.findOne({ phone });
 
     if (!user) {
-      const primaryGuardian = (matchingStudents[0] as any).guardians?.find((g: any) => g.phone === phone);
+      const primaryGuardian = (matchingStudents[0] as any).guardians?.find((g: any) => candidates.includes(g.phone));
       const placeholderPasswordHash = await bcrypt.hash(`otp-only-${Date.now()}-${Math.random()}`, 10);
       user = await this.userModel.create({
         tenantId: (tenant as any)._id,

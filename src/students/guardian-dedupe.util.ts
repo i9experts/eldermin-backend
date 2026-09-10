@@ -11,10 +11,18 @@
 // compared has a phone on record, fall back to a case-insensitive name
 // match - the same rule addGuardianToStudent's guard already uses.
 //
+// The dedupe key normalizes the phone (see phone.util.ts) before comparing,
+// so two entries for the same real number in different formats (e.g. one
+// saved before write-side normalization existed as "03172573105", another
+// re-entered as "+923172573105") are still recognized as the same guardian
+// instead of being treated as two different people.
+//
 // This only ever collapses entries that are duplicates *within the same
 // student's own guardians[] array* - it never looks across students, so a
 // guardian legitimately linked to two different children (siblings) is
 // completely unaffected.
+
+import { normalizePhone } from '../common/utils/phone.util';
 
 export interface GuardianLike {
   name?: string;
@@ -32,7 +40,7 @@ export interface GuardianLike {
  * case-insensitive name key. Two entries with the same key are considered
  * the same real person for the purposes of one student's guardians[]. */
 export function guardianDedupeKey(g: GuardianLike): string {
-  const phone = (g?.phone || '').trim();
+  const phone = normalizePhone(g?.phone);
   if (phone) return `phone:${phone}`;
   return `name:${(g?.name || '').trim().toLowerCase()}`;
 }
