@@ -28,6 +28,12 @@ export class BookIssue {
   @Prop() notes: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) issuedBy: Types.ObjectId;
   @Prop({ type: Types.ObjectId, ref: 'User' }) returnedTo: Types.ObjectId;
+  // How many times this issue has been renewed, capped by
+  // LibrarySettings.maxRenewals - see AcademicsService.renewIssue.
+  @Prop({ default: 0 }) renewalCount: number;
+  // Set only when status transitions to 'lost' - the replacement cost
+  // charged to the borrower, distinct from the overdue fineAmount above.
+  @Prop({ default: 0 }) replacementCharge: number;
 }
 export const BookIssueSchema = SchemaFactory.createForClass(BookIssue);
 BookIssueSchema.index({ tenantId: 1, bookId: 1, status: 1 });

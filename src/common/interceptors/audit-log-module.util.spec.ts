@@ -26,6 +26,17 @@ describe('deriveAuditModule', () => {
     expect(deriveAuditModule('/api/v1/finance/invoices')).toBe('Finance');
   });
 
+  it('splits Academics library actions into their own label instead of one generic "Academics"', () => {
+    expect(deriveAuditModule('/api/v1/academics/library/books')).toBe('Academics: Library');
+    expect(deriveAuditModule('/api/v1/academics/library/issue')).toBe('Academics: Library');
+    expect(deriveAuditModule('/api/v1/academics/library/return/123')).toBe('Academics: Library');
+  });
+
+  it('falls back to the capitalized first segment for other Academics sub-resources', () => {
+    expect(deriveAuditModule('/api/v1/academics/subjects/123')).toBe('Academics');
+    expect(deriveAuditModule('/api/v1/academics/curriculum')).toBe('Academics');
+  });
+
   it('falls back to "System" for a root path with no segments', () => {
     expect(deriveAuditModule('/api/v1/')).toBe('System');
   });
