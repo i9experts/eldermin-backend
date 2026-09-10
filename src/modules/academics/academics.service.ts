@@ -1,22 +1,33 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { Cron, CronExpression } from '@nestjs/schedule';
+import * as XLSX from 'xlsx';
 import { Subject, SubjectDocument } from './schemas/subject.schema';
 import { SubjectGroup, SubjectGroupDocument } from './schemas/subject-group.schema';
 import { Curriculum, CurriculumDocument } from './schemas/curriculum.schema';
 import { Syllabus, SyllabusDocument } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookDocument } from './schemas/book.schema';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
+import { LibrarySettings, LibrarySettingsDocument } from './schemas/library-settings.schema';
+import { Reservation, ReservationDocument } from './schemas/reservation.schema';
 import { Timetable, TimetableDocument } from '../teaching/schemas/timetable.schema';
 import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/elective-group.schema';
+import { Student, StudentDocument } from '../../students/schemas/student.schema';
+import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
 import { buildSubjectCategoryInUseMessage } from './subject-category-reference.util';
 import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
 import { mergeClassAssignment } from './subject-assign.util';
+import { computeLibraryFine } from './library-fine.util';
+
+const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
 @Injectable()
 export class AcademicsService {
+  private logger = new Logger('AcademicsService');
+
   constructor(
     @InjectModel(Subject.name)   private subjectModel:    Model<SubjectDocument>,
     @InjectModel(SubjectGroup.name) private subjectGroupModel: Model<SubjectGroupDocument>,
@@ -24,9 +35,13 @@ export class AcademicsService {
     @InjectModel(Syllabus.name)  private syllabusModel:   Model<SyllabusDocument>,
     @InjectModel(Book.name)      private bookModel:       Model<BookDocument>,
     @InjectModel(BookIssue.name) private issueModel:      Model<BookIssueDocument>,
+    @InjectModel(LibrarySettings.name) private librarySettingsModel: Model<LibrarySettingsDocument>,
+    @InjectModel(Reservation.name) private reservationModel: Model<ReservationDocument>,
     @InjectModel(Timetable.name) private timetableModel:  Model<TimetableDocument>,
     @InjectModel(ElectiveGroup.name) private electiveGroupModel: Model<ElectiveGroupDocument>,
     @InjectModel(SubjectCategory.name) private subjectCategoryModel: Model<SubjectCategoryDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
   ) {}
 
   private tid(t: string) { return t; }
@@ -414,6 +429,36 @@ export class AcademicsService {
   // Management's separate SyllabusCoverage collection. The dashboard count
   // above still reads the same underlying (now-shared) collection.
 
+  // ─── LIBRARY — SETTINGS ───────────────────────────────────────────────────────
+  // Configurable circulation policy - replaces the hardcoded fine rate,
+  // unlimited-checkout and unlimited-renewal behavior the first cut
+  // shipped with. Same "return defaults, only persist on explicit save"
+  // pattern as AttendanceComplianceService.getSettings.
+
+  async getLibrarySettings(tenantId: string) {
+    const existing = await this.librarySettingsModel.findOne({ tenantId: this.tid(tenantId) }).lean();
+    if (existing) return existing;
+    return {
+      tenantId,
+      finePerDay: 5,
+      gracePeriodDays: 0,
+      maxFineCap: 0,
+      maxBooksStudent: 2,
+      maxBooksStaff: 5,
+      maxRenewals: 1,
+      renewalDays: 14,
+      defaultLoanDays: 14,
+    };
+  }
+
+  async updateLibrarySettings(tenantId: string, data: any) {
+    return this.librarySettingsModel.findOneAndUpdate(
+      { tenantId: this.tid(tenantId) },
+      { $set: { ...data, tenantId: this.tid(tenantId) } },
+      { upsert: true, new: true },
+    );
+  }
+
   // ─── LIBRARY — STATS ──────────────────────────────────────────────────────────
 
   async getLibraryStats(tenantId: string) {
@@ -450,14 +495,26 @@ export class AcademicsService {
   // ─── LIBRARY — BOOKS ──────────────────────────────────────────────────────────
 
   async getBooks(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20 } = query;
+    const { skip } = paged(Number(page), Number(limit));
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.category)  filter.category = query.category;
     if (query.status)    filter.status = query.status;
     if (query.available === 'true') filter.availableCopies = { $gt: 0 };
     if (query.search)    filter.$text = { $search: query.search };
+    // Deaccessioned copies are retired stock - excluded from the default
+    // catalog view same as Subjects excludes inactive ones by default,
+    // unless a status filter or includeInactive explicitly asks for them.
+    if (!query.status && query.includeInactive !== 'true') {
+      filter.status = { $ne: 'deaccessioned' };
+    }
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
-    return this.bookModel.find(filter).sort({ title: 1 }).limit(100).lean();
+    const [data, total] = await Promise.all([
+      this.bookModel.find(filter).sort({ title: 1 }).skip(skip).limit(Number(limit)).lean(),
+      this.bookModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) } };
   }
 
   async getBookById(tenantId: string, id: string) {
@@ -500,6 +557,21 @@ export class AcademicsService {
     return this.bookModel.findByIdAndUpdate(id, { $set: data }, { new: true }).lean();
   }
 
+  /**
+   * Retires a book copy record from the catalog - the missing half of
+   * `deaccessioned` being a valid Book.status all along with nothing ever
+   * setting it. Refuses while any copy is still checked out, same "block
+   * on in-use records with a clear reason" convention as deleteSubject.
+   */
+  async deaccessionBook(tenantId: string, id: string) {
+    const book = await this.bookModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!book) throw new NotFoundException('Book not found');
+    if (book.issuedCopies > 0) {
+      throw new BadRequestException(`Cannot deaccession this book - ${book.issuedCopies} copy(ies) still issued. Wait for them to be returned first.`);
+    }
+    return this.bookModel.findByIdAndUpdate(id, { $set: { status: 'deaccessioned' } }, { new: true }).lean();
+  }
+
   async searchBooks(tenantId: string, searchTerm: string) {
     if (!searchTerm?.trim()) return [];
     return this.bookModel
@@ -510,7 +582,40 @@ export class AcademicsService {
 
   // ─── LIBRARY — ISSUES ─────────────────────────────────────────────────────────
 
+  /**
+   * Resolves a client-supplied {borrowerType, borrowerId} into the real
+   * Student/Staff record and the denormalized fields BookIssue/Reservation
+   * store, never trusting a client-typed name/admission-no/class. Student
+   * is schoolSlug-keyed (no tenantId at all) and Staff is tenantId-keyed -
+   * since the id already came from a school/tenant-scoped picker on the
+   * frontend, this looks up by _id alone (mirrors ConsentRecord.subjectRef
+   * in compliance.service.ts: `Types.ObjectId, refPath` + trust the id).
+   */
+  private async resolveBorrower(borrowerType: string, borrowerId: string) {
+    if (borrowerType === 'student') {
+      const student = await this.studentModel.findById(borrowerId).lean();
+      if (!student) throw new NotFoundException('Student not found');
+      return {
+        borrowerName: `${student.firstName} ${student.lastName}`.trim(),
+        borrowerAdmissionNo: student.studentId || student.admissionNumber || '',
+        borrowerClass: `${student.currentGrade || ''}${student.currentSection ? ' - ' + student.currentSection : ''}`.trim(),
+      };
+    }
+    if (borrowerType === 'staff') {
+      const staff = await this.staffModel.findById(borrowerId).lean();
+      if (!staff) throw new NotFoundException('Staff member not found');
+      return {
+        borrowerName: `${staff.firstName} ${staff.lastName}`.trim(),
+        borrowerAdmissionNo: staff.employeeId || '',
+        borrowerClass: undefined,
+      };
+    }
+    throw new BadRequestException('borrowerType must be "student" or "staff"');
+  }
+
   async getIssues(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
+    const { page = 1, limit = 20 } = query;
+    const { skip } = paged(Number(page), Number(limit));
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.status)       filter.status = query.status;
     if (query.borrowerType) filter.borrowerType = query.borrowerType;
@@ -521,7 +626,11 @@ export class AcademicsService {
       filter.status  = { $in: ['issued','overdue'] };
       filter.dueDate = { $lt: new Date() };
     }
-    return this.issueModel.find(filter).sort({ createdAt: -1 }).limit(100).lean();
+    const [data, total] = await Promise.all([
+      this.issueModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)).lean(),
+      this.issueModel.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) } };
   }
 
   async issueBook(tenantId: string, institutionId: string, data: any, userId: string, requestingUser?: ScopedUser) {
@@ -529,18 +638,37 @@ export class AcademicsService {
     if (!book) throw new NotFoundException('Book not found');
     if (book.availableCopies < 1) throw new BadRequestException('No copies available');
 
+    if (!data.borrowerType || !data.borrowerId) {
+      throw new BadRequestException('borrowerType and borrowerId are required');
+    }
+    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId);
+
+    const settings = await this.getLibrarySettings(tenantId);
+    const activeIssueCount = await this.issueModel.countDocuments({
+      tenantId: this.tid(tenantId),
+      borrowerId: this.oid(data.borrowerId),
+      status: { $in: ['issued', 'overdue'] },
+    });
+    const limit = data.borrowerType === 'staff' ? settings.maxBooksStaff : settings.maxBooksStudent;
+    if (activeIssueCount >= limit) {
+      throw new BadRequestException(`This ${data.borrowerType} already has ${activeIssueCount} book(s) issued - the maximum allowed is ${limit}.`);
+    }
+
     const issueDate = new Date();
     const dueDate   = new Date();
-    dueDate.setDate(dueDate.getDate() + (data.loanDays || 14));
+    dueDate.setDate(dueDate.getDate() + (data.loanDays || settings.defaultLoanDays));
 
     const issue = await this.issueModel.create({
-      ...data,
       bookId:       this.oid(data.bookId),
       bookTitle:    book.title,
       accessionNo:  book.accessionNo,
       // Inherit the book's own campus, not the issuing staff member's -
       // the issue record belongs to wherever the physical book lives.
       campusId:     book.campusId || (requestingUser?.campusId ? this.oid(requestingUser.campusId) : null),
+      borrowerType: data.borrowerType,
+      borrowerId:   this.oid(data.borrowerId),
+      ...borrower,
+      notes:        data.notes,
       issueDate,
       dueDate,
       status:       'issued',
@@ -555,6 +683,20 @@ export class AcademicsService {
       $set: { status: newAvailable === 0 ? 'fully_issued' : 'available' },
     });
 
+    // If this exact borrower was holding a waiting/ready reservation on
+    // this exact book, this issue satisfies it - don't make the frontend
+    // orchestrate a second call to close the loop.
+    const reservation = await this.reservationModel.findOne({
+      tenantId: this.tid(tenantId),
+      bookId: this.oid(data.bookId),
+      borrowerId: this.oid(data.borrowerId),
+      status: { $in: ['waiting', 'ready'] },
+    });
+    if (reservation) {
+      await this.reservationModel.findByIdAndUpdate(reservation._id, { $set: { status: 'fulfilled' } });
+      await this.bookModel.findByIdAndUpdate(data.bookId, { $inc: { reservedCopies: -1 } });
+    }
+
     return issue;
   }
 
@@ -563,11 +705,9 @@ export class AcademicsService {
     if (!issue) throw new NotFoundException('Issue record not found');
     if (issue.status === 'returned') throw new BadRequestException('Book already returned');
 
-    const now         = new Date();
-    const overdueDays = now > new Date(issue.dueDate)
-      ? Math.ceil((now.getTime() - new Date(issue.dueDate).getTime()) / 86_400_000)
-      : 0;
-    const fineAmount  = overdueDays * (data.finePerDay ?? 5);
+    const now = new Date();
+    const settings = await this.getLibrarySettings(tenantId);
+    const { overdueDays, fineAmount } = computeLibraryFine(new Date(issue.dueDate), now, settings);
 
     await this.issueModel.findByIdAndUpdate(issueId, {
       $set: {
@@ -585,22 +725,143 @@ export class AcademicsService {
       $set: { status: 'available' },
     });
 
+    // The oldest waiting reservation on this book (if any) graduates to
+    // "ready for pickup" - reservedCopies is left alone here, it was
+    // already claimed when the reservation was created and only releases
+    // on fulfil/cancel/expire.
+    const nextReservation = await this.reservationModel
+      .findOne({ tenantId: this.tid(tenantId), bookId: issue.bookId, status: 'waiting' })
+      .sort({ reservedDate: 1 });
+    if (nextReservation) {
+      await this.reservationModel.findByIdAndUpdate(nextReservation._id, { $set: { status: 'ready' } });
+    }
+
     return { message: 'Book returned successfully', overdueDays, fineAmount };
   }
 
-  async getOverdueIssues(tenantId: string) {
+  /**
+   * Renews an active issue: extends dueDate by settings.renewalDays,
+   * capped at settings.maxRenewals total renewals, blocked once the book
+   * is overdue past the configured grace period (renew is not a way to
+   * dodge an already-late return).
+   */
+  async renewIssue(tenantId: string, issueId: string) {
+    const issue = await this.issueModel.findOne({ _id: issueId, tenantId: this.tid(tenantId) });
+    if (!issue) throw new NotFoundException('Issue record not found');
+    if (!['issued', 'overdue'].includes(issue.status)) {
+      throw new BadRequestException(`Cannot renew a book with status "${issue.status}"`);
+    }
+
+    const settings = await this.getLibrarySettings(tenantId);
     const now = new Date();
-    const issues = await this.issueModel
-      .find({ tenantId: this.tid(tenantId), status: 'issued', dueDate: { $lt: now } })
+    const { overdueDays } = computeLibraryFine(new Date(issue.dueDate), now, settings);
+    if (overdueDays > 0) {
+      throw new BadRequestException('Cannot renew an overdue book - return or pay the fine first');
+    }
+    if ((issue.renewalCount || 0) >= settings.maxRenewals) {
+      throw new BadRequestException('Maximum renewals reached');
+    }
+
+    const newDueDate = new Date(issue.dueDate);
+    newDueDate.setDate(newDueDate.getDate() + settings.renewalDays);
+
+    return this.issueModel.findByIdAndUpdate(
+      issueId,
+      { $inc: { renewalCount: 1 }, $set: { dueDate: newDueDate, status: 'issued' } },
+      { new: true },
+    ).lean();
+  }
+
+  /**
+   * Marks a checked-out copy lost - it permanently leaves the collection
+   * (totalCopies decrements, not just availableCopies which was already
+   * excluded while issued) and can carry a replacement charge distinct
+   * from any overdue fine.
+   */
+  async markLost(tenantId: string, issueId: string, data: any) {
+    const issue = await this.issueModel.findOne({ _id: issueId, tenantId: this.tid(tenantId) });
+    if (!issue) throw new NotFoundException('Issue record not found');
+    if (!['issued', 'overdue'].includes(issue.status)) {
+      throw new BadRequestException(`Cannot mark a book with status "${issue.status}" as lost`);
+    }
+
+    const updated = await this.issueModel.findByIdAndUpdate(issueId, {
+      $set: {
+        status: 'lost',
+        returnDate: new Date(),
+        replacementCharge: data.replacementCharge || 0,
+        notes: data.notes,
+      },
+    }, { new: true }).lean();
+
+    const book = await this.bookModel.findByIdAndUpdate(issue.bookId, {
+      $inc: { issuedCopies: -1, lostCopies: 1, totalCopies: -1 },
+    }, { new: true }).lean();
+    if (book) {
+      await this.bookModel.findByIdAndUpdate(issue.bookId, {
+        $set: { status: book.availableCopies === 0 ? 'fully_issued' : 'available' },
+      });
+    }
+
+    return updated;
+  }
+
+  /**
+   * Marks a returned-but-damaged copy - stays out of circulation
+   * (availableCopies untouched, it was already excluded while issued) but
+   * remains part of the collection count since it could theoretically be
+   * repaired later. No repair/restore flow in this build - disclosed gap.
+   */
+  async markDamaged(tenantId: string, issueId: string, data: any) {
+    const issue = await this.issueModel.findOne({ _id: issueId, tenantId: this.tid(tenantId) });
+    if (!issue) throw new NotFoundException('Issue record not found');
+    if (!['issued', 'overdue'].includes(issue.status)) {
+      throw new BadRequestException(`Cannot mark a book with status "${issue.status}" as damaged`);
+    }
+
+    const updated = await this.issueModel.findByIdAndUpdate(issueId, {
+      $set: {
+        status: 'damaged',
+        returnDate: new Date(),
+        condition: 'damaged',
+        notes: data.notes,
+      },
+    }, { new: true }).lean();
+
+    await this.bookModel.findByIdAndUpdate(issue.bookId, {
+      $inc: { issuedCopies: -1, damagedCopies: 1 },
+    });
+
+    return updated;
+  }
+
+  async getOverdueIssues(tenantId: string) {
+    return this.issueModel
+      .find({ tenantId: this.tid(tenantId), status: { $in: ['issued', 'overdue'] }, dueDate: { $lt: new Date() } })
       .sort({ dueDate: 1 })
       .lean();
-    if (issues.length > 0) {
-      await this.issueModel.updateMany(
-        { tenantId: this.tid(tenantId), status: 'issued', dueDate: { $lt: now } },
+  }
+
+  /**
+   * Daily sweep that actually flips status to 'overdue' - moved out of
+   * getOverdueIssues (a GET endpoint used to mutate on every read, a
+   * genuine data-integrity smell). No tenantId filter - runs system-wide
+   * across every tenant, same pattern as FeeDefaulterService's own daily
+   * cron, with the same try/catch-and-log so one failure doesn't crash
+   * the whole run.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_8AM)
+  async markOverdueBooks() {
+    try {
+      const result = await this.issueModel.updateMany(
+        { status: 'issued', dueDate: { $lt: new Date() } },
         { $set: { status: 'overdue' } },
       );
+      this.logger.log(`Library overdue sweep: ${result.modifiedCount} issue(s) marked overdue.`);
+      return result;
+    } catch (err: any) {
+      this.logger.error(`Library overdue sweep failed: ${err.message}`, err.stack);
     }
-    return issues;
   }
 
   async markFinePaid(tenantId: string, issueId: string) {
@@ -613,5 +874,180 @@ export class AcademicsService {
       .lean();
     if (!doc) throw new NotFoundException('Issue record not found');
     return doc;
+  }
+
+  // ─── LIBRARY — RESERVATIONS ───────────────────────────────────────────────────
+
+  async getReservations(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.status)     filter.status = query.status;
+    if (query.bookId)     filter.bookId = this.oid(query.bookId);
+    if (query.borrowerId) filter.borrowerId = this.oid(query.borrowerId);
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    return this.reservationModel.find(filter).sort({ reservedDate: 1 }).lean();
+  }
+
+  async createReservation(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
+    const book = await this.bookModel.findOne({ _id: data.bookId, tenantId: this.tid(tenantId) }).lean();
+    if (!book) throw new NotFoundException('Book not found');
+    if (!data.borrowerType || !data.borrowerId) {
+      throw new BadRequestException('borrowerType and borrowerId are required');
+    }
+    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId);
+
+    const duplicate = await this.reservationModel.findOne({
+      tenantId: this.tid(tenantId),
+      bookId: this.oid(data.bookId),
+      borrowerId: this.oid(data.borrowerId),
+      status: { $in: ['waiting', 'ready'] },
+    });
+    if (duplicate) throw new BadRequestException('This borrower already has an active hold on this book');
+
+    const reservation = await this.reservationModel.create({
+      tenantId: this.tid(tenantId),
+      institutionId: this.oid(institutionId),
+      campusId: book.campusId || (requestingUser?.campusId ? this.oid(requestingUser.campusId) : null),
+      bookId: this.oid(data.bookId),
+      bookTitle: book.title,
+      borrowerType: data.borrowerType,
+      borrowerId: this.oid(data.borrowerId),
+      ...borrower,
+      reservedDate: new Date(),
+      status: 'waiting',
+      notes: data.notes,
+    });
+
+    await this.bookModel.findByIdAndUpdate(data.bookId, { $inc: { reservedCopies: 1 } });
+    return reservation;
+  }
+
+  async cancelReservation(tenantId: string, id: string) {
+    const reservation = await this.reservationModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (!reservation) throw new NotFoundException('Reservation not found');
+    if (!['waiting', 'ready'].includes(reservation.status)) {
+      throw new BadRequestException(`Cannot cancel a reservation with status "${reservation.status}"`);
+    }
+
+    const updated = await this.reservationModel.findByIdAndUpdate(id, { $set: { status: 'cancelled' } }, { new: true }).lean();
+    await this.bookModel.findByIdAndUpdate(reservation.bookId, { $inc: { reservedCopies: -1 } });
+    return updated;
+  }
+
+  // ─── LIBRARY — REPORTS ────────────────────────────────────────────────────────
+
+  /** Overdue issues with the same fine calc as returnBook, plus best-effort
+   * borrower contact info batch-fetched by distinct borrowerId (no N+1). */
+  async getLibraryDefaultersReport(tenantId: string, requestingUser?: ScopedUser) {
+    const tid = this.tid(tenantId);
+    const settings = await this.getLibrarySettings(tenantId);
+    const filter: any = { tenantId: tid, status: { $in: ['issued', 'overdue'] }, dueDate: { $lt: new Date() } };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, undefined) : undefined;
+    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+
+    const issues = await this.issueModel.find(filter).sort({ dueDate: 1 }).lean();
+    const now = new Date();
+
+    const studentIds = Array.from(new Set(issues.filter(i => i.borrowerType === 'student').map(i => String(i.borrowerId))));
+    const staffIds   = Array.from(new Set(issues.filter(i => i.borrowerType === 'staff').map(i => String(i.borrowerId))));
+    const [students, staff] = await Promise.all([
+      studentIds.length ? this.studentModel.find({ _id: { $in: studentIds } }).select('personalPhone personalEmail').lean() : [],
+      staffIds.length ? this.staffModel.find({ _id: { $in: staffIds } }).select('phone email').lean() : [],
+    ]);
+    const studentContactById = new Map<string, { phone: string | null; email: string | null }>(
+      students.map((s: any) => [String(s._id), { phone: s.personalPhone ?? null, email: s.personalEmail ?? null }] as const),
+    );
+    const staffContactById = new Map<string, { phone: string | null; email: string | null }>(
+      staff.map((s: any) => [String(s._id), { phone: s.phone ?? null, email: s.email ?? null }] as const),
+    );
+
+    return issues.map((issue) => {
+      const { overdueDays, fineAmount } = computeLibraryFine(new Date(issue.dueDate), now, settings);
+      const contact = issue.borrowerType === 'student'
+        ? studentContactById.get(String(issue.borrowerId))
+        : staffContactById.get(String(issue.borrowerId));
+      return { ...issue, overdueDays, fineAmount, contact: contact || null };
+    });
+  }
+
+  /** Top borrowed books - aggregate-counted, then batch-joined to Book
+   * (no per-row lookups). */
+  async getMostBorrowedReport(tenantId: string, limitParam: any) {
+    const limit = Number(limitParam) || 10;
+    const rows = await this.issueModel.aggregate([
+      { $match: { tenantId: this.tid(tenantId) } },
+      { $group: { _id: '$bookId', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: limit },
+    ]);
+    const bookIds = rows.map(r => r._id);
+    const books = bookIds.length
+      ? await this.bookModel.find({ _id: { $in: bookIds } }).select('title author category').lean()
+      : [];
+    const bookById = new Map(books.map((b: any) => [String(b._id), b]));
+    return rows.map(r => ({
+      bookId: r._id,
+      count: r.count,
+      title: bookById.get(String(r._id))?.title ?? null,
+      author: bookById.get(String(r._id))?.author ?? null,
+      category: bookById.get(String(r._id))?.category ?? null,
+    }));
+  }
+
+  /** Circulation counts by book category - BookIssue has no category of
+   * its own, so this batch-joins to Book rather than a $lookup per issue. */
+  async getCirculationByCategoryReport(tenantId: string) {
+    const tid = this.tid(tenantId);
+    const issues = await this.issueModel.find({ tenantId: tid }).select('bookId').lean();
+    const bookIds = Array.from(new Set(issues.map(i => String(i.bookId))));
+    const books = bookIds.length
+      ? await this.bookModel.find({ _id: { $in: bookIds } }).select('category').lean()
+      : [];
+    const categoryByBookId = new Map(books.map((b: any) => [String(b._id), b.category || 'other']));
+
+    const counts = new Map<string, number>();
+    for (const issue of issues) {
+      const category = categoryByBookId.get(String(issue.bookId)) || 'other';
+      counts.set(category, (counts.get(category) || 0) + 1);
+    }
+    return Array.from(counts.entries()).map(([category, count]) => ({ category, count }));
+  }
+
+  /** XLSX export for the three library reports above - same pattern as
+   * SyllabusService.generateSloTemplateDownload (XLSX.utils.book_new /
+   * aoa_to_sheet or json_to_sheet / book_append_sheet / XLSX.write with
+   * {type:'buffer', bookType:'xlsx'}). */
+  async exportLibraryReport(tenantId: string, type: string, requestingUser?: ScopedUser): Promise<{ buffer: Buffer; filename: string }> {
+    const wb = XLSX.utils.book_new();
+
+    if (type === 'defaulters') {
+      const rows = await this.getLibraryDefaultersReport(tenantId, requestingUser);
+      const ws = XLSX.utils.json_to_sheet(rows.map(r => ({
+        Book: r.bookTitle, Borrower: r.borrowerName, Type: r.borrowerType,
+        'Admission/Employee No': r.borrowerAdmissionNo, 'Due Date': r.dueDate,
+        'Days Overdue': r.overdueDays, 'Fine Amount': r.fineAmount,
+        Phone: r.contact?.phone ?? '', Email: r.contact?.email ?? '',
+      })));
+      XLSX.utils.book_append_sheet(wb, ws, 'Defaulters');
+      return { buffer: XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }), filename: 'library-defaulters.xlsx' };
+    }
+
+    if (type === 'most-borrowed') {
+      const rows = await this.getMostBorrowedReport(tenantId, 100);
+      const ws = XLSX.utils.json_to_sheet(rows.map(r => ({
+        Title: r.title, Author: r.author, Category: r.category, 'Times Borrowed': r.count,
+      })));
+      XLSX.utils.book_append_sheet(wb, ws, 'Most Borrowed');
+      return { buffer: XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }), filename: 'library-most-borrowed.xlsx' };
+    }
+
+    if (type === 'circulation') {
+      const rows = await this.getCirculationByCategoryReport(tenantId);
+      const ws = XLSX.utils.json_to_sheet(rows.map(r => ({ Category: r.category, Issues: r.count })));
+      XLSX.utils.book_append_sheet(wb, ws, 'Circulation by Category');
+      return { buffer: XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }), filename: 'library-circulation-by-category.xlsx' };
+    }
+
+    throw new BadRequestException('type must be one of: defaulters, most-borrowed, circulation');
   }
 }

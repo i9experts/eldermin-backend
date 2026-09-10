@@ -1,7 +1,8 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body,
-  Param, Query, Request, UseGuards,
+  Controller, Get, Post, Patch, Put, Delete, Body,
+  Param, Query, Request, Res, UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { AcademicsService } from './academics.service';
 
@@ -137,6 +138,18 @@ export class AcademicsController {
   // Syllabus endpoints have moved to the new unified /syllabus module -
   // the frontend now calls that directly instead of /academics/syllabus.
 
+  // ─── LIBRARY — SETTINGS ───────────────────────────────────────────────────────
+
+  @Get('library/settings')
+  getLibrarySettings(@Request() req) {
+    return this.academicsService.getLibrarySettings(req.user.tenantId);
+  }
+
+  @Put('library/settings')
+  updateLibrarySettings(@Request() req, @Body() body: any) {
+    return this.academicsService.updateLibrarySettings(req.user.tenantId, body);
+  }
+
   // ─── LIBRARY — BOOKS ──────────────────────────────────────────────────────────
 
   @Get('library/stats')
@@ -169,6 +182,11 @@ export class AcademicsController {
     return this.academicsService.updateBook(req.user.tenantId, id, body);
   }
 
+  @Patch('library/books/:id/deaccession')
+  deaccessionBook(@Request() req, @Param('id') id: string) {
+    return this.academicsService.deaccessionBook(req.user.tenantId, id);
+  }
+
   // ─── LIBRARY — ISSUES ─────────────────────────────────────────────────────────
 
   @Get('library/issues')
@@ -195,8 +213,70 @@ export class AcademicsController {
     );
   }
 
+  @Post('library/issues/:id/renew')
+  renewIssue(@Request() req, @Param('id') id: string) {
+    return this.academicsService.renewIssue(req.user.tenantId, id);
+  }
+
   @Patch('library/issues/:id/fine-paid')
   markFinePaid(@Request() req, @Param('id') id: string) {
     return this.academicsService.markFinePaid(req.user.tenantId, id);
+  }
+
+  @Post('library/issues/:id/lost')
+  markLost(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.markLost(req.user.tenantId, id, body);
+  }
+
+  @Post('library/issues/:id/damaged')
+  markDamaged(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.markDamaged(req.user.tenantId, id, body);
+  }
+
+  // ─── LIBRARY — RESERVATIONS ───────────────────────────────────────────────────
+
+  @Get('library/reservations')
+  getReservations(@Request() req, @Query() q: any) {
+    return this.academicsService.getReservations(req.user.tenantId, q, req.user);
+  }
+
+  @Post('library/reservations')
+  createReservation(@Request() req, @Body() body: any) {
+    return this.academicsService.createReservation(
+      req.user.tenantId, req.user.institutionId, body, req.user,
+    );
+  }
+
+  @Delete('library/reservations/:id')
+  cancelReservation(@Request() req, @Param('id') id: string) {
+    return this.academicsService.cancelReservation(req.user.tenantId, id);
+  }
+
+  // ─── LIBRARY — REPORTS ────────────────────────────────────────────────────────
+
+  @Get('library/reports/defaulters')
+  getLibraryDefaultersReport(@Request() req) {
+    return this.academicsService.getLibraryDefaultersReport(req.user.tenantId, req.user);
+  }
+
+  @Get('library/reports/most-borrowed')
+  getMostBorrowedReport(@Request() req, @Query('limit') limit: string) {
+    return this.academicsService.getMostBorrowedReport(req.user.tenantId, limit);
+  }
+
+  @Get('library/reports/circulation-by-category')
+  getCirculationByCategoryReport(@Request() req) {
+    return this.academicsService.getCirculationByCategoryReport(req.user.tenantId);
+  }
+
+  @Get('library/reports/export')
+  async exportLibraryReport(@Request() req, @Query('type') type: string, @Res() res: Response) {
+    const { buffer, filename } = await this.academicsService.exportLibraryReport(req.user.tenantId, type, req.user);
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length,
+    });
+    res.status(200).end(buffer);
   }
 }

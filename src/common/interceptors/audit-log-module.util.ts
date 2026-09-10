@@ -26,6 +26,14 @@ const SUB_MODULE_LABELS: Record<string, Record<string, string>> = {
     reports: 'Procurement: Reports',
     'scheduled-reports': 'Procurement: Scheduled Reports',
   },
+  // Same granularity gap as Procurement's, for the same reason: every
+  // library action (books, issues, reservations, settings, reports) is
+  // mounted under the single /academics prefix alongside Subjects,
+  // Curriculum, Timetable, etc, so without this override every library
+  // action collapsed into the generic "Academics" audit-log entry.
+  academics: {
+    library: 'Academics: Library',
+  },
 };
 
 export function deriveAuditModule(path: string): string {
