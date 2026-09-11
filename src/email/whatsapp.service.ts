@@ -88,7 +88,22 @@ export class WhatsAppService {
       const body: any = await response.json().catch(() => null);
 
       if (!response.ok) {
-        const errorMessage = body?.error?.message || `WhatsApp API returned HTTP ${response.status}`;
+        // Meta's error.message is often generic (e.g. "Account not
+        // registered") - error.error_data.details usually carries the more
+        // specific human-readable explanation, and the numeric code/
+        // subcode (e.g. 133010) is what actually distinguishes "number not
+        // registered with the Cloud API" from a token/permission/template
+        // problem. Surfacing all three here means whoever reads this
+        // `reason` (it's returned straight through requestOtp's API
+        // response, not just logged) can diagnose without needing log
+        // access.
+        const err = body?.error;
+        const errorMessage = err
+          ? [
+              err.code != null ? `${err.message} (code ${err.code}${err.error_subcode != null ? `/${err.error_subcode}` : ''})` : err.message,
+              err.error_data?.details,
+            ].filter(Boolean).join(' — ')
+          : `WhatsApp API returned HTTP ${response.status}`;
         this.logger.error(`WhatsApp send failed for template "${templateName}" to ${to}: ${errorMessage}`);
         return { sent: false, reason: errorMessage };
       }
