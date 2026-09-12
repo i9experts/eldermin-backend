@@ -45,14 +45,18 @@ export class FeeDefaulterService {
 
   // ── Policy ───────────────────────────────────────────────────
   async getPolicy(schoolSlug: string): Promise<DefaulterPolicyDocument> {
-    let policy = await this.policyModel.findOne({ schoolSlug });
-    if (!policy) {
-      // Every school gets sane defaults the first time this is touched -
-      // no separate "seed" step required, and every default mirrors the
-      // schema's own @Prop defaults so this never drifts out of sync.
-      policy = await this.policyModel.create({ schoolSlug });
-    }
-    return policy;
+    const policy = await this.policyModel.findOne({ schoolSlug });
+    if (policy) return policy;
+    // Every school gets sane defaults the first time this is touched - no
+    // separate "seed" step required, and every default mirrors the schema's
+    // own @Prop defaults so this never drifts out of sync. Upserted
+    // atomically (like updatePolicy below) rather than findOne-then-create,
+    // since schoolSlug is uniquely indexed and two concurrent first-touch
+    // requests for the same school would otherwise race and one would throw
+    // E11000 instead of just getting the policy the other just created.
+    return this.policyModel.findOneAndUpdate(
+      { schoolSlug }, { $setOnInsert: { schoolSlug } }, { new: true, upsert: true },
+    );
   }
 
   async updatePolicy(schoolSlug: string, data: Partial<DefaulterPolicy>) {
