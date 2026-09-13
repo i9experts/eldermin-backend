@@ -190,6 +190,11 @@ export class EceController {
     return this.service.updateExperience(this.ctx(req).schoolSlug, id, dto);
   }
 
+  @Delete('experiences/:id') @HttpCode(HttpStatus.OK)
+  deleteExperience(@Request() req: any, @Param('id') id: string) {
+    return this.service.deleteExperience(this.ctx(req).schoolSlug, id);
+  }
+
   // ── Weekly Provision Plan ──────────────────────────────────
   @Get('weekly-plan')
   getWeeklyPlan(
