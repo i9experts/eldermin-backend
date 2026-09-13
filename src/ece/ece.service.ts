@@ -272,7 +272,11 @@ export class EceService {
       .lean();
 
     const skillIds = [...new Set(observations.flatMap((o: any) => o.skillMappings.map((m: any) => String(m.skillId))))];
-    const skills = await this.skillModel.find({ _id: { $in: skillIds } }).lean();
+    // Scoped by schoolSlug too, not just _id - a skillId submitted on an
+    // observation/DTO is only @IsMongoId()-validated, so an unscoped lookup
+    // here would let another tenant's skill quietly get folded into this
+    // school's domain rollups/analytics.
+    const skills = await this.skillModel.find({ _id: { $in: skillIds }, schoolSlug }).lean();
     const skillToDomain = new Map(skills.map((s: any) => [String(s._id), String(s.domainId)]));
 
     const domainData = new Map<string, { level: string; count: number; lastObservedAt: Date }>();
@@ -329,9 +333,15 @@ export class EceService {
   }
 
   async createPortfolioEntry(schoolSlug: string, dto: any) {
+    // dto.studentId is only @IsMongoId()-validated at the DTO layer - confirm
+    // it actually belongs to this school before creating the entry, so a
+    // guessed/enumerated ObjectId from another tenant can't be used to
+    // notify a stranger school's guardian (see notifyFamily below).
+    const student = await this.studentModel.findOne({ _id: dto.studentId, schoolSlug }).select('_id').lean();
+    if (!student) throw new NotFoundException('Student not found');
     const entry = await this.portfolioModel.create({ ...dto, schoolSlug });
     if (dto.isVisibleToFamily) {
-      await this.notifyFamily(dto.studentId, entry.title, entry.narrative, entry.tryThisAtHome);
+      await this.notifyFamily(schoolSlug, dto.studentId, entry.title, entry.narrative, entry.tryThisAtHome);
     }
     return entry;
   }
@@ -344,7 +354,7 @@ export class EceService {
     );
     if (!entry) throw new NotFoundException('Portfolio entry not found');
     if (isVisibleToFamily) {
-      const notified = await this.notifyFamily(String(entry.studentId), entry.title, entry.narrative, entry.tryThisAtHome);
+      const notified = await this.notifyFamily(schoolSlug, String(entry.studentId), entry.title, entry.narrative, entry.tryThisAtHome);
       return { ...entry.toObject(), familyNotified: notified };
     }
     return { ...entry.toObject(), familyNotified: false };
@@ -356,8 +366,8 @@ export class EceService {
   // connected (WhatsAppService already exists as an honest stub for
   // exactly that, see src/email/whatsapp.service.ts), but there is
   // nothing to wire in until then.
-  private async notifyFamily(studentId: string, title: string, narrative: string, tryThisAtHome?: string): Promise<boolean> {
-    const student: any = await this.studentModel.findById(studentId).lean();
+  private async notifyFamily(schoolSlug: string, studentId: string, title: string, narrative: string, tryThisAtHome?: string): Promise<boolean> {
+    const student: any = await this.studentModel.findOne({ _id: studentId, schoolSlug }).lean();
     if (!student?.guardians?.length) return false;
     const guardian = student.guardians.find((g: any) => g.isPrimary && g.email) || student.guardians.find((g: any) => g.email);
     if (!guardian?.email) return false;
@@ -979,7 +989,11 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
       .select('skillMappings')
       .lean();
     const skillIds = [...new Set(recentObservations.flatMap((o: any) => o.skillMappings.map((m: any) => String(m.skillId))))];
-    const skills = await this.skillModel.find({ _id: { $in: skillIds } }).lean();
+    // Scoped by schoolSlug too, not just _id - a skillId submitted on an
+    // observation/DTO is only @IsMongoId()-validated, so an unscoped lookup
+    // here would let another tenant's skill quietly get folded into this
+    // school's domain rollups/analytics.
+    const skills = await this.skillModel.find({ _id: { $in: skillIds }, schoolSlug }).lean();
     const skillToDomain = new Map(skills.map((s: any) => [String(s._id), String(s.domainId)]));
     const domainCounts = new Map<string, number>();
     for (const obs of recentObservations as any[]) {
