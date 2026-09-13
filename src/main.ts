@@ -29,6 +29,24 @@ async function bootstrap() {
   // at all. API responses here are all dynamic and tenant-scoped — none of
   // them should ever be served from a stale browser cache.
   app.getHttpAdapter().getInstance().set('etag', false);
+
+  // Express 5's default 'query parser' is 'simple' (Node's built-in
+  // querystring module), which has NO idea about bracket array syntax -
+  // `grade[]=Grade-1&grade[]=Grade-2` parses into a literal key named
+  // "grade[]", leaving `grade` itself undefined. Axios's default array
+  // serialization (used by every array-valued filter param across the
+  // frontend, e.g. the Students list's Class/Section multi-select) sends
+  // exactly that bracket syntax. The practical effect: any multi-select
+  // filter silently had zero effect on the query - the endpoint received
+  // no `grade`/`section` value at all and returned its unfiltered list,
+  // while the UI still showed the filter chip as "selected". Switching to
+  // 'extended' (the qs library) fixes this globally in one place, since
+  // qs understands both bracket (`grade[]=`) and repeated-key
+  // (`grade=A&grade=B`) array styles - rather than hunting down and
+  // patching a custom paramsSerializer in each of the ~19 separate axios
+  // instances across the frontend.
+  app.getHttpAdapter().getInstance().set('query parser', 'extended');
+
   app.use((req: any, res: any, next: any) => {
     res.setHeader('Cache-Control', 'no-store');
     next();
