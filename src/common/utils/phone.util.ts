@@ -62,3 +62,33 @@ export function phoneMatchCandidates(raw: string | null | undefined): string[] {
 
   return Array.from(candidates);
 }
+
+/** Builds a MongoDB-safe regex that matches a stored guardians.phone value
+ * even if it still has punctuation baked into the stored string itself
+ * (e.g. "0315-2711020" or "0315 2711020") - a real, observed case: a
+ * student created before every write path normalized on save (see
+ * students.service.ts createStudent/addGuardianToStudent) can have a
+ * guardian phone persisted with the exact separators the admin typed at
+ * enrollment time. phoneMatchCandidates() alone can't catch this because
+ * it only generates clean, punctuation-free candidates and Mongo does an
+ * exact string match - so a lookup for "3172573105" would never equal a
+ * stored "0315-2711020". This instead matches on the digits alone,
+ * tolerating any run of non-digit characters between them, so historical
+ * punctuated data works without a one-off migration of every record.
+ * Anchored at both ends so it can't false-match a longer number that
+ * merely contains these digits as a substring. Returns null for empty
+ * input. */
+export function phoneMatchRegex(raw: string | null | undefined): RegExp | null {
+  const canonical = normalizePhone(raw);
+  if (!canonical) return null;
+
+  const nationalSignificant = canonical.startsWith(`+${DEFAULT_COUNTRY_CODE}`)
+    ? canonical.slice(1 + DEFAULT_COUNTRY_CODE.length)
+    : canonical.slice(1);
+  if (!nationalSignificant) return null;
+
+  const digitPattern = nationalSignificant.split('').join('[^0-9]*');
+  // Optional prefix: +92, 0092, 92, or a plain local leading 0 - each
+  // possibly followed by punctuation before the significant digits start.
+  return new RegExp(`^(?:\\+?${DEFAULT_COUNTRY_CODE}|00${DEFAULT_COUNTRY_CODE}|0)?[^0-9]*${digitPattern}$`);
+}

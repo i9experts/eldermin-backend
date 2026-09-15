@@ -8,7 +8,7 @@ import { User, UserDocument } from '../modules/organization/schemas/user.schema'
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { WhatsAppService } from '../email/whatsapp.service';
-import { normalizePhone, phoneMatchCandidates } from '../common/utils/phone.util';
+import { normalizePhone, phoneMatchRegex } from '../common/utils/phone.util';
 
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
@@ -35,12 +35,13 @@ export class ParentAuthService {
     }
 
     // Guardian phones can be saved to the dashboard in any of the common
-    // local formats (see phone.util.ts) - match against every
-    // representation of this number, not just the canonical one, so a
-    // guardian added before write-side normalization existed (or via a
-    // school's bulk import) can still log in without needing a data fix.
+    // local formats, and a record created before every write path
+    // normalized on save can still have punctuation (dashes/spaces) baked
+    // into the stored string itself (see phone.util.ts) - match on the
+    // digits alone so a guardian added before write-side normalization
+    // existed can still log in without needing a data fix.
     const student = await this.studentModel
-      .findOne({ 'guardians.phone': { $in: phoneMatchCandidates(phone) } })
+      .findOne({ 'guardians.phone': phoneMatchRegex(phone) })
       .select('schoolSlug')
       .lean();
     if (!student) {
@@ -103,8 +104,8 @@ export class ParentAuthService {
   }
 
   private async issueSessionForPhone(phone: string) {
-    const candidates = phoneMatchCandidates(phone);
-    const matchingStudents = await this.studentModel.find({ 'guardians.phone': { $in: candidates } }).lean();
+    const matchRegex = phoneMatchRegex(phone);
+    const matchingStudents = await this.studentModel.find({ 'guardians.phone': matchRegex }).lean();
     if (matchingStudents.length === 0) {
       throw new NotFoundException('No student record found with this WhatsApp number.');
     }
@@ -116,7 +117,7 @@ export class ParentAuthService {
     let user = await this.userModel.findOne({ phone });
 
     if (!user) {
-      const primaryGuardian = (matchingStudents[0] as any).guardians?.find((g: any) => candidates.includes(g.phone));
+      const primaryGuardian = (matchingStudents[0] as any).guardians?.find((g: any) => matchRegex?.test(g.phone || ''));
       const placeholderPasswordHash = await bcrypt.hash(`otp-only-${Date.now()}-${Math.random()}`, 10);
       user = await this.userModel.create({
         tenantId: (tenant as any)._id,

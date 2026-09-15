@@ -1,4 +1,4 @@
-import { normalizePhone, phoneMatchCandidates } from './phone.util';
+import { normalizePhone, phoneMatchCandidates, phoneMatchRegex } from './phone.util';
 
 describe('normalizePhone', () => {
   it('adds the country code to a local number with leading zero', () => {
@@ -50,5 +50,41 @@ describe('phoneMatchCandidates', () => {
   it('returns an empty array for empty input', () => {
     expect(phoneMatchCandidates('')).toEqual([]);
     expect(phoneMatchCandidates(undefined)).toEqual([]);
+  });
+});
+
+describe('phoneMatchRegex', () => {
+  it('matches a clean, unpunctuated stored value', () => {
+    expect(phoneMatchRegex('03152711020')!.test('03152711020')).toBe(true);
+    expect(phoneMatchRegex('03152711020')!.test('+923152711020')).toBe(true);
+    expect(phoneMatchRegex('03152711020')!.test('923152711020')).toBe(true);
+    expect(phoneMatchRegex('03152711020')!.test('3152711020')).toBe(true);
+  });
+
+  it('matches a stored value that still has dashes baked in (real observed case)', () => {
+    expect(phoneMatchRegex('03152711020')!.test('0315-2711020')).toBe(true);
+  });
+
+  it('matches a stored value that still has spaces baked in', () => {
+    expect(phoneMatchRegex('03152711020')!.test('0315 271 1020')).toBe(true);
+  });
+
+  it('matches regardless of which format the query itself was typed in', () => {
+    const re = phoneMatchRegex('+923152711020')!;
+    expect(re.test('0315-2711020')).toBe(true);
+    expect(re.test('03152711020')).toBe(true);
+  });
+
+  it('does not match a different number', () => {
+    expect(phoneMatchRegex('03152711020')!.test('03172573105')).toBe(false);
+  });
+
+  it('does not false-match a longer number that merely contains these digits', () => {
+    expect(phoneMatchRegex('03152711020')!.test('103152711020999')).toBe(false);
+  });
+
+  it('returns null for empty input', () => {
+    expect(phoneMatchRegex('')).toBeNull();
+    expect(phoneMatchRegex(undefined)).toBeNull();
   });
 });

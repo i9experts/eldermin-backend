@@ -353,7 +353,18 @@ export class StudentsService {
     }
 
     try {
-      const student = new this.studentModel({ ...dto, studentId, admissionNumber });
+      // Normalize guardian phones the same way addGuardianToStudent /
+      // updateStudent / bulk-import already do (see phone.util.ts) - this
+      // is the create-a-brand-new-student path (the one enrollment/"Add
+      // Student" actually uses), so it's the most common way a guardian's
+      // WhatsApp number first enters the database. Missing normalization
+      // here meant a number typed with dashes/spaces at enrollment time
+      // (e.g. "0315-2711020") got persisted exactly as typed and could
+      // never match the parent app's normalized WhatsApp login lookup.
+      const guardians = Array.isArray(dto.guardians)
+        ? dto.guardians.map((g) => ({ ...g, phone: normalizePhone(g?.phone) || undefined }))
+        : dto.guardians;
+      const student = new this.studentModel({ ...dto, guardians, studentId, admissionNumber });
       await student.save();
 
       // Mirror any structured medical detail the Enrollment Wizard collected
