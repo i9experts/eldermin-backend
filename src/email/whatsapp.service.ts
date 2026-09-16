@@ -24,12 +24,21 @@ export class WhatsAppService {
    * template's actual placeholder order.
    *
    * `isAuthTemplate` must be true for Authentication-category templates
-   * using the "Copy Code" delivery method (e.g. parent_login_otp) -
-   * Meta requires those to carry the code in BOTH the body parameter
-   * AND a separate button component with sub_type 'copy_code'. A
-   * regular Utility template (e.g. fee_reminder) doesn't need this and
-   * would be rejected by Meta if it were added, so this only applies
-   * when explicitly requested.
+   * using the "One-Tap Autofill" delivery method (e.g. parent_login_otp) -
+   * Meta requires those to carry the code in BOTH the body parameter AND
+   * a separate button component with sub_type 'url' (the code fills the
+   * button's dynamic URL suffix, configured with a {{1}} placeholder when
+   * the template was approved in WhatsApp Manager). A regular Utility
+   * template (e.g. fee_reminder) doesn't need this and would be rejected
+   * by Meta if it were added, so this only applies when explicitly
+   * requested.
+   *
+   * NOTE: Authentication templates can alternatively be approved with a
+   * "Copy Code" button (sub_type 'copy_code' + a 'coupon_code' parameter)
+   * instead - Meta rejects a send whose button sub_type doesn't match
+   * how the specific template was actually approved (error #132018,
+   * "Button at index 0 must be of type Url"), so if parent_login_otp is
+   * ever re-approved as Copy Code, this needs to switch back.
    */
   async sendTemplateMessage(
     to: string, templateName: string, params: Record<string, string>,
@@ -53,10 +62,11 @@ export class WhatsAppService {
     }
     if (options?.isAuthTemplate) {
       // The code is always the first (and normally only) param for an
-      // auth template - copied into the button component as Meta's
-      // copy-code delivery method requires.
+      // auth template - it also fills the button's dynamic URL suffix,
+      // as parent_login_otp is approved with a One-Tap Autofill (URL)
+      // button rather than Copy Code (see the doc comment above).
       const code = paramValues[0];
-      components.push({ type: 'button', sub_type: 'copy_code', index: 0, parameters: [{ type: 'coupon_code', coupon_code: code }] });
+      components.push({ type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: code }] });
     }
 
     // Language code as actually registered on the template in WhatsApp
