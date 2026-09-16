@@ -205,8 +205,17 @@ export class Student {
   @Prop({ type: Object, default: {} }) customFields: Record<string, any>;
 
   // ── Status ─────────────────────────────────────────────────
+  // 'academic_gap': a real enrollment status, not the same as 'on_leave'
+  // (which is a short suspension). For a student taking an extended
+  // academic-year break - most commonly to complete Hifz - while staying
+  // enrolled at the school. Excluded from active-classroom rosters and
+  // dashboards the same way every other non-'active' status already is
+  // (see the 'status: active' filters throughout students.service.ts),
+  // but the full record - guardians, history, everything - stays intact
+  // for when the school re-assigns them a class/section and fee
+  // structure on resuming.
   @Prop({
-    enum: ['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave'],
+    enum: ['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave', 'academic_gap'],
     default: 'active',
   })
   status: string;

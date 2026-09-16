@@ -221,7 +221,7 @@ export class CreateStudentDto {
 
 export class UpdateStudentDto extends PartialType(CreateStudentDto) {
   @IsOptional()
-  @IsEnum(['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave'])
+  @IsEnum(['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave', 'academic_gap'])
   status?: string;
 
   @IsOptional() @IsDateString() leftDate?: string;
