@@ -14,6 +14,7 @@ import {
   StudentFeeAssignment, StudentFeeAssignmentDocument,
 } from './schemas/finance.schema';
 import { findConflictingAssignments } from './fee-assignment.util';
+import { pickApplicableFeeStructures } from './fee-structure-match.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
 import { canResyncInvoiceDiscount, discountActuallyChanged } from './discount-resync.util';
@@ -3121,12 +3122,12 @@ export class FinanceService {
       studentMatch._id = new Types.ObjectId(scopeValue);
     } else if (scopeType === 'campus' && scopeValue) {
       const campus = await this.campusModel.findOne({ schoolSlug, name: scopeValue }).lean();
-      if (!campus) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], errors: [`Campus "${scopeValue}" not found`], totalStudents: 0 };
+      if (!campus) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: [`Campus "${scopeValue}" not found`], totalStudents: 0 };
       studentMatch.campusId = String((campus as any)._id);
     }
 
     const students = await this.studentModel.find(studentMatch).lean();
-    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
+    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
 
     const [feeStructures, assignments, discountPrograms, campuses, studentFeeAssignments] = await Promise.all([
       // Match on isActive + grade/section/campus only, not academicYear.
@@ -3176,9 +3177,10 @@ export class FinanceService {
     const alreadyInvoiced = new Set(existingInvoices.map((inv: any) => String(inv.studentId)));
     const existingInvoiceByStudent = new Map(existingInvoices.map((inv: any) => [String(inv.studentId), inv]));
 
-    let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, discountsSynced = 0;
+    let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, skippedAmbiguousMatch = 0, discountsSynced = 0;
     const errors: string[] = [];
     const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
+    const gradesWithAmbiguousMatch = new Map<string, number>(); // grade/section -> count of students affected
 
     for (const student of students) {
       try {
@@ -3206,16 +3208,35 @@ export class FinanceService {
         const explicitAssignments = (studentFeeAssignmentsByStudent.get(String(student._id)) || []).filter((a: any) =>
           new Date(a.effectiveFrom) <= billingMonthAnchor && (!a.effectiveTo || new Date(a.effectiveTo) >= billingMonthAnchor));
 
-        const applicableStructures = explicitAssignments.length > 0
-          ? explicitAssignments.map((a: any) => feeStructureById.get(String(a.feeStructureId))).filter(Boolean)
-          : feeStructures.filter((fs: any) =>
-              fs.grade === (student as any).currentGrade &&
-              (!fs.section || fs.section === (student as any).currentSection) &&
-              (!fs.campus || fs.campus === studentCampusName)
-            );
+        const key = `${(student as any).currentGrade || 'Unknown'}${(student as any).currentSection ? ' - ' + (student as any).currentSection : ''}`;
+        let applicableStructures: any[];
+        if (explicitAssignments.length > 0) {
+          applicableStructures = explicitAssignments.map((a: any) => feeStructureById.get(String(a.feeStructureId))).filter(Boolean);
+        } else {
+          // A class's fee structure is a single current-state catalog, not
+          // something that bills additively across every structure ever
+          // created for that grade/section - see fee-structure-match.util.ts.
+          // Narrowed first by effectiveFrom/effectiveTo (a field this exact
+          // matching step previously ignored entirely, despite the schema
+          // fully supporting it), then, if more than one candidate still
+          // ties, by specificity/recency. A genuine unresolved tie is never
+          // silently summed into one invoice - it's reported below so the
+          // school can deactivate the stale structure(s).
+          const gradeSectionCampusMatch = feeStructures.filter((fs: any) =>
+            fs.grade === (student as any).currentGrade &&
+            (!fs.section || fs.section === (student as any).currentSection) &&
+            (!fs.campus || fs.campus === studentCampusName)
+          );
+          applicableStructures = pickApplicableFeeStructures(gradeSectionCampusMatch, billingMonthAnchor);
+          if (applicableStructures.length > 1) {
+            skippedAmbiguousMatch++;
+            gradesWithAmbiguousMatch.set(key, (gradesWithAmbiguousMatch.get(key) || 0) + 1);
+            errors.push(`${(student as any).firstName || ''} ${(student as any).lastName || ''}: ${applicableStructures.length} equally-specific active fee structures match ${key} for this billing month (${applicableStructures.map((fs: any) => `"${fs.name}"`).join(', ')}) - deactivate the stale one(s) in Fee Structures, or assign this student a fee structure explicitly.`);
+            continue;
+          }
+        }
         if (applicableStructures.length === 0) {
           skippedNoMatch++;
-          const key = `${(student as any).currentGrade || 'Unknown'}${(student as any).currentSection ? ' - ' + (student as any).currentSection : ''}`;
           gradesWithNoMatch.set(key, (gradesWithNoMatch.get(key) || 0) + 1);
           continue;
         }
@@ -3365,10 +3386,12 @@ export class FinanceService {
       // canResyncDiscount above).
       discountsSynced: dryRun ? 0 : discountsSynced,
       willSyncDiscounts: dryRun ? discountsSynced : discountsSynced,
-      skipped: skippedAlreadyBilled + skippedNoMatch,
+      skipped: skippedAlreadyBilled + skippedNoMatch + skippedAmbiguousMatch,
       skippedAlreadyBilled,
       skippedNoMatch,
       noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, count]) => ({ grade, count })),
+      skippedAmbiguousMatch,
+      ambiguousMatchBreakdown: Array.from(gradesWithAmbiguousMatch.entries()).map(([grade, count]) => ({ grade, count })),
       errors,
       totalStudents: students.length,
     };
