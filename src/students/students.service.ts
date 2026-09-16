@@ -576,7 +576,7 @@ export class StudentsService {
    * the right default for almost every real case, unlike a hard delete. */
   async bulkUpdateStatus(schoolSlug: string, studentIds: string[], status: string, leftDate?: string, leftReason?: string) {
     if (!studentIds?.length) throw new BadRequestException('studentIds is required');
-    const validStatuses = ['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave'];
+    const validStatuses = ['active', 'inactive', 'graduated', 'transferred', 'expelled', 'on_leave', 'academic_gap'];
     if (!validStatuses.includes(status)) throw new BadRequestException(`Invalid status - must be one of: ${validStatuses.join(', ')}`);
 
     const set: any = { status };

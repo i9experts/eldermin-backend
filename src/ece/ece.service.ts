@@ -806,8 +806,13 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
   // deliberately self-contained here rather than modifying the actively
   // developed Students module for one narrow filter) ──────────
   async getChildren(schoolSlug: string) {
+    // 'active' only, not merely "not inactive" - a child on an academic
+    // gap (e.g. a Hifz break), graduated, transferred etc. is still a real
+    // record but shouldn't appear in the day-to-day Early Years roster,
+    // matching the 'status: active' convention students.service.ts uses
+    // everywhere else for "who's actually in class right now".
     return this.studentModel
-      .find({ schoolSlug, programType: 'early-years', status: { $ne: 'inactive' } })
+      .find({ schoolSlug, programType: 'early-years', status: 'active' })
       .select('firstName lastName photo dateOfBirth currentGrade currentSection studentId')
       .sort({ firstName: 1 })
       .lean();
@@ -821,7 +826,7 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const eceStudents = await this.studentModel.find({ schoolSlug, programType: 'early-years', status: { $ne: 'inactive' } }).select('_id').lean();
+    const eceStudents = await this.studentModel.find({ schoolSlug, programType: 'early-years', status: 'active' }).select('_id').lean();
     const eceStudentIds = eceStudents.map((s: any) => s._id);
 
     const presentToday = await this.attendanceModel.countDocuments({
@@ -969,7 +974,7 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
     const thirtyDaysAgo = new Date(now); thirtyDaysAgo.setDate(now.getDate() - 30);
 
     const children = await this.studentModel
-      .find({ schoolSlug, programType: 'early-years', status: { $ne: 'inactive' } })
+      .find({ schoolSlug, programType: 'early-years', status: 'active' })
       .select('_id firstName lastName currentGrade currentSection')
       .lean();
     const childIds = children.map((c: any) => c._id);
