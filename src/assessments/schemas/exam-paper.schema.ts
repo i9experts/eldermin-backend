@@ -64,6 +64,16 @@ export class ExamPaper {
   @Prop({ required: true, enum: ['english', 'urdu', 'arabic'] }) language: string;
   @Prop({ required: true }) duration: number; // minutes
   @Prop() generalInstructions: string;
+  // Globally-standardised print layouts a school admin picks from rather
+  // than a free-form design - keeps every paper leaving the school
+  // structurally consistent no matter who set it up. 'standard': single
+  // question column, header + QR/barcode on the question sheet itself
+  // (existing default). 'compact': two-column question layout to save
+  // paper on long objective papers. 'formal': adds a separate board-exam
+  // style cover page (candidate/invigilator fields, seal box, signed
+  // declaration) ahead of the question content.
+  @Prop({ required: true, enum: ['standard', 'compact', 'formal'], default: 'standard' })
+  paperFormat: string;
   @Prop({ type: [PaperSectionSchema], default: [] }) sections: PaperSection[];
   // Unique, human-readable identifier printed with the QR code - lets a
   // physical paper be traced back to this record even without scanning

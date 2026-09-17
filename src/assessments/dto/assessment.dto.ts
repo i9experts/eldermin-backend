@@ -201,6 +201,7 @@ export class CreateExamPaperDto {
   @IsEnum(['english', 'urdu', 'arabic']) language: string;
   @IsNumber() duration: number;
   @IsOptional() @IsString() generalInstructions?: string;
+  @IsOptional() @IsEnum(['standard', 'compact', 'formal']) paperFormat?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => PaperSectionDto) sections: PaperSectionDto[];
 }
 export class UpdateExamPaperDto extends PartialType(CreateExamPaperDto) {}
