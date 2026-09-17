@@ -14,6 +14,11 @@ const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
 const RESEND_COOLDOWN_SECONDS = 45;
 
+// Play Store closed-testing reviewer account: fixed OTP so reviewers can log
+// in without receiving a real WhatsApp message. Remove once review is done.
+const REVIEWER_TEST_PHONE = '+923172573105';
+const REVIEWER_TEST_OTP = '123456';
+
 @Injectable()
 export class ParentAuthService {
   private logger = new Logger('ParentAuthService');
@@ -60,11 +65,14 @@ export class ParentAuthService {
       throw new BadRequestException(`Please wait ${waitSeconds} more second(s) before requesting another code.`);
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const isReviewerTestPhone = phone === REVIEWER_TEST_PHONE;
+    const code = isReviewerTestPhone ? REVIEWER_TEST_OTP : String(Math.floor(100000 + Math.random() * 900000));
     const codeHash = await bcrypt.hash(code, 10);
     const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
 
-    const result = await this.whatsAppService.sendTemplateMessage(phone, 'parent_login_otp', { code }, { isAuthTemplate: true });
+    const result = isReviewerTestPhone
+      ? { sent: true, reason: undefined }
+      : await this.whatsAppService.sendTemplateMessage(phone, 'parent_login_otp', { code }, { isAuthTemplate: true });
 
     await this.otpModel.create({
       phone, codeHash, expiresAt, attempts: 0,
