@@ -3083,6 +3083,84 @@ export class FinanceService {
     };
   }
 
+  /** CSV/spreadsheet bulk import for the common real-world case a single
+   * fee structure can't cover: a class where different students have
+   * genuinely different, individually-negotiated fee structures (sibling
+   * discounts, special concessions, etc - see the auto-match ambiguity
+   * this exact scenario triggers in generateInvoices/fee-structure-match.util.ts).
+   * Assigning ~20+ students one at a time through the single-assignment
+   * modal doesn't scale; this lets a school paste/upload a spreadsheet of
+   * student -> fee structure pairs instead. Runs every row through the
+   * same conflict-checked assignFeeStructure used everywhere else - never
+   * a raw insertMany - so a row that would silently double up a student's
+   * assignment is reported per-row instead, exactly like bulkImportCOA's
+   * per-row created/updated/error reporting. */
+  async bulkImportFeeAssignments(schoolSlug: string, rows: any[], opts: {
+    academicYear: string; assignedBy?: string; replace?: boolean;
+  }) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new BadRequestException('No rows to import.');
+    }
+
+    const students = await this.studentModel.find({ schoolSlug }).select('_id firstName lastName admissionNumber studentId').lean();
+    const studentByAdmissionNumber = new Map(students.filter((s: any) => s.admissionNumber).map((s: any) => [String(s.admissionNumber).trim().toLowerCase(), s]));
+    const studentByStudentId = new Map(students.filter((s: any) => s.studentId).map((s: any) => [String(s.studentId).trim().toLowerCase(), s]));
+
+    const structures = await this.feeStructModel.find({ schoolSlug, isActive: true }).select('_id name').lean();
+    const structuresByName = new Map<string, any[]>();
+    for (const fs of structures as any[]) {
+      const key = String(fs.name).trim().toLowerCase();
+      (structuresByName.get(key) ?? structuresByName.set(key, []).get(key)!).push(fs);
+    }
+
+    const results: Array<{ row: number; student?: string; status: 'assigned' | 'conflict' | 'error'; message?: string }> = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i] || {};
+      const studentKey = String(raw.admissionNumber || raw.studentId || '').trim().toLowerCase();
+      const structureName = String(raw.feeStructureName || '').trim();
+      const effectiveFrom = String(raw.effectiveFrom || '').trim();
+
+      try {
+        if (!studentKey) throw new Error('"admissionNumber" (or "studentId") is required.');
+        if (!structureName) throw new Error('"feeStructureName" is required.');
+        if (!effectiveFrom) throw new Error('"effectiveFrom" is required (e.g. 2026-09-01).');
+
+        const student = studentByAdmissionNumber.get(studentKey) || studentByStudentId.get(studentKey);
+        if (!student) throw new Error(`No student found with admission number / student ID "${raw.admissionNumber || raw.studentId}".`);
+
+        const matchingStructures = structuresByName.get(structureName.toLowerCase()) || [];
+        if (matchingStructures.length === 0) throw new Error(`No active fee structure named "${structureName}" found.`);
+        if (matchingStructures.length > 1) throw new Error(`${matchingStructures.length} active fee structures are named "${structureName}" - rename them to be unique before bulk-importing.`);
+
+        const result = await this.assignFeeStructure(schoolSlug, {
+          studentId: String((student as any)._id),
+          feeStructureId: String(matchingStructures[0]._id),
+          academicYear: opts.academicYear,
+          effectiveFrom,
+          effectiveTo: raw.effectiveTo || null,
+          assignedBy: opts.assignedBy,
+          notes: raw.notes || undefined,
+          replace: opts.replace,
+        });
+
+        if (result.conflict) {
+          results.push({ row: i + 1, student: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(), status: 'conflict', message: result.message });
+        } else {
+          results.push({ row: i + 1, student: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(), status: 'assigned' });
+        }
+      } catch (err: any) {
+        results.push({ row: i + 1, status: 'error', message: err?.message || 'Import failed.' });
+      }
+    }
+
+    return {
+      assigned: results.filter(r => r.status === 'assigned').length,
+      conflicts: results.filter(r => r.status === 'conflict'),
+      errors: results.filter(r => r.status === 'error'),
+    };
+  }
+
   async deleteStudentFeeAssignment(id: string, schoolSlug: string) {
     const assignment = await this.studentFeeAssignmentModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: { isActive: false, replacedAt: new Date() } },

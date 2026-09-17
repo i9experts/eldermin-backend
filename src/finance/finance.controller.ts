@@ -635,6 +635,15 @@ export class FinanceController {
   }
 
   @RequireModuleAccess('finance', 'assignments', 'manage')
+  @Post('student-fee-assignments/bulk-import') @HttpCode(HttpStatus.CREATED)
+  async bulkImportFeeAssignments(@Body() dto: { rows: any[]; academicYear?: string; replace?: boolean }, @Request() req: any) {
+    const { schoolSlug, academicYear, userName } = this.ctx(req);
+    return this.service.bulkImportFeeAssignments(schoolSlug, dto?.rows || [], {
+      academicYear: dto.academicYear || academicYear, assignedBy: userName, replace: dto.replace,
+    });
+  }
+
+  @RequireModuleAccess('finance', 'assignments', 'manage')
   @Delete('student-fee-assignments/:id') async deleteStudentFeeAssignment(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteStudentFeeAssignment(id, schoolSlug);
