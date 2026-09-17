@@ -227,7 +227,12 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   private readonly LANGUAGE_CONFIG: Record<string, { dir: string; lang: string; font: string; labels: Record<string, string> }> = {
     english: {
       dir: 'ltr', lang: 'en', font: "'Times New Roman', Georgia, serif",
-      labels: { instructions: 'Instructions', duration: 'Time Allowed', marks: 'Total Marks', name: 'Name', roll: 'Roll No', section: 'Section' },
+      labels: {
+        instructions: 'Instructions', duration: 'Time Allowed', marks: 'Total Marks', name: 'Name', roll: 'Roll No', section: 'Section',
+        father: "Father's Name", campus: 'Campus / Centre', date: 'Date', invigilator: "Invigilator's Signature",
+        declaration: 'I have read and understood the instructions above and agree to abide by the examination rules.',
+        coverTitle: 'Examination Answer Sheet',
+      },
     },
     urdu: {
       // Noto Sans Arabic renders Urdu's Perso-Arabic script correctly and
@@ -236,17 +241,34 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       // honest limitation of what's readily available as a redistributable
       // font in this environment, not a rendering bug.
       dir: 'rtl', lang: 'ur', font: "'Noto Sans Arabic', 'Noto Naskh Arabic', sans-serif",
-      labels: { instructions: 'ہدایات', duration: 'وقت', marks: 'کل نمبر', name: 'نام', roll: 'رول نمبر', section: 'سیکشن' },
+      labels: {
+        instructions: 'ہدایات', duration: 'وقت', marks: 'کل نمبر', name: 'نام', roll: 'رول نمبر', section: 'سیکشن',
+        father: 'والد کا نام', campus: 'کیمپس', date: 'تاریخ', invigilator: 'نگران کے دستخط',
+        declaration: 'میں نے مندرجہ بالا ہدایات پڑھ اور سمجھ لی ہیں اور امتحانی قواعد کی پابندی کروں گا/گی۔',
+        coverTitle: 'امتحانی جوابی شیٹ',
+      },
     },
     arabic: {
       dir: 'rtl', lang: 'ar', font: "'Noto Sans Arabic', 'Noto Naskh Arabic', sans-serif",
-      labels: { instructions: 'التعليمات', duration: 'الوقت المحدد', marks: 'الدرجة الكلية', name: 'الاسم', roll: 'رقم القيد', section: 'الشعبة' },
+      labels: {
+        instructions: 'التعليمات', duration: 'الوقت المحدد', marks: 'الدرجة الكلية', name: 'الاسم', roll: 'رقم القيد', section: 'الشعبة',
+        father: 'اسم الأب', campus: 'الحرم / المركز', date: 'التاريخ', invigilator: 'توقيع المراقب',
+        declaration: 'لقد قرأت وفهمت التعليمات أعلاه وأوافق على الالتزام بقواعد الامتحان.',
+        coverTitle: 'ورقة إجابة الامتحان',
+      },
     },
   };
+
+  // Globally-standardised print layouts - keeps every paper a school
+  // generates structurally consistent regardless of who set it up,
+  // rather than leaving formatting to whoever fills the CreatePaperModal
+  // in that moment.
+  private readonly PAPER_FORMATS = ['standard', 'compact', 'formal'];
 
   async generateExamPaperPdf(id: string, schoolSlug: string): Promise<Buffer> {
     const paper: any = await this.getExamPaperById(id, schoolSlug);
     const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
+    const format = this.PAPER_FORMATS.includes(paper.paperFormat) ? paper.paperFormat : 'standard';
 
     const totalMarks = paper.sections.reduce((sum: number, s: any) => sum + s.questions.reduce((s2: number, q: any) => s2 + (q.marks || 0), 0), 0);
     const qrDataUrl = await QRCode.toDataURL(paper.paperCode, { width: 90, margin: 0 });
@@ -297,6 +319,38 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       </div>
     `).join('');
 
+    // 'formal' format prepends a standalone, board-exam-style cover page
+    // (candidate/invigilator fields, seal box, signed declaration) ahead
+    // of the question content, on its own page.
+    const coverPageHtml = format === 'formal' ? `
+      <div class="cover-page">
+        <div class="cover-header">
+          <img src="${qrDataUrl}" width="90" height="90" />
+          <h1>${cfg.labels.coverTitle}</h1>
+          <p class="cover-paper-title">${this.escapeHtml(paper.title)}</p>
+          <p class="cover-code">${paper.paperCode}</p>
+        </div>
+        <div class="cover-fields">
+          <div class="cover-field"><label>${cfg.labels.name}</label><span>&nbsp;</span></div>
+          <div class="cover-field"><label>${cfg.labels.father}</label><span>&nbsp;</span></div>
+          <div class="cover-field"><label>${cfg.labels.roll}</label><span>&nbsp;</span></div>
+          <div class="cover-field"><label>${cfg.labels.section}</label><span>&nbsp;</span></div>
+          <div class="cover-field"><label>${cfg.labels.campus}</label><span>&nbsp;</span></div>
+          <div class="cover-field"><label>${cfg.labels.date}</label><span>&nbsp;</span></div>
+        </div>
+        <div class="cover-meta">
+          <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+          <p>${cfg.labels.duration}: ${paper.duration} ${paper.language === 'english' ? 'minutes' : ''} &nbsp;|&nbsp; ${cfg.labels.marks}: ${totalMarks}</p>
+        </div>
+        <div class="cover-declaration">${cfg.labels.declaration}</div>
+        <div class="cover-signoff">
+          <div class="cover-seal">${paper.language === 'english' ? 'SEAL' : ''}</div>
+          <div class="cover-invigilator"><span>&nbsp;</span><label>${cfg.labels.invigilator}</label></div>
+        </div>
+      </div>
+      <div class="page-break"></div>
+    ` : '';
+
     const html = `
       <!DOCTYPE html>
       <html dir="${cfg.dir}" lang="${cfg.lang}">
@@ -305,6 +359,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
         <style>
           @page { margin: 15mm 12mm; }
           body { font-family: ${cfg.font}; color: #111; font-size: 13px; line-height: 1.6; }
+          .page-break { page-break-after: always; }
           .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0C447C; padding-bottom: 10px; margin-bottom: 14px; }
           .header-main h1 { font-size: 18px; color: #0C447C; margin: 0 0 4px; }
           .header-main p { margin: 2px 0; font-size: 12px; }
@@ -313,20 +368,34 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .top-fields { display: flex; gap: 24px; margin-bottom: 14px; font-size: 12px; }
           .top-fields span { border-bottom: 1px solid #999; padding-bottom: 2px; min-width: 120px; display: inline-block; }
           .instructions-box { border: 1px solid #ccc; border-radius: 4px; padding: 8px 12px; margin-bottom: 16px; font-size: 12px; background: #f9f9f9; }
-          .section { margin-bottom: 18px; }
-          .section-title { font-size: 14px; background: #0C447C; color: white; padding: 5px 10px; border-radius: 3px; margin-bottom: 8px; }
-          .section-instructions { font-size: 11px; color: #555; margin: 0 0 8px; font-style: italic; }
-          .question { margin-bottom: 12px; }
+          .section { margin-bottom: 18px; ${format === 'compact' ? 'column-count: 2; column-gap: 24px;' : ''} }
+          .section-title { font-size: 14px; background: #0C447C; color: white; padding: 5px 10px; border-radius: 3px; margin-bottom: 8px; ${format === 'compact' ? 'column-span: all;' : ''} }
+          .section-instructions { font-size: 11px; color: #555; margin: 0 0 8px; font-style: italic; ${format === 'compact' ? 'column-span: all;' : ''} }
+          .question { margin-bottom: ${format === 'compact' ? '8px' : '12px'}; ${format === 'compact' ? 'break-inside: avoid; font-size: 12px;' : ''} }
           .question-row { display: flex; align-items: baseline; gap: 8px; }
           .q-number { font-weight: bold; flex-shrink: 0; }
           .q-text { flex: 1; }
           .q-marks { font-weight: bold; flex-shrink: 0; }
-          .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+          .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: ${format === 'compact' ? '1fr' : '1fr 1fr'}; gap: 4px; }
           .opt-marker { font-weight: bold; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 6px; }
           .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
+          .cover-page { display: flex; flex-direction: column; align-items: center; height: 250mm; padding-top: 20mm; text-align: center; }
+          .cover-header h1 { font-size: 22px; color: #0C447C; margin: 10px 0 4px; }
+          .cover-paper-title { font-size: 15px; font-weight: bold; margin: 4px 0; }
+          .cover-code { font-size: 11px; color: #666; margin: 0; }
+          .cover-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 40px; width: 100%; max-width: 420px; margin: 28px 0; text-align: ${cfg.dir === 'rtl' ? 'right' : 'left'}; }
+          .cover-field label { display: block; font-size: 10px; color: #666; margin-bottom: 3px; }
+          .cover-field span { display: block; border-bottom: 1px solid #999; height: 18px; }
+          .cover-meta { font-size: 12px; margin-bottom: 20px; }
+          .cover-declaration { max-width: 420px; font-size: 11px; color: #444; border: 1px solid #ccc; border-radius: 4px; padding: 10px 14px; margin-bottom: 30px; background: #f9f9f9; }
+          .cover-signoff { display: flex; align-items: flex-end; gap: 40px; margin-top: auto; }
+          .cover-seal { width: 90px; height: 90px; border: 2px dashed #999; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #999; }
+          .cover-invigilator span { display: block; border-bottom: 1px solid #999; width: 180px; height: 24px; margin-bottom: 4px; }
+          .cover-invigilator label { font-size: 10px; color: #666; }
         </style>
       </head>
       <body>
+        ${coverPageHtml}
         <div class="header">
           <div class="header-main">
             <h1>${this.escapeHtml(paper.title)}</h1>
