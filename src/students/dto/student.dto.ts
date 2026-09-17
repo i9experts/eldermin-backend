@@ -6,7 +6,7 @@
 import {
   IsString, IsEmail, IsOptional, IsEnum, IsBoolean,
   IsNumber, IsArray, IsDateString, IsMongoId, IsObject,
-  ValidateNested, Min, Max,
+  ValidateNested, ValidateIf, Min, Max,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
@@ -36,7 +36,11 @@ export class GuardianDto {
   @IsEnum(['father', 'mother', 'guardian']) relation: string;
   @IsOptional() @IsString() cnic?: string;
   @IsOptional() @IsString() phone?: string;
-  @IsOptional() @IsEmail() email?: string;
+  // @IsOptional() alone only skips validation for undefined/null, not ''
+  // - forms that submit an empty email field send '' rather than omitting
+  // the key, which used to 400 with "guardians.N.email must be an email".
+  @ValidateIf((o) => o.email !== undefined && o.email !== null && o.email !== '')
+  @IsEmail() email?: string;
   @IsOptional() @IsString() occupation?: string;
   @IsOptional() @IsString() employer?: string;
   @IsOptional() @IsNumber() monthlyIncome?: number;
