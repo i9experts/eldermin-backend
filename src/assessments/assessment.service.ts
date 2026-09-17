@@ -892,6 +892,16 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return { message: 'Question deleted' };
   }
 
+  async updateQuestion(id: string, schoolSlug: string, dto: Partial<CreateQuestionDto>) {
+    const question = await this.questionModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: dto },
+      { new: true },
+    );
+    if (!question) throw new NotFoundException('Question not found.');
+    return question;
+  }
+
   // ============================================================
   // MARK ENTRY
   // ============================================================
