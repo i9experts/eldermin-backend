@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import { Roles } from '../auth/decorators';
+import { UserRole } from '../auth/roles.enum';
 import { AssessmentService } from './assessment.service';
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
@@ -19,6 +21,15 @@ import {
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
 } from './dto/assessment.dto';
+
+// Roles allowed to create/modify/delete question-bank & exam-paper content.
+// Read-only routes stay open to any authenticated role (matches the rest of
+// this codebase's convention of broad-permissive backend access).
+const QUESTION_BANK_EDITOR_ROLES = [
+  UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
+  UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.ACADEMIC_COORDINATOR,
+  UserRole.TEACHER,
+];
 
 @Controller('assessments')
 export class AssessmentController {
@@ -164,19 +175,29 @@ export class AssessmentController {
 
   @Post('questions')
   @HttpCode(HttpStatus.CREATED)
+  @Roles(...QUESTION_BANK_EDITOR_ROLES)
   async createQuestion(@Body() dto: CreateQuestionDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.createQuestion({ ...dto, schoolSlug, addedBy: userName });
   }
 
   @Delete('questions/:id')
+  @Roles(...QUESTION_BANK_EDITOR_ROLES)
   async deleteQuestion(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteQuestion(id, schoolSlug);
   }
 
+  @Put('questions/:id')
+  @Roles(...QUESTION_BANK_EDITOR_ROLES)
+  async updateQuestion(@Param('id') id: string, @Body() dto: Partial<CreateQuestionDto>, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateQuestion(id, schoolSlug, dto);
+  }
+
   @Post('questions/bulk-import')
   @HttpCode(HttpStatus.CREATED)
+  @Roles(...QUESTION_BANK_EDITOR_ROLES)
   async bulkImportQuestions(@Body() dto: { rows: any[] }, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.bulkImportQuestions(schoolSlug, userName, dto?.rows || []);
@@ -199,17 +220,18 @@ export class AssessmentController {
   }
 
   @Post('papers') @HttpCode(HttpStatus.CREATED)
+  @Roles(...QUESTION_BANK_EDITOR_ROLES)
   async createExamPaper(@Body() dto: CreateExamPaperDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.createExamPaper(schoolSlug, userName, dto);
   }
 
-  @Put('papers/:id') async updateExamPaper(@Param('id') id: string, @Body() dto: UpdateExamPaperDto, @Request() req: any) {
+  @Put('papers/:id') @Roles(...QUESTION_BANK_EDITOR_ROLES) async updateExamPaper(@Param('id') id: string, @Body() dto: UpdateExamPaperDto, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateExamPaper(id, schoolSlug, dto);
   }
 
-  @Delete('papers/:id') async deleteExamPaper(@Param('id') id: string, @Request() req: any) {
+  @Delete('papers/:id') @Roles(...QUESTION_BANK_EDITOR_ROLES) async deleteExamPaper(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteExamPaper(id, schoolSlug);
   }
