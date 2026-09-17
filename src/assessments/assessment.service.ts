@@ -163,6 +163,18 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async createExamPaper(schoolSlug: string, createdBy: string, dto: any) {
+    // Every questionId submitted must actually belong to this school - a
+    // section's questionIds are only Mongo-ID-shape-validated at the DTO
+    // layer, so without this check a guessed/enumerated ObjectId from
+    // another tenant would get silently woven into this paper and its
+    // question text/options/correct answers later rendered straight into
+    // this school's PDF (see getExamPapers/getExamPaperById below, which
+    // had the same unscoped-lookup gap on the read side).
+    const submittedQuestionIds: string[] = [...new Set((dto.sections || []).flatMap((s: any) => s.questionIds || []) as string[])];
+    if (submittedQuestionIds.length > 0) {
+      const owned = await this.questionModel.countDocuments({ _id: { $in: submittedQuestionIds }, schoolSlug });
+      if (owned !== submittedQuestionIds.length) throw new BadRequestException("One or more selected questions were not found in this school's question bank.");
+    }
     const paper = new this.examPaperModel({ ...dto, schoolSlug, createdBy, paperCode: this.generatePaperCode() });
     return paper.save();
   }
@@ -176,7 +188,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // separately-stored number that could silently drift out of sync
     // with the questions actually in the paper.
     const allQuestionIds = [...new Set(papers.flatMap((p: any) => p.sections.flatMap((s: any) => s.questionIds.map(String))))];
-    const questions = await this.questionModel.find({ _id: { $in: allQuestionIds } }).select('marks').lean();
+    const questions = await this.questionModel.find({ _id: { $in: allQuestionIds }, schoolSlug }).select('marks').lean();
     const marksById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
     return papers.map((p: any) => ({
       ...p,
@@ -189,7 +201,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const paper: any = await this.examPaperModel.findOne({ _id: id, schoolSlug }).lean();
     if (!paper) throw new NotFoundException('Exam paper not found');
     const allQuestionIds = paper.sections.flatMap((s: any) => s.questionIds);
-    const questions = await this.questionModel.find({ _id: { $in: allQuestionIds } }).lean();
+    const questions = await this.questionModel.find({ _id: { $in: allQuestionIds }, schoolSlug }).lean();
     const questionMap = new Map(questions.map((q: any) => [String(q._id), q]));
     return {
       ...paper,
@@ -257,7 +269,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
     // Fire-and-forget usage tracking - never block PDF delivery on this.
     const allQuestionIds = paper.sections.flatMap((s: any) => s.questions.map((q: any) => q._id));
-    this.questionModel.updateMany({ _id: { $in: allQuestionIds } }, { $inc: { usageCount: 1 } }).catch(() => {});
+    this.questionModel.updateMany({ _id: { $in: allQuestionIds }, schoolSlug }, { $inc: { usageCount: 1 } }).catch(() => {});
 
     let questionNumber = 0;
     const sectionsHtml = paper.sections.map((section: any) => `
@@ -415,7 +427,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // MCQ-only questions actually determine the bubble grid - count them
     // for real rather than assuming every question in the paper is MCQ.
     const allQuestionIds = paper.sections.flatMap((s: any) => s.questionIds);
-    const mcqCount = await this.questionModel.countDocuments({ _id: { $in: allQuestionIds }, type: 'mcq' });
+    const mcqCount = await this.questionModel.countDocuments({ _id: { $in: allQuestionIds }, type: 'mcq', schoolSlug });
     if (mcqCount === 0) throw new BadRequestException('This paper has no MCQ questions - OMR sheets only make sense for MCQ-based papers');
 
     if (!paper.omrLayout) {
@@ -566,7 +578,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const paper: any = await this.examPaperModel.findOne({ _id: sheet.examPaperId, schoolSlug }).lean();
 
     const allQuestionIds = paper.sections.flatMap((s: any) => s.questionIds);
-    const mcqQuestions = await this.questionModel.find({ _id: { $in: allQuestionIds }, type: 'mcq' }).lean();
+    const mcqQuestions = await this.questionModel.find({ _id: { $in: allQuestionIds }, type: 'mcq', schoolSlug }).lean();
     // Real correct-answer lookup keyed by question ORDER (question 1, 2,
     // 3... in the same order the OMR layout was generated in), not by
     // ID, since the sheet only ever knows question NUMBERS from the
@@ -731,6 +743,97 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return q.save();
   }
 
+  /** CSV/spreadsheet bulk import for the question bank - lets a school hand
+   * subject teachers a fixed template (one row per question) instead of
+   * entering each one through AddQuestionModal by hand. Mirrors the
+   * per-row created/skipped/error reporting convention already used by
+   * bulkImportCOA (finance) and bulkImportFeeAssignments (finance) - never
+   * a raw insertMany, so one malformed row never sinks the whole file and
+   * every outcome is visible to the uploader, not silently swallowed. */
+  async bulkImportQuestions(schoolSlug: string, addedBy: string, rows: any[]) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new BadRequestException('No rows to import.');
+    }
+    const validTypes = ['mcq', 'short', 'long', 'true_false', 'fill_blank', 'matching'];
+    const validBlooms = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create'];
+    const validDifficulty = ['easy', 'medium', 'hard'];
+
+    const results: Array<{ row: number; status: 'created' | 'skipped' | 'error'; message?: string }> = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i] || {};
+      const subject = String(raw.subject || '').trim();
+      const grade = String(raw.grade || '').trim();
+      const type = String(raw.type || '').trim().toLowerCase();
+      const questionText = String(raw.questionText || '').trim();
+
+      try {
+        if (!subject) throw new Error('"subject" is required.');
+        if (!grade) throw new Error('"grade" is required.');
+        if (!questionText) throw new Error('"questionText" is required.');
+        if (!validTypes.includes(type)) throw new Error(`"type" must be one of: ${validTypes.join(', ')}.`);
+
+        const difficulty = raw.difficulty ? String(raw.difficulty).trim().toLowerCase() : 'medium';
+        if (!validDifficulty.includes(difficulty)) throw new Error(`"difficulty" must be one of: ${validDifficulty.join(', ')}.`);
+        const bloomsLevel = raw.bloomsLevel ? String(raw.bloomsLevel).trim().toLowerCase() : 'understand';
+        if (!validBlooms.includes(bloomsLevel)) throw new Error(`"bloomsLevel" must be one of: ${validBlooms.join(', ')}.`);
+
+        // Same real Question document a single-row create would end up
+        // with, not a hand-picked subset - every column the template
+        // exposes maps to the exact schema field it saves as.
+        const options: { text: string; isCorrect: boolean }[] = [];
+        if (type === 'mcq') {
+          for (let n = 1; n <= 6; n++) {
+            const text = raw[`option${n}`] ? String(raw[`option${n}`]).trim() : '';
+            if (!text) continue;
+            const isCorrect = ['true', '1', 'yes', 'y'].includes(String(raw[`option${n}Correct`] || '').trim().toLowerCase());
+            options.push({ text, isCorrect });
+          }
+          if (options.length < 2) throw new Error('An MCQ question needs at least 2 non-empty options (option1, option2, ...).');
+          if (!options.some(o => o.isCorrect)) throw new Error('An MCQ question needs exactly one option marked correct (option1Correct=true, etc).');
+        }
+
+        // Exact-duplicate protection (question bank has none at all
+        // otherwise - same schoolSlug+subject+grade+questionText was
+        // previously accepted unlimited times with zero warning). Skipped
+        // rather than erroring, since re-uploading the same shared
+        // spreadsheet next term with a few new rows added is the expected
+        // normal use of this import, not a mistake to block on.
+        const dup = await this.questionModel.findOne({ schoolSlug, subject, grade, questionText }).select('_id').lean();
+        if (dup) {
+          results.push({ row: i + 1, status: 'skipped', message: 'An identical question already exists for this subject/grade - not re-added.' });
+          continue;
+        }
+
+        const marks = raw.marks !== undefined && raw.marks !== '' && !isNaN(Number(raw.marks)) ? Number(raw.marks) : 1;
+        const tags = raw.tags ? String(raw.tags).split(',').map((t: string) => t.trim()).filter(Boolean) : [];
+        const correctAnswer = raw.correctAnswer ? String(raw.correctAnswer).trim() : undefined;
+
+        await this.questionModel.create({
+          schoolSlug, addedBy, subject, grade, type, difficulty, bloomsLevel, questionText, marks, tags,
+          topic: raw.topic ? String(raw.topic).trim() : undefined,
+          chapter: raw.chapter ? String(raw.chapter).trim() : undefined,
+          options: type === 'mcq' ? options : undefined,
+          correctAnswer: type !== 'mcq' ? correctAnswer : undefined,
+          answerExplanation: raw.answerExplanation ? String(raw.answerExplanation).trim() : undefined,
+        });
+        results.push({ row: i + 1, status: 'created' });
+      } catch (err: any) {
+        results.push({ row: i + 1, status: 'error', message: err?.message || 'Import failed.' });
+      }
+    }
+
+    return {
+      created: results.filter(r => r.status === 'created').length,
+      skipped: results.filter(r => r.status === 'skipped'),
+      errors: results.filter(r => r.status === 'error'),
+    };
+  }
+
+  private escapeRegex(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   async getQuestions(schoolSlug: string, query: QuestionQueryDto) {
     const { page, limit, search, subject, grade, topic, type, difficulty, bloomsLevel } = query;
     const { skip } = paged(page, limit);
@@ -738,14 +841,17 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const filter: any = { schoolSlug };
     if (subject) filter.subject = subject;
     if (grade) filter.grade = grade;
-    if (topic) filter.topic = { $regex: topic, $options: 'i' };
+    if (topic) filter.topic = { $regex: this.escapeRegex(topic), $options: 'i' };
     if (type) filter.type = type;
     if (difficulty) filter.difficulty = difficulty;
     if (bloomsLevel) filter.bloomsLevel = bloomsLevel;
-    if (search) filter.$or = [
-      { questionText: { $regex: search, $options: 'i' } },
-      { tags: { $in: [new RegExp(search, 'i')] } },
-    ];
+    if (search) {
+      const safeSearch = this.escapeRegex(search);
+      filter.$or = [
+        { questionText: { $regex: safeSearch, $options: 'i' } },
+        { tags: { $in: [new RegExp(safeSearch, 'i')] } },
+      ];
+    }
 
     const [data, total] = await Promise.all([
       this.questionModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit!),

@@ -175,6 +175,13 @@ export class AssessmentController {
     return this.service.deleteQuestion(id, schoolSlug);
   }
 
+  @Post('questions/bulk-import')
+  @HttpCode(HttpStatus.CREATED)
+  async bulkImportQuestions(@Body() dto: { rows: any[] }, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.bulkImportQuestions(schoolSlug, userName, dto?.rows || []);
+  }
+
   @Post('questions/ai-classify-blooms') @HttpCode(HttpStatus.OK)
   async classifyBloomsLevel(@Body() dto: ClassifyBloomsLevelDto) {
     return this.service.classifyBloomsLevel(dto.questionText, dto.questionType, dto.options);
