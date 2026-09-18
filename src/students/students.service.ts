@@ -454,6 +454,10 @@ export class StudentsService {
     };
   }
 
+  private escapeRegex(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   async getStudents(schoolSlug: string, query: StudentQueryDto, requestingUser?: ScopedUser) {
     const { page, limit, search, sortBy, sortOrder,
       grade, section, status, gender, academicYear, scholarshipHolder, specialNeeds, campusId } = query;
@@ -470,12 +474,26 @@ export class StudentsService {
     if (scholarshipHolder !== undefined) filter.scholarshipHolder = scholarshipHolder;
     if (specialNeeds !== undefined) filter.specialNeeds = specialNeeds;
     if (search) {
+      // Escaped before going into $regex - an unescaped user-supplied
+      // search string let a school admin (unintentionally) or anyone
+      // else (intentionally) submit regex metacharacters straight into a
+      // MongoDB query, from a plain search box - both a ReDoS risk (e.g.
+      // pathological alternation/repetition patterns) and a way to widen
+      // matches beyond what a literal search was meant to find.
+      const safeSearch = this.escapeRegex(search);
       filter.$or = [
-        { firstName: { $regex: search, $options: 'i' } },
-        { lastName: { $regex: search, $options: 'i' } },
-        { studentId: { $regex: search, $options: 'i' } },
-        { 'guardians.phone': { $regex: search, $options: 'i' } },
-        { 'guardians.email': { $regex: search, $options: 'i' } },
+        { firstName: { $regex: safeSearch, $options: 'i' } },
+        { lastName: { $regex: safeSearch, $options: 'i' } },
+        { studentId: { $regex: safeSearch, $options: 'i' } },
+        // GR # is the school's own permanent register number - the most
+        // common thing an admin actually has on hand when tracking down a
+        // student, and critically, a case where TWO students sharing the
+        // same GR # (a real data-entry mistake) must both surface in the
+        // results rather than silently pointing at just one of them.
+        { grNo: { $regex: safeSearch, $options: 'i' } },
+        { admissionNumber: { $regex: safeSearch, $options: 'i' } },
+        { 'guardians.phone': { $regex: safeSearch, $options: 'i' } },
+        { 'guardians.email': { $regex: safeSearch, $options: 'i' } },
       ];
     }
 
