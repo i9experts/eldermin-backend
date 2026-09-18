@@ -1173,14 +1173,15 @@ export class StudentsService {
     const printDate = new Date();
 
     const cols = [
-      { key: 'grNo', label: 'GR #', width: 55 },
-      { key: 'familyCode', label: 'F.Code', width: 55 },
-      { key: 'name', label: 'Student Name', width: 145 },
-      { key: 'father', label: 'Father Name', width: 130 },
-      { key: 'contact', label: 'Contact Details', width: 140 },
-      { key: 'dob', label: 'DOB', width: 75 },
-      { key: 'doa', label: 'DOA', width: 75 },
-      { key: 'address', label: 'Address', width: 111 },
+      { key: 'grNo', label: 'GR #', width: 50 },
+      { key: 'admissionNumber', label: 'Admission #', width: 60 },
+      { key: 'familyCode', label: 'F.Code', width: 40 },
+      { key: 'name', label: 'Student Name', width: 140 },
+      { key: 'father', label: 'Father Name', width: 120 },
+      { key: 'contact', label: 'Contact Details', width: 120 },
+      { key: 'dob', label: 'DOB', width: 68 },
+      { key: 'doa', label: 'DOA', width: 68 },
+      { key: 'address', label: 'Address', width: 120 },
     ];
     const tableWidth = cols.reduce((s, c) => s + c.width, 0);
 
@@ -1258,13 +1259,14 @@ export class StudentsService {
         let x = margin;
         const rowY = y - 4;
         drawTextSafe(page, s.grNo || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[0].width - 10 }); x += cols[0].width;
-        drawTextSafe(page, s.familyCode || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[1].width - 10 }); x += cols[1].width;
-        drawTextSafe(page, `${s.firstName || ''} ${s.lastName || ''}`.trim(), { x: x + 5, y: rowY, size: 7.5, font: bold, color: black, maxWidth: cols[2].width - 10 }); x += cols[2].width;
-        drawTextSafe(page, father?.name || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[3].width - 10 }); x += cols[3].width;
-        drawTextSafe(page, contactNumbers, { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[4].width - 10 }); x += cols[4].width;
-        page.drawText(fmtDate(s.dateOfBirth), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[5].width - 10 }); x += cols[5].width;
-        page.drawText(fmtDate(s.admissionDate), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[6].width - 10 }); x += cols[6].width;
-        drawTextSafe(page, s.address || '—', { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[7].width - 10 });
+        drawTextSafe(page, s.admissionNumber || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[1].width - 10 }); x += cols[1].width;
+        drawTextSafe(page, s.familyCode || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[2].width - 10 }); x += cols[2].width;
+        drawTextSafe(page, `${s.firstName || ''} ${s.lastName || ''}`.trim(), { x: x + 5, y: rowY, size: 7.5, font: bold, color: black, maxWidth: cols[3].width - 10 }); x += cols[3].width;
+        drawTextSafe(page, father?.name || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[4].width - 10 }); x += cols[4].width;
+        drawTextSafe(page, contactNumbers, { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[5].width - 10 }); x += cols[5].width;
+        page.drawText(fmtDate(s.dateOfBirth), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[6].width - 10 }); x += cols[6].width;
+        page.drawText(fmtDate(s.admissionDate), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[7].width - 10 }); x += cols[7].width;
+        drawTextSafe(page, s.address || '—', { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[8].width - 10 });
 
         y -= rowHeight;
       });
