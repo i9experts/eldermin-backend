@@ -3102,9 +3102,18 @@ export class FinanceService {
       throw new BadRequestException('No rows to import.');
     }
 
+    // admissionNumber is free text (whatever the school typed at
+    // enrollment, or their own legacy scheme on import) - collapsing all
+    // internal whitespace (including stray double-spaces and non-breaking
+    // spaces pasted in from Excel) to a single space before comparing
+    // means "GR  00122", "GR 00122" and "GR 00122" all still match,
+    // without silently touching the digits themselves (no zero-padding
+    // normalization - "GR 013" and "GR 0013" may genuinely be different
+    // students).
+    const normalizeKey = (v: string) => v.trim().toLowerCase().replace(/\s+/g, ' ');
     const students = await this.studentModel.find({ schoolSlug }).select('_id firstName lastName admissionNumber studentId').lean();
-    const studentByAdmissionNumber = new Map(students.filter((s: any) => s.admissionNumber).map((s: any) => [String(s.admissionNumber).trim().toLowerCase(), s]));
-    const studentByStudentId = new Map(students.filter((s: any) => s.studentId).map((s: any) => [String(s.studentId).trim().toLowerCase(), s]));
+    const studentByAdmissionNumber = new Map(students.filter((s: any) => s.admissionNumber).map((s: any) => [normalizeKey(String(s.admissionNumber)), s]));
+    const studentByStudentId = new Map(students.filter((s: any) => s.studentId).map((s: any) => [normalizeKey(String(s.studentId)), s]));
 
     const structures = await this.feeStructModel.find({ schoolSlug, isActive: true }).select('_id name').lean();
     const structuresByName = new Map<string, any[]>();
@@ -3117,7 +3126,7 @@ export class FinanceService {
 
     for (let i = 0; i < rows.length; i++) {
       const raw = rows[i] || {};
-      const studentKey = String(raw.admissionNumber || raw.studentId || '').trim().toLowerCase();
+      const studentKey = normalizeKey(String(raw.admissionNumber || raw.studentId || ''));
       const structureName = String(raw.feeStructureName || '').trim();
       const effectiveFrom = String(raw.effectiveFrom || '').trim();
 
@@ -3154,10 +3163,27 @@ export class FinanceService {
       }
     }
 
+    const errors = results.filter(r => r.status === 'error');
+    const notFoundCount = errors.filter(r => r.message?.startsWith('No student found')).length;
+    // If every (or nearly every) row failed on student lookup, the file's
+    // admission numbers almost certainly don't match this school's actual
+    // format (a different scheme, a stale export, etc.) rather than 179
+    // individual typos - show a handful of real admission numbers from
+    // this school right in the result so the mismatch is obvious without
+    // needing to cross-check the Student Directory separately.
+    let hint: string | undefined;
+    if (rows.length >= 5 && notFoundCount >= rows.length * 0.8) {
+      const samples = [...studentByAdmissionNumber.values()].slice(0, 5).map((s: any) => s.admissionNumber);
+      hint = samples.length > 0
+        ? `Almost every row failed to match a student. This school's actual admission numbers look like: ${samples.join(', ')} - check that your file's admissionNumber column uses the exact same format.`
+        : `Almost every row failed to match a student, and this school has no students with an admissionNumber on file at all - use the studentId column instead, or set admission numbers on the student records first.`;
+    }
+
     return {
       assigned: results.filter(r => r.status === 'assigned').length,
       conflicts: results.filter(r => r.status === 'conflict'),
-      errors: results.filter(r => r.status === 'error'),
+      errors,
+      hint,
     };
   }
 
