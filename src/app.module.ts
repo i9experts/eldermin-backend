@@ -40,6 +40,7 @@ import { ComplaintsModule } from './complaints/complaints.module';
 import { ParentPortalModule } from './parent-portal/parent-portal.module';
 import { ResellersModule } from './resellers/resellers.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
+import { IdCardsModule } from './modules/id-cards/id-cards.module';
 
 @Module({
   imports: [
@@ -81,6 +82,7 @@ import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.mod
     ParentPortalModule,
     ResellersModule,
     KnowledgeBaseModule,
+    IdCardsModule,
   ],
   controllers: [AppController],
   providers: [
