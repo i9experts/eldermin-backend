@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { CURRICULUM_FRAMEWORKS } from '../../../common/constants/curriculum-framework';
 export type CurriculumDocument = Curriculum & Document;
 
 @Schema({ timestamps: true, collection: 'curricula' })
@@ -7,7 +8,7 @@ export class Curriculum {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Institution' }) institutionId: Types.ObjectId;
   @Prop({ required: true }) name: string;
-  @Prop({ enum: ['cambridge','ib','national','american','islamic','custom','hybrid'], default: 'national' }) framework: string;
+  @Prop({ enum: CURRICULUM_FRAMEWORKS, default: 'national' }) framework: string;
   @Prop({ required: true }) gradeLevel: string;
   @Prop({ required: true, type: Types.ObjectId, ref: 'Subject' }) subjectId: Types.ObjectId;
   @Prop() subjectName: string;
