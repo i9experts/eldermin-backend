@@ -520,12 +520,16 @@ export class AcademicsService {
   async getBookById(tenantId: string, id: string) {
     const book = await this.bookModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!book) throw new NotFoundException('Book not found');
+    // Detail view needs individual copies to show/print - backfill them
+    // here rather than on the list endpoint, so opening a book's detail
+    // is the one read that's allowed to also persist a one-time write.
+    const copies = await this.ensureCopies(book);
     const issues = await this.issueModel
       .find({ bookId: this.oid(id), tenantId: this.tid(tenantId) })
       .sort({ createdAt: -1 })
       .limit(20)
       .lean();
-    return { ...book, issues };
+    return { ...book, copies, issues };
   }
 
   /**
