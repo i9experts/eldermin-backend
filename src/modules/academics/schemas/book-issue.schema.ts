@@ -13,6 +13,12 @@ export class BookIssue {
   @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
   @Prop() bookTitle: string;
   @Prop() accessionNo: string;
+  // The specific physical copy issued (Book.copies[].accessionNo/barcode),
+  // once the book has been migrated to per-copy tracking - see
+  // AcademicsService.ensureCopies. Undefined for issues made before that
+  // migration or against a book that still has no copies recorded.
+  @Prop() copyAccessionNo: string;
+  @Prop() copyBarcode: string;
   @Prop({ enum: ['student','staff'], required: true }) borrowerType: string;
   @Prop({ type: Types.ObjectId, refPath: 'borrowerType' }) borrowerId: Types.ObjectId;
   @Prop() borrowerName: string;

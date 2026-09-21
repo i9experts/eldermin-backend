@@ -183,8 +183,8 @@ export class AcademicsController {
   }
 
   @Patch('library/books/:id/deaccession')
-  deaccessionBook(@Request() req, @Param('id') id: string) {
-    return this.academicsService.deaccessionBook(req.user.tenantId, id);
+  deaccessionBook(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.deaccessionBook(req.user.tenantId, id, body?.copyAccessionNo);
   }
 
   // ─── LIBRARY — ISSUES ─────────────────────────────────────────────────────────
