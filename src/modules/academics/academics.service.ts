@@ -528,18 +528,67 @@ export class AcademicsService {
     return { ...book, issues };
   }
 
+  /**
+   * Builds a per-copy array for a book that predates the `copies` field,
+   * inferring each copy's status from the legacy aggregate counters so
+   * totals still add up (issuedCopies copies become 'issued', etc). Exact
+   * copy-to-borrower mapping for pre-existing issue records isn't
+   * recoverable - only the counts are - which is fine, it's forward
+   * tracking that matters from here on.
+   */
+  private inferCopiesFromCounts(book: any): any[] {
+    const n = Math.max(book.totalCopies ?? 1, 1);
+    const statuses: string[] = [
+      ...Array(book.issuedCopies || 0).fill('issued'),
+      ...Array(book.damagedCopies || 0).fill('damaged'),
+      ...Array(book.lostCopies || 0).fill('lost'),
+      ...Array(book.reservedCopies || 0).fill('reserved'),
+    ];
+    while (statuses.length < n) statuses.push('available');
+    return statuses.slice(0, n).map((status, i) => ({
+      accessionNo: i === 0 ? book.accessionNo : `${book.accessionNo}-${i + 1}`,
+      barcode:     i === 0 ? book.accessionNo : `${book.accessionNo}-${i + 1}`,
+      status,
+      condition: status === 'damaged' ? 'damaged' : 'good',
+      shelfNo: book.shelfNo,
+      addedDate: book.purchaseDate || book.createdAt || new Date(),
+    }));
+  }
+
+  /** Returns the book's copies, lazily backfilling+persisting them if missing. */
+  private async ensureCopies(book: any): Promise<any[]> {
+    if (book.copies?.length) return book.copies;
+    const copies = this.inferCopiesFromCounts(book);
+    await this.bookModel.findByIdAndUpdate(book._id, { $set: { copies } });
+    return copies;
+  }
+
   async createBook(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     const count = await this.bookModel.countDocuments({ tenantId: this.tid(tenantId) });
     const accessionNo = data.accessionNo
       || `ACC-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
     const totalCopies = data.totalCopies ?? 1;
+    // One copy record per physical item, each with its own accession
+    // number - copy 1 reuses the title's own accessionNo (unchanged
+    // behaviour for single-copy books), extra copies auto-suffix unless
+    // the librarian typed specific ones in data.copyAccessionNos.
+    const copies = Array.from({ length: totalCopies }, (_, i) => ({
+      accessionNo: data.copyAccessionNos?.[i] || (i === 0 ? accessionNo : `${accessionNo}-${i + 1}`),
+      barcode:     data.copyAccessionNos?.[i] || (i === 0 ? accessionNo : `${accessionNo}-${i + 1}`),
+      status: 'available',
+      condition: 'good',
+      shelfNo: data.shelfNo,
+      addedDate: new Date(),
+    }));
+    const { copyAccessionNos, ...rest } = data;
     try {
       return await this.bookModel.create({
-        ...data,
+        ...rest,
         accessionNo,
         totalCopies,
         availableCopies: totalCopies,
         issuedCopies:    0,
+        copies,
         tenantId:        this.tid(tenantId),
         institutionId:   this.oid(institutionId),
         campusId:        requestingUser?.campusId ? this.oid(requestingUser.campusId) : (data.campusId ? this.oid(data.campusId) : null),
@@ -550,10 +599,41 @@ export class AcademicsService {
   async updateBook(tenantId: string, id: string, data: any) {
     const doc = await this.bookModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!doc) throw new NotFoundException('Book not found');
-    if (data.totalCopies !== undefined) {
+    if (data.totalCopies !== undefined && data.totalCopies !== doc.totalCopies) {
       const diff = data.totalCopies - doc.totalCopies;
       data.availableCopies = Math.max(0, doc.availableCopies + diff);
+      const copies = await this.ensureCopies(doc);
+      if (diff > 0) {
+        // Grow: append new available copies, auto-suffixed off the
+        // highest existing copy number so numbering never collides.
+        const nextIndex = copies.length + 1;
+        const added = Array.from({ length: diff }, (_, i) => ({
+          accessionNo: data.copyAccessionNos?.[i] || `${doc.accessionNo}-${nextIndex + i}`,
+          barcode:     data.copyAccessionNos?.[i] || `${doc.accessionNo}-${nextIndex + i}`,
+          status: 'available',
+          condition: 'good',
+          shelfNo: data.shelfNo ?? doc.shelfNo,
+          addedDate: new Date(),
+        }));
+        data.copies = [...copies, ...added];
+      } else {
+        // Shrink: only ever remove copies that are sitting available on
+        // the shelf - one still checked out or lost can't just vanish
+        // from the count, it has to be returned/deaccessioned first.
+        const removable = copies.filter((c: any) => c.status === 'available').length;
+        if (removable < -diff) {
+          throw new BadRequestException(
+            `Cannot reduce total copies by ${-diff} - only ${removable} copy(ies) are available to remove. Return or deaccession the rest first.`,
+          );
+        }
+        let toRemove = -diff;
+        data.copies = copies.filter((c: any) => {
+          if (toRemove > 0 && c.status === 'available') { toRemove--; return false; }
+          return true;
+        });
+      }
     }
+    delete data.copyAccessionNos;
     return this.bookModel.findByIdAndUpdate(id, { $set: data }, { new: true }).lean();
   }
 
@@ -562,14 +642,43 @@ export class AcademicsService {
    * `deaccessioned` being a valid Book.status all along with nothing ever
    * setting it. Refuses while any copy is still checked out, same "block
    * on in-use records with a clear reason" convention as deleteSubject.
+   * With `copyAccessionNo`, retires just that one physical copy instead
+   * of the whole title.
    */
-  async deaccessionBook(tenantId: string, id: string) {
+  async deaccessionBook(tenantId: string, id: string, copyAccessionNo?: string) {
     const book = await this.bookModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!book) throw new NotFoundException('Book not found');
+
+    if (copyAccessionNo) {
+      const copies = await this.ensureCopies(book);
+      const idx = copies.findIndex((c: any) => c.accessionNo === copyAccessionNo);
+      if (idx < 0) throw new NotFoundException('Copy not found on this book');
+      if (copies[idx].status === 'issued') {
+        throw new BadRequestException('This copy is still issued - wait for it to be returned first.');
+      }
+      if (copies[idx].status === 'deaccessioned') {
+        throw new BadRequestException('This copy is already deaccessioned');
+      }
+      const wasAvailable = copies[idx].status === 'available';
+      const update: any = {
+        $set: { [`copies.${idx}.status`]: 'deaccessioned' },
+        $inc: { totalCopies: -1, ...(wasAvailable ? { availableCopies: -1 } : {}) },
+      };
+      const remaining = book.totalCopies - 1;
+      if (remaining <= 0) update.$set.status = 'deaccessioned';
+      return this.bookModel.findByIdAndUpdate(id, update, { new: true }).lean();
+    }
+
     if (book.issuedCopies > 0) {
       throw new BadRequestException(`Cannot deaccession this book - ${book.issuedCopies} copy(ies) still issued. Wait for them to be returned first.`);
     }
-    return this.bookModel.findByIdAndUpdate(id, { $set: { status: 'deaccessioned' } }, { new: true }).lean();
+    const copies = await this.ensureCopies(book);
+    return this.bookModel.findByIdAndUpdate(id, {
+      $set: {
+        status: 'deaccessioned',
+        copies: copies.map((c: any) => c.status === 'deaccessioned' ? c : { ...c, status: 'deaccessioned' }),
+      },
+    }, { new: true }).lean();
   }
 
   async searchBooks(tenantId: string, searchTerm: string) {
@@ -658,10 +767,19 @@ export class AcademicsService {
     const dueDate   = new Date();
     dueDate.setDate(dueDate.getDate() + (data.loanDays || settings.defaultLoanDays));
 
+    // Pick the specific physical copy being handed over, so the issue
+    // record (and the print-ready barcode on it) points at one exact
+    // item rather than the title in aggregate.
+    const copies = await this.ensureCopies(book);
+    const copyIdx = copies.findIndex((c: any) => c.status === 'available');
+    const copy = copyIdx >= 0 ? copies[copyIdx] : null;
+
     const issue = await this.issueModel.create({
       bookId:       this.oid(data.bookId),
       bookTitle:    book.title,
-      accessionNo:  book.accessionNo,
+      accessionNo:  copy?.accessionNo || book.accessionNo,
+      copyAccessionNo: copy?.accessionNo,
+      copyBarcode:     copy?.barcode,
       // Inherit the book's own campus, not the issuing staff member's -
       // the issue record belongs to wherever the physical book lives.
       campusId:     book.campusId || (requestingUser?.campusId ? this.oid(requestingUser.campusId) : null),
@@ -678,10 +796,12 @@ export class AcademicsService {
     });
 
     const newAvailable = book.availableCopies - 1;
-    await this.bookModel.findByIdAndUpdate(data.bookId, {
+    const bookUpdate: any = {
       $inc: { availableCopies: -1, issuedCopies: 1, totalIssues: 1 },
       $set: { status: newAvailable === 0 ? 'fully_issued' : 'available' },
-    });
+    };
+    if (copyIdx >= 0) bookUpdate.$set[`copies.${copyIdx}.status`] = 'issued';
+    await this.bookModel.findByIdAndUpdate(data.bookId, bookUpdate);
 
     // If this exact borrower was holding a waiting/ready reservation on
     // this exact book, this issue satisfies it - don't make the frontend
@@ -720,10 +840,16 @@ export class AcademicsService {
       },
     });
 
-    await this.bookModel.findByIdAndUpdate(issue.bookId, {
+    const bookReturnUpdate: any = {
       $inc: { availableCopies: 1, issuedCopies: -1 },
       $set: { status: 'available' },
-    });
+    };
+    if (issue.copyAccessionNo) {
+      const bookForReturn = await this.bookModel.findById(issue.bookId).lean();
+      const copyIdx = (bookForReturn?.copies || []).findIndex((c: any) => c.accessionNo === issue.copyAccessionNo);
+      if (copyIdx >= 0) bookReturnUpdate.$set[`copies.${copyIdx}.status`] = 'available';
+    }
+    await this.bookModel.findByIdAndUpdate(issue.bookId, bookReturnUpdate);
 
     // The oldest waiting reservation on this book (if any) graduates to
     // "ready for pickup" - reservedCopies is left alone here, it was
@@ -794,9 +920,13 @@ export class AcademicsService {
       },
     }, { new: true }).lean();
 
-    const book = await this.bookModel.findByIdAndUpdate(issue.bookId, {
-      $inc: { issuedCopies: -1, lostCopies: 1, totalCopies: -1 },
-    }, { new: true }).lean();
+    const lostUpdate: any = { $inc: { issuedCopies: -1, lostCopies: 1, totalCopies: -1 } };
+    if (issue.copyAccessionNo) {
+      const bookForLost = await this.bookModel.findById(issue.bookId).lean();
+      const copyIdx = (bookForLost?.copies || []).findIndex((c: any) => c.accessionNo === issue.copyAccessionNo);
+      if (copyIdx >= 0) lostUpdate.$set = { [`copies.${copyIdx}.status`]: 'lost' };
+    }
+    const book = await this.bookModel.findByIdAndUpdate(issue.bookId, lostUpdate, { new: true }).lean();
     if (book) {
       await this.bookModel.findByIdAndUpdate(issue.bookId, {
         $set: { status: book.availableCopies === 0 ? 'fully_issued' : 'available' },
@@ -828,9 +958,13 @@ export class AcademicsService {
       },
     }, { new: true }).lean();
 
-    await this.bookModel.findByIdAndUpdate(issue.bookId, {
-      $inc: { issuedCopies: -1, damagedCopies: 1 },
-    });
+    const damagedUpdate: any = { $inc: { issuedCopies: -1, damagedCopies: 1 } };
+    if (issue.copyAccessionNo) {
+      const bookForDamaged = await this.bookModel.findById(issue.bookId).lean();
+      const copyIdx = (bookForDamaged?.copies || []).findIndex((c: any) => c.accessionNo === issue.copyAccessionNo);
+      if (copyIdx >= 0) damagedUpdate.$set = { [`copies.${copyIdx}.status`]: 'damaged' };
+    }
+    await this.bookModel.findByIdAndUpdate(issue.bookId, damagedUpdate);
 
     return updated;
   }
