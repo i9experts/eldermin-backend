@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { SyllabusUnit, SyllabusUnitSchema } from './syllabus.schema';
+import { CURRICULUM_FRAMEWORKS } from '../../common/constants/curriculum-framework';
 
 // ============================================================
 // SLO TEMPLATE - reusable, sourced curriculum content
@@ -26,7 +27,7 @@ export type SloTemplateDocument = SloTemplate & Document;
 export class SloTemplate {
   @Prop({ required: true }) subjectName: string;
   @Prop({ required: true }) gradeLevel: string;
-  @Prop({ required: true, enum: ['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom'] }) framework: string;
+  @Prop({ required: true, enum: CURRICULUM_FRAMEWORKS }) framework: string;
 
   @Prop({ type: [SyllabusUnitSchema], default: [] }) units: SyllabusUnit[];
 

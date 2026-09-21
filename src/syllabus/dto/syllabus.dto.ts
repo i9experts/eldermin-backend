@@ -3,6 +3,7 @@ import {
   ValidateNested, IsMongoId,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { CURRICULUM_FRAMEWORKS } from '../../common/constants/curriculum-framework';
 
 export class SyllabusSubTopicDto {
   @IsNumber() subTopicNo: number;
@@ -54,7 +55,7 @@ export class CreateSyllabusDto {
   @IsOptional() @IsString() sectionName?: string;
   @IsString() academicYearLabel: string;
   @IsOptional() @IsString() term?: string;
-  @IsOptional() @IsEnum(['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom']) framework?: string;
+  @IsOptional() @IsEnum(CURRICULUM_FRAMEWORKS) framework?: string;
   @IsOptional() @IsString() recommendedTextbook?: string;
   @IsOptional() @IsString() publisherName?: string;
   @IsOptional() @IsString() edition?: string;
@@ -74,7 +75,7 @@ export class UpdateSyllabusDto {
   @IsOptional() @IsString() sectionName?: string;
   @IsOptional() @IsString() academicYearLabel?: string;
   @IsOptional() @IsString() term?: string;
-  @IsOptional() @IsEnum(['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom']) framework?: string;
+  @IsOptional() @IsEnum(CURRICULUM_FRAMEWORKS) framework?: string;
   @IsOptional() @IsString() recommendedTextbook?: string;
   @IsOptional() @IsString() publisherName?: string;
   @IsOptional() @IsString() edition?: string;
@@ -125,7 +126,7 @@ export class SyllabusQueryDto {
 export class CreateSloTemplateDto {
   @IsString() subjectName: string;
   @IsString() gradeLevel: string;
-  @IsEnum(['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom']) framework: string;
+  @IsEnum(CURRICULUM_FRAMEWORKS) framework: string;
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

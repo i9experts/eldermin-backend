@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
+import { CURRICULUM_FRAMEWORKS } from '../../common/constants/curriculum-framework';
 
 // ============================================================
 // SYLLABUS - unified design + tracking
@@ -92,7 +93,7 @@ export class Syllabus {
   @Prop() sectionName: string; // blank/undefined = applies to all sections of this grade
   @Prop({ required: true }) academicYearLabel: string;
   @Prop() term: string; // Term 1, Term 2, Term 3
-  @Prop({ enum: ['cambridge', 'ib', 'national', 'national-pk', 'american', 'custom'], default: 'national' }) framework: string;
+  @Prop({ enum: CURRICULUM_FRAMEWORKS, default: 'national' }) framework: string;
   @Prop() recommendedTextbook: string;
   @Prop() publisherName: string;
   @Prop() edition: string;
