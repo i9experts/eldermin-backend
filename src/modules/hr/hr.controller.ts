@@ -29,6 +29,11 @@ export class HrController {
     return this.hrService.createLoginForStaff(req.user.tenantId, this.iid(req), id);
   }
 
+  @Post('staff/:id/reset-password')
+  resetPasswordForStaff(@Request() req, @Param('id') id: string) {
+    return this.hrService.resetPasswordForStaff(req.user.tenantId, id);
+  }
+
   @Post('staff/bulk-create-logins')
   bulkCreateLogins(@Request() req, @Body() body: { staffIds?: string[] }) {
     return this.hrService.bulkCreateLogins(req.user.tenantId, this.iid(req), body?.staffIds);
