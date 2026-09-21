@@ -295,6 +295,34 @@ export class HrService {
     return { email: user.email, tempPassword, primaryRole: user.primaryRole, emailSent, emailError };
   }
 
+  // For a staff member who ALREADY has a login account - the counterpart to
+  // createLoginForStaff, which explicitly refuses to touch an existing
+  // account. Previously the only admin-facing option once an account
+  // existed was "Send Password Reset Link" (self-service, emailed to the
+  // staff member) - with no way to hand someone a working password directly
+  // when email delivery isn't reliable (e.g. while an SES sandbox/production
+  // access issue is blocking delivery) or the person is standing right there
+  // asking for a new one. Generates a fresh temp password and overwrites
+  // the existing User's passwordHash, returned once in plaintext the same
+  // way createLoginForStaff's initial temp password is - never stored or
+  // retrievable again after this response.
+  async resetPasswordForStaff(tenantId: string, staffId: string) {
+    const staff = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) });
+    if (!staff) throw new NotFoundException('Staff member not found');
+    if (!staff.userId) throw new BadRequestException('This staff member has no login account yet - use Create Login instead');
+
+    const tempPassword = this.generateTempPassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
+    const user = await this.userModel.findByIdAndUpdate(
+      staff.userId,
+      { passwordHash, $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' } },
+      { new: true },
+    );
+    if (!user) throw new NotFoundException('Login account not found for this staff member');
+
+    return { email: user.email, tempPassword };
+  }
+
   async bulkCreateLogins(tenantId: string, institutionId: string, staffIds?: string[]) {
     const filter: any = { tenantId: this.newTid(tenantId), userId: null, email: { $exists: true, $ne: '' } };
     if (staffIds?.length) filter._id = { $in: staffIds };
