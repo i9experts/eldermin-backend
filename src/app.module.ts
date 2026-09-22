@@ -41,6 +41,7 @@ import { ParentPortalModule } from './parent-portal/parent-portal.module';
 import { ResellersModule } from './resellers/resellers.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
 import { IdCardsModule } from './modules/id-cards/id-cards.module';
+import { AccountingIntegrationsModule } from './modules/accounting-integrations/accounting-integrations.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { IdCardsModule } from './modules/id-cards/id-cards.module';
     OrganizationModule,
     HrModule,
     FinanceModule,
+    AccountingIntegrationsModule,
     ProcurementModule,
     StudentsModule,
     TeachingModule,
