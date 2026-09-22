@@ -7,16 +7,21 @@ export const CIRCULAR_CATEGORIES = [
   'academic', 'administrative', 'fee', 'emergency', 'sports', 'cultural', 'other',
 ] as const;
 
-// Who a circular reaches. 'individual' uses userIds directly; every other
-// scope resolves via Student/Staff (see SchoolCalendarService.resolveAudience) -
-// roles picks which account types within that scope get notified (a
-// circular can target parents only, staff only, or both).
+// Who a circular reaches. Every scope resolves via Student/Staff (see
+// SchoolCalendarService.resolveAudience) - roles picks which account types
+// get notified (a circular can target parents only, staff only, or both).
+// 'individual' picks specific students (their parent gets notified) and/or
+// specific staff members directly, by Student/Staff id - not raw User ids,
+// which nobody composing a circular would ever know by hand. userIds stays
+// as a lower-level escape hatch for API callers that already have one.
 @Schema({ _id: false })
 export class CircularAudience {
   @Prop({ type: [String], default: [] }) roles: string[]; // subset of 'parent' | 'staff' | 'student'
   @Prop({ enum: ['school', 'campus', 'grade', 'individual'], default: 'school' }) scope: string;
   @Prop({ default: null }) campusId: string | null;
   @Prop({ type: [String], default: [] }) gradeLevels: string[];
+  @Prop({ type: [String], default: [] }) individualStudentIds: string[];
+  @Prop({ type: [String], default: [] }) individualStaffIds: string[];
   @Prop({ type: [String], default: [] }) userIds: string[];
 }
 export const CircularAudienceSchema = SchemaFactory.createForClass(CircularAudience);

@@ -11,6 +11,12 @@ import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { Notification, NotificationDocument } from '../parent-portal/schemas/notification-and-message.schema';
+import { Assessment, AssessmentDocument } from '../assessments/schemas/assessment.schema';
+// Aliased: src/modules/organization/schemas/academic-year.schema.ts declares
+// a DIFFERENT, tenantId-scoped class with the same name and no terms - this
+// is deliberately the schoolSlug-scoped one from src/organization/ that
+// actually carries Term dates.
+import { AcademicYear as SchoolAcademicYear, AcademicYearDocument as SchoolAcademicYearDocument } from '../organization/schemas/organization.schema';
 import { EmailService } from '../email/email.service';
 
 interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string }
@@ -29,6 +35,8 @@ export class SchoolCalendarService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
+    @InjectModel(Assessment.name) private assessmentModel: Model<AssessmentDocument>,
+    @InjectModel(SchoolAcademicYear.name) private academicYearModel: Model<SchoolAcademicYearDocument>,
     private emailService: EmailService,
   ) {}
 
@@ -94,9 +102,61 @@ export class SchoolCalendarService {
       source: 'finance',
     }));
 
+    // Exam windows from Assessments - only the school-wide exam types
+    // (mid_term/final_exam/unit_test), not every quiz/assignment, since
+    // this calendar is a school-wide view, not a teacher's gradebook.
+    const assessmentFilter: any = {
+      schoolSlug,
+      type: { $in: ['mid_term', 'final_exam', 'unit_test'] },
+      status: { $ne: 'cancelled' },
+      startDate: { $lte: to },
+      $or: [{ endDate: { $gte: from } }, { endDate: null, startDate: { $gte: from } }],
+    };
+    const assessments = await this.assessmentModel.find(assessmentFilter)
+      .select('title type grade section startDate endDate campusId').lean();
+    const examEvents = assessments.map((a: any) => ({
+      _id: `exam-${a._id}`,
+      title: a.title,
+      description: `${a.type.replace(/_/g, ' ')} — Grade ${a.grade}${a.section ? ` ${a.section}` : ''}`,
+      type: 'exam',
+      color: CALENDAR_EVENT_COLORS.exam,
+      startDate: a.startDate,
+      endDate: a.endDate || a.startDate,
+      allDay: true,
+      campusId: a.campusId ? String(a.campusId) : null,
+      gradeLevels: a.grade ? [a.grade] : [],
+      source: 'assessments',
+    }));
+
+    // Term start/end dates from the current+overlapping academic year(s).
+    const years = await this.academicYearModel.find({
+      schoolSlug, startDate: { $lte: to }, endDate: { $gte: from },
+    }).lean();
+    const termEvents: any[] = [];
+    for (const y of years as any[]) {
+      for (const t of y.terms || []) {
+        if (new Date(t.startDate) > to || new Date(t.endDate) < from) continue;
+        termEvents.push({
+          _id: `term-${y._id}-${t._id}`,
+          title: `${t.name} (${y.name})`,
+          description: `Academic term`,
+          type: 'academic_term',
+          color: CALENDAR_EVENT_COLORS.academic_term,
+          startDate: t.startDate,
+          endDate: t.endDate,
+          allDay: true,
+          campusId: null,
+          gradeLevels: [],
+          source: 'academics',
+        });
+      }
+    }
+
     return [
       ...manual.map((e) => ({ ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' })),
       ...feeDueEvents,
+      ...examEvents,
+      ...termEvents,
     ].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
   }
 
@@ -235,7 +295,8 @@ export class SchoolCalendarService {
   // ─── Audience resolution ────────────────────────────────────────────────
 
   private async resolveAudience(schoolSlug: string, spec: {
-    roles: string[]; scope: string; campusId?: string | null; gradeLevels?: string[]; userIds?: string[];
+    roles: string[]; scope: string; campusId?: string | null; gradeLevels?: string[];
+    individualStudentIds?: string[]; individualStaffIds?: string[]; userIds?: string[];
   }): Promise<AudienceRecipient[]> {
     const tenant = await this.tenantModel.findOne({ slug: schoolSlug }).lean();
     if (!tenant) throw new NotFoundException('School not found');
@@ -243,8 +304,28 @@ export class SchoolCalendarService {
     const nameOf = (u: any) => `${u.profile?.firstName || ''} ${u.profile?.lastName || ''}`.trim() || u.email;
 
     if (spec.scope === 'individual') {
-      const users = await this.userModel.find({ _id: { $in: (spec.userIds || []).map((id) => new Types.ObjectId(id)) }, tenantId: (tenant as any)._id }).lean();
-      return users.map((u) => ({ userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone }));
+      const recipients = new Map<string, AudienceRecipient>();
+
+      if (spec.individualStudentIds?.length) {
+        const studentIds = spec.individualStudentIds.map((id) => new Types.ObjectId(id));
+        const parents = await this.userModel.find({
+          tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
+        }).lean();
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone });
+      }
+      if (spec.individualStaffIds?.length) {
+        const staffDocs = await this.staffModel.find({ _id: { $in: spec.individualStaffIds }, tenantId: (tenant as any)._id }).select('userId').lean();
+        const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
+        if (staffUserIds.length) {
+          const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
+          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+        }
+      }
+      if (spec.userIds?.length) {
+        const users = await this.userModel.find({ _id: { $in: spec.userIds.map((id) => new Types.ObjectId(id)) }, tenantId: (tenant as any)._id }).lean();
+        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+      }
+      return Array.from(recipients.values());
     }
 
     const recipients = new Map<string, AudienceRecipient>();
