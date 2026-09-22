@@ -22,6 +22,9 @@ export const CALENDAR_EVENT_COLORS: Record<string, string> = {
   half_day: '#888888',
   public_holiday: '#D85A30',
   other: '#0C447C',
+  // Synced-only, never a manually selectable CalendarEvent.type - see
+  // SchoolCalendarService.getEvents' term-dates merge.
+  academic_term: '#008300',
 };
 
 @Schema({ timestamps: true, collection: 'calendar_events' })

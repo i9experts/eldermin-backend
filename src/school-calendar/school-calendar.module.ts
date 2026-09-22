@@ -12,6 +12,8 @@ import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { Notification, NotificationSchema } from '../parent-portal/schemas/notification-and-message.schema';
+import { Assessment, AssessmentSchema } from '../assessments/schemas/assessment.schema';
+import { AcademicYear as SchoolAcademicYear, AcademicYearSchema as SchoolAcademicYearSchema } from '../organization/schemas/organization.schema';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { Notification, NotificationSchema } from '../parent-portal/schemas/notif
       { name: User.name, schema: UserSchema },
       { name: Tenant.name, schema: TenantSchema },
       { name: Notification.name, schema: NotificationSchema },
+      { name: Assessment.name, schema: AssessmentSchema },
+      { name: SchoolAcademicYear.name, schema: SchoolAcademicYearSchema },
     ]),
   ],
   controllers: [SchoolCalendarController],
