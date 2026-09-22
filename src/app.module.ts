@@ -42,6 +42,7 @@ import { ResellersModule } from './resellers/resellers.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
 import { IdCardsModule } from './modules/id-cards/id-cards.module';
 import { AccountingIntegrationsModule } from './modules/accounting-integrations/accounting-integrations.module';
+import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { AccountingIntegrationsModule } from './modules/accounting-integrations/
     HrModule,
     FinanceModule,
     AccountingIntegrationsModule,
+    SchoolCalendarModule,
     ProcurementModule,
     StudentsModule,
     TeachingModule,
