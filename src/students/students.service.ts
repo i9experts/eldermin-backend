@@ -458,6 +458,53 @@ export class StudentsService {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  /**
+   * Explains a "why does the class/section roster show fewer students than
+   * expected" report (e.g. Finance's "Assign Fee -> Whole Class" bulk
+   * preview) instead of leaving the admin to guess. Runs the exact same
+   * filters getStudents does for a grade/section (status + campus scope)
+   * so the counts line up with what a bulk action would actually target,
+   * then breaks out every student EXCLUDED by those filters by the reason
+   * they were excluded - a status other than 'active', or a campus that
+   * doesn't match the caller's scope.
+   */
+  async getClassRosterDiagnostic(schoolSlug: string, grade: string, section: string | undefined, requestingUser?: ScopedUser) {
+    const baseFilter: any = { schoolSlug, currentGrade: grade };
+    if (section) baseFilter.currentSection = section;
+
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, undefined) : undefined;
+
+    const [totalInClass, byStatus, activeInScope] = await Promise.all([
+      this.studentModel.countDocuments(baseFilter),
+      this.studentModel.aggregate([
+        { $match: baseFilter },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      this.studentModel.countDocuments({
+        ...baseFilter,
+        status: 'active',
+        ...(effectiveCampusId ? { campusId: effectiveCampusId } : {}),
+      }),
+    ]);
+
+    let excludedByCampus = 0;
+    if (effectiveCampusId) {
+      excludedByCampus = await this.studentModel.countDocuments({
+        ...baseFilter,
+        status: 'active',
+        campusId: { $ne: effectiveCampusId },
+      });
+    }
+
+    return {
+      totalInClass,
+      activeCount: activeInScope,
+      byStatus: byStatus.map((r: any) => ({ status: r._id || 'unset', count: r.count })),
+      excludedByCampus,
+      scopedToCampusId: effectiveCampusId || null,
+    };
+  }
+
   async getStudents(schoolSlug: string, query: StudentQueryDto, requestingUser?: ScopedUser) {
     const { page, limit, search, sortBy, sortOrder,
       grade, section, status, gender, academicYear, scholarshipHolder, specialNeeds, campusId } = query;
