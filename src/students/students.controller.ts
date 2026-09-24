@@ -63,6 +63,13 @@ export class StudentsController {
     return this.studentsService.getDistinctGradesSections(schoolSlug);
   }
 
+  /** GET /api/v1/students/class-roster-diagnostic?grade=&section= */
+  @Get('class-roster-diagnostic')
+  async getClassRosterDiagnostic(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.studentsService.getClassRosterDiagnostic(schoolSlug, grade, section, requestingUser);
+  }
+
   // ============================================================
   // BULK IMPORT
   // ============================================================
