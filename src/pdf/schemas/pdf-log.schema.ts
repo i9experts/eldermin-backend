@@ -11,7 +11,7 @@ export class PdfLog {
     enum: [
       'report-card', 'invoice', 'tarbiyah-report', 'admission-letter',
       'fee_receipt', 'payment_voucher', 'journal_voucher', 'expense_voucher',
-      'payslip', 'result_card', 'attendance_sheet', 'custom',
+      'payslip', 'result_card', 'attendance_sheet', 'custom', 'fee-revenue-report',
     ],
   })
   type: string;

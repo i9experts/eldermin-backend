@@ -529,6 +529,16 @@ export class FinanceController {
     return res.json(data);
   }
 
+  // Item 43 — Fee Revenue by Batch (Grade+Section, e.g. "Grade 3-Boys").
+  // JSON here backs both an in-app preview and the landscape PDF
+  // (POST /pdf/fee-revenue-report, which calls this same service method).
+  @RequireModuleAccess('finance', 'reports', 'view')
+  @Get('reports/fee-revenue-by-batch')
+  async getFeeRevenueByBatchReport(@Request() req: any, @Query('month') month: string, @Query('academicYear') academicYear: string, @Query('campus') campus?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getFeeRevenueByBatchReport(schoolSlug, { month, academicYear: academicYear || req.headers['x-academic-year'], campus });
+  }
+
   @RequireModuleAccess('finance', 'receivable', 'manage')
   @Delete('invoices/:id')
   async deleteInvoice(@Param('id') id: string, @Body('reason') reason: string, @Request() req: any) {

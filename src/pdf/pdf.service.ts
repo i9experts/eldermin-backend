@@ -6,6 +6,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { IsString, IsOptional, IsMongoId } from 'class-validator';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules/report-templates/procurement-report-sections';
+import { FinanceService } from '../finance/finance.service';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -550,6 +551,7 @@ export class PdfService {
     @InjectModel('Expense') private expenseModel: Model<any>,
     @InjectModel('BankAccount') private bankAccountModel: Model<any>,
     @InjectModel('Campus') private campusModel: Model<any>,
+    private financeService: FinanceService,
   ) {}
 
   /**
@@ -865,6 +867,162 @@ export class PdfService {
       type: 'invoice',
       referenceId: params.scopeValue || 'bulk',
       referenceName: `Bulk challans - ${params.scopeType || 'all'} - ${params.month} (${invoices.length} students)`,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Fee Revenue Report - matches the school's existing reference report
+   * format: one landscape table, one row per "batch" (Grade+Section, e.g.
+   * "Grade 3-Boys"), a Male/Female headcount split, one column per fee head
+   * actually billed that month (dynamic, not a fixed set - see
+   * FinanceService.getFeeRevenueByBatchReport), Total Revenue/Paid/
+   * Remaining, plus a grand total row. Adds a Collection % column per
+   * batch and a KPI summary strip up top (total students, revenue,
+   * collected, outstanding, overall collection rate) beyond what the
+   * reference report showed, since those numbers already exist for free
+   * once the batch rows are computed and are the first thing a principal
+   * actually wants to know at a glance.
+   */
+  async generateFeeRevenueReportPdf(
+    schoolSlug: string,
+    params: { month: string; academicYear: string; campus?: string },
+    userId: string,
+  ): Promise<Buffer> {
+    const report = await this.financeService.getFeeRevenueByBatchReport(schoolSlug, params);
+    const school: any = await this.getSchool(schoolSlug);
+
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const logoImg = await this.embedSchoolLogo(pdfDoc, school);
+
+    const pageWidth = 842, pageHeight = 595; // landscape A4
+    const margin = 28;
+    const tableWidth = pageWidth - margin * 2;
+    const navy = rgb(0.047, 0.267, 0.486);
+    const black = rgb(0.1, 0.1, 0.1);
+    const gray = rgb(0.42, 0.42, 0.42);
+    const lightGray = rgb(0.93, 0.93, 0.93);
+    const zebra = rgb(0.97, 0.97, 0.98);
+    const white = rgb(1, 1, 1);
+    const num = (n: number) => Math.round(n || 0).toLocaleString();
+
+    const [y2, m2] = report.month.split('-').map(Number);
+    const monthLabel = y2 && m2 ? new Date(y2, m2 - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) : report.month;
+
+    type Col = { key: string; label: string; width: number; align: 'left' | 'right' };
+    const feeHeads = report.feeHeads;
+    const cols: Col[] = [
+      { key: 'sr', label: 'SR#', width: 26, align: 'left' },
+      { key: 'batch', label: 'BATCH TITLE', width: 120, align: 'left' },
+      { key: 'male', label: 'MALE', width: 34, align: 'right' },
+      { key: 'female', label: 'FEMALE', width: 38, align: 'right' },
+      ...feeHeads.map((fh) => ({ key: `fh:${fh}`, label: fh.toUpperCase(), width: 0, align: 'right' as const })),
+      { key: 'revenue', label: 'TOTAL REVENUE', width: 74, align: 'right' },
+      { key: 'paid', label: 'TOTAL PAID', width: 68, align: 'right' },
+      { key: 'remaining', label: 'TOTAL REMAINING', width: 76, align: 'right' },
+      { key: 'pct', label: 'COLLECTION %', width: 56, align: 'right' },
+    ];
+    const fixedWidth = cols.filter((c) => !c.key.startsWith('fh:')).reduce((s, c) => s + c.width, 0);
+    const feeHeadWidth = feeHeads.length ? Math.max(58, (tableWidth - fixedWidth) / feeHeads.length) : 0;
+    for (const c of cols) if (c.key.startsWith('fh:')) c.width = feeHeadWidth;
+    const colX: Record<string, number> = {};
+    { let x = margin; for (const c of cols) { colX[c.key] = x; x += c.width; } }
+
+    let page: any, y: number;
+
+    const drawPageHeader = (withKpis: boolean) => {
+      page = pdfDoc.addPage([pageWidth, pageHeight]);
+      y = pageHeight - margin;
+      const logoSize = 34;
+      if (logoImg) page.drawImage(logoImg, { x: margin, y: y - logoSize, width: logoSize, height: logoSize });
+      const textX = logoImg ? margin + logoSize + 8 : margin;
+      page.drawText(school?.name || 'School', { x: textX, y: y - 12, size: 13, font: bold, color: navy, maxWidth: tableWidth - logoSize - 8 });
+      page.drawText(
+        `Fee Revenue Report — ${monthLabel}${report.campus ? ` · ${report.campus}` : ''}`,
+        { x: textX, y: y - 27, size: 9, font, color: gray },
+      );
+      y -= logoSize + 14;
+
+      if (withKpis) {
+        const kpis: [string, string][] = [
+          ['Total Students', String(report.totals.totalStudents)],
+          ['Total Revenue', num(report.totals.totalRevenue)],
+          ['Total Collected', num(report.totals.totalPaid)],
+          ['Outstanding', num(report.totals.totalRemaining)],
+          ['Collection Rate', `${report.totals.collectionPct}%`],
+        ];
+        const kpiGap = 6;
+        const kpiW = (tableWidth - kpiGap * (kpis.length - 1)) / kpis.length;
+        kpis.forEach(([label, value], i) => {
+          const kx = margin + i * (kpiW + kpiGap);
+          page.drawRectangle({ x: kx, y: y - 32, width: kpiW, height: 32, color: lightGray });
+          page.drawText(label, { x: kx + 7, y: y - 12, size: 6.5, font, color: gray });
+          page.drawText(value, { x: kx + 7, y: y - 25, size: 10.5, font: bold, color: navy });
+        });
+        y -= 42;
+      }
+
+      page.drawRectangle({ x: margin, y: y - 15, width: tableWidth, height: 17, color: navy });
+      for (const c of cols) {
+        const tw = bold.widthOfTextAtSize(c.label, 6.5);
+        const tx = c.align === 'right' ? colX[c.key] + c.width - 6 - tw : colX[c.key] + 4;
+        page.drawText(c.label, { x: tx, y: y - 10, size: 6.5, font: bold, color: white });
+      }
+      y -= 19;
+    };
+
+    drawPageHeader(true);
+
+    const rowH = 15;
+    const drawRow = (cells: Record<string, string>, opts: { bold?: boolean; bg?: any } = {}) => {
+      if (y < margin + rowH + 4) drawPageHeader(false);
+      if (opts.bg) page.drawRectangle({ x: margin, y: y - 11, width: tableWidth, height: 13, color: opts.bg });
+      const f = opts.bold ? bold : font;
+      for (const c of cols) {
+        const val = cells[c.key] ?? '';
+        const tw = f.widthOfTextAtSize(val, 7);
+        const tx = c.align === 'right' ? colX[c.key] + c.width - 6 - tw : colX[c.key] + 4;
+        page.drawText(val, { x: tx, y: y - 9, size: 7, font: f, color: black, maxWidth: c.width - 8 });
+      }
+      y -= rowH;
+    };
+
+    report.rows.forEach((r, i) => {
+      const cells: Record<string, string> = {
+        sr: String(i + 1), batch: r.batchTitle,
+        male: r.maleCount ? String(r.maleCount) : '-', female: r.femaleCount ? String(r.femaleCount) : '-',
+        revenue: num(r.totalRevenue), paid: num(r.totalPaid), remaining: r.totalRemaining ? num(r.totalRemaining) : '-',
+        pct: `${r.collectionPct}%`,
+      };
+      for (const fh of feeHeads) cells[`fh:${fh}`] = r.byFeeHead[fh] ? num(r.byFeeHead[fh]) : '-';
+      drawRow(cells, { bg: i % 2 === 1 ? zebra : undefined });
+    });
+
+    const totalCells: Record<string, string> = {
+      sr: '', batch: 'Total',
+      male: String(report.totals.maleCount), female: String(report.totals.femaleCount),
+      revenue: num(report.totals.totalRevenue), paid: num(report.totals.totalPaid), remaining: num(report.totals.totalRemaining),
+      pct: `${report.totals.collectionPct}%`,
+    };
+    for (const fh of feeHeads) totalCells[`fh:${fh}`] = num(report.totals.byFeeHead[fh] || 0);
+    drawRow(totalCells, { bold: true, bg: lightGray });
+
+    page.drawText(`Generated ${new Date().toLocaleString('en-GB')} · Eldermin ERP`, { x: margin, y: margin - 10, size: 6, font, color: gray });
+
+    const bytes = await pdfDoc.save();
+    const pdf = Buffer.from(bytes);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'fee-revenue-report',
+      referenceId: `fee-revenue-${report.month}`,
+      referenceName: `Fee Revenue Report - ${monthLabel}${report.campus ? ` (${report.campus})` : ''}`,
       generatedBy: userId,
       status: 'success',
       fileSizeKb: Math.round(pdf.length / 1024),
