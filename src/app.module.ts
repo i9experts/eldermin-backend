@@ -43,6 +43,7 @@ import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.mod
 import { IdCardsModule } from './modules/id-cards/id-cards.module';
 import { AccountingIntegrationsModule } from './modules/accounting-integrations/accounting-integrations.module';
 import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
+import { EventsModule } from './events/events.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
     FinanceModule,
     AccountingIntegrationsModule,
     SchoolCalendarModule,
+    EventsModule,
     ProcurementModule,
     StudentsModule,
     TeachingModule,
