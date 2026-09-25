@@ -8,6 +8,7 @@ import { TicketType, TicketTypeDocument } from './schemas/ticket-type.schema';
 import { PromoCode, PromoCodeDocument } from './schemas/promo-code.schema';
 import { Order, OrderDocument } from './schemas/order.schema';
 import { Ticket, TicketDocument } from './schemas/ticket.schema';
+import { SeatMap, SeatMapDocument } from './schemas/seat-map.schema';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
@@ -24,6 +25,7 @@ export class EventsService {
     @InjectModel(PromoCode.name) private promoCodeModel: Model<PromoCodeDocument>,
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     @InjectModel(Ticket.name) private ticketModel: Model<TicketDocument>,
+    @InjectModel(SeatMap.name) private seatMapModel: Model<SeatMapDocument>,
     private pdfService: PdfService,
     private emailService: EmailService,
     private whatsAppService: WhatsAppService,
@@ -151,6 +153,58 @@ export class EventsService {
     return { message: 'Deleted' };
   }
 
+  // ─── Reserved seating ───────────────────────────────────────────────────
+
+  // Live occupancy computed against Ticket at read time (never
+  // denormalized onto the Seat subdocument) - so a cancelled/refunded
+  // ticket immediately frees its seat with no extra bookkeeping.
+  async getSeatMap(schoolSlug: string, eventId: string) {
+    const map = await this.seatMapModel.findOne({ schoolSlug, eventId }).lean();
+    if (!map) return null;
+    const takenTickets = await this.ticketModel.find(
+      { schoolSlug, eventId, status: { $in: ACTIVE_TICKET_STATUSES }, seatId: { $ne: null } },
+      { seatId: 1, attendeeName: 1, status: 1 },
+    ).lean();
+    const takenBySeatId = new Map(takenTickets.map((t: any) => [t.seatId, t]));
+    return {
+      ...map,
+      seats: map.seats.map((s: any) => {
+        const ticket = takenBySeatId.get(s.seatId);
+        return { ...s, status: ticket ? 'taken' : 'available', attendeeName: ticket?.attendeeName };
+      }),
+    };
+  }
+
+  async upsertSeatMap(schoolSlug: string, eventId: string, data: { name: string; seats: any[] }) {
+    if (!Array.isArray(data.seats)) throw new BadRequestException('seats must be an array');
+    const seatIds = data.seats.map((s) => s.seatId);
+    if (new Set(seatIds).size !== seatIds.length) throw new BadRequestException('Duplicate seatId in layout');
+
+    const existing = await this.seatMapModel.findOne({ schoolSlug, eventId }).lean();
+    if (existing) {
+      const removedSeatIds = existing.seats.map((s: any) => s.seatId).filter((id: string) => !seatIds.includes(id));
+      if (removedSeatIds.length) {
+        const stillTaken = await this.ticketModel.exists({
+          schoolSlug, eventId, status: { $in: ACTIVE_TICKET_STATUSES }, seatId: { $in: removedSeatIds },
+        });
+        if (stillTaken) throw new BadRequestException('Cannot remove a seat that already has a ticket assigned - cancel that order first.');
+      }
+    }
+
+    return this.seatMapModel.findOneAndUpdate(
+      { schoolSlug, eventId },
+      { $set: { name: data.name, seats: data.seats, schoolSlug, eventId } },
+      { new: true, upsert: true },
+    ).lean();
+  }
+
+  async deleteSeatMap(schoolSlug: string, eventId: string) {
+    const anySeated = await this.ticketModel.exists({ schoolSlug, eventId, status: { $in: ACTIVE_TICKET_STATUSES }, seatId: { $ne: null } });
+    if (anySeated) throw new BadRequestException('Cannot remove seating - tickets are already assigned to seats. Cancel those orders first.');
+    await this.seatMapModel.deleteOne({ schoolSlug, eventId });
+    return { message: 'Deleted' };
+  }
+
   // ─── Pricing ────────────────────────────────────────────────────────────
 
   private currentPrice(ticketType: any, at: Date = new Date()): number {
@@ -204,6 +258,22 @@ export class EventsService {
     // Lock in ticket types + validate capacity up front, before creating
     // anything - a partially-created order on a capacity failure would be
     // a real mess to unwind.
+    const seatMap = await this.seatMapModel.findOne({ schoolSlug, eventId }).lean();
+    const seatById = new Map((seatMap?.seats ?? []).map((s: any) => [s.seatId, s]));
+    const requestedSeatIds: string[] = data.items.flatMap((item: any) => item.seatIds || []);
+    if (new Set(requestedSeatIds).size !== requestedSeatIds.length) {
+      throw new BadRequestException('The same seat was selected more than once');
+    }
+    if (requestedSeatIds.length) {
+      const alreadyTaken = await this.ticketModel.find(
+        { schoolSlug, eventId, status: { $in: ACTIVE_TICKET_STATUSES }, seatId: { $in: requestedSeatIds } },
+        { seatId: 1 },
+      ).lean();
+      if (alreadyTaken.length) {
+        throw new BadRequestException(`Seat(s) ${alreadyTaken.map((t: any) => t.seatId).join(', ')} were just taken by someone else - please pick again.`);
+      }
+    }
+
     const lineItems: any[] = [];
     let subtotal = 0;
     for (const item of data.items) {
@@ -215,8 +285,18 @@ export class EventsService {
       if (qty > remaining) {
         throw new BadRequestException(`Only ${remaining} "${tt.name}" ticket(s) left - requested ${qty}`);
       }
+      const seatIds: (string | null)[] = item.seatIds?.length ? item.seatIds : new Array(qty).fill(null);
+      if (seatIds.length !== qty) throw new BadRequestException(`Select exactly ${qty} seat(s) for ${tt.name}`);
+      for (const seatId of seatIds) {
+        if (seatId == null) continue;
+        const seat = seatById.get(seatId);
+        if (!seat) throw new BadRequestException(`Seat ${seatId} does not exist on this event's seat map`);
+        if (seat.ticketTypeId && String(seat.ticketTypeId) !== String(tt._id)) {
+          throw new BadRequestException(`Seat ${seatId} is reserved for a different ticket type`);
+        }
+      }
       const unitPrice = this.currentPrice(tt);
-      lineItems.push({ ticketType: tt, ticketTypeId: tt._id, ticketTypeName: tt.name, quantity: qty, unitPrice, attendees: item.attendees || [] });
+      lineItems.push({ ticketType: tt, ticketTypeId: tt._id, ticketTypeName: tt.name, quantity: qty, unitPrice, attendees: item.attendees || [], seatIds });
       subtotal += unitPrice * qty;
     }
 
@@ -248,6 +328,7 @@ export class EventsService {
           attendeeName: attendee.name || data.buyerName, attendeeEmail: attendee.email || data.buyerEmail, attendeePhone: attendee.phone || data.buyerPhone,
           qrToken: randomBytes(16).toString('hex'),
           status: isPaid ? 'valid' : 'reserved',
+          seatId: li.seatIds[i] || null,
           schoolSlug,
         });
       }
@@ -284,14 +365,30 @@ export class EventsService {
     return order;
   }
 
-  async cancelOrder(schoolSlug: string, orderId: string, reason: string | undefined, cancelledBy: string) {
+  // Refunds always return via the order's original paymentMethod ("refund
+  // to source") - there's no field to pick a different method, by design.
+  // `refundReference` is required for a paid order so there's a record of
+  // how the money actually moved (a bank ref, "cash handed back", etc) -
+  // Phase 2 only supports refunding the full order, not individual
+  // tickets within it (documented Phase 3 gap).
+  async cancelOrder(schoolSlug: string, orderId: string, reason: string | undefined, refundReference: string | undefined, cancelledBy: string) {
     const order = await this.orderModel.findOne({ _id: orderId, schoolSlug });
     if (!order) throw new NotFoundException('Order not found');
     if (order.status === 'refunded' || order.status === 'cancelled') throw new BadRequestException('Already cancelled/refunded');
 
     const wasPaid = order.status === 'paid';
+    if (wasPaid && !refundReference?.trim()) {
+      throw new BadRequestException(`This order was paid via ${order.paymentMethod.replace('_', ' ')} - describe how the ${order.totalAmount} refund was actually returned (e.g. a bank reference, or "cash handed back").`);
+    }
     order.status = wasPaid ? 'refunded' : 'cancelled';
     order.notes = [order.notes, reason ? `${wasPaid ? 'Refunded' : 'Cancelled'} by ${cancelledBy}: ${reason}` : undefined].filter(Boolean).join(' | ');
+    if (wasPaid) {
+      order.refundedAt = new Date();
+      order.refundedBy = cancelledBy;
+      order.refundMethod = order.paymentMethod;
+      order.refundReference = refundReference as string;
+      order.refundAmount = order.totalAmount;
+    }
     await order.save();
 
     const tickets = await this.ticketModel.find({ orderId, status: { $ne: 'checked_in' } }).lean();
@@ -377,6 +474,20 @@ export class EventsService {
     };
   }
 
+  // ─── Multi-gate check-in ────────────────────────────────────────────────
+
+  // Powers both the admin dashboard's per-gate breakdown and the Kiosk
+  // mode header (each gate/device shows its own running count, plus this
+  // gives the event-wide total across all gates).
+  async getGateStats(schoolSlug: string, eventId: string) {
+    const stats = await this.ticketModel.aggregate([
+      { $match: { schoolSlug, eventId: new Types.ObjectId(eventId), status: 'checked_in' } },
+      { $group: { _id: '$checkedInGate', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+    return stats.map((s: any) => ({ gate: s._id || 'Unspecified', count: s.count }));
+  }
+
   // ─── Badges ─────────────────────────────────────────────────────────────
 
   async generateBadgesPdf(schoolSlug: string, ticketIds: string[]): Promise<Buffer> {
@@ -430,14 +541,19 @@ export class EventsService {
   async getPublicEventBySlug(schoolSlug: string, slug: string) {
     const event = await this.eventModel.findOne({ schoolSlug, slug, status: 'published', visibility: { $in: ['public', 'unlisted'] } }).lean();
     if (!event) throw new NotFoundException('Event not found');
-    const ticketTypes = await this.ticketTypeModel.find({ schoolSlug, eventId: event._id, isActive: true }).sort({ sortOrder: 1 }).lean();
+    const [ticketTypes, seatMap] = await Promise.all([
+      this.ticketTypeModel.find({ schoolSlug, eventId: event._id, isActive: true }).sort({ sortOrder: 1 }).lean(),
+      this.getSeatMap(schoolSlug, String(event._id)),
+    ]);
     return {
       ...event,
       ticketTypes: ticketTypes.map((t: any) => ({
         _id: t._id, name: t.name, description: t.description,
-        price: this.currentPrice(t), available: Math.max(0, t.capacity - t.soldCount),
+        currentPrice: this.currentPrice(t), availableCount: Math.max(0, t.capacity - t.soldCount),
         isComplimentary: t.isComplimentary,
       })),
+      hasReservedSeating: !!seatMap,
+      seatMap: seatMap ? { seats: seatMap.seats } : null,
     };
   }
 }

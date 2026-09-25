@@ -41,6 +41,18 @@ export class Order {
   @Prop() paidAt: Date;
   @Prop() paidBy: string; // admin/box-office user who confirmed a manual payment
 
+  // Refund-to-source: a refund always returns via the SAME method the
+  // order was paid with (refundMethod mirrors paymentMethod, set by
+  // EventsService.cancelOrder, never chosen independently) - a school
+  // can't accidentally hand back cash for a bank-transfer payment without
+  // it being visible here. Full-order refunds only in Phase 2; a partial
+  // refund (e.g. 2 of 4 tickets) is a documented Phase 3 gap.
+  @Prop() refundedAt: Date;
+  @Prop() refundedBy: string;
+  @Prop({ type: String, default: null }) refundMethod: string | null;
+  @Prop() refundReference: string; // e.g. "Bank ref #1234", "Cash handed back to parent"
+  @Prop({ type: Number, default: null }) refundAmount: number | null;
+
   @Prop() notes: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }

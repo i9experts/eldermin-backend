@@ -1,13 +1,14 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, Res,
+  Controller, Get, Post, Patch, Put, Delete, Body, Param, Query, Request, Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { EventsService } from './events.service';
+import { CampaignsService } from './campaigns.service';
 import { Public } from '../auth/decorators';
 
 @Controller('events')
 export class EventsController {
-  constructor(private readonly service: EventsService) {}
+  constructor(private readonly service: EventsService, private readonly campaigns: CampaignsService) {}
 
   private ctx(req: any) {
     return { schoolSlug: req?.user?.schoolSlug, userName: req?.user?.name || 'Admin' };
@@ -55,6 +56,32 @@ export class EventsController {
   getEventDashboard(@Request() req: any, @Param('id') id: string) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getEventDashboard(schoolSlug, id);
+  }
+
+  @Get(':id/gate-stats')
+  getGateStats(@Request() req: any, @Param('id') id: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getGateStats(schoolSlug, id);
+  }
+
+  // ─── Admin: reserved seating ────────────────────────────────────────────
+
+  @Get(':id/seat-map')
+  getSeatMap(@Request() req: any, @Param('id') id: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getSeatMap(schoolSlug, id);
+  }
+
+  @Put(':id/seat-map')
+  upsertSeatMap(@Request() req: any, @Param('id') id: string, @Body() body: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.upsertSeatMap(schoolSlug, id, body);
+  }
+
+  @Delete(':id/seat-map')
+  deleteSeatMap(@Request() req: any, @Param('id') id: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteSeatMap(schoolSlug, id);
   }
 
   // ─── Admin: ticket types ────────────────────────────────────────────────
@@ -123,9 +150,12 @@ export class EventsController {
   }
 
   @Post('orders/:orderId/cancel')
-  cancelOrder(@Request() req: any, @Param('orderId') orderId: string, @Body('reason') reason: string) {
+  cancelOrder(
+    @Request() req: any, @Param('orderId') orderId: string,
+    @Body('reason') reason: string, @Body('refundReference') refundReference: string,
+  ) {
     const { schoolSlug, userName } = this.ctx(req);
-    return this.service.cancelOrder(schoolSlug, orderId, reason, userName);
+    return this.service.cancelOrder(schoolSlug, orderId, reason, refundReference, userName);
   }
 
   // ─── Admin: attendees / CRM ─────────────────────────────────────────────
@@ -148,6 +178,38 @@ export class EventsController {
   checkInSearch(@Request() req: any, @Param('id') eventId: string, @Query('q') q: string) {
     const { schoolSlug } = this.ctx(req);
     return this.service.checkInByName(schoolSlug, eventId, q || '');
+  }
+
+  // ─── Admin: campaigns (CRM) ─────────────────────────────────────────────
+
+  @Get(':id/campaigns')
+  getCampaigns(@Request() req: any, @Param('id') eventId: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.campaigns.getCampaigns(schoolSlug, eventId);
+  }
+
+  @Post(':id/campaigns')
+  createCampaign(@Request() req: any, @Param('id') eventId: string, @Body() body: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.campaigns.createCampaign(schoolSlug, eventId, userName, body);
+  }
+
+  @Patch('campaigns/:campaignId')
+  updateCampaign(@Request() req: any, @Param('campaignId') id: string, @Body() body: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.campaigns.updateCampaign(schoolSlug, id, body);
+  }
+
+  @Delete('campaigns/:campaignId')
+  deleteCampaign(@Request() req: any, @Param('campaignId') id: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.campaigns.deleteCampaign(schoolSlug, id);
+  }
+
+  @Post('campaigns/:campaignId/send-now')
+  sendCampaignNow(@Request() req: any, @Param('campaignId') id: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.campaigns.sendCampaignNow(schoolSlug, id);
   }
 
   // ─── Admin: badges ──────────────────────────────────────────────────────
