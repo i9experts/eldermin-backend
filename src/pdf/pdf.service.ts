@@ -551,6 +551,7 @@ export class PdfService {
     @InjectModel('Expense') private expenseModel: Model<any>,
     @InjectModel('BankAccount') private bankAccountModel: Model<any>,
     @InjectModel('Campus') private campusModel: Model<any>,
+    @InjectModel('GroupInstitution') private groupInstitutionModel: Model<any>,
     private financeService: FinanceService,
   ) {}
 
@@ -621,6 +622,33 @@ export class PdfService {
     const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
     if (!school) throw new NotFoundException(`School not found: ${schoolSlug}`);
     return school;
+  }
+
+  /**
+   * Resolves the correct branding (name + logo) for a document tied to a
+   * specific campus - not just the tenant's single top-level School
+   * document. A multi-institution school GROUP (see
+   * src/organization/schemas/group-institution.schema.ts - "Institutions"
+   * in Institution Setup) has one GroupInstitution per member school, each
+   * with its OWN logoUrl, and each Campus optionally links to one via
+   * Campus.institutionId. Every report used to call embedSchoolLogo(school)
+   * with only the shared School.logo - fine for a single-institution
+   * school, but for a group it meant EVERY report/voucher/challan showed
+   * whichever institution's logo happened to be uploaded most recently
+   * (last write wins, since InstitutionsTab's logo upload writes through
+   * the same shared /organization/profile/logo endpoint used for the
+   * plain single-school case), regardless of which campus the document was
+   * actually for. Falls back to the tenant-level School doc whenever the
+   * campus has no institution linked, so a single-institution school's
+   * behavior is completely unchanged.
+   */
+  private async resolveSchoolBranding(schoolSlug: string, school: any, campusName?: string): Promise<{ name: string; logo: string | null }> {
+    if (!campusName) return { name: school?.name, logo: school?.logo || null };
+    const campus = await this.campusModel.findOne({ schoolSlug, name: campusName }, { institutionId: 1 }).lean();
+    if (!campus?.institutionId) return { name: school?.name, logo: school?.logo || null };
+    const institution = await this.groupInstitutionModel.findOne({ _id: campus.institutionId, schoolSlug }).lean();
+    if (!institution) return { name: school?.name, logo: school?.logo || null };
+    return { name: institution.name || school?.name, logo: institution.logoUrl || school?.logo || null };
   }
 
   private async logPdf(data: Partial<PdfLog>) {
@@ -760,13 +788,14 @@ export class PdfService {
       .findOne({ schoolSlug, isActive: true })
       .sort({ isPrimary: -1 })
       .lean();
+    const branding = await this.resolveSchoolBranding(schoolSlug, school, invoice.campus);
 
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    const logoImg = await this.embedSchoolLogo(pdfDoc, school);
+    const logoImg = await this.embedSchoolLogo(pdfDoc, branding.logo);
 
-    const data = this.buildChallanData(school, bankAccount, invoice);
+    const data = this.buildChallanData({ ...school, name: branding.name }, bankAccount, invoice);
     this.drawChallanPage(pdfDoc, data, logoImg, font, bold);
 
     const bytes = await pdfDoc.save();
@@ -852,11 +881,29 @@ export class PdfService {
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    const logoImg = await this.embedSchoolLogo(pdfDoc, school);
+
+    // A bulk run can span multiple campuses at once (e.g. scopeType 'all'),
+    // and each campus may belong to a different institution in a
+    // multi-institution school group (see resolveSchoolBranding) - so each
+    // page resolves its own invoice.campus branding rather than one shared
+    // logo/name for the whole PDF. Cached per campus name so a same-campus
+    // run (the overwhelmingly common case) only fetches/embeds the logo
+    // image once, not once per student.
+    const brandingCache = new Map<string, { name: string; logoImg: any }>();
+    const brandingFor = async (campusName?: string) => {
+      const key = campusName || '';
+      if (!brandingCache.has(key)) {
+        const branding = await this.resolveSchoolBranding(schoolSlug, school, campusName);
+        const logoImg = await this.embedSchoolLogo(pdfDoc, branding.logo);
+        brandingCache.set(key, { name: branding.name, logoImg });
+      }
+      return brandingCache.get(key)!;
+    };
 
     for (const invoice of invoices) {
-      const data = this.buildChallanData(school, bankAccount, invoice);
-      this.drawChallanPage(pdfDoc, data, logoImg, font, bold);
+      const branding = await brandingFor(invoice.campus);
+      const data = this.buildChallanData({ ...school, name: branding.name }, bankAccount, invoice);
+      this.drawChallanPage(pdfDoc, data, branding.logoImg, font, bold);
     }
 
     const bytes = await pdfDoc.save();
@@ -895,11 +942,12 @@ export class PdfService {
   ): Promise<Buffer> {
     const report = await this.financeService.getFeeRevenueByBatchReport(schoolSlug, params);
     const school: any = await this.getSchool(schoolSlug);
+    const branding = await this.resolveSchoolBranding(schoolSlug, school, params.campus);
 
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    const logoImg = await this.embedSchoolLogo(pdfDoc, school);
+    const logoImg = await this.embedSchoolLogo(pdfDoc, branding.logo);
 
     const pageWidth = 842, pageHeight = 595; // landscape A4
     const margin = 28;
@@ -911,6 +959,20 @@ export class PdfService {
     const zebra = rgb(0.97, 0.97, 0.98);
     const white = rgb(1, 1, 1);
     const num = (n: number) => Math.round(n || 0).toLocaleString();
+    // Hard character-level truncation (with an ellipsis), not pdf-lib's
+    // own `maxWidth` (which WORD-WRAPS onto extra lines instead of
+    // clipping - fine for a paragraph, but this table's rows/header are a
+    // fixed single line each). A long fee-head name (this report's column
+    // set is dynamic, not fixed) in a narrow column used to overflow
+    // sideways past its own column boundary and collide with its
+    // neighbor's label - this guarantees every cell fits inside its own
+    // column no matter how many fee heads a school has configured.
+    const fitText = (f: any, text: string, size: number, maxW: number): string => {
+      if (f.widthOfTextAtSize(text, size) <= maxW) return text;
+      let t = text;
+      while (t.length > 1 && f.widthOfTextAtSize(`${t}…`, size) > maxW) t = t.slice(0, -1);
+      return `${t}…`;
+    };
 
     const [y2, m2] = report.month.split('-').map(Number);
     const monthLabel = y2 && m2 ? new Date(y2, m2 - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) : report.month;
@@ -942,7 +1004,7 @@ export class PdfService {
       const logoSize = 34;
       if (logoImg) page.drawImage(logoImg, { x: margin, y: y - logoSize, width: logoSize, height: logoSize });
       const textX = logoImg ? margin + logoSize + 8 : margin;
-      page.drawText(school?.name || 'School', { x: textX, y: y - 12, size: 13, font: bold, color: navy, maxWidth: tableWidth - logoSize - 8 });
+      page.drawText(fitText(bold, branding.name || 'School', 13, tableWidth - logoSize - 8), { x: textX, y: y - 12, size: 13, font: bold, color: navy });
       page.drawText(
         `Fee Revenue Report — ${monthLabel}${report.campus ? ` · ${report.campus}` : ''}`,
         { x: textX, y: y - 27, size: 9, font, color: gray },
@@ -970,9 +1032,10 @@ export class PdfService {
 
       page.drawRectangle({ x: margin, y: y - 15, width: tableWidth, height: 17, color: navy });
       for (const c of cols) {
-        const tw = bold.widthOfTextAtSize(c.label, 6.5);
+        const label = fitText(bold, c.label, 6.5, c.width - 6);
+        const tw = bold.widthOfTextAtSize(label, 6.5);
         const tx = c.align === 'right' ? colX[c.key] + c.width - 6 - tw : colX[c.key] + 4;
-        page.drawText(c.label, { x: tx, y: y - 10, size: 6.5, font: bold, color: white });
+        page.drawText(label, { x: tx, y: y - 10, size: 6.5, font: bold, color: white });
       }
       y -= 19;
     };
@@ -985,10 +1048,10 @@ export class PdfService {
       if (opts.bg) page.drawRectangle({ x: margin, y: y - 11, width: tableWidth, height: 13, color: opts.bg });
       const f = opts.bold ? bold : font;
       for (const c of cols) {
-        const val = cells[c.key] ?? '';
+        const val = fitText(f, cells[c.key] ?? '', 7, c.width - 8);
         const tw = f.widthOfTextAtSize(val, 7);
         const tx = c.align === 'right' ? colX[c.key] + c.width - 6 - tw : colX[c.key] + 4;
-        page.drawText(val, { x: tx, y: y - 9, size: 7, font: f, color: black, maxWidth: c.width - 8 });
+        page.drawText(val, { x: tx, y: y - 9, size: 7, font: f, color: black });
       }
       y -= rowH;
     };
@@ -1031,24 +1094,24 @@ export class PdfService {
     return pdf;
   }
 
-  private async embedSchoolLogo(pdfDoc: any, school: any): Promise<any> {
-    if (!school?.logo) return null;
+  private async embedSchoolLogo(pdfDoc: any, logoUrl: string | null | undefined): Promise<any> {
+    if (!logoUrl) return null;
     try {
-      const res = await fetch(school.logo);
+      const res = await fetch(logoUrl);
       if (!res.ok) {
         // A voucher silently printing with no logo used to fail here with
         // zero trace - if the S3 object is actually private (403) or the
         // stored URL is stale (404), this is otherwise undiagnosable from
         // outside the container. Non-fatal: the voucher still renders.
-        this.logger.warn(`School logo fetch failed (${res.status} ${res.statusText}) for ${school.slug}: ${school.logo}`);
+        this.logger.warn(`School logo fetch failed (${res.status} ${res.statusText}): ${logoUrl}`);
         return null;
       }
       const bytes = await res.arrayBuffer();
       const contentType = res.headers.get('content-type') || '';
-      const isPng = contentType.includes('png') || school.logo.toLowerCase().includes('.png');
+      const isPng = contentType.includes('png') || logoUrl.toLowerCase().includes('.png');
       return isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
     } catch (err: any) {
-      this.logger.warn(`School logo embed failed for ${school.slug}: ${err?.message}`);
+      this.logger.warn(`School logo embed failed for ${logoUrl}: ${err?.message}`);
       return null;
     }
   }
