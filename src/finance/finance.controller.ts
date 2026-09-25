@@ -253,6 +253,11 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateFeeStructure(id, schoolSlug, dto);
   }
+  @RequireModuleAccess('finance', 'fee', 'manage')
+  @Delete('fee-structures/:id') async deleteFeeStructure(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteFeeStructure(id, schoolSlug);
+  }
 
   // Invoices
   @RequireModuleAccess('finance', 'fee', 'view')
