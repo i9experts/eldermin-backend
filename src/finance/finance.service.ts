@@ -2275,6 +2275,105 @@ export class FinanceService {
     };
   }
 
+  // ============================================================
+  // REPORT — Fee Revenue by Batch (Grade+Section, e.g. "Grade 3-Boys")
+  // ============================================================
+  // Matches the school's own reference "Fee Revenue Report" format: one row
+  // per batch with a Male/Female headcount split, one column per fee head
+  // actually billed this month (dynamic - not a fixed Annual/Registration/
+  // Tuition set, since that's specific to this school's own fee heads), and
+  // Total Revenue/Paid/Remaining. "Batch" isn't a stored entity anywhere in
+  // this codebase (grepped) - it's Invoice.grade + Invoice.section, the same
+  // fields the fee-challan/voucher PDF already bills against, falling back
+  // to the student's own currentGrade/currentSection exactly like
+  // buildChallanData does for a challan missing those (older invoices).
+  async getFeeRevenueByBatchReport(schoolSlug: string, params: {
+    month: string; academicYear: string; campus?: string;
+  }) {
+    const { month, academicYear, campus } = params;
+    if (!month) throw new BadRequestException('month is required (e.g. 2026-08)');
+    if (!academicYear) throw new BadRequestException('academicYear is required');
+
+    const match: any = { schoolSlug, month, academicYear, isDeleted: { $ne: true } };
+    if (campus) match.campus = campus;
+
+    const basePipeline: any[] = [
+      { $match: match },
+      { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+      { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+      { $addFields: {
+        batchGrade: { $ifNull: ['$grade', { $ifNull: ['$student.currentGrade', 'Unassigned'] }] },
+        batchSection: { $ifNull: ['$section', { $ifNull: ['$student.currentSection', ''] }] },
+        gender: '$student.gender',
+      } },
+    ];
+
+    const [batchSummary, feeHeadRows, grades] = await Promise.all([
+      this.invoiceModel.aggregate([
+        ...basePipeline,
+        { $group: {
+          _id: { grade: '$batchGrade', section: '$batchSection' },
+          maleCount: { $sum: { $cond: [{ $eq: ['$gender', 'male'] }, 1, 0] } },
+          femaleCount: { $sum: { $cond: [{ $eq: ['$gender', 'female'] }, 1, 0] } },
+          totalRevenue: { $sum: '$totalAmount' },
+          totalPaid: { $sum: '$paidAmount' },
+          totalRemaining: { $sum: '$balanceDue' },
+          studentsWithBalance: { $sum: { $cond: [{ $gt: ['$balanceDue', 0] }, 1, 0] } },
+        } },
+      ]),
+      this.invoiceModel.aggregate([
+        ...basePipeline,
+        { $unwind: '$items' },
+        { $group: {
+          _id: { grade: '$batchGrade', section: '$batchSection', feeHead: { $ifNull: ['$items.feeHead', '$items.description'] } },
+          amount: { $sum: { $ifNull: ['$items.netAmount', '$items.amount'] } },
+        } },
+      ]),
+      this.gradeModel.find({ schoolSlug }, { name: 1, displayOrder: 1 }).lean(),
+    ]);
+
+    const displayOrderByGrade = new Map(grades.map((g: any) => [g.name, g.displayOrder ?? 999]));
+    const feeHeads = Array.from(new Set(feeHeadRows.map((r: any) => r._id.feeHead))).sort();
+
+    const batchKey = (grade: string, section: string) => `${grade}::${section}`;
+    const byFeeHeadByBatch = new Map<string, Record<string, number>>();
+    for (const r of feeHeadRows as any[]) {
+      const key = batchKey(r._id.grade, r._id.section);
+      if (!byFeeHeadByBatch.has(key)) byFeeHeadByBatch.set(key, {});
+      byFeeHeadByBatch.get(key)![r._id.feeHead] = r.amount;
+    }
+
+    const rows = (batchSummary as any[])
+      .map((b: any) => {
+        const grade = b._id.grade || 'Unassigned';
+        const section = b._id.section || '';
+        const batchTitle = section ? `${grade}-${section}` : grade;
+        const collectionPct = b.totalRevenue > 0 ? Math.round((b.totalPaid / b.totalRevenue) * 1000) / 10 : 0;
+        return {
+          batchTitle, grade, section,
+          maleCount: b.maleCount, femaleCount: b.femaleCount, totalStudents: b.maleCount + b.femaleCount,
+          byFeeHead: byFeeHeadByBatch.get(batchKey(grade, section)) || {},
+          totalRevenue: b.totalRevenue, totalPaid: b.totalPaid, totalRemaining: b.totalRemaining,
+          collectionPct, studentsWithBalance: b.studentsWithBalance,
+        };
+      })
+      .sort((a, b) => {
+        const orderDiff = (displayOrderByGrade.get(a.grade) ?? 999) - (displayOrderByGrade.get(b.grade) ?? 999);
+        return orderDiff !== 0 ? orderDiff : a.section.localeCompare(b.section);
+      });
+
+    const totals = rows.reduce((acc, r) => {
+      acc.maleCount += r.maleCount; acc.femaleCount += r.femaleCount; acc.totalStudents += r.totalStudents;
+      acc.totalRevenue += r.totalRevenue; acc.totalPaid += r.totalPaid; acc.totalRemaining += r.totalRemaining;
+      acc.studentsWithBalance += r.studentsWithBalance;
+      for (const fh of feeHeads) acc.byFeeHead[fh] = (acc.byFeeHead[fh] || 0) + (r.byFeeHead[fh] || 0);
+      return acc;
+    }, { maleCount: 0, femaleCount: 0, totalStudents: 0, totalRevenue: 0, totalPaid: 0, totalRemaining: 0, studentsWithBalance: 0, byFeeHead: {} as Record<string, number> });
+    const collectionPct = totals.totalRevenue > 0 ? Math.round((totals.totalPaid / totals.totalRevenue) * 1000) / 10 : 0;
+
+    return { month, academicYear, campus: campus || null, feeHeads, rows, totals: { ...totals, collectionPct } };
+  }
+
   async getFeeCollection(schoolSlug: string, month: string) {
     const [collected, outstanding, byGrade] = await Promise.all([
       this.invoiceModel.aggregate([

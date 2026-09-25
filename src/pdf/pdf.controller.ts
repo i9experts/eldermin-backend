@@ -141,6 +141,25 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @Post('fee-revenue-report')
+  async feeRevenueReport(
+    @Body() dto: { month: string; academicYear?: string; campus?: string },
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = req.headers['x-school-slug'];
+    const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
+    const pdf = await this.pdfService.generateFeeRevenueReportPdf(
+      schoolSlug, { month: dto.month, academicYear, campus: dto.campus }, req.user.userId,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="fee-revenue-report-${dto.month}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
   @Post('voucher')
   async voucher(
     @Body() dto: GenerateVoucherDto,

@@ -9,9 +9,17 @@ import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/orga
 import { AssessmentSchema } from '../assessments/schemas/assessment.schema';
 import { BehaviourRecordSchema } from '../behaviour/schemas/behaviour.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
+import { FinanceModule } from '../finance/finance.module';
 
 @Module({
   imports: [
+    // Reuses FinanceService.getFeeRevenueByBatchReport for the Fee Revenue
+    // Report PDF, rather than re-deriving the same aggregation a second
+    // time straight from raw models the way the rest of this file's
+    // report methods (which predate this module link) still do.
+    // FinanceModule doesn't import PdfModule anywhere, so this is a
+    // one-directional dependency, not a cycle.
+    FinanceModule,
     MongooseModule.forFeature([
       { name: PdfLog.name, schema: PdfLogSchema },
       { name: 'Student', schema: StudentSchema },
