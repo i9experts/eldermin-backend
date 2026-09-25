@@ -877,11 +877,20 @@ export class PdfService {
     if (!school?.logo) return null;
     try {
       const res = await fetch(school.logo);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        // A voucher silently printing with no logo used to fail here with
+        // zero trace - if the S3 object is actually private (403) or the
+        // stored URL is stale (404), this is otherwise undiagnosable from
+        // outside the container. Non-fatal: the voucher still renders.
+        this.logger.warn(`School logo fetch failed (${res.status} ${res.statusText}) for ${school.slug}: ${school.logo}`);
+        return null;
+      }
       const bytes = await res.arrayBuffer();
-      const isPng = school.logo.toLowerCase().includes('.png') || res.headers.get('content-type')?.includes('png');
+      const contentType = res.headers.get('content-type') || '';
+      const isPng = contentType.includes('png') || school.logo.toLowerCase().includes('.png');
       return isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
-    } catch {
+    } catch (err: any) {
+      this.logger.warn(`School logo embed failed for ${school.slug}: ${err?.message}`);
       return null;
     }
   }
@@ -956,19 +965,26 @@ export class PdfService {
         }
       }
 
-      const logoSize = 26;
+      // logoSize was 26pt (~0.36in) with no maxWidth on the bank name/
+      // account number lines below it - in this 3-up landscape layout
+      // (colWidth ~255pt) that made the logo look like a barely-visible
+      // speck and let a longer bank name or account number bleed past this
+      // copy's column into the next one. Bumped the logo up and every text
+      // line in this header now has an explicit maxWidth.
+      const logoSize = 34;
       const textX = logoImg ? colX + logoSize + 6 : colX;
+      const textMaxWidth = colWidth - (logoImg ? logoSize + 6 : 0);
       if (logoImg) {
         page.drawImage(logoImg, { x: colX, y: y - logoSize, width: logoSize, height: logoSize });
       }
-      page.drawText(data.schoolName, { x: textX, y: y - 9, size: 9, font: bold, color: black, maxWidth: colWidth - (logoImg ? logoSize + 6 : 0) });
-      page.drawText(`${data.campusName} Campus`, { x: textX, y: y - 19, size: 6.5, font, color: gray });
-      page.drawText(data.bankName, { x: textX, y: y - 28, size: 6.5, font, color: gray });
-      y -= logoSize + 8;
+      page.drawText(data.schoolName, { x: textX, y: y - 10, size: 9.5, font: bold, color: black, maxWidth: textMaxWidth });
+      page.drawText(`${data.campusName} Campus`, { x: textX, y: y - 21, size: 6.5, font, color: gray, maxWidth: textMaxWidth });
+      page.drawText(`Bank: ${data.bankName}`, { x: textX, y: y - 31, size: 6.5, font, color: gray, maxWidth: textMaxWidth });
+      y -= logoSize + 10;
 
-      page.drawText(`A/C Title: ${data.accountTitle}`, { x: colX, y, size: 6, font, color: gray, maxWidth: colWidth });
-      y -= 9;
-      page.drawText(`Account #: ${data.accountNumber || 'N/A'}`, { x: colX, y, size: 6, font, color: gray });
+      page.drawText(`A/C Title: ${data.accountTitle}`, { x: colX, y, size: 6.5, font, color: gray, maxWidth: colWidth });
+      y -= 10;
+      page.drawText(`Account #: ${data.accountNumber || 'N/A'}`, { x: colX, y, size: 6.5, font, color: gray, maxWidth: colWidth });
       y -= 10;
 
       page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
