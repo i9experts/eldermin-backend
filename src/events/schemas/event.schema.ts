@@ -33,7 +33,7 @@ export class Event {
   @Prop({ required: true }) title: string;
   @Prop() description: string; // HTML, same rich-text convention as Circular.body
   @Prop({ enum: EVENT_CATEGORIES, default: 'other' }) category: string;
-  @Prop({ default: null }) campusId: string | null;
+  @Prop({ type: String, default: null }) campusId: string | null;
   @Prop() venueName: string;
   @Prop() venueAddress: string;
   @Prop({ type: [EventSessionSchema], default: [] }) sessions: EventSession[];
