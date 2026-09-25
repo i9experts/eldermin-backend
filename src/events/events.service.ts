@@ -9,6 +9,7 @@ import { PromoCode, PromoCodeDocument } from './schemas/promo-code.schema';
 import { Order, OrderDocument } from './schemas/order.schema';
 import { Ticket, TicketDocument } from './schemas/ticket.schema';
 import { SeatMap, SeatMapDocument } from './schemas/seat-map.schema';
+import { MerchItem, MerchItemDocument } from './schemas/merch-item.schema';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
@@ -26,6 +27,7 @@ export class EventsService {
     @InjectModel(Order.name) private orderModel: Model<OrderDocument>,
     @InjectModel(Ticket.name) private ticketModel: Model<TicketDocument>,
     @InjectModel(SeatMap.name) private seatMapModel: Model<SeatMapDocument>,
+    @InjectModel(MerchItem.name) private merchItemModel: Model<MerchItemDocument>,
     private pdfService: PdfService,
     private emailService: EmailService,
     private whatsAppService: WhatsAppService,
@@ -40,6 +42,46 @@ export class EventsService {
 
   // ─── Events (admin) ─────────────────────────────────────────────────────
 
+  // Phase 3 — a school running several events (Sports Day, Annual Day,
+  // PTM...) can easily double-book the same hall/ground without anyone
+  // noticing until both admins show up. Matches purely on venueName
+  // (trimmed, case-insensitive) since venue is free text here, not a
+  // Campus/room entity - a typo'd venue name just won't be caught, which
+  // is a real but narrower gap than not checking at all. Never blocks
+  // saving (a school may genuinely want two small things in the same hall
+  // back-to-back) - just returns what it found so the UI can warn.
+  private async checkVenueConflicts(schoolSlug: string, venueName: string | undefined, sessions: any[], excludeEventId?: string) {
+    const venue = venueName?.trim();
+    if (!venue || !sessions?.length) return [];
+
+    const candidates = await this.eventModel.find(
+      {
+        schoolSlug, status: { $in: ['draft', 'published'] },
+        ...(excludeEventId ? { _id: { $ne: excludeEventId } } : {}),
+        venueName: { $regex: `^${venue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      },
+      { title: 1, sessions: 1, slug: 1 },
+    ).lean();
+
+    const conflicts: any[] = [];
+    for (const other of candidates) {
+      for (const mine of sessions) {
+        const mineStart = new Date(mine.startAt).getTime(), mineEnd = new Date(mine.endAt).getTime();
+        for (const theirs of (other as any).sessions || []) {
+          const theirStart = new Date(theirs.startAt).getTime(), theirEnd = new Date(theirs.endAt).getTime();
+          if (mineStart < theirEnd && theirStart < mineEnd) {
+            conflicts.push({
+              eventId: other._id, eventTitle: (other as any).title, eventSlug: (other as any).slug,
+              theirSession: theirs.label, theirStartAt: theirs.startAt, theirEndAt: theirs.endAt,
+              mySession: mine.label,
+            });
+          }
+        }
+      }
+    }
+    return conflicts;
+  }
+
   async createEvent(schoolSlug: string, createdBy: string, data: any) {
     if (!data.title) throw new BadRequestException('title is required');
     let slug = this.slugify(data.slug || data.title);
@@ -49,14 +91,30 @@ export class EventsService {
     while (await this.eventModel.exists({ schoolSlug, slug: suffix ? `${slug}-${suffix}` : slug })) suffix++;
     if (suffix) slug = `${slug}-${suffix}`;
 
-    return this.eventModel.create({ ...data, slug, schoolSlug, createdBy });
+    const [event, venueConflicts] = await Promise.all([
+      this.eventModel.create({ ...data, slug, schoolSlug, createdBy }),
+      this.checkVenueConflicts(schoolSlug, data.venueName, data.sessions || []),
+    ]);
+    return { ...event.toObject(), venueConflicts };
   }
 
   async updateEvent(schoolSlug: string, id: string, data: any) {
     const { slug, ...rest } = data; // slug is set once at creation, not editable (would break already-shared links)
-    const updated = await this.eventModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: rest }, { new: true }).lean();
+    const [updated, venueConflicts] = await Promise.all([
+      this.eventModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: rest }, { new: true }).lean(),
+      (rest.venueName !== undefined || rest.sessions !== undefined)
+        ? this.eventModel.findOne({ _id: id, schoolSlug }).lean().then((existing: any) =>
+            this.checkVenueConflicts(schoolSlug, rest.venueName ?? existing?.venueName, rest.sessions ?? existing?.sessions ?? [], id))
+        : Promise.resolve([]),
+    ]);
     if (!updated) throw new NotFoundException('Event not found');
-    return updated;
+    return { ...updated, venueConflicts };
+  }
+
+  // Lets the frontend live-check a venue/time combo while the admin is
+  // still typing, before they've saved anything.
+  async checkVenueAvailability(schoolSlug: string, venueName: string, sessions: any[], excludeEventId?: string) {
+    return { venueConflicts: await this.checkVenueConflicts(schoolSlug, venueName, sessions, excludeEventId) };
   }
 
   async deleteEvent(schoolSlug: string, id: string) {
@@ -68,6 +126,8 @@ export class EventsService {
       this.eventModel.deleteOne({ _id: id, schoolSlug }),
       this.ticketTypeModel.deleteMany({ schoolSlug, eventId: id }),
       this.promoCodeModel.deleteMany({ schoolSlug, eventId: id }),
+      this.merchItemModel.deleteMany({ schoolSlug, eventId: id }),
+      this.seatMapModel.deleteMany({ schoolSlug, eventId: id }),
     ]);
     return { message: 'Deleted' };
   }
@@ -150,6 +210,37 @@ export class EventsService {
   async deletePromoCode(schoolSlug: string, id: string) {
     const deleted = await this.promoCodeModel.findOneAndDelete({ _id: id, schoolSlug }).lean();
     if (!deleted) throw new NotFoundException('Promo code not found');
+    return { message: 'Deleted' };
+  }
+
+  // ─── Merchandise (box office only - see MerchItem schema) ───────────────
+
+  async getMerchItems(schoolSlug: string, eventId: string) {
+    return this.merchItemModel.find({ schoolSlug, eventId }).sort({ createdAt: -1 }).lean();
+  }
+
+  async createMerchItem(schoolSlug: string, eventId: string, data: any) {
+    if (!data.name) throw new BadRequestException('name is required');
+    if (data.price == null || data.price < 0) throw new BadRequestException('price is required');
+    return this.merchItemModel.create({ ...data, eventId, schoolSlug });
+  }
+
+  async updateMerchItem(schoolSlug: string, id: string, data: any) {
+    const item = await this.merchItemModel.findOne({ _id: id, schoolSlug });
+    if (!item) throw new NotFoundException('Merchandise item not found');
+    if (data.stock !== undefined && data.stock !== null && data.stock < item.soldCount) {
+      throw new BadRequestException(`Cannot set stock below ${item.soldCount} - that many are already sold.`);
+    }
+    Object.assign(item, data);
+    await item.save();
+    return item;
+  }
+
+  async deleteMerchItem(schoolSlug: string, id: string) {
+    const item = await this.merchItemModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!item) throw new NotFoundException('Merchandise item not found');
+    if (item.soldCount > 0) throw new BadRequestException('Cannot delete an item that already has sales - deactivate it instead.');
+    await this.merchItemModel.deleteOne({ _id: id, schoolSlug });
     return { message: 'Deleted' };
   }
 
@@ -241,13 +332,15 @@ export class EventsService {
    * at_door orders hold their capacity slot but need an admin to confirm
    * payment before their tickets are valid for check-in.
    */
-  async createOrder(schoolSlug: string, eventId: string, data: any, opts: { immediatePayment?: boolean; confirmedBy?: string } = {}) {
+  async createOrder(schoolSlug: string, eventId: string, data: any, opts: { immediatePayment?: boolean; confirmedBy?: string; allowMerch?: boolean } = {}) {
     const event = await this.eventModel.findOne({ _id: eventId, schoolSlug }).lean();
     if (!event) throw new NotFoundException('Event not found');
     if (!opts.immediatePayment && event.status !== 'published') {
       throw new BadRequestException('This event is not open for registration');
     }
-    if (!Array.isArray(data.items) || data.items.length === 0) {
+    const ticketItems = Array.isArray(data.items) ? data.items : [];
+    const merchRequests = opts.allowMerch && Array.isArray(data.merchItems) ? data.merchItems : [];
+    if (ticketItems.length === 0 && merchRequests.length === 0) {
       throw new BadRequestException('At least one ticket is required');
     }
     if (!data.buyerName) throw new BadRequestException('buyerName is required');
@@ -260,7 +353,7 @@ export class EventsService {
     // a real mess to unwind.
     const seatMap = await this.seatMapModel.findOne({ schoolSlug, eventId }).lean();
     const seatById = new Map((seatMap?.seats ?? []).map((s: any) => [s.seatId, s]));
-    const requestedSeatIds: string[] = data.items.flatMap((item: any) => item.seatIds || []);
+    const requestedSeatIds: string[] = ticketItems.flatMap((item: any) => item.seatIds || []);
     if (new Set(requestedSeatIds).size !== requestedSeatIds.length) {
       throw new BadRequestException('The same seat was selected more than once');
     }
@@ -276,7 +369,7 @@ export class EventsService {
 
     const lineItems: any[] = [];
     let subtotal = 0;
-    for (const item of data.items) {
+    for (const item of ticketItems) {
       const tt = await this.ticketTypeModel.findOne({ _id: item.ticketTypeId, schoolSlug, eventId, isActive: true });
       if (!tt) throw new BadRequestException(`Ticket type not found or no longer available`);
       const qty = Number(item.quantity) || 0;
@@ -301,8 +394,26 @@ export class EventsService {
     }
 
     const { discount, promo } = await this.applyPromoCode(schoolSlug, eventId, data.promoCode, subtotal);
-    const totalAmount = Math.max(0, subtotal - discount);
+    const ticketNet = Math.max(0, subtotal - discount);
 
+    // Merch is priced separately from the promo-code discount above (which
+    // only ever applied against ticket pricing) - a walk-up t-shirt sale
+    // isn't discounted by an EARLYBIRD ticket code.
+    const merchLines: any[] = [];
+    let merchTotal = 0;
+    for (const req of merchRequests) {
+      const merchItem = await this.merchItemModel.findOne({ _id: req.merchItemId, schoolSlug, eventId, isActive: true });
+      if (!merchItem) throw new BadRequestException('Merchandise item not found or no longer available');
+      const qty = Number(req.quantity) || 0;
+      if (qty < 1) throw new BadRequestException(`Invalid quantity for ${merchItem.name}`);
+      if (merchItem.stock != null && qty > merchItem.stock - merchItem.soldCount) {
+        throw new BadRequestException(`Only ${merchItem.stock - merchItem.soldCount} "${merchItem.name}" left - requested ${qty}`);
+      }
+      merchLines.push({ merchItem, merchItemId: merchItem._id, merchItemName: merchItem.name, quantity: qty, unitPrice: merchItem.price });
+      merchTotal += merchItem.price * qty;
+    }
+
+    const totalAmount = ticketNet + merchTotal;
     const isPaid = opts.immediatePayment || totalAmount === 0;
     const orderCount = await this.orderModel.countDocuments({ schoolSlug });
     const orderNo = `ORD-${new Date().getFullYear()}-${String(orderCount + 1).padStart(5, '0')}`;
@@ -310,14 +421,21 @@ export class EventsService {
     const order = await this.orderModel.create({
       orderNo, eventId, schoolSlug,
       buyerName: data.buyerName, buyerEmail: data.buyerEmail, buyerPhone: data.buyerPhone, buyerUserId: data.buyerUserId || null,
-      items: lineItems.map((li) => ({ ticketTypeId: li.ticketTypeId, ticketTypeName: li.ticketTypeName, quantity: li.quantity, unitPrice: li.unitPrice })),
-      subtotal, discountTotal: discount, promoCode: promo?.code, totalAmount,
+      items: [
+        ...lineItems.map((li) => ({ kind: 'ticket', ticketTypeId: li.ticketTypeId, ticketTypeName: li.ticketTypeName, quantity: li.quantity, unitPrice: li.unitPrice })),
+        ...merchLines.map((ml) => ({ kind: 'merch', merchItemId: ml.merchItemId, merchItemName: ml.merchItemName, quantity: ml.quantity, unitPrice: ml.unitPrice })),
+      ],
+      subtotal: subtotal + merchTotal, discountTotal: discount, promoCode: promo?.code, totalAmount,
       paymentMethod: data.paymentMethod || 'at_door',
       status: isPaid ? 'paid' : 'pending_payment',
       paidAt: isPaid ? new Date() : undefined,
       paidBy: isPaid ? opts.confirmedBy : undefined,
       notes: data.notes,
     });
+
+    for (const ml of merchLines) {
+      await this.merchItemModel.updateOne({ _id: ml.merchItemId }, { $inc: { soldCount: ml.quantity } });
+    }
 
     const tickets: any[] = [];
     for (const li of lineItems) {
@@ -368,9 +486,9 @@ export class EventsService {
   // Refunds always return via the order's original paymentMethod ("refund
   // to source") - there's no field to pick a different method, by design.
   // `refundReference` is required for a paid order so there's a record of
-  // how the money actually moved (a bank ref, "cash handed back", etc) -
-  // Phase 2 only supports refunding the full order, not individual
-  // tickets within it (documented Phase 3 gap).
+  // how the money actually moved (a bank ref, "cash handed back", etc).
+  // This refunds the WHOLE order - see refundTickets below for refunding
+  // just some of an order's tickets (Phase 3).
   async cancelOrder(schoolSlug: string, orderId: string, reason: string | undefined, refundReference: string | undefined, cancelledBy: string) {
     const order = await this.orderModel.findOne({ _id: orderId, schoolSlug });
     if (!order) throw new NotFoundException('Order not found');
@@ -388,6 +506,7 @@ export class EventsService {
       order.refundMethod = order.paymentMethod;
       order.refundReference = refundReference as string;
       order.refundAmount = order.totalAmount;
+      order.totalRefunded = order.totalAmount;
     }
     await order.save();
 
@@ -397,6 +516,57 @@ export class EventsService {
       await this.ticketTypeModel.updateOne({ _id: t.ticketTypeId }, { $inc: { soldCount: -1 } });
     }
     return order;
+  }
+
+  // Phase 3 — refund just SOME of a paid order's tickets (e.g. a parent
+  // can no longer bring 2 of their 4 kids), rather than the all-or-nothing
+  // cancelOrder above. Never touches a checked-in ticket (same rule
+  // cancelOrder already follows) - once someone's actually walked in, the
+  // service was rendered. The order itself stays 'paid' throughout; only
+  // totalRefunded/partialRefunds track how much has come back out of it.
+  async refundTickets(schoolSlug: string, orderId: string, ticketIds: string[], refundReference: string, refundedBy: string) {
+    if (!ticketIds?.length) throw new BadRequestException('Select at least one ticket to refund');
+    if (!refundReference?.trim()) throw new BadRequestException('Describe how this refund was actually returned (e.g. a bank reference, or "cash handed back")');
+
+    const order = await this.orderModel.findOne({ _id: orderId, schoolSlug });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status !== 'paid') throw new BadRequestException(`Cannot refund individual tickets from a ${order.status} order`);
+
+    const tickets = await this.ticketModel.find({ _id: { $in: ticketIds }, orderId, schoolSlug });
+    if (tickets.length !== ticketIds.length) throw new BadRequestException('Some of those tickets were not found on this order');
+    const notRefundable = tickets.filter((t) => t.status === 'checked_in' || t.status === 'refunded' || t.status === 'cancelled');
+    if (notRefundable.length) {
+      throw new BadRequestException(`${notRefundable.length} of those ticket(s) are already ${notRefundable[0].status} and can't be refunded again.`);
+    }
+
+    // Per-ticket amount = that ticket type's unitPrice on this order (the
+    // price actually charged, not today's price if it's since changed) -
+    // promo-code discount isn't prorated per ticket in Phase 3 (documented
+    // gap), so a refund on a discounted order returns the pre-discount
+    // per-ticket rate, capped so the running total never exceeds what's
+    // actually left to refund on the order.
+    const unitPriceByTicketType = new Map(order.items.filter((i) => i.kind !== 'merch').map((i) => [String(i.ticketTypeId), i.unitPrice]));
+    const remaining = order.totalAmount - order.totalRefunded;
+    let amount = tickets.reduce((sum, t) => sum + (unitPriceByTicketType.get(String(t.ticketTypeId)) || 0), 0);
+    amount = Math.min(amount, remaining);
+
+    await this.ticketModel.updateMany({ _id: { $in: ticketIds } }, { $set: { status: 'refunded' } });
+    for (const t of tickets) {
+      await this.ticketTypeModel.updateOne({ _id: t.ticketTypeId }, { $inc: { soldCount: -1 } });
+    }
+
+    order.partialRefunds.push({ ticketIds: tickets.map((t) => t._id), amount, reference: refundReference, refundedAt: new Date(), refundedBy } as any);
+    order.totalRefunded += amount;
+    if (order.totalRefunded >= order.totalAmount) {
+      order.status = 'refunded';
+      order.refundedAt = new Date();
+      order.refundedBy = refundedBy;
+      order.refundMethod = order.paymentMethod;
+      order.refundReference = refundReference;
+      order.refundAmount = order.totalAmount;
+    }
+    await order.save();
+    return { order, refundedAmount: amount };
   }
 
   private async sendOrderConfirmation(event: any, order: any, tickets: any[]) {
@@ -424,6 +594,46 @@ export class EventsService {
 
   async getAttendees(schoolSlug: string, eventId: string) {
     return this.ticketModel.find({ schoolSlug, eventId }).sort({ attendeeName: 1 }).lean();
+  }
+
+  // Phase 3 — cross-event loyalty/CRM: given a buyer's email or phone,
+  // shows every order they've ever placed across every event this school
+  // has run, not just the one currently open. Lets box office recognize a
+  // repeat family ("they came to Sports Day and the Fundraiser too") on
+  // the spot, and gives the school a real picture of who its most engaged
+  // families are without a separate loyalty-points system to maintain.
+  async lookupAttendeeHistory(schoolSlug: string, query: { email?: string; phone?: string }) {
+    const email = query.email?.trim().toLowerCase();
+    const phone = query.phone?.trim();
+    if (!email && !phone) throw new BadRequestException('Provide an email or phone to search');
+
+    const match: any = { schoolSlug, $or: [] };
+    if (email) match.$or.push({ buyerEmail: { $regex: `^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } });
+    if (phone) match.$or.push({ buyerPhone: phone });
+
+    const orders = await this.orderModel.find(match).sort({ createdAt: -1 }).lean();
+    if (orders.length === 0) return { found: false, orders: [], totalOrders: 0, totalSpent: 0, totalTickets: 0, events: [] };
+
+    const eventIds = [...new Set(orders.map((o: any) => String(o.eventId)))];
+    const events = await this.eventModel.find({ _id: { $in: eventIds }, schoolSlug }, { title: 1, category: 1, sessions: 1 }).lean();
+    const eventById = new Map(events.map((e: any) => [String(e._id), e]));
+
+    const totalSpent = orders.filter((o: any) => o.status === 'paid').reduce((s: number, o: any) => s + (o.totalAmount - (o.totalRefunded || 0)), 0);
+    const totalTickets = orders.reduce((s: number, o: any) => s + o.items.filter((i: any) => i.kind !== 'merch').reduce((n: number, i: any) => n + i.quantity, 0), 0);
+
+    return {
+      found: true,
+      buyerName: orders[0].buyerName,
+      isRepeatAttendee: eventIds.length > 1,
+      totalOrders: orders.length,
+      totalSpent,
+      totalTickets,
+      events: eventIds.map((id) => ({ eventId: id, title: eventById.get(id)?.title, category: eventById.get(id)?.category })),
+      orders: orders.map((o: any) => ({
+        _id: o._id, orderNo: o.orderNo, eventId: o.eventId, eventTitle: eventById.get(String(o.eventId))?.title,
+        totalAmount: o.totalAmount, totalRefunded: o.totalRefunded || 0, status: o.status, createdAt: (o as any).createdAt,
+      })),
+    };
   }
 
   // ─── Check-in ───────────────────────────────────────────────────────────

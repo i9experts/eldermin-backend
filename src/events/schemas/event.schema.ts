@@ -28,6 +28,18 @@ export class EventSession {
 }
 export const EventSessionSchema = SchemaFactory.createForClass(EventSession);
 
+export const SPONSOR_TIERS = ['title', 'gold', 'silver', 'bronze', 'partner'] as const;
+
+@Schema({ _id: true })
+export class EventSponsor {
+  @Prop({ required: true }) name: string;
+  @Prop() logoUrl: string;
+  @Prop({ enum: SPONSOR_TIERS, default: 'partner' }) tier: string;
+  @Prop() websiteUrl: string;
+  @Prop({ default: 0 }) sortOrder: number;
+}
+export const EventSponsorSchema = SchemaFactory.createForClass(EventSponsor);
+
 @Schema({ timestamps: true, collection: 'events' })
 export class Event {
   @Prop({ required: true }) title: string;
@@ -38,6 +50,11 @@ export class Event {
   @Prop() venueAddress: string;
   @Prop({ type: [EventSessionSchema], default: [] }) sessions: EventSession[];
   @Prop({ type: EventThemeSchema, default: {} }) theme: EventTheme;
+  // Phase 3 — sponsor logos/tiers shown on the public event page and the
+  // admin Overview tab. A plain array field on Event (not its own
+  // collection/CRUD routes) since it's always read/written as a whole set
+  // alongside the event, same as `theme` above.
+  @Prop({ type: [EventSponsorSchema], default: [] }) sponsors: EventSponsor[];
 
   // Public page identity - unique per school, used in the public URL
   // (/e/{schoolSlug}/{slug}) rather than exposing the Mongo _id.
