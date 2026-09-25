@@ -5,12 +5,35 @@ export type OrderDocument = Order & Document;
 
 @Schema({ _id: false })
 export class OrderLineItem {
-  @Prop({ required: true, type: Types.ObjectId, ref: 'TicketType' }) ticketTypeId: Types.ObjectId;
-  @Prop({ required: true }) ticketTypeName: string;
+  // Exactly one of ticketTypeId or merchItemId is set, per `kind` - kept as
+  // two optional refs rather than a polymorphic single field so each still
+  // has its own typed ref/name for existing ticket-line code that never
+  // expected a merch line to begin with.
+  @Prop({ enum: ['ticket', 'merch'], default: 'ticket' }) kind: string;
+  @Prop({ type: Types.ObjectId, ref: 'TicketType', default: null }) ticketTypeId: Types.ObjectId | null;
+  @Prop() ticketTypeName: string;
+  @Prop({ type: Types.ObjectId, ref: 'MerchItem', default: null }) merchItemId: Types.ObjectId | null;
+  @Prop() merchItemName: string;
   @Prop({ required: true }) quantity: number;
   @Prop({ required: true }) unitPrice: number;
 }
 export const OrderLineItemSchema = SchemaFactory.createForClass(OrderLineItem);
+
+// Phase 3 — one row per partial (not-the-whole-order) refund transaction,
+// e.g. 2 of 4 tickets returned. Kept separate from the single
+// refundedAt/refundedBy/... fields below, which record a FULL-order
+// refund/cancel (see EventsService.cancelOrder) - a partial refund never
+// changes Order.status away from 'paid', since the order as a whole is
+// still a real, still-valid purchase.
+@Schema({ _id: false })
+export class TicketRefund {
+  @Prop({ type: [Types.ObjectId], default: [] }) ticketIds: Types.ObjectId[];
+  @Prop({ required: true }) amount: number;
+  @Prop({ required: true }) reference: string;
+  @Prop({ required: true }) refundedAt: Date;
+  @Prop({ required: true }) refundedBy: string;
+}
+export const TicketRefundSchema = SchemaFactory.createForClass(TicketRefund);
 
 // The purchase transaction (one checkout = one Order); individual
 // admission credentials live on Ticket (one per attendee/seat) so a
@@ -52,6 +75,14 @@ export class Order {
   @Prop({ type: String, default: null }) refundMethod: string | null;
   @Prop() refundReference: string; // e.g. "Bank ref #1234", "Cash handed back to parent"
   @Prop({ type: Number, default: null }) refundAmount: number | null;
+
+  // Phase 3 — partial refund history (see TicketRefund above) plus a
+  // running total so "how much of this order has been refunded so far"
+  // never requires summing partialRefunds by hand. A full-order refund via
+  // cancelOrder sets this to totalAmount too, so it's always the single
+  // source of truth regardless of which path issued the refund.
+  @Prop({ type: [TicketRefundSchema], default: [] }) partialRefunds: TicketRefund[];
+  @Prop({ default: 0 }) totalRefunded: number;
 
   @Prop() notes: string;
   @Prop({ required: true, index: true }) schoolSlug: string;

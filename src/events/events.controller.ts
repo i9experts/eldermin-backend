@@ -64,6 +64,23 @@ export class EventsController {
     return this.service.getGateStats(schoolSlug, id);
   }
 
+  // Live-checks a venue/time combo while the admin is still filling out the
+  // event form, before anything is saved - excludeEventId lets editing an
+  // existing event's own sessions not flag a conflict against itself.
+  @Post('venue-availability')
+  checkVenueAvailability(@Request() req: any, @Body() body: { venueName: string; sessions: any[]; excludeEventId?: string }) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.checkVenueAvailability(schoolSlug, body.venueName, body.sessions || [], body.excludeEventId);
+  }
+
+  // Cross-event loyalty/CRM lookup - not scoped to one event's :id, so it
+  // lives at the controller root rather than under an event id.
+  @Get('attendees/lookup')
+  lookupAttendeeHistory(@Request() req: any, @Query('email') email?: string, @Query('phone') phone?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.lookupAttendeeHistory(schoolSlug, { email, phone });
+  }
+
   // ─── Admin: reserved seating ────────────────────────────────────────────
 
   @Get(':id/seat-map')
@@ -104,6 +121,32 @@ export class EventsController {
     return this.service.deleteTicketType(schoolSlug, id);
   }
 
+  // ─── Admin: merchandise (box office only, see MerchItem schema) ─────────
+
+  @Get(':id/merch')
+  getMerchItems(@Request() req: any, @Param('id') eventId: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getMerchItems(schoolSlug, eventId);
+  }
+
+  @Post(':id/merch')
+  createMerchItem(@Request() req: any, @Param('id') eventId: string, @Body() body: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.createMerchItem(schoolSlug, eventId, body);
+  }
+
+  @Patch('merch/:merchId')
+  updateMerchItem(@Request() req: any, @Param('merchId') id: string, @Body() body: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateMerchItem(schoolSlug, id, body);
+  }
+
+  @Delete('merch/:merchId')
+  deleteMerchItem(@Request() req: any, @Param('merchId') id: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteMerchItem(schoolSlug, id);
+  }
+
   // ─── Admin: promo codes ─────────────────────────────────────────────────
 
   @Post(':id/promo-codes')
@@ -140,6 +183,7 @@ export class EventsController {
     return this.service.createOrder(schoolSlug, eventId, body, {
       immediatePayment: body.paymentMethod === 'cash' || body.paymentMethod === 'complimentary',
       confirmedBy: userName,
+      allowMerch: true,
     });
   }
 
@@ -156,6 +200,17 @@ export class EventsController {
   ) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.cancelOrder(schoolSlug, orderId, reason, refundReference, userName);
+  }
+
+  // Phase 3 — refund just some of an order's tickets rather than the whole
+  // order (cancelOrder above).
+  @Post('orders/:orderId/refund-tickets')
+  refundTickets(
+    @Request() req: any, @Param('orderId') orderId: string,
+    @Body('ticketIds') ticketIds: string[], @Body('refundReference') refundReference: string,
+  ) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.refundTickets(schoolSlug, orderId, ticketIds, refundReference, userName);
   }
 
   // ─── Admin: attendees / CRM ─────────────────────────────────────────────

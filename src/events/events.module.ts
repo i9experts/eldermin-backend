@@ -13,6 +13,7 @@ import { Ticket, TicketSchema } from './schemas/ticket.schema';
 import { SeatMap, SeatMapSchema } from './schemas/seat-map.schema';
 import { Campaign, CampaignSchema } from './schemas/campaign.schema';
 import { CampaignSend, CampaignSendSchema } from './schemas/campaign-send.schema';
+import { MerchItem, MerchItemSchema } from './schemas/merch-item.schema';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { CampaignSend, CampaignSendSchema } from './schemas/campaign-send.schema
       { name: SeatMap.name, schema: SeatMapSchema },
       { name: Campaign.name, schema: CampaignSchema },
       { name: CampaignSend.name, schema: CampaignSendSchema },
+      { name: MerchItem.name, schema: MerchItemSchema },
     ]),
   ],
   controllers: [EventsController],
