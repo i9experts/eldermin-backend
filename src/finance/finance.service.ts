@@ -1582,6 +1582,32 @@ export class FinanceService {
     return nextVersion;
   }
 
+  // A structure that has never actually billed anything (no invoice line
+  // item references it) is safe to remove outright - unlike
+  // updateFeeStructure's "version instead of mutate" rule, which only
+  // exists to protect real financial history. Deactivating (isActive:
+  // false via updateFeeStructure) already covers "stop using this" for a
+  // structure WITH billing history; this covers "this was a mistake, make
+  // it go away entirely" for one without any. Any StudentFeeAssignment
+  // pointing at it is cascade-removed too (a pure targeting pointer, not a
+  // financial record - keeping a dangling reference to a deleted
+  // structure would be worse than removing it).
+  async deleteFeeStructure(id: string, schoolSlug: string) {
+    const existing = await this.feeStructModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Fee structure not found');
+
+    const billedCount = await this.invoiceModel.countDocuments({ schoolSlug, 'items.feeStructureId': id, isDeleted: { $ne: true } });
+    if (billedCount > 0) {
+      throw new BadRequestException(
+        `"${(existing as any).name}" has already billed ${billedCount} invoice(s) - it can't be deleted without breaking those records. Deactivate it instead (toggle it Inactive) to stop it from being used going forward.`,
+      );
+    }
+
+    const assignmentResult = await this.studentFeeAssignmentModel.deleteMany({ schoolSlug, feeStructureId: id });
+    await this.feeStructModel.deleteOne({ _id: id, schoolSlug });
+    return { message: 'Deleted', removedAssignments: assignmentResult.deletedCount || 0 };
+  }
+
   // ── Invoices ─────────────────────────────────────────────
   async getInvoices(schoolSlug: string, query: any) {
     const { page = 1, limit = 20, status, grade, section, month, studentId, academicYear, campus, from, to } = query;
