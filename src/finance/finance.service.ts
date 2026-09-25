@@ -3367,7 +3367,14 @@ export class FinanceService {
             const baseAmount = item.amount || 0;
             let discount = 0;
             for (const a of studentAssignments) {
-              if (a.feeHeadName && a.feeHeadName !== item.feeHead) continue;
+              // Both feeHeadName (discount assignment) and item.feeHead (Fee
+              // Structure) were free-text fields until the frontend fix for
+              // this bug - an assignment created before that (e.g.
+              // "Tuition Fee " vs "Tuition Fee") would otherwise silently
+              // never match and the discount would compute as 0 with no
+              // error anywhere. Trimmed + case-insensitive compare here is
+              // the safety net for exactly that already-saved mismatch.
+              if (a.feeHeadName && a.feeHeadName.trim().toLowerCase() !== String(item.feeHead || '').trim().toLowerCase()) continue;
               let valueType = a.overrideValueType, value = a.overrideValue, maxAmount: number | undefined;
               if (a.discountProgramId) {
                 const program = programById.get(String(a.discountProgramId));
