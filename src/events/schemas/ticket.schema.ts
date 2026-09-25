@@ -29,6 +29,11 @@ export class Ticket {
   @Prop({ default: false }) badgePrinted: boolean;
   @Prop() badgePrintedAt: Date;
 
+  // References Seat.seatId within this event's SeatMap - not a Mongo ref,
+  // since a Seat is a layout subdocument, not its own collection. Null for
+  // general-admission events with no SeatMap.
+  @Prop({ type: String, default: null }) seatId: string | null;
+
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
 export const TicketSchema = SchemaFactory.createForClass(Ticket);
