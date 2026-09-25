@@ -38,7 +38,7 @@ export class CalendarEvent {
   @Prop({ required: true }) endDate: Date; // same as startDate for single-day entries
   @Prop({ default: true }) allDay: boolean;
   // null = applies to every campus
-  @Prop({ default: null }) campusId: string | null;
+  @Prop({ type: String, default: null }) campusId: string | null;
   // empty = applies to every grade
   @Prop({ type: [String], default: [] }) gradeLevels: string[];
   @Prop() academicYear: string;

@@ -18,7 +18,7 @@ export const CIRCULAR_CATEGORIES = [
 export class CircularAudience {
   @Prop({ type: [String], default: [] }) roles: string[]; // subset of 'parent' | 'staff' | 'student'
   @Prop({ enum: ['school', 'campus', 'grade', 'individual'], default: 'school' }) scope: string;
-  @Prop({ default: null }) campusId: string | null;
+  @Prop({ type: String, default: null }) campusId: string | null;
   @Prop({ type: [String], default: [] }) gradeLevels: string[];
   @Prop({ type: [String], default: [] }) individualStudentIds: string[];
   @Prop({ type: [String], default: [] }) individualStaffIds: string[];
