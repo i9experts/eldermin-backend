@@ -3110,8 +3110,77 @@ export class FinanceService {
         throw new BadRequestException('A percentage discount cannot exceed 100%');
       }
     }
-    const assignment = new this.feeAssignmentModel(data);
-    return assignment.save();
+    const assignment = await new this.feeAssignmentModel(data).save();
+
+    // FEE-06 — a discount assigned AFTER a student's challan for the month
+    // was already generated used to just sit there until someone happened
+    // to notice and re-click "Generate Challans" (see item 36 / the resync
+    // mechanism in generateInvoices above). That's exactly the "I assigned
+    // the discount but the challan still doesn't show it" report - resync
+    // eligible (unpaid, nothing collected) invoices immediately instead of
+    // depending on the admin remembering an extra manual step. Never blocks
+    // the assignment itself from saving if this best-effort pass fails.
+    let resynced = 0;
+    try {
+      resynced = await this.resyncInvoicesForNewAssignment(data.schoolSlug, assignment);
+    } catch { /* the assignment is saved either way; next manual "Generate Challans" run still picks it up */ }
+
+    return { ...assignment.toObject(), _resynced: resynced };
+  }
+
+  /** Students currently matched by a FeeAssignment's target - same
+   * student/family/class/section/campus matching rules generateInvoices
+   * uses when applying assignments to a billed invoice, just resolving
+   * "who" instead of "does this one student match". */
+  private async getAffectedStudentIdsForAssignment(schoolSlug: string, assignment: { targetType: string; targetValue: string }): Promise<string[]> {
+    if (assignment.targetType === 'student') return [assignment.targetValue];
+    if (assignment.targetType === 'family') {
+      const students = await this.studentModel.find({ schoolSlug, familyId: assignment.targetValue }).select('_id').lean();
+      return students.map((s: any) => String(s._id));
+    }
+    if (assignment.targetType === 'class') {
+      const students = await this.studentModel.find({ schoolSlug, currentGrade: assignment.targetValue }).select('_id').lean();
+      return students.map((s: any) => String(s._id));
+    }
+    if (assignment.targetType === 'section') {
+      const [grade, section] = String(assignment.targetValue).split('::');
+      const students = await this.studentModel.find({ schoolSlug, currentGrade: grade, currentSection: section }).select('_id').lean();
+      return students.map((s: any) => String(s._id));
+    }
+    if (assignment.targetType === 'campus') {
+      const campus = await this.campusModel.findOne({ schoolSlug, name: assignment.targetValue }).lean();
+      if (!campus) return [];
+      const students = await this.studentModel.find({ schoolSlug, campusId: String((campus as any)._id) }).select('_id').lean();
+      return students.map((s: any) => String(s._id));
+    }
+    return [];
+  }
+
+  /** Re-runs generateInvoices (scoped to just one student+month at a time,
+   * reusing its existing, already-tested resync path - see
+   * canResyncInvoiceDiscount) for every still-unpaid invoice this new
+   * assignment now covers. Returns how many were actually updated. */
+  private async resyncInvoicesForNewAssignment(schoolSlug: string, assignment: any): Promise<number> {
+    const studentIds = await this.getAffectedStudentIdsForAssignment(schoolSlug, assignment);
+    if (studentIds.length === 0) return 0;
+
+    const candidateInvoices = await this.invoiceModel.find(
+      { schoolSlug, studentId: { $in: studentIds.map((id) => new Types.ObjectId(id)) }, isDeleted: { $ne: true } },
+      { studentId: 1, month: 1, academicYear: 1, paidAmount: 1, status: 1 },
+    ).lean();
+    const resyncable = candidateInvoices.filter((inv: any) => canResyncInvoiceDiscount(inv));
+
+    let resynced = 0;
+    for (const inv of resyncable) {
+      const result = await this.generateInvoices(schoolSlug, {
+        month: (inv as any).month,
+        academicYear: (inv as any).academicYear,
+        scopeType: 'student',
+        scopeValue: String((inv as any).studentId),
+      });
+      resynced += result.discountsSynced || 0;
+    }
+    return resynced;
   }
 
   async deleteFeeAssignment(id: string, schoolSlug: string) {
