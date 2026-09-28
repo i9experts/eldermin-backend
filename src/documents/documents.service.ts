@@ -6,6 +6,7 @@ import {
   WorkflowTemplate, WorkflowTemplateDocument,
   WorkflowInstance, WorkflowInstanceDocument,
 } from './schemas/documents.schema';
+import { SignatureRequest, SignatureRequestDocument } from './schemas/signature-request.schema';
 import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
@@ -16,6 +17,7 @@ export class DocumentsService {
     @InjectModel(DocumentRecord.name) private docModel: Model<DocumentRecordDocument>,
     @InjectModel(WorkflowTemplate.name) private templateModel: Model<WorkflowTemplateDocument>,
     @InjectModel(WorkflowInstance.name) private instanceModel: Model<WorkflowInstanceDocument>,
+    @InjectModel(SignatureRequest.name) private signatureModel: Model<SignatureRequestDocument>,
   ) {}
 
   // ── Dashboard ──────────────────────────────────────────
@@ -23,6 +25,7 @@ export class DocumentsService {
     const [
       totalDocs, activeDocs, expiringSoon,
       totalWorkflows, pendingWorkflows, completedWorkflows,
+      awaitingSignature,
       byCategory, recentDocs, pendingApprovals,
     ] = await Promise.all([
       this.docModel.countDocuments({ schoolSlug }),
@@ -34,6 +37,7 @@ export class DocumentsService {
       this.instanceModel.countDocuments({ schoolSlug }),
       this.instanceModel.countDocuments({ schoolSlug, status: { $in: ['pending','in_progress'] } }),
       this.instanceModel.countDocuments({ schoolSlug, status: 'approved' }),
+      this.signatureModel.countDocuments({ schoolSlug, status: 'pending' }),
       this.docModel.aggregate([
         { $match: { schoolSlug } },
         { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -47,7 +51,7 @@ export class DocumentsService {
     ]);
 
     return {
-      stats: { totalDocs, activeDocs, expiringSoon, totalWorkflows, pendingWorkflows, completedWorkflows },
+      stats: { totalDocs, activeDocs, expiringSoon, totalWorkflows, pendingWorkflows, completedWorkflows, awaitingSignature },
       byCategory, recentDocs, pendingApprovals,
     };
   }
