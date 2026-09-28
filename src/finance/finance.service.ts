@@ -1608,6 +1608,27 @@ export class FinanceService {
     return { message: 'Deleted', removedAssignments: assignmentResult.deletedCount || 0 };
   }
 
+  /** Bulk convenience for removing several fee structures at once (a school
+   * cleaning up duplicate/mistaken entries) - runs each id through the same
+   * single-delete rule (never billed an invoice) so an already-billed
+   * structure in the selection is reported, not silently skipped or, worse,
+   * force-deleted and breaking its invoices' feeStructureId references. */
+  async bulkDeleteFeeStructures(ids: string[], schoolSlug: string) {
+    const deleted: string[] = [];
+    const failed: { id: string; name?: string; message: string }[] = [];
+    for (const id of ids) {
+      try {
+        const result = await this.deleteFeeStructure(id, schoolSlug);
+        deleted.push(id);
+        void result;
+      } catch (err: any) {
+        const existing = await this.feeStructModel.findOne({ _id: id, schoolSlug }).select('name').lean();
+        failed.push({ id, name: (existing as any)?.name, message: err?.message || 'Failed to delete' });
+      }
+    }
+    return { deleted: deleted.length, failed };
+  }
+
   // ── Invoices ─────────────────────────────────────────────
   async getInvoices(schoolSlug: string, query: any) {
     const { page = 1, limit = 20, status, grade, section, month, studentId, academicYear, campus, from, to } = query;
