@@ -340,6 +340,72 @@ export class EmailService {
     });
   }
 
+  async sendSignatureRequest(
+    to: string,
+    recipientName: string,
+    documentName: string,
+    senderName: string,
+    schoolName: string,
+    signLink: string,
+    message?: string,
+    deadline?: string,
+  ) {
+    return this.sendEmail({
+      to,
+      subject: `✍️ Signature Requested: ${documentName} | ${schoolName}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+          <div style="background:#1e3a5f;padding:25px;text-align:center">
+            <h1 style="color:white;margin:0">elder<span style="color:#f59e0b">min</span></h1>
+          </div>
+          <div style="background:white;padding:25px">
+            <p>Dear <strong>${recipientName}</strong>,</p>
+            <p><strong>${senderName}</strong> has sent you a document that needs your signature:</p>
+            <div style="background:#f9fafb;border-radius:8px;padding:15px;margin:15px 0">
+              <p style="margin:0"><strong>${documentName}</strong></p>
+              ${deadline ? `<p style="margin:8px 0 0;color:#dc2626;font-size:13px">Deadline: ${deadline}</p>` : ''}
+            </div>
+            ${message ? `<p style="color:#374151;font-style:italic">"${message}"</p>` : ''}
+            <div style="text-align:center;margin:25px 0">
+              <a href="${signLink}" style="background:#1e3a5f;color:white;padding:12px 30px;border-radius:8px;text-decoration:none;font-weight:bold">
+                Review &amp; Sign →
+              </a>
+            </div>
+            <p style="color:#6b7280;font-size:12px">— ${schoolName}</p>
+          </div>
+        </div>`,
+    });
+  }
+
+  async sendSignatureStatusUpdate(
+    to: string,
+    senderName: string,
+    documentName: string,
+    schoolName: string,
+    event: 'completed' | 'declined',
+    recipientName?: string,
+    declineReason?: string,
+  ) {
+    const cfg = event === 'completed'
+      ? { emoji: '✅', title: 'Fully Signed', color: '#10b981', msg: `Everyone has now signed <strong>${documentName}</strong>.` }
+      : { emoji: '❌', title: 'Signature Declined', color: '#ef4444', msg: `<strong>${recipientName}</strong> declined to sign <strong>${documentName}</strong>${declineReason ? `: "${declineReason}"` : '.'}` };
+    return this.sendEmail({
+      to,
+      subject: `${cfg.emoji} ${cfg.title}: ${documentName} | ${schoolName}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+          <div style="background:#1e3a5f;padding:25px;text-align:center">
+            <h1 style="color:white;margin:0">elder<span style="color:#f59e0b">min</span></h1>
+          </div>
+          <div style="background:white;padding:25px">
+            <p>Dear <strong>${senderName}</strong>,</p>
+            <p style="color:${cfg.color}">${cfg.msg}</p>
+            <p style="color:#6b7280;font-size:12px">— ${schoolName}</p>
+          </div>
+        </div>`,
+    });
+  }
+
   async sendCommitteeMeetingNotice(
     to: string,
     memberName: string,
