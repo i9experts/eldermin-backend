@@ -3088,7 +3088,32 @@ export class FinanceService {
   // family, class, section, or campus)
   // ============================================================
   async getFeeAssignments(schoolSlug: string) {
-    return this.feeAssignmentModel.find({ schoolSlug, isActive: true }).sort({ createdAt: -1 }).lean();
+    const assignments = await this.feeAssignmentModel.find({ schoolSlug, isActive: true }).sort({ createdAt: -1 }).lean();
+
+    // Student-targeted assignments carry a denormalized targetLabel/targetPhoto
+    // snapshot from whenever they were created - a frontend bug once saved that
+    // as the literal placeholder "Student" for every one of them (see item 36
+    // follow-up), and even correctly-saved ones go stale the moment a student's
+    // name changes or a photo is added later. Resolving the real student live
+    // here fixes every existing record retroactively, not just newly-created
+    // ones, and adds their photo for the admin to visually confirm who's who.
+    const studentIds = assignments.filter((a: any) => a.targetType === 'student').map((a: any) => a.targetValue);
+    if (studentIds.length > 0) {
+      const students = await this.studentModel
+        .find({ schoolSlug, _id: { $in: studentIds } })
+        .select('firstName lastName admissionNumber photo')
+        .lean();
+      const studentById = new Map(students.map((s: any) => [String(s._id), s]));
+      for (const a of assignments as any[]) {
+        if (a.targetType !== 'student') continue;
+        const student = studentById.get(String(a.targetValue));
+        if (!student) continue;
+        a.targetLabel = `${student.firstName || ''} ${student.lastName || ''}`.trim() + (student.admissionNumber ? ` (${student.admissionNumber})` : '');
+        a.targetPhoto = student.photo || null;
+      }
+    }
+
+    return assignments;
   }
 
   async createFeeAssignment(data: any) {
