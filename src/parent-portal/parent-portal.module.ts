@@ -9,6 +9,8 @@ import { MarkEntry, MarkEntrySchema, ReportCard, ReportCardSchema } from '../ass
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { Timetable, TimetableSchema } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
+import { AssignmentSubmission, AssignmentSubmissionSchema } from '../modules/teaching/schemas/assignment-submission.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { Book, BookSchema } from '../modules/academics/schemas/book.schema';
 import { BookIssue, BookIssueSchema } from '../modules/academics/schemas/book-issue.schema';
 import { DocumentRecord, DocumentRecordSchema } from '../documents/schemas/documents.schema';
@@ -44,6 +46,8 @@ import { ParentAuthController } from './parent-auth.controller';
       { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
       { name: Timetable.name, schema: TimetableSchema },
       { name: Assignment.name, schema: AssignmentSchema },
+      { name: AssignmentSubmission.name, schema: AssignmentSubmissionSchema },
+      { name: Staff.name, schema: StaffSchema },
       { name: Book.name, schema: BookSchema },
       { name: BookIssue.name, schema: BookIssueSchema },
       { name: DocumentRecord.name, schema: DocumentRecordSchema },

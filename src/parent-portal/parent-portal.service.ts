@@ -10,6 +10,8 @@ import { MarkEntry, MarkEntryDocument, ReportCard, ReportCardDocument } from '..
 import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahAssessmentDocument } from '../behaviour/schemas/behaviour.schema';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
+import { AssignmentSubmission, AssignmentSubmissionDocument } from '../modules/teaching/schemas/assignment-submission.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { Book, BookDocument } from '../modules/academics/schemas/book.schema';
 import { BookIssue, BookIssueDocument } from '../modules/academics/schemas/book-issue.schema';
 import { DocumentRecord, DocumentRecordDocument } from '../documents/schemas/documents.schema';
@@ -39,6 +41,8 @@ export class ParentPortalService {
     @InjectModel(TarbiyahAssessment.name) private tarbiyahModel: Model<TarbiyahAssessmentDocument>,
     @InjectModel(Timetable.name) private timetableModel: Model<TimetableDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
+    @InjectModel(AssignmentSubmission.name) private submissionModel: Model<AssignmentSubmissionDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(Book.name) private bookModel: Model<BookDocument>,
     @InjectModel(BookIssue.name) private bookIssueModel: Model<BookIssueDocument>,
     @InjectModel(DocumentRecord.name) private documentModel: Model<DocumentRecordDocument>,
@@ -146,12 +150,70 @@ export class ParentPortalService {
   // ── Homework ─────────────────────────────────────────────────
   async getHomework(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
-    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection').lean();
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
     if (!student) throw new NotFoundException('Student not found');
-    return this.assignmentModel.find({
+    const filter: any = {
       tenantId, gradeLevel: (student as any).currentGrade,
       $or: [{ sectionName: (student as any).currentSection }, { sectionName: { $exists: false } }, { sectionName: null }],
-    }).sort({ dueDate: -1 }).limit(100).lean();
+    };
+    // A student's own campusId is the source of truth for scoping this,
+    // not the assignment's - without it, a multi-campus tenant where two
+    // campuses happen to name a section the same way ("Grade 5 - A") leaked
+    // homework across campuses to any parent whose child's section matched.
+    if ((student as any).campusId) filter.campusId = new Types.ObjectId((student as any).campusId);
+    const assignments = await this.assignmentModel.find(filter).sort({ dueDate: -1 }).limit(100).lean();
+    if (assignments.length === 0) return [];
+
+    const submissions = await this.submissionModel.find({
+      tenantId, studentId: new Types.ObjectId(studentId),
+      assignmentId: { $in: assignments.map((a) => a._id) },
+    }).lean();
+    const byAssignment = new Map(submissions.map((s) => [String(s.assignmentId), s]));
+    // Merge in this student's own submission status/grade/feedback so the
+    // parent sees "submitted / late / graded, scored X/Y" per assignment,
+    // not just the bare assignment listing.
+    return assignments.map((a) => ({ ...a, mySubmission: byAssignment.get(String(a._id)) || null }));
+  }
+
+  async submitHomework(studentId: string, assignmentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { textResponse?: string; attachmentS3Keys?: string[] }) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!dto.textResponse?.trim() && !(dto.attachmentS3Keys || []).length) {
+      throw new BadRequestException('Submission needs a written response, an attachment, or both.');
+    }
+    const assignment = await this.assignmentModel.findOne({ _id: assignmentId, tenantId });
+    if (!assignment) throw new NotFoundException('Assignment not found');
+
+    const submission = await this.submissionModel.findOne({ tenantId, assignmentId: assignment._id, studentId: new Types.ObjectId(studentId) });
+    if (!submission) throw new NotFoundException('This assignment is not on your child\'s class roster - contact the school if this looks wrong.');
+    if (submission.status === 'graded') throw new BadRequestException('This has already been graded and can no longer be resubmitted.');
+
+    const now = new Date();
+    const isLate = !!assignment.dueDate && now > assignment.dueDate;
+    submission.textResponse = dto.textResponse;
+    submission.attachmentS3Keys = dto.attachmentS3Keys || [];
+    submission.submittedAt = now;
+    submission.isLate = isLate;
+    submission.status = isLate ? 'late' : 'submitted';
+    await submission.save();
+
+    const [stats] = await this.assignmentModel.db.collection('assignmentSubmissions').aggregate([
+      { $match: { assignmentId: assignment._id } },
+      { $group: { _id: null, submissionsCount: { $sum: { $cond: [{ $in: ['$status', ['submitted', 'late', 'graded']] }, 1, 0] } } } },
+    ]).toArray();
+    await this.assignmentModel.updateOne({ _id: assignment._id }, { $set: { submissionsCount: stats?.submissionsCount || 0 } });
+
+    if (assignment.teacherId) {
+      const teacher = await this.staffModel.findOne({ _id: assignment.teacherId }).select('userId').lean();
+      if ((teacher as any)?.userId) {
+        await this.notificationModel.create({
+          recipientUserId: (teacher as any).userId, type: 'homework',
+          title: `Submission received: ${assignment.title}`,
+          body: `${submission.studentName} ${isLate ? 'submitted (late)' : 'submitted'} "${assignment.title}".`,
+          relatedEntityId: String(assignment._id), schoolSlug,
+        });
+      }
+    }
+    return submission.toObject();
   }
 
   // ── Learning Resources (from delivered lesson plans covering this student's grade) ──

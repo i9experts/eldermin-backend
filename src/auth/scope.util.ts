@@ -47,6 +47,8 @@ export function getScopeLevel(role?: string): ScopeLevel {
 }
 
 export interface ScopedUser {
+  userId?: string;
+  schoolSlug?: string;
   role?: string;
   primaryRole?: string;
   campusId?: string;
