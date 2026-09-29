@@ -1164,7 +1164,12 @@ export class PdfService {
       guardianContact: guardian?.cnic || guardian?.phone || '',
       items: (invoice.items || []).map((it: any) => ({
         description: it.description,
+        amount: it.amount || 0,
         discount: it.discount || 0,
+        // Each labeled contributor (e.g. "Sibling Discount") - only
+        // populated for invoices generated after this field was added;
+        // older invoices just print the old unlabeled total instead.
+        discountBreakdown: (it.discountBreakdown || []).filter((d: any) => (d.amount || 0) > 0),
         netAmount: it.netAmount ?? (it.amount || 0) - (it.discount || 0),
       })),
       totalAmount: invoice.totalAmount || 0,
@@ -1248,22 +1253,28 @@ export class PdfService {
       page.drawText(`Campus: ${data.campusName}`, { x: colX + half, y, size: 6.5, font, color: black });
       y -= 13;
 
-      // ── Particulars table ─────────────────────────────────────────────
-      const hasDiscount = data.items.some((it: any) => (it.discount || 0) > 0);
-      const discColX = colX + colWidth - 78;
+      // ── Particulars table ───────────────────────────────────────────────
+      // Each item shows its gross amount; any discount that applies to it
+      // gets its own indented, labeled line right below (e.g. "Sibling
+      // Discount  -2,500") instead of a cramped same-row "Discount" column
+      // that had no room for the label at all - the running Total
+      // Discount/Total Amount Payable lines further down still reconcile
+      // everything to the actual net amount due.
+      const amountColX = colX + colWidth - 50;
       page.drawRectangle({ x: colX, y: y - 10, width: colWidth, height: 12, color: lightGray });
       page.drawText('Particulars', { x: colX + 3, y: y - 8, size: 6.5, font: bold, color: black });
-      if (hasDiscount) page.drawText('Discount', { x: discColX, y: y - 8, size: 6.5, font: bold, color: black });
-      page.drawText('Amount (Rs)', { x: colX + colWidth - 50, y: y - 8, size: 6.5, font: bold, color: black });
+      page.drawText('Amount (Rs)', { x: amountColX, y: y - 8, size: 6.5, font: bold, color: black });
       y -= 10;
 
       for (const item of data.items) {
         y -= 11;
-        page.drawText(String(item.description || '').slice(0, hasDiscount ? 32 : 42), { x: colX + 3, y, size: 6.5, font, color: black });
-        if (hasDiscount && item.discount > 0) {
-          page.drawText(`- ${item.discount.toLocaleString()}`, { x: discColX, y, size: 6.5, font, color: green });
+        page.drawText(String(item.description || '').slice(0, 42), { x: colX + 3, y, size: 6.5, font, color: black });
+        page.drawText((item.amount || 0).toLocaleString(), { x: amountColX, y, size: 6.5, font, color: black });
+        for (const d of (item.discountBreakdown || [])) {
+          y -= 10;
+          page.drawText(String(d.label || 'Discount').slice(0, 38), { x: colX + 9, y, size: 6, font, color: green });
+          page.drawText(`- ${d.amount.toLocaleString()}`, { x: amountColX, y, size: 6, font, color: green });
         }
-        page.drawText((item.netAmount || 0).toLocaleString(), { x: colX + colWidth - 50, y, size: 6.5, font, color: black });
       }
       y -= 8;
       page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
