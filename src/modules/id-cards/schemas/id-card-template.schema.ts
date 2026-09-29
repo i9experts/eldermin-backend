@@ -15,9 +15,13 @@ export type IdCardTemplateDocument = IdCardTemplate & Document;
 // of that baseline.
 export const STUDENT_ID_CARD_FIELDS = [
   'dob', 'bloodGroup', 'address', 'guardianContact',
+  // Longer-form fields, printed on the back only (see
+  // IdCardsService.buildCardFace) alongside address/guardianContact above
+  // - keeps the front uncluttered while making the back genuinely useful.
+  'guardianName', 'campus', 'academicYear', 'admissionDate', 'religion', 'nationality', 'emergencyContact',
 ] as const;
 export const STAFF_ID_CARD_FIELDS = [
-  'phone', 'bloodGroup', 'joiningDate',
+  'phone', 'bloodGroup', 'joiningDate', 'email', 'fatherName', 'campus',
 ] as const;
 
 // A school's own reusable, printable ID card design - selected per batch
@@ -36,13 +40,16 @@ export class IdCardTemplate {
   @Prop({ required: true, enum: ['student', 'staff'] }) entityType: string;
   @Prop({ required: true }) name: string;
 
-  // Three real, visually distinct CSS layouts - not just a label - see
+  // Four real, visually distinct CSS layouts - not just a label - see
   // id-cards.service.ts's buildCardHtml(). Chosen over a freeform
   // drag-and-drop canvas: gives a school a genuinely professional result
   // immediately, matching the same "pick from real, standardised layouts"
   // pattern already used for exam paper formats, rather than an
-  // open-ended designer most admins would never fully use.
-  @Prop({ required: true, enum: ['classic', 'modern', 'minimal'], default: 'classic' })
+  // open-ended designer most admins would never fully use. 'vibrant' is a
+  // richer, gradient-header design with a registration-number badge,
+  // aimed at schools that want something closer to a commercially
+  // printed card rather than a plain corporate badge.
+  @Prop({ required: true, enum: ['classic', 'modern', 'minimal', 'vibrant'], default: 'classic' })
   layoutStyle: string;
 
   @Prop({ default: '#0C447C' }) primaryColor: string;
@@ -66,6 +73,13 @@ export class IdCardTemplate {
   // here (calendar year, academic year, indefinite until reissued), so a
   // single free-text field beats guessing a rigid date format.
   @Prop() validityText?: string;
+
+  // Free-text instructions block on the back (e.g. "1. Must be worn at
+  // all times. 2. Report a lost card to the office immediately.") -
+  // rendered alongside the back's field list in a two-column layout, same
+  // free-text reasoning as validityText above (schools phrase this very
+  // differently and a rigid structured list isn't worth the complexity).
+  @Prop() noteText?: string;
 
   @Prop({ default: false }) isDefault: boolean;
   @Prop({ default: true }) isActive: boolean;
