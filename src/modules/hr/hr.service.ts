@@ -22,6 +22,7 @@ import { computeSalaryStructure, validateSalaryComponentGraph, CircularSalaryCom
 import { renderOfferLetterTemplate } from './offer-letter-template.util';
 import { sanitizeSelfLeaveInput } from './leave-self.util';
 import { countLeaveDays, DAY_CODES } from './leave-days.util';
+import { numberToWords } from './payslip-number-to-words.util';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
 import { PayrollPayment, PayrollPaymentDocument } from './schemas/payroll-payment.schema';
 import { BankAccount, BankAccountDocument } from '../../finance/schemas/finance.schema';
@@ -1999,11 +2000,28 @@ export class HrService {
     return Buffer.from(bytes);
   }
 
+  // Redesigned to match the school's reference payslip layout (a real
+  // Zoho Payroll sample supplied as the design to match): plain white
+  // letterhead (no colored bar), an Employee Summary block beside a
+  // highlighted Net Pay box with Paid/LOP days, a two-column Earnings/
+  // Deductions table with a real (not fabricated) year-to-date column
+  // per line, a highlighted Total Net Payable bar, and an amount-in-
+  // words line - see numberToWords in payslip-number-to-words.util.ts.
   async generatePayslipPdf(payslipId: string, tenantId: string, schoolSlug: string): Promise<Buffer> {
     const payslip = await this.payslipModel.findOne({ _id: payslipId, tenantId: this.newTid(tenantId) }).lean();
     if (!payslip) throw new NotFoundException('Payslip not found');
     const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
     const schoolName = (school as any)?.name || 'Eldermin School';
+    const schoolLocation = [(school as any)?.address?.city, (school as any)?.address?.country].filter(Boolean).join(', ');
+    const staff = await this.staffModel.findOne({ _id: payslip.staffId, tenantId: this.newTid(tenantId) }).select('dateOfJoining').lean();
+
+    // Real YTD-to-date totals (this staff member, same year, up to and
+    // including this payslip's month) - never fabricated, and correctly
+    // 0/absent for a January payslip or a staff member's first month.
+    const ytdPayslips = await this.payslipModel.find({
+      tenantId: this.newTid(tenantId), staffId: payslip.staffId, year: payslip.year, month: { $lte: payslip.month },
+    }).select('basicSalary hra transportAllowance medicalAllowance otherAllowances incomeTax providentFund loanDeduction leaveDeduction otherDeductions').lean();
+    const ytdSum = (field: string) => ytdPayslips.reduce((s, p: any) => s + (p[field] || 0), 0);
 
     const pdfDoc = await PDFDocument.create();
     pdfDoc.registerFontkit(fontkit);
@@ -2022,6 +2040,12 @@ export class HrService {
     const navy = rgb(0.11, 0.23, 0.37);
     const gray = rgb(0.42, 0.45, 0.5);
     const lightGray = rgb(0.95, 0.96, 0.97);
+    const greenBg = rgb(0.90, 0.97, 0.93);
+    const greenBorder = rgb(0.75, 0.9, 0.8);
+    const greenText = rgb(0.09, 0.5, 0.31);
+    const margin = 40;
+    const pageWidth = 595;
+    const contentWidth = pageWidth - margin * 2;
     let y = 800;
 
     const drawText = (text: string, x: number, yPos: number, opts: { size?: number; f?: any; color?: any } = {}) => {
@@ -2032,86 +2056,130 @@ export class HrService {
         page.drawText(text ?? '', { ...drawOpts, font: arabicFont });
       }
     };
-    const fmt = (n: number) => `${payslip.currency || 'PKR'} ${Number(n || 0).toLocaleString()}`;
+    const drawRight = (text: string, xRight: number, yPos: number, opts: { size?: number; f?: any; color?: any } = {}) => {
+      const size = opts.size ?? 10;
+      const f = opts.f ?? font;
+      const w = f.widthOfTextAtSize(text ?? '', size);
+      drawText(text, xRight - w, yPos, opts);
+    };
+    const fmt = (n: number) => Number(n || 0).toLocaleString();
+    const currency = payslip.currency || 'PKR';
 
-    // Header
-    page.drawRectangle({ x: 0, y: 792, width: 595, height: 50, color: navy });
-    drawText(schoolName, 40, 812, { size: 16, f: bold, color: rgb(1, 1, 1) });
-    drawText('PAYSLIP', 480, 812, { size: 14, f: bold, color: rgb(1, 1, 1) });
-    y = 765;
+    // ── Letterhead ──────────────────────────────────────────────────────
+    drawText(schoolName, margin, y, { size: 15, f: bold, color: navy });
+    drawRight('Payslip For the Month', pageWidth - margin, y + 2, { size: 8.5, color: gray });
+    y -= 14;
+    if (schoolLocation) drawText(schoolLocation, margin, y, { size: 8.5, color: gray });
+    drawRight(payslip.periodLabel || `${payslip.month}/${payslip.year}`, pageWidth - margin, y - 2, { size: 12, f: bold, color: navy });
+    y -= 22;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: gray });
+    y -= 22;
 
-    drawText(payslip.periodLabel || `${payslip.month}/${payslip.year}`, 40, y, { size: 12, f: bold, color: navy });
-    y -= 25;
+    // ── Employee Summary (left) + Net Pay highlight (right) ─────────────
+    const summaryTop = y;
+    const netBoxX = margin + 300, netBoxW = contentWidth - 300, netBoxH = 46;
+    page.drawRectangle({ x: netBoxX, y: summaryTop - netBoxH + 6, width: netBoxW, height: netBoxH, color: greenBg, borderColor: greenBorder, borderWidth: 1 });
+    drawText(`${currency} ${fmt(payslip.netSalary)}`, netBoxX + 12, summaryTop - 16, { size: 15, f: bold, color: greenText });
+    drawText('Employee Net Pay', netBoxX + 12, summaryTop - 30, { size: 8, color: gray });
 
-    // Employee details block
-    page.drawRectangle({ x: 40, y: y - 55, width: 515, height: 60, color: lightGray });
-    drawText('Employee Name', 50, y - 12, { size: 8, color: gray });
-    drawText(payslip.staffName || '—', 50, y - 26, { size: 11, f: bold });
-    drawText('Employee ID', 220, y - 12, { size: 8, color: gray });
-    drawText(payslip.employeeId || '—', 220, y - 26, { size: 11, f: bold });
-    drawText('Designation', 350, y - 12, { size: 8, color: gray });
-    drawText(payslip.designation || '—', 350, y - 26, { size: 11, f: bold });
-    drawText('Department', 50, y - 44, { size: 8, color: gray });
-    drawText(payslip.department || '—', 50, y - 56, { size: 10 });
-    drawText('Status', 350, y - 44, { size: 8, color: gray });
-    drawText((payslip.status || 'draft').toUpperCase(), 350, y - 56, { size: 10, f: bold });
-    y -= 85;
+    const daysInMonth = new Date(payslip.year, payslip.month, 0).getDate();
+    const lopDays = payslip.absentDays || 0;
+    const paidDays = Math.max(0, daysInMonth - lopDays);
+    drawText('Paid Days', netBoxX, summaryTop - netBoxH - 6, { size: 8, color: gray });
+    drawRight(String(paidDays), pageWidth - margin, summaryTop - netBoxH - 6, { size: 9, f: bold });
+    drawText('LOP Days', netBoxX, summaryTop - netBoxH - 20, { size: 8, color: gray });
+    drawRight(String(lopDays), pageWidth - margin, summaryTop - netBoxH - 20, { size: 9, f: bold });
 
-    // Earnings / Deductions two-column table
-    const colWidth = 250;
-    drawText('EARNINGS', 40, y, { size: 10, f: bold, color: navy });
-    drawText('DEDUCTIONS', 40 + colWidth + 25, y, { size: 10, f: bold, color: navy });
-    y -= 5;
-    page.drawLine({ start: { x: 40, y }, end: { x: 40 + colWidth, y }, thickness: 0.5, color: gray });
-    page.drawLine({ start: { x: 40 + colWidth + 25, y }, end: { x: 595 - 40, y }, thickness: 0.5, color: gray });
-    y -= 18;
-
-    const earnings = [
-      ['Basic Salary', payslip.basicSalary], ['HRA', payslip.hra],
-      ['Transport Allowance', payslip.transportAllowance], ['Medical Allowance', payslip.medicalAllowance],
-      ['Other Allowances', payslip.otherAllowances],
+    const summaryRows: [string, string][] = [
+      ['Employee Name', payslip.staffName || '—'],
+      ['Designation', payslip.designation || '—'],
+      ['Employee ID', payslip.employeeId || '—'],
+      ['Date of Joining', (staff as any)?.dateOfJoining ? new Date((staff as any).dateOfJoining).toLocaleDateString('en-GB') : '—'],
+      ['Pay Period', payslip.periodLabel || `${payslip.month}/${payslip.year}`],
+      ['Pay Date', new Date().toLocaleDateString('en-GB')],
     ];
-    const deductions = [
-      ['Income Tax', payslip.incomeTax], ['Provident Fund', payslip.providentFund],
-      ['Loan Deduction', payslip.loanDeduction], ['Leave Deduction', payslip.leaveDeduction],
-      ['Other Deductions', payslip.otherDeductions],
+    let sy = summaryTop;
+    for (const [label, value] of summaryRows) {
+      drawText(label, margin, sy, { size: 8.5, color: gray });
+      drawText(`:  ${value}`, margin + 100, sy, { size: 9, f: bold });
+      sy -= 15;
+    }
+    y = Math.min(sy, summaryTop - netBoxH - 34) - 14;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: gray });
+    y -= 20;
+
+    // ── Earnings / Deductions two-column table (with real YTD) ──────────
+    // Each half-column gets its own AMOUNT/YTD right edges, spaced well
+    // apart (a whole label-width's worth) so two same-sized numbers -
+    // routine for the first payslip of a year, when amount == YTD -
+    // never visually run together.
+    const colWidth = (contentWidth - 24) / 2;
+    const leftColX = margin, rightColX = margin + colWidth + 24;
+    const amountRightOffset = colWidth * 0.68, ytdRightOffset = colWidth - 4;
+
+    const drawColHeader = (colX: number, title: string) => {
+      page.drawRectangle({ x: colX, y: y - 2, width: colWidth, height: 14, color: lightGray });
+      drawText(title, colX + 4, y + 2, { size: 8, f: bold, color: navy });
+      drawRight('AMOUNT', colX + amountRightOffset, y + 2, { size: 7, f: bold, color: gray });
+      drawRight('YTD', colX + ytdRightOffset, y + 2, { size: 7, f: bold, color: gray });
+    };
+    drawColHeader(leftColX, 'EARNINGS');
+    drawColHeader(rightColX, 'DEDUCTIONS');
+    y -= 20;
+
+    const earnings: [string, number, number][] = [
+      ['Basic Salary', payslip.basicSalary, ytdSum('basicSalary')],
+      ['House Rent Allowance', payslip.hra, ytdSum('hra')],
+      ['Conveyance Allowance', payslip.transportAllowance, ytdSum('transportAllowance')],
+      ['Medical Allowance', payslip.medicalAllowance, ytdSum('medicalAllowance')],
+      ['Other Allowances', payslip.otherAllowances, ytdSum('otherAllowances')],
     ];
-    let ey = y, dy = y;
-    for (const [label, amt] of earnings) {
-      if (!amt) continue;
-      drawText(label as string, 40, ey, { size: 9 });
-      drawText(fmt(amt as number), 40 + colWidth - 70, ey, { size: 9 });
-      ey -= 16;
-    }
-    for (const [label, amt] of deductions) {
-      if (!amt) continue;
-      drawText(label as string, 40 + colWidth + 25, dy, { size: 9 });
-      drawText(fmt(amt as number), 595 - 110, dy, { size: 9 });
-      dy -= 16;
-    }
-    y = Math.min(ey, dy) - 10;
-    page.drawLine({ start: { x: 40, y }, end: { x: 40 + colWidth, y }, thickness: 0.5, color: gray });
-    page.drawLine({ start: { x: 40 + colWidth + 25, y }, end: { x: 595 - 40, y }, thickness: 0.5, color: gray });
+    const deductions: [string, number, number][] = [
+      ['Income Tax', payslip.incomeTax, ytdSum('incomeTax')],
+      ['Provident Fund', payslip.providentFund, ytdSum('providentFund')],
+      ['Loan Deduction', payslip.loanDeduction, ytdSum('loanDeduction')],
+      ['Leave Deduction', payslip.leaveDeduction, ytdSum('leaveDeduction')],
+      ['Other Deductions', payslip.otherDeductions, ytdSum('otherDeductions')],
+    ];
+    const drawRows = (colX: number, rows: [string, number, number][]) => {
+      let ry = y;
+      for (const [label, amt, ytd] of rows) {
+        if (!amt && !ytd) continue;
+        drawText(label, colX + 4, ry, { size: 8.5 });
+        drawRight(fmt(amt), colX + amountRightOffset, ry, { size: 8.5 });
+        drawRight(fmt(ytd), colX + ytdRightOffset, ry, { size: 8.5, color: gray });
+        ry -= 15;
+      }
+      return ry;
+    };
+    const ey = drawRows(leftColX, earnings);
+    const dy = drawRows(rightColX, deductions);
+    y = Math.min(ey, dy) - 6;
+    page.drawLine({ start: { x: leftColX, y }, end: { x: leftColX + colWidth, y }, thickness: 0.5, color: gray });
+    page.drawLine({ start: { x: rightColX, y }, end: { x: rightColX + colWidth, y }, thickness: 0.5, color: gray });
     y -= 16;
-    drawText('Gross Salary', 40, y, { size: 9, f: bold });
-    drawText(fmt(payslip.grossSalary), 40 + colWidth - 70, y, { size: 9, f: bold });
-    drawText('Total Deductions', 40 + colWidth + 25, y, { size: 9, f: bold });
-    drawText(fmt(payslip.totalDeductions), 595 - 110, y, { size: 9, f: bold });
-    y -= 40;
+    drawText('Gross Earnings', leftColX + 4, y, { size: 9, f: bold });
+    drawRight(fmt(payslip.grossSalary), leftColX + amountRightOffset, y, { size: 9, f: bold });
+    drawText('Total Deductions', rightColX + 4, y, { size: 9, f: bold });
+    drawRight(fmt(payslip.totalDeductions), rightColX + amountRightOffset, y, { size: 9, f: bold });
+    y -= 34;
 
-    // Net Salary highlight
-    page.drawRectangle({ x: 40, y: y - 30, width: 515, height: 40, color: navy });
-    drawText('NET SALARY', 55, y - 15, { size: 12, f: bold, color: rgb(1, 1, 1) });
-    drawText(fmt(payslip.netSalary), 420, y - 15, { size: 14, f: bold, color: rgb(1, 1, 1) });
-    y -= 65;
+    // ── Total Net Payable ─────────────────────────────────────────────
+    const netBarH = 40;
+    page.drawRectangle({ x: margin, y: y - netBarH + 12, width: contentWidth, height: netBarH, color: greenBg, borderColor: greenBorder, borderWidth: 1 });
+    drawText('TOTAL NET PAYABLE', margin + 12, y - 8, { size: 10, f: bold, color: navy });
+    drawText('Gross Earnings - Total Deductions', margin + 12, y - 21, { size: 7.5, color: gray });
+    drawRight(`${currency} ${fmt(payslip.netSalary)}`, pageWidth - margin - 12, y - 14, { size: 13, f: bold, color: greenText });
+    y -= netBarH + 20;
 
-    // Attendance summary
-    drawText('Attendance Summary', 40, y, { size: 10, f: bold, color: navy });
-    y -= 18;
-    drawText(`Present: ${payslip.presentDays ?? 0}  ·  Absent: ${payslip.absentDays ?? 0}  ·  Leave: ${payslip.leaveDays ?? 0}`, 40, y, { size: 9, color: gray });
-    y -= 40;
+    drawText(`Amount In Words: ${currency} ${numberToWords(payslip.netSalary)} Only`, margin, y, { size: 8.5, f: bold, color: navy });
+    y -= 12;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.5, color: gray });
 
-    drawText('This is a system-generated payslip and does not require a signature.', 40, 40, { size: 7, color: gray });
+    drawText(
+      `This document has been automatically generated by ${schoolName} Payroll; therefore, a signature is not required.`,
+      margin, 40, { size: 7, color: gray },
+    );
 
     const bytes = await pdfDoc.save();
     return Buffer.from(bytes);
