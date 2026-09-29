@@ -8,6 +8,7 @@ import { Timetable, TimetableSchema } from './schemas/timetable.schema';
 import { Room, RoomSchema } from './schemas/room.schema';
 import { PeriodTemplate, PeriodTemplateSchema } from './schemas/period-template.schema';
 import { Assignment, AssignmentSchema } from './schemas/assignment.schema';
+import { AssignmentSubmission, AssignmentSubmissionSchema } from './schemas/assignment-submission.schema';
 import { BehaviourNote, BehaviourNoteSchema } from './schemas/behaviour-note.schema';
 import { Substitution, SubstitutionSchema } from './schemas/substitution.schema';
 import { PTMMeeting, PTMMeetingSchema } from './schemas/ptm-meeting.schema';
@@ -17,6 +18,8 @@ import { TimetableVariant, TimetableVariantSchema } from './schemas/timetable-va
 import { ExamSession, ExamSessionSchema } from './schemas/exam-session.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { User, UserSchema } from '../organization/schemas/user.schema';
+import { Notification, NotificationSchema } from '../../parent-portal/schemas/notification-and-message.schema';
 import { EmailModule } from '../../email/email.module';
 import { PdfModule } from '../../pdf/pdf.module';
 import { SubstitutionService } from './substitution.service';
@@ -38,6 +41,7 @@ import { ExamController } from './exam.controller';
       { name: Room.name, schema: RoomSchema },
       { name: PeriodTemplate.name, schema: PeriodTemplateSchema },
       { name: Assignment.name, schema: AssignmentSchema },
+      { name: AssignmentSubmission.name, schema: AssignmentSubmissionSchema },
       { name: BehaviourNote.name, schema: BehaviourNoteSchema },
       { name: Substitution.name, schema: SubstitutionSchema },
       { name: PTMMeeting.name, schema: PTMMeetingSchema },
@@ -47,6 +51,8 @@ import { ExamController } from './exam.controller';
       { name: ExamSession.name, schema: ExamSessionSchema },
       { name: Staff.name, schema: StaffSchema },
       { name: Student.name, schema: StudentSchema },
+      { name: User.name, schema: UserSchema },
+      { name: Notification.name, schema: NotificationSchema },
     ]),
     EmailModule,
     PdfModule,

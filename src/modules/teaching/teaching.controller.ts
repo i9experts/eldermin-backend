@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, Res,
 import { AuthGuard } from '@nestjs/passport';
 import type { Response } from 'express';
 import { TeachingService } from './teaching.service';
+import { CreateAssignmentDto, UpdateAssignmentDto, GradeSubmissionDto } from './dto/assignment.dto';
 
 @Controller('teaching')
 @UseGuards(AuthGuard('jwt'))
@@ -152,10 +153,21 @@ export class TeachingController {
   getAssignments(@Request() req, @Query() q: any) { return this.teachingService.getAssignments(req.user.tenantId, q, req.user); }
 
   @Post('assignments')
-  createAssignment(@Request() req, @Body() body: any) { return this.teachingService.createAssignment(req.user.tenantId, req.user.institutionId, body, req.user); }
+  createAssignment(@Request() req, @Body() body: CreateAssignmentDto) { return this.teachingService.createAssignment(req.user.tenantId, req.user.institutionId, body, req.user); }
 
   @Patch('assignments/:id')
-  updateAssignment(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateAssignment(req.user.tenantId, id, body); }
+  updateAssignment(@Request() req, @Param('id') id: string, @Body() body: UpdateAssignmentDto) { return this.teachingService.updateAssignment(req.user.tenantId, id, body, req.user); }
+
+  @Delete('assignments/:id')
+  deleteAssignment(@Request() req, @Param('id') id: string) { return this.teachingService.deleteAssignment(req.user.tenantId, id); }
+
+  @Get('assignments/:id/submissions')
+  getSubmissions(@Request() req, @Param('id') id: string) { return this.teachingService.getSubmissionsForAssignment(req.user.tenantId, id, req.user); }
+
+  @Patch('assignments/:id/submissions/:submissionId')
+  gradeSubmission(@Request() req, @Param('id') id: string, @Param('submissionId') submissionId: string, @Body() body: GradeSubmissionDto) {
+    return this.teachingService.gradeSubmission(req.user.tenantId, id, submissionId, body, req.user);
+  }
 
   // ── BEHAVIOUR NOTES ───────────────────────────────────────────────────────────
 

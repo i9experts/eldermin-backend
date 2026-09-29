@@ -36,9 +36,13 @@ function makeService(existingPeriods: any[]) {
     noop, // roomModel
     noop, // periodTemplateModel
     noop, // assignmentModel
+    noop, // submissionModel
     noop, // behaviourModel
     noop, // electiveGroupModel
     dutyRosterModel,
+    noop, // staffModel
+    noop, // userModel
+    noop, // notificationModel
     noop, // pdfService
   );
   return { service, timetableModel };

@@ -1,17 +1,23 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { TeacherProfile, TeacherProfileDocument } from './schemas/teacher-profile.schema';
 import { LessonPlan, LessonPlanDocument } from './schemas/lesson-plan.schema';
 import { Timetable, TimetableDocument } from './schemas/timetable.schema';
 import { Room, RoomDocument } from './schemas/room.schema';
 import { PeriodTemplate, PeriodTemplateDocument } from './schemas/period-template.schema';
 import { Assignment, AssignmentDocument } from './schemas/assignment.schema';
+import { AssignmentSubmission, AssignmentSubmissionDocument } from './schemas/assignment-submission.schema';
 import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.schema';
 import { ElectiveGroup, ElectiveGroupDocument } from './schemas/elective-group.schema';
 import { DutyRoster, DutyRosterDocument } from './schemas/duty-roster.schema';
+import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
+import { User, UserDocument } from '../organization/schemas/user.schema';
+import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
 import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
 import { PdfService } from '../../pdf/pdf.service';
+import { GradeSubmissionDto } from './dto/assignment.dto';
 
 @Injectable()
 export class TeachingService {
@@ -22,9 +28,13 @@ export class TeachingService {
     @InjectModel(Room.name) private roomModel: Model<RoomDocument>,
     @InjectModel(PeriodTemplate.name) private periodTemplateModel: Model<PeriodTemplateDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
+    @InjectModel(AssignmentSubmission.name) private submissionModel: Model<AssignmentSubmissionDocument>,
     @InjectModel(BehaviourNote.name) private behaviourModel: Model<BehaviourNoteDocument>,
     @InjectModel(ElectiveGroup.name) private electiveGroupModel: Model<ElectiveGroupDocument>,
     @InjectModel(DutyRoster.name) private dutyRosterModel: Model<DutyRosterDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     private readonly pdfService: PdfService,
   ) {}
 
@@ -654,7 +664,7 @@ export class TeachingService {
   // completely disconnected from the design-side data in the old Academics
   // Syllabus collection. The frontend now calls /syllabus directly.
 
-  // ── ASSIGNMENTS ───────────────────────────────────────────────────────────────
+  // ── ASSIGNMENTS (homework / classwork / project) ────────────────────────────────
 
   async getAssignments(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
@@ -684,20 +694,186 @@ export class TeachingService {
     if (teacherId) {
       try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore */ }
     }
+    let created: AssignmentDocument;
     try {
-      return await this.assignmentModel.create(payload);
+      created = await this.assignmentModel.create(payload);
     } catch (err: any) {
       if (err.name === 'ValidationError') throw new BadRequestException(err.message);
       throw err;
     }
+    if (created.status === 'assigned') {
+      await this.materializeSubmissions(created, requestingUser?.schoolSlug);
+    }
+    return created;
   }
 
-  async updateAssignment(tenantId: string, id: string, data: any) {
-    return this.assignmentModel.findOneAndUpdate(
-      { _id: id, tenantId: this.tid(tenantId) },
-      { $set: data },
-      { new: true },
-    ).lean();
+  // Deliberately re-reads the existing document and $set's only the
+  // fields the (now DTO-whitelisted) caller sent, rather than a raw
+  // findOneAndUpdate($set: data) - that used to let a caller silently
+  // reassign an assignment's tenantId/institutionId/campusId/teacherId
+  // or hand-write submissionsCount/avgScore, since nothing validated or
+  // stripped the body. Also detects a draft->assigned transition here so
+  // "Assign to Class" on an existing draft still materializes the
+  // student roster + fires the notification, not just brand-new creates.
+  async updateAssignment(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    const existing = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (!existing) throw new NotFoundException('Assignment not found');
+    const wasDraft = existing.status === 'draft';
+    Object.assign(existing, data);
+    await existing.save();
+    if (wasDraft && existing.status === 'assigned') {
+      await this.materializeSubmissions(existing, requestingUser?.schoolSlug);
+    }
+    return existing.toObject();
+  }
+
+  async deleteAssignment(tenantId: string, id: string) {
+    const assignment = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (!assignment) throw new NotFoundException('Assignment not found');
+    await this.submissionModel.deleteMany({ tenantId: this.tid(tenantId), assignmentId: assignment._id });
+    await assignment.deleteOne();
+    return { deleted: true };
+  }
+
+  // Resolves the real, live class roster for an assignment's grade/section/
+  // campus straight from the students collection - bypassing the Student
+  // Mongoose model token, which is registered with two DIFFERENT, mutually
+  // incompatible schemas across this codebase (the real one in
+  // src/students/schemas/student.schema.ts, and a stale/unused one this
+  // module itself still registers) and so cannot be trusted to resolve to
+  // the right shape. Raw collection access sidesteps that ambiguity
+  // entirely, same pattern already used by ParentPortalService.getLearningResources.
+  private async getClassRoster(schoolSlug: string, gradeLevel: string, sectionName?: string | null, campusId?: any) {
+    const filter: any = { schoolSlug, currentGrade: gradeLevel, status: 'active' };
+    if (sectionName) filter.currentSection = sectionName;
+    if (campusId) filter.campusId = String(campusId);
+    return this.assignmentModel.db.collection('students')
+      .find(filter).project({ firstName: 1, lastName: 1 }).toArray();
+  }
+
+  // Idempotent: safe to call again for an assignment that already has
+  // submission rows (e.g. a second student enrolls in the class later) -
+  // existing rows are left untouched via $setOnInsert + upsert.
+  private async materializeSubmissions(assignment: AssignmentDocument, schoolSlug?: string) {
+    if (!schoolSlug) return;
+    const students = await this.getClassRoster(schoolSlug, assignment.gradeLevel, assignment.sectionName, assignment.campusId);
+    if (students.length === 0) return;
+
+    await this.submissionModel.bulkWrite(students.map((s: any) => ({
+      updateOne: {
+        filter: { tenantId: assignment.tenantId, assignmentId: assignment._id, studentId: s._id },
+        update: {
+          $setOnInsert: {
+            tenantId: assignment.tenantId, institutionId: assignment.institutionId, campusId: assignment.campusId,
+            assignmentId: assignment._id, studentId: s._id,
+            studentName: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+            status: 'pending', maxGrade: assignment.totalMarks || 100,
+          },
+        },
+        upsert: true,
+      },
+    })));
+
+    await this.notifyGuardians(
+      schoolSlug, assignment.tenantId, students.map((s: any) => s._id),
+      `New ${assignment.type}: ${assignment.title}`,
+      `${assignment.subject} - due ${assignment.dueDate ? new Date(assignment.dueDate).toLocaleDateString() : 'soon'}.`,
+      String(assignment._id),
+    );
+  }
+
+  private async notifyGuardians(schoolSlug: string, tenantId: any, studentIds: any[], title: string, body: string, relatedEntityId: string) {
+    if (!studentIds.length) return;
+    const parents = await this.userModel.find({
+      tenantId, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
+    }).select('_id').lean();
+    if (!parents.length) return;
+    await this.notificationModel.insertMany(parents.map((p: any) => ({
+      recipientUserId: p._id, type: 'homework', title, body, relatedEntityId, schoolSlug,
+    })));
+  }
+
+  // ── ASSIGNMENT SUBMISSIONS (grading) ────────────────────────────────────────────
+
+  async getSubmissionsForAssignment(tenantId: string, assignmentId: string, requestingUser?: ScopedUser) {
+    const assignment = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
+    if (!assignment) throw new NotFoundException('Assignment not found');
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId && String((assignment as any).campusId || '') !== String(effectiveCampusId)) {
+        throw new ForbiddenException('This assignment belongs to a different campus.');
+      }
+    }
+    const submissions = await this.submissionModel.find({ tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) })
+      .sort({ studentName: 1 }).lean();
+    return { assignment, submissions };
+  }
+
+  async gradeSubmission(tenantId: string, assignmentId: string, submissionId: string, dto: GradeSubmissionDto, requestingUser?: ScopedUser) {
+    const submission = await this.submissionModel.findOne({ _id: submissionId, tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) });
+    if (!submission) throw new NotFoundException('Submission not found');
+    if (dto.grade > submission.maxGrade) {
+      throw new BadRequestException(`Grade cannot exceed this assignment's maximum of ${submission.maxGrade}.`);
+    }
+    submission.grade = dto.grade;
+    submission.feedback = dto.feedback;
+    submission.status = 'graded';
+    submission.gradedAt = new Date();
+    submission.gradedBy = requestingUser?.userId ? new Types.ObjectId(requestingUser.userId) : null;
+    await submission.save();
+
+    const assignment = await this.recomputeAssignmentStats(new Types.ObjectId(assignmentId));
+    if (requestingUser?.schoolSlug && assignment) {
+      await this.notifyGuardians(
+        requestingUser.schoolSlug, submission.tenantId, [submission.studentId],
+        `Homework graded: ${assignment.title}`,
+        `${submission.studentName} scored ${dto.grade}/${submission.maxGrade} on "${assignment.title}".${dto.feedback ? ` Feedback: ${dto.feedback}` : ''}`,
+        String(assignment._id),
+      );
+    }
+    return submission.toObject();
+  }
+
+  // submissionsCount/avgScore on the Assignment itself are now purely a
+  // cached read-model over the real per-student rows, recomputed after
+  // every submit/grade - never client-writable (see UpdateAssignmentDto).
+  private async recomputeAssignmentStats(assignmentId: Types.ObjectId) {
+    const [stats] = await this.submissionModel.aggregate([
+      { $match: { assignmentId } },
+      { $group: {
+        _id: null,
+        submissionsCount: { $sum: { $cond: [{ $in: ['$status', ['submitted', 'late', 'graded']] }, 1, 0] } },
+        gradedSum: { $sum: { $cond: [{ $eq: ['$status', 'graded'] }, '$grade', 0] } },
+        gradedCount: { $sum: { $cond: [{ $eq: ['$status', 'graded'] }, 1, 0] } },
+      } },
+    ]);
+    const submissionsCount = stats?.submissionsCount || 0;
+    const avgScore = stats?.gradedCount ? Math.round((stats.gradedSum / stats.gradedCount) * 100) / 100 : 0;
+    return this.assignmentModel.findByIdAndUpdate(assignmentId, { $set: { submissionsCount, avgScore } }, { new: true });
+  }
+
+  // Daily pass across every tenant: (1) an assignment past its due date
+  // that a teacher never manually closed out moves to 'overdue' instead
+  // of sitting in 'assigned' forever - previously nothing ever set this,
+  // so the dashboard's "overdue" count was always driven by whatever a
+  // human happened to type into status, never the actual date; (2) a
+  // still-'pending' submission (nothing turned in) past its assignment's
+  // due date becomes 'missed', so a teacher's grading view can tell
+  // "hasn't submitted yet, still has time" apart from "didn't submit."
+  @Cron(CronExpression.EVERY_DAY_AT_1AM)
+  async autoCloseOverdueAssignments() {
+    const now = new Date();
+    await this.assignmentModel.updateMany(
+      { status: 'assigned', dueDate: { $lt: now } },
+      { $set: { status: 'overdue' } },
+    );
+    const overdueAssignments = await this.assignmentModel.find({ status: 'overdue', dueDate: { $lt: now } }).select('_id').lean();
+    if (overdueAssignments.length) {
+      await this.submissionModel.updateMany(
+        { assignmentId: { $in: overdueAssignments.map((a) => a._id) }, status: 'pending' },
+        { $set: { status: 'missed' } },
+      );
+    }
   }
 
   // ── BEHAVIOUR NOTES ───────────────────────────────────────────────────────────

@@ -79,6 +79,16 @@ export class ParentPortalController {
     return this.service.getHomework(studentId, requestingUser, tenantId, schoolSlug);
   }
 
+  @Post('students/:studentId/homework/:assignmentId/submit')
+  @HttpCode(HttpStatus.CREATED)
+  async submitHomework(
+    @Param('studentId') studentId: string, @Param('assignmentId') assignmentId: string,
+    @Body() dto: { textResponse?: string; attachmentS3Keys?: string[] }, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.submitHomework(studentId, assignmentId, requestingUser, tenantId, schoolSlug, dto);
+  }
+
   @Get('students/:studentId/learning-resources')
   async getLearningResources(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
