@@ -3585,6 +3585,12 @@ export class FinanceService {
           for (const item of (fs.items || [])) {
             const baseAmount = item.amount || 0;
             let discount = 0;
+            // Each contributing discount is recorded with its own label (the
+            // DiscountProgram's name, or the assignment's own note for a
+            // custom one-off) so the challan can print "Sibling Discount:
+            // -2,500" as its own line instead of one unlabeled lump sum -
+            // see pdf.service.ts's drawChallanPage.
+            const breakdown: { label: string; amount: number }[] = [];
             for (const a of studentAssignments) {
               // Both feeHeadName (discount assignment) and item.feeHead (Fee
               // Structure) were free-text fields until the frontend fix for
@@ -3595,31 +3601,48 @@ export class FinanceService {
               // the safety net for exactly that already-saved mismatch.
               if (a.feeHeadName && a.feeHeadName.trim().toLowerCase() !== String(item.feeHead || '').trim().toLowerCase()) continue;
               let valueType = a.overrideValueType, value = a.overrideValue, maxAmount: number | undefined;
+              let label = a.notes?.trim() || 'Custom Discount';
               if (a.discountProgramId) {
                 const program = programById.get(String(a.discountProgramId));
                 if (!program) continue;
                 valueType = program.valueType; value = program.value; maxAmount = program.maxAmount;
+                label = program.name;
               }
               let thisDiscount = valueType === 'percentage' ? (baseAmount * (value || 0)) / 100 : (value || 0);
               if (maxAmount != null) thisDiscount = Math.min(thisDiscount, maxAmount);
-              discount += thisDiscount;
+              if (thisDiscount > 0) {
+                discount += thisDiscount;
+                breakdown.push({ label, amount: Math.round(thisDiscount) });
+              }
             }
             // Structure-level default discount (see FeeStructure.defaultDiscountType/
             // defaultDiscountValue) - a simple, optional discount that applies to
             // every invoice this structure generates, distinct from and stacked
             // on top of the per-student DiscountProgram/override discounts above.
             // 'none' (the default for every pre-existing structure) contributes 0.
+            let structureDiscount = 0;
             if (fs.defaultDiscountType === 'percent') {
-              discount += (baseAmount * (fs.defaultDiscountValue || 0)) / 100;
+              structureDiscount = (baseAmount * (fs.defaultDiscountValue || 0)) / 100;
             } else if (fs.defaultDiscountType === 'flat') {
-              discount += fs.defaultDiscountValue || 0;
+              structureDiscount = fs.defaultDiscountValue || 0;
             }
-            discount = Math.min(discount, baseAmount); // never let stacked discounts exceed the item itself
+            if (structureDiscount > 0) {
+              discount += structureDiscount;
+              breakdown.push({ label: 'Structure Discount', amount: Math.round(structureDiscount) });
+            }
+            const cappedDiscount = Math.min(discount, baseAmount); // never let stacked discounts exceed the item itself
+            // If capping actually reduced the total, scale every labeled
+            // entry down proportionally so the printed breakdown always
+            // sums to exactly what was deducted - never more.
+            const finalBreakdown = cappedDiscount < discount && discount > 0
+              ? breakdown.map((b) => ({ label: b.label, amount: Math.round(b.amount * (cappedDiscount / discount)) }))
+              : breakdown;
             items.push({
               description: `${fs.name}${fs.section ? ` (${fs.grade} - ${fs.section})` : ` (${fs.grade})`}`,
               amount: baseAmount,
-              discount: Math.round(discount),
-              netAmount: Math.round(baseAmount - discount),
+              discount: Math.round(cappedDiscount),
+              discountBreakdown: finalBreakdown,
+              netAmount: Math.round(baseAmount - cappedDiscount),
               feeStructureId: fs._id,
               feeHead: item.feeHead,
             });

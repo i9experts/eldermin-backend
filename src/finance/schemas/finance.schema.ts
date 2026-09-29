@@ -158,11 +158,24 @@ StudentFeeAssignmentSchema.index({ schoolSlug: 1, academicYear: 1 });
 // ============================================================
 export type InvoiceDocument = Invoice & Document;
 
+// A single labeled discount contributing to an InvoiceLineItem's total
+// discount - e.g. "Sibling Discount: -2,500" as its own line on the
+// printed challan, rather than one unlabeled lump sum (see
+// pdf.service.ts's drawChallanPage). Populated by generateInvoices as it
+// walks each applicable FeeAssignment/DiscountProgram for the item.
+@Schema({ _id: false })
+class DiscountBreakdownEntry {
+  @Prop({ required: true }) label: string;
+  @Prop({ required: true }) amount: number;
+}
+const DiscountBreakdownEntrySchema = SchemaFactory.createForClass(DiscountBreakdownEntry);
+
 @Schema({ _id: true })
 class InvoiceLineItem {
   @Prop({ required: true }) description: string;
   @Prop({ required: true }) amount: number;
   @Prop({ default: 0 }) discount: number;
+  @Prop({ type: [DiscountBreakdownEntrySchema], default: [] }) discountBreakdown: DiscountBreakdownEntry[];
   @Prop() taxRate: number;
   @Prop() netAmount: number;
   // Which FeeStructure (and specific fee head within it) this line was
