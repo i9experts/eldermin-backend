@@ -3,7 +3,7 @@ import { IsString, IsOptional, IsEnum, IsBoolean, IsArray, IsMongoId, ArrayMinSi
 export class CreateIdCardTemplateDto {
   @IsEnum(['student', 'staff']) entityType: string;
   @IsString() name: string;
-  @IsOptional() @IsEnum(['classic', 'modern', 'minimal']) layoutStyle?: string;
+  @IsOptional() @IsEnum(['classic', 'modern', 'minimal', 'vibrant']) layoutStyle?: string;
   @IsOptional() @IsString() primaryColor?: string;
   @IsOptional() @IsString() accentColor?: string;
   @IsOptional() @IsString() backgroundImageUrl?: string;
@@ -12,11 +12,12 @@ export class CreateIdCardTemplateDto {
   @IsOptional() @IsBoolean() showBarcode?: boolean;
   @IsOptional() @IsBoolean() showSignatureLine?: boolean;
   @IsOptional() @IsString() validityText?: string;
+  @IsOptional() @IsString() noteText?: string;
 }
 
 export class UpdateIdCardTemplateDto {
   @IsOptional() @IsString() name?: string;
-  @IsOptional() @IsEnum(['classic', 'modern', 'minimal']) layoutStyle?: string;
+  @IsOptional() @IsEnum(['classic', 'modern', 'minimal', 'vibrant']) layoutStyle?: string;
   @IsOptional() @IsString() primaryColor?: string;
   @IsOptional() @IsString() accentColor?: string;
   @IsOptional() @IsString() backgroundImageUrl?: string;
@@ -25,6 +26,7 @@ export class UpdateIdCardTemplateDto {
   @IsOptional() @IsBoolean() showBarcode?: boolean;
   @IsOptional() @IsBoolean() showSignatureLine?: boolean;
   @IsOptional() @IsString() validityText?: string;
+  @IsOptional() @IsString() noteText?: string;
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
