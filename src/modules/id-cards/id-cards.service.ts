@@ -180,7 +180,12 @@ export class IdCardsService {
 
   private cardCss(layoutStyle: string, primary: string, accent: string): string {
     const base = `
-      .card { position: relative; width: ${CARD_WIDTH_MM}mm; height: ${CARD_HEIGHT_MM}mm;
+      /* z-index: 0 (not just position: relative) is required so .card
+         establishes its OWN stacking context - otherwise a negative
+         z-index child (the watermark below) escapes it entirely and
+         sinks below the whole page background instead of staying
+         layered between the card's background and its content. */
+      .card { position: relative; z-index: 0; width: ${CARD_WIDTH_MM}mm; height: ${CARD_HEIGHT_MM}mm;
         border: 0.5px dashed #bbb; border-radius: 3mm; overflow: hidden; background: #fff;
         font-family: Arial, Helvetica, sans-serif; box-sizing: border-box; }
       .card * { box-sizing: border-box; }
@@ -197,6 +202,19 @@ export class IdCardsService {
       .reg-badge { position: absolute; top: 2mm; left: 2mm; background: rgba(255,255,255,0.92);
         color: ${primary}; font-size: 5.5pt; font-weight: bold; padding: 0.6mm 1.8mm;
         border-radius: 1mm; z-index: 3; letter-spacing: 0.2pt; }
+      /* The header logo - a fixed size on every layout, never the
+         template's own intrinsic pixel dimensions. Without this bound, a
+         school's real (often large) logo file rendered at native size and
+         bled across the whole card like a giant watermark, since only
+         classic/minimal used to define their own override here and
+         modern/vibrant had none at all. */
+      .card-header img.logo { height: 6.5mm; width: auto; max-width: 22mm; object-fit: contain; }
+      /* Sits behind the header/body content (negative z-index within the
+         .card stacking context established by position:relative), never
+         in front of it - a genuine low-opacity watermark, distinct from
+         the header logo above. */
+      .watermark { position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: cover; z-index: -1; }
     `;
     if (layoutStyle === 'modern') {
       return base + `
@@ -292,6 +310,12 @@ export class IdCardsService {
     const regBadgeHtml = template.layoutStyle === 'vibrant'
       ? `<div class="reg-badge">${this.escapeHtml(person.idLabel)}: ${this.escapeHtml(person.idNumber)}</div>`
       : '';
+    // A faint, full-bleed watermark image - separate from the header logo
+    // above. Opacity defaults conservatively low so it never fights with
+    // the text/photo printed on top of it.
+    const watermarkHtml = template.backgroundImageUrl
+      ? `<img class="watermark" src="${this.escapeHtml(template.backgroundImageUrl)}" style="opacity:${template.backgroundImageOpacity ?? 0.15};" />`
+      : '';
 
     if (side === 'back') {
       // Two-column back: field list on the left, free-text notes +
@@ -300,6 +324,7 @@ export class IdCardsService {
       const backFields = (template.showFields || []).filter((f) => IdCardsService.BACK_ONLY_FIELDS.includes(f));
       return `
         <div class="card" style="padding: 3mm;">
+          ${watermarkHtml}
           <p style="font-size:7pt; font-weight:bold; color:${template.primaryColor}; margin:0 0 1.5mm;">${this.escapeHtml(branding.name)}</p>
           <div style="display:flex; gap:3mm; height: calc(100% - 5mm);">
             <div style="flex:1; min-width:0;">
@@ -320,6 +345,7 @@ export class IdCardsService {
     const frontFields = (template.showFields || []).filter((f) => !IdCardsService.BACK_ONLY_FIELDS.includes(f));
     return `
       <div class="card">
+        ${watermarkHtml}
         ${regBadgeHtml}
         <div class="card-header">${logoHtml}<span class="school-name">${this.escapeHtml(branding.name)}</span></div>
         <div class="card-body">

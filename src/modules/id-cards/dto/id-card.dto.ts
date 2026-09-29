@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsBoolean, IsArray, IsMongoId, ArrayMinSize } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsBoolean, IsArray, IsMongoId, ArrayMinSize, IsNumber, Min, Max } from 'class-validator';
 
 export class CreateIdCardTemplateDto {
   @IsEnum(['student', 'staff']) entityType: string;
@@ -7,6 +7,7 @@ export class CreateIdCardTemplateDto {
   @IsOptional() @IsString() primaryColor?: string;
   @IsOptional() @IsString() accentColor?: string;
   @IsOptional() @IsString() backgroundImageUrl?: string;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) backgroundImageOpacity?: number;
   @IsOptional() @IsArray() @IsString({ each: true }) showFields?: string[];
   @IsOptional() @IsBoolean() showQrCode?: boolean;
   @IsOptional() @IsBoolean() showBarcode?: boolean;
@@ -21,6 +22,7 @@ export class UpdateIdCardTemplateDto {
   @IsOptional() @IsString() primaryColor?: string;
   @IsOptional() @IsString() accentColor?: string;
   @IsOptional() @IsString() backgroundImageUrl?: string;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) backgroundImageOpacity?: number;
   @IsOptional() @IsArray() @IsString({ each: true }) showFields?: string[];
   @IsOptional() @IsBoolean() showQrCode?: boolean;
   @IsOptional() @IsBoolean() showBarcode?: boolean;
