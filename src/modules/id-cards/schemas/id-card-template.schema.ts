@@ -55,10 +55,13 @@ export class IdCardTemplate {
   @Prop({ default: '#0C447C' }) primaryColor: string;
   @Prop({ default: '#F5A623' }) accentColor: string;
 
-  // Optional custom background image for the card face (e.g. a school
-  // watermark/pattern) - falls back to a solid primaryColor header band
-  // when unset.
+  // Optional watermark image, rendered faint and full-bleed behind the
+  // card content (not the header logo - that's always resolveBranding()'s
+  // institution/school logo, shown small in the header regardless of this
+  // field). backgroundImageOpacity controls how faint it prints - kept
+  // low by default so it never fights with the text/photo on top of it.
   @Prop() backgroundImageUrl?: string;
+  @Prop({ default: 0.15 }) backgroundImageOpacity: number;
 
   // Which optional fields (beyond the always-shown photo+name) this
   // template prints - see STUDENT_ID_CARD_FIELDS / STAFF_ID_CARD_FIELDS.
