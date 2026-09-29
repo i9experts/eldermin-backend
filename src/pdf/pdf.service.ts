@@ -784,9 +784,10 @@ export class PdfService {
       .lean();
     if (!invoice) throw new NotFoundException('Invoice not found');
 
-    const bankAccount: any = await this.bankAccountModel
-      .findOne({ schoolSlug, isActive: true })
+    const bankAccounts: any[] = await this.bankAccountModel
+      .find({ schoolSlug, isActive: true })
       .sort({ isPrimary: -1 })
+      .limit(3)
       .lean();
     const branding = await this.resolveSchoolBranding(schoolSlug, school, invoice.campus);
 
@@ -795,7 +796,7 @@ export class PdfService {
     const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const logoImg = await this.embedSchoolLogo(pdfDoc, branding.logo);
 
-    const data = this.buildChallanData({ ...school, name: branding.name }, bankAccount, invoice);
+    const data = this.buildChallanData({ ...school, name: branding.name }, bankAccounts, invoice);
     this.drawChallanPage(pdfDoc, data, logoImg, font, bold);
 
     const bytes = await pdfDoc.save();
@@ -873,9 +874,10 @@ export class PdfService {
     }
 
     const school: any = await this.getSchool(schoolSlug);
-    const bankAccount: any = await this.bankAccountModel
-      .findOne({ schoolSlug, isActive: true })
+    const bankAccounts: any[] = await this.bankAccountModel
+      .find({ schoolSlug, isActive: true })
       .sort({ isPrimary: -1 })
+      .limit(3)
       .lean();
 
     const pdfDoc = await PDFDocument.create();
@@ -902,7 +904,7 @@ export class PdfService {
 
     for (const invoice of invoices) {
       const branding = await brandingFor(invoice.campus);
-      const data = this.buildChallanData({ ...school, name: branding.name }, bankAccount, invoice);
+      const data = this.buildChallanData({ ...school, name: branding.name }, bankAccounts, invoice);
       this.drawChallanPage(pdfDoc, data, branding.logoImg, font, bold);
     }
 
@@ -1116,7 +1118,7 @@ export class PdfService {
     }
   }
 
-  private buildChallanData(school: any, bankAccount: any, invoice: any): any {
+  private buildChallanData(school: any, bankAccounts: any[], invoice: any): any {
     const student: any = invoice.studentId;
     const father = (student?.guardians || []).find((g: any) => g.relation === 'father');
     const guardian = father || (student?.guardians || [])[0];
@@ -1134,12 +1136,21 @@ export class PdfService {
     }
     const dueDateLabel = invoice.dueDate ? fmtDate(new Date(invoice.dueDate)) : issueDateLabel;
 
+    const addressParts = [school?.address?.street, school?.address?.city].filter(Boolean);
+    const accounts = (bankAccounts || []).map((b: any) => ({
+      bankName: b.bankName || 'N/A',
+      accountTitle: b.accountTitle || school?.name || '',
+      accountNumber: b.accountNumber || '',
+    }));
+
     return {
       schoolName: school?.name || 'School',
+      schoolAddress: addressParts.join(', '),
+      schoolPhone: school?.phone || '',
+      schoolEmail: school?.email || '',
+      registrationNumber: school?.registrationNumber || '',
       campusName: invoice.campus || 'N/A',
-      bankName: bankAccount?.bankName || 'N/A',
-      accountTitle: bankAccount?.accountTitle || school?.name || '',
-      accountNumber: bankAccount?.accountNumber || '',
+      accounts,
       invoiceNumber: invoice.invoiceNumber || `INV-${String(invoice._id).slice(-6).toUpperCase()}`,
       issueDateLabel,
       dueDateLabel,
@@ -1150,6 +1161,7 @@ export class PdfService {
       grade: invoice.grade || student?.currentGrade || '',
       section: invoice.section || student?.currentSection || '',
       guardianName: guardian?.name || '',
+      guardianContact: guardian?.cnic || guardian?.phone || '',
       items: (invoice.items || []).map((it: any) => ({
         description: it.description,
         discount: it.discount || 0,
@@ -1161,19 +1173,30 @@ export class PdfService {
     };
   }
 
+  // Redesigned to match the school's reference fee challan layout (a
+  // real printed university voucher supplied as a sample): centered
+  // letterhead, Issue Date/Session and Challan No/Student ID rows, a
+  // Particulars table, bank deposit + payment-mode instructions, a fine
+  // note, and the copy label moved to the bottom next to the "signatures
+  // not required" disclaimer rather than a top-right tag.
   private drawChallanPage(pdfDoc: any, data: any, logoImg: any, font: any, bold: any) {
     const pageWidth = 842, pageHeight = 595; // landscape A4
     const page = pdfDoc.addPage([pageWidth, pageHeight]);
-    const navy = rgb(0.047, 0.267, 0.486);
     const black = rgb(0.1, 0.1, 0.1);
     const gray = rgb(0.42, 0.42, 0.42);
     const lightGray = rgb(0.93, 0.93, 0.93);
     const red = rgb(0.7, 0.15, 0.15);
+    const green = rgb(0.06, 0.5, 0.2);
 
-    const margin = 22;
-    const gap = 16;
+    const margin = 20;
+    const gap = 14;
     const colWidth = (pageWidth - margin * 2 - gap * 2) / 3;
-    const copyLabels = ['Bank Copy', 'School Copy', "Parent's Copy"];
+    const copyLabels = ['BANK COPY', 'ACCOUNTS COPY', 'STUDENT COPY'];
+
+    const centered = (text: string, colX: number, y: number, size: number, f: any, color: any) => {
+      const w = f.widthOfTextAtSize(text, size);
+      page.drawText(text, { x: colX + Math.max(0, (colWidth - w) / 2), y, size, font: f, color, maxWidth: colWidth });
+    };
 
     for (let i = 0; i < 3; i++) {
       const colX = margin + i * (colWidth + gap);
@@ -1186,98 +1209,115 @@ export class PdfService {
         }
       }
 
-      // logoSize was 26pt (~0.36in) with no maxWidth on the bank name/
-      // account number lines below it - in this 3-up landscape layout
-      // (colWidth ~255pt) that made the logo look like a barely-visible
-      // speck and let a longer bank name or account number bleed past this
-      // copy's column into the next one. Bumped the logo up and every text
-      // line in this header now has an explicit maxWidth.
-      const logoSize = 34;
-      const textX = logoImg ? colX + logoSize + 6 : colX;
-      const textMaxWidth = colWidth - (logoImg ? logoSize + 6 : 0);
+      // ── Letterhead (centered, matching the reference sample) ──────────
       if (logoImg) {
+        const logoSize = 26;
         page.drawImage(logoImg, { x: colX, y: y - logoSize, width: logoSize, height: logoSize });
       }
-      page.drawText(data.schoolName, { x: textX, y: y - 10, size: 9.5, font: bold, color: black, maxWidth: textMaxWidth });
-      page.drawText(`${data.campusName} Campus`, { x: textX, y: y - 21, size: 6.5, font, color: gray, maxWidth: textMaxWidth });
-      page.drawText(`Bank: ${data.bankName}`, { x: textX, y: y - 31, size: 6.5, font, color: gray, maxWidth: textMaxWidth });
-      y -= logoSize + 10;
+      centered(data.schoolName, colX, y - 9, 9.5, bold, black);
+      y -= 20;
+      if (data.schoolAddress) { centered(data.schoolAddress, colX, y, 6, font, gray); y -= 9; }
+      const contactLine = [data.schoolPhone ? `Phone: ${data.schoolPhone}` : '', data.schoolEmail ? `Email: ${data.schoolEmail}` : ''].filter(Boolean).join('   ');
+      if (contactLine) { centered(contactLine, colX, y, 6, font, gray); y -= 9; }
+      if (data.registrationNumber) { centered(`NTN: ${data.registrationNumber}`, colX, y, 6, font, gray); y -= 9; }
+      y -= 3;
+      page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.75, color: black });
+      y -= 12;
 
-      page.drawText(`A/C Title: ${data.accountTitle}`, { x: colX, y, size: 6.5, font, color: gray, maxWidth: colWidth });
-      y -= 10;
-      page.drawText(`Account #: ${data.accountNumber || 'N/A'}`, { x: colX, y, size: 6.5, font, color: gray, maxWidth: colWidth });
-      y -= 10;
-
-      page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
-      y -= 13;
-
-      page.drawText('Fee Voucher', { x: colX, y, size: 8, font: bold, color: black });
-      page.drawText(`Campus: ${data.campusName}`, { x: colX + 68, y, size: 6.5, font, color: black });
-      const labelW = bold.widthOfTextAtSize(copyLabels[i], 8);
-      page.drawText(copyLabels[i], { x: colX + colWidth - labelW, y, size: 8, font: bold, color: navy });
-      y -= 13;
-
-      const third = colWidth / 3;
+      // ── Issue Date / Session, Challan No / Student ID ──────────────────
+      const half = colWidth / 2;
       page.drawText('Issue Date:', { x: colX, y, size: 6, font, color: gray });
-      page.drawText('Due Date:', { x: colX + third, y, size: 6, font, color: gray });
-      page.drawText('Validity:', { x: colX + third * 2, y, size: 6, font, color: gray });
+      page.drawText('Session:', { x: colX + half, y, size: 6, font, color: gray });
       y -= 9;
       page.drawText(data.issueDateLabel, { x: colX, y, size: 6.5, font: bold, color: black });
-      page.drawText(data.dueDateLabel, { x: colX + third, y, size: 6.5, font: bold, color: black });
-      page.drawText(data.validityLabel, { x: colX + third * 2, y, size: 6.5, font: bold, color: black });
-      y -= 13;
-
-      page.drawText(`Challan No: ${data.invoiceNumber}`, { x: colX, y, size: 7, font: bold, color: black });
-      page.drawText(`GRN: ${data.admissionNumber || '-'}`, { x: colX + colWidth * 0.62, y, size: 7, font: bold, color: black });
+      page.drawText(data.monthLabel || 'N/A', { x: colX + half, y, size: 6.5, font: bold, color: black });
       y -= 12;
+
+      page.drawText('Challan No:', { x: colX, y, size: 6, font, color: gray });
+      page.drawText('Student ID:', { x: colX + half, y, size: 6, font, color: gray });
+      y -= 9;
+      page.drawText(data.invoiceNumber, { x: colX, y, size: 6.5, font: bold, color: black });
+      page.drawText(data.admissionNumber || 'N/A', { x: colX + half, y, size: 6.5, font: bold, color: black });
+      y -= 13;
 
       page.drawText(`Name: ${data.studentName}`, { x: colX, y, size: 7, font: bold, color: black, maxWidth: colWidth });
       y -= 11;
-      page.drawText(`Father's Name: ${data.guardianName || '-'}`, { x: colX, y, size: 7, font, color: black, maxWidth: colWidth });
+      page.drawText(`Parent/Guardian: ${data.guardianName || '-'}${data.guardianContact ? `   ${data.guardianContact}` : ''}`, { x: colX, y, size: 6.5, font, color: black, maxWidth: colWidth });
       y -= 11;
-      page.drawText(`Class: ${data.grade}${data.section ? ' - ' + data.section : ''}`, { x: colX, y, size: 7, font, color: black });
-      page.drawText(`For the month of: ${data.monthLabel}`, { x: colX + colWidth * 0.5, y, size: 6.5, font, color: black });
+      page.drawText(`Class: ${data.grade}${data.section ? ' - ' + data.section : ''}`, { x: colX, y, size: 6.5, font, color: black });
+      page.drawText(`Campus: ${data.campusName}`, { x: colX + half, y, size: 6.5, font, color: black });
       y -= 13;
 
+      // ── Particulars table ─────────────────────────────────────────────
       const hasDiscount = data.items.some((it: any) => (it.discount || 0) > 0);
       const discColX = colX + colWidth - 78;
       page.drawRectangle({ x: colX, y: y - 10, width: colWidth, height: 12, color: lightGray });
-      page.drawText('Description', { x: colX + 3, y: y - 8, size: 6.5, font: bold, color: black });
-      if (hasDiscount) {
-        page.drawText('Discount', { x: discColX, y: y - 8, size: 6.5, font: bold, color: black });
-      }
-      page.drawText('Amount', { x: colX + colWidth - 38, y: y - 8, size: 6.5, font: bold, color: black });
+      page.drawText('Particulars', { x: colX + 3, y: y - 8, size: 6.5, font: bold, color: black });
+      if (hasDiscount) page.drawText('Discount', { x: discColX, y: y - 8, size: 6.5, font: bold, color: black });
+      page.drawText('Amount (Rs)', { x: colX + colWidth - 50, y: y - 8, size: 6.5, font: bold, color: black });
       y -= 10;
 
       for (const item of data.items) {
         y -= 11;
         page.drawText(String(item.description || '').slice(0, hasDiscount ? 32 : 42), { x: colX + 3, y, size: 6.5, font, color: black });
         if (hasDiscount && item.discount > 0) {
-          page.drawText(`- ${item.discount.toLocaleString()}`, { x: discColX, y, size: 6.5, font, color: rgb(0.06, 0.5, 0.2) });
+          page.drawText(`- ${item.discount.toLocaleString()}`, { x: discColX, y, size: 6.5, font, color: green });
         }
-        page.drawText((item.netAmount || 0).toLocaleString(), { x: colX + colWidth - 38, y, size: 6.5, font, color: black });
+        page.drawText((item.netAmount || 0).toLocaleString(), { x: colX + colWidth - 50, y, size: 6.5, font, color: black });
       }
       y -= 8;
       page.drawLine({ start: { x: colX, y }, end: { x: colX + colWidth, y }, thickness: 0.5, color: gray });
       y -= 12;
 
       if (data.totalDiscount > 0) {
-        page.drawText('Total Discount:', { x: colX, y, size: 6.5, font, color: rgb(0.06, 0.5, 0.2) });
-        page.drawText(`- ${data.totalDiscount.toLocaleString()}`, { x: colX + colWidth - 38, y, size: 6.5, font, color: rgb(0.06, 0.5, 0.2) });
+        page.drawText('Total Discount:', { x: colX, y, size: 6.5, font, color: green });
+        page.drawText(`- ${data.totalDiscount.toLocaleString()}`, { x: colX + colWidth - 50, y, size: 6.5, font, color: green });
         y -= 11;
       }
 
-      page.drawText(`Payable by: ${data.dueDateLabel}`, { x: colX, y, size: 7, font: bold, color: black });
-      page.drawText(data.totalAmount.toLocaleString(), { x: colX + colWidth - 38, y, size: 7, font: bold, color: black });
-      y -= 12;
+      page.drawText('Total Amount Payable:', { x: colX, y, size: 7, font: bold, color: black });
+      page.drawText(data.totalAmount.toLocaleString(), { x: colX + colWidth - 50, y, size: 7, font: bold, color: black });
+      y -= 13;
 
-      if (data.lateFine > 0) {
-        page.drawText(`After ${data.dueDateLabel}`, { x: colX, y, size: 7, font, color: red });
-        page.drawText((data.totalAmount + data.lateFine).toLocaleString(), { x: colX + colWidth - 38, y, size: 7, font: bold, color: red });
-      }
+      // ── Due Date / Valid Date ──────────────────────────────────────────
+      page.drawText('Due Date:', { x: colX, y, size: 6, font, color: gray });
+      page.drawText('Valid Date:', { x: colX + half, y, size: 6, font, color: gray });
+      y -= 9;
+      page.drawText(data.dueDateLabel, { x: colX, y, size: 6.5, font: bold, color: black });
+      page.drawText(data.validityLabel, { x: colX + half, y, size: 6.5, font: bold, color: black });
+      y -= 13;
 
-      page.drawText('Instructions:', { x: colX, y: margin + 22, size: 6.5, font: bold, color: black });
-      page.drawText('Not Acceptable / Null & Void After Due Date', { x: colX, y: margin + 12, size: 6, font, color: gray });
+      // ── Bank / payment instructions ────────────────────────────────────
+      const bankNames = data.accounts.map((a: any) => a.bankName).join(' & ') || 'N/A';
+      centered(`Payable at any Branch of ${bankNames}`, colX, y, 6.5, bold, black);
+      y -= 10;
+
+      page.drawText('Fee to be Deposited in:', { x: colX, y, size: 6, font: bold, color: black });
+      y -= 9;
+      data.accounts.forEach((acct: any, idx: number) => {
+        page.drawText(`${idx + 1}) ${acct.bankName} A/c No ${acct.accountNumber || 'N/A'}`, { x: colX, y, size: 6, font, color: gray, maxWidth: colWidth });
+        y -= 8;
+      });
+      if (data.accounts.length === 0) { page.drawText('Contact the school office for deposit details.', { x: colX, y, size: 6, font, color: gray }); y -= 8; }
+      y -= 3;
+
+      page.drawText('Modes of Payment:', { x: colX, y, size: 6, font: bold, color: black });
+      y -= 9;
+      page.drawText('1) Cash / Bank Transfer at any listed branch', { x: colX, y, size: 6, font, color: gray, maxWidth: colWidth });
+      y -= 8;
+      page.drawText('2) Cash / Card at the school office', { x: colX, y, size: 6, font, color: gray, maxWidth: colWidth });
+      y -= 10;
+
+      page.drawText(
+        data.lateFine > 0
+          ? `Fine of Rs. ${data.lateFine.toLocaleString()} applies after the Due Date.`
+          : 'Please pay before the Due Date to avoid a late fee.',
+        { x: colX, y, size: 6, font, color: red, maxWidth: colWidth },
+      );
+
+      // ── Footer: copy label + disclaimer (bottom, matching reference) ──
+      centered(copyLabels[i], colX, margin + 16, 8, bold, black);
+      centered('This is a system generated Fee Challan. Signatures not required.', colX, margin + 6, 5.5, font, gray);
     }
   }
 
