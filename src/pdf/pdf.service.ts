@@ -1215,12 +1215,20 @@ export class PdfService {
       }
 
       // ── Letterhead (centered, matching the reference sample) ──────────
+      // Logo is centered above the school name - not left-aligned beside
+      // it - so a real 1x1" logo (72pt, the size a school actually asked
+      // for) never collides with the centered title text regardless of
+      // how long the school's name is. The previous 26pt logo was barely
+      // legible on a printed voucher.
       if (logoImg) {
-        const logoSize = 26;
-        page.drawImage(logoImg, { x: colX, y: y - logoSize, width: logoSize, height: logoSize });
+        const logoSize = 72;
+        const logoX = colX + (colWidth - logoSize) / 2;
+        page.drawImage(logoImg, { x: logoX, y: y - logoSize, width: logoSize, height: logoSize });
+        y -= logoSize + 4;
       }
       centered(data.schoolName, colX, y - 9, 9.5, bold, black);
       y -= 20;
+      if (data.campusName && data.campusName !== 'N/A') { centered(data.campusName, colX, y, 7, bold, gray); y -= 10; }
       if (data.schoolAddress) { centered(data.schoolAddress, colX, y, 6, font, gray); y -= 9; }
       const contactLine = [data.schoolPhone ? `Phone: ${data.schoolPhone}` : '', data.schoolEmail ? `Email: ${data.schoolEmail}` : ''].filter(Boolean).join('   ');
       if (contactLine) { centered(contactLine, colX, y, 6, font, gray); y -= 9; }
