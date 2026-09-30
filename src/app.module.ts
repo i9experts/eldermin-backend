@@ -41,6 +41,7 @@ import { ParentPortalModule } from './parent-portal/parent-portal.module';
 import { ResellersModule } from './resellers/resellers.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
 import { IdCardsModule } from './modules/id-cards/id-cards.module';
+import { CertificatesModule } from './modules/certificates/certificates.module';
 import { AccountingIntegrationsModule } from './modules/accounting-integrations/accounting-integrations.module';
 import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
@@ -89,6 +90,7 @@ import { EventsModule } from './events/events.module';
     ResellersModule,
     KnowledgeBaseModule,
     IdCardsModule,
+    CertificatesModule,
   ],
   controllers: [AppController],
   providers: [
