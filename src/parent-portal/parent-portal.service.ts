@@ -30,6 +30,7 @@ import {
 } from './schemas/notification-and-message.schema';
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { AssessmentService } from '../assessments/assessment.service';
 
 @Injectable()
 export class ParentPortalService {
@@ -59,6 +60,7 @@ export class ParentPortalService {
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
+    private assessmentService: AssessmentService,
   ) {}
 
   // ── Admin: link a guardian's login to their child/children ─────
@@ -318,6 +320,29 @@ export class ParentPortalService {
       { upsert: true, new: true },
     );
     return updated;
+  }
+
+  // ── LMS Phase 2: self-paced online quizzes ─────────────────────
+  // Thin wrappers around AssessmentService - the grading/auto-mark logic
+  // lives there once, shared with the teacher-facing review queue,
+  // rather than duplicated here. The only thing Parent Portal adds is
+  // the guardian-access check and resolving this student's own
+  // grade/section to list what's actually available to them.
+  async listMyQuizzes(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    return this.assessmentService.listAvailableQuizzes(schoolSlug, studentId, (student as any).currentGrade, (student as any).currentSection, (student as any).campusId);
+  }
+
+  async startQuiz(studentId: string, requestingUser: ScopedUser, schoolSlug: string, dto: { assessmentId: string; subject: string }) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.assessmentService.startQuizAttempt(schoolSlug, studentId, dto);
+  }
+
+  async submitQuiz(studentId: string, requestingUser: ScopedUser, schoolSlug: string, attemptId: string, answers: { questionId: string; selectedOptionIndex?: number; textAnswer?: string }[]) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.assessmentService.submitQuizAttempt(schoolSlug, studentId, attemptId, answers);
   }
 
   // ── Results ──────────────────────────────────────────────────

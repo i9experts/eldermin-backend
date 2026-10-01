@@ -27,6 +27,8 @@ export class SubjectConfigDto {
   @IsOptional() @IsString() startTime?: string;
   @IsOptional() @IsNumber() duration?: number;
   @IsOptional() @IsString() venue?: string;
+  @IsOptional() @IsMongoId() examPaperId?: string;
+  @IsOptional() @IsNumber() attemptsAllowed?: number;
 }
 
 // ── Assessment ────────────────────────────────────────────────
@@ -54,11 +56,42 @@ export class CreateAssessmentDto {
   @IsEnum(['draft','scheduled','ongoing','completed','result_published','cancelled'])
   status?: string;
 
+  @IsOptional() @IsEnum(['teacher_marked', 'self_paced_online']) deliveryMode?: string;
+
   schoolSlug?: string;
   createdBy?: string;
 }
 
 export class UpdateAssessmentDto extends PartialType(CreateAssessmentDto) {}
+
+// ── LMS Phase 2: online quizzes ─────────────────────────────────
+export class StartQuizDto {
+  @IsMongoId() assessmentId: string;
+  @IsString() subject: string;
+}
+
+export class QuizAnswerInputDto {
+  @IsMongoId() questionId: string;
+  @IsOptional() @IsNumber() selectedOptionIndex?: number;
+  @IsOptional() @IsString() textAnswer?: string;
+}
+
+export class SubmitQuizDto {
+  @IsArray() @ValidateNested({ each: true })
+  @Type(() => QuizAnswerInputDto)
+  answers: QuizAnswerInputDto[];
+}
+
+export class ManualQuizGradeDto {
+  @IsMongoId() questionId: string;
+  @IsNumber() marksAwarded: number;
+}
+
+export class GradeQuizAttemptDto {
+  @IsArray() @ValidateNested({ each: true })
+  @Type(() => ManualQuizGradeDto)
+  grades: ManualQuizGradeDto[];
+}
 
 export class AssessmentQueryDto extends PaginationDto {
   @IsOptional() @IsString() grade?: string;
