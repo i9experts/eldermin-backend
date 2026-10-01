@@ -29,6 +29,9 @@ import { StudentNote, StudentNoteDocument } from './schemas/student-note.schema'
 import { StudentDocumentRecord, StudentDocumentRecordDocument } from './schemas/student-document-record.schema';
 import { AcademicHistoryRecord, AcademicHistoryRecordDocument } from './schemas/academic-history-record.schema';
 import { EnrollmentField, EnrollmentFieldDocument } from './schemas/enrollment-field.schema';
+import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
+import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { QuizAttempt, QuizAttemptDocument } from '../assessments/schemas/quiz-attempt.schema';
 
 import {
   CreateStudentDto, UpdateStudentDto, StudentQueryDto,
@@ -78,6 +81,9 @@ export class StudentsService {
     @InjectModel(StudentDocumentRecord.name) private studentDocumentRecordModel: Model<StudentDocumentRecordDocument>,
     @InjectModel(AcademicHistoryRecord.name) private academicHistoryRecordModel: Model<AcademicHistoryRecordDocument>,
     @InjectModel(EnrollmentField.name) private enrollmentFieldModel: Model<EnrollmentFieldDocument>,
+    @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
+    @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
+    @InjectModel(QuizAttempt.name) private quizAttemptModel: Model<QuizAttemptDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -1456,6 +1462,77 @@ export class StudentsService {
       },
       assessments: {
         recent: recentResults,
+      },
+    };
+  }
+
+  // ── LMS Phase 3: Student 360 "Learning" tab ──────────────────
+  // Deliberately its own endpoint rather than folded into getStudent360's
+  // payload above - that aggregate is read on every single Student 360
+  // page load regardless of which tab is open, so adding three more
+  // queries (and a Syllabus/LessonProgress/QuizAttempt dependency) to it
+  // would cost every admin opening a student's profile, not just the ones
+  // who click into Learning. Needs tenantId (Syllabus's own scoping key,
+  // not schoolSlug) - resolved from req.user the same way Parent Portal's
+  // getMyCourses already does.
+  async getStudentLearning(id: string, schoolSlug: string, tenantId: string) {
+    const student = await this.studentModel.findOne({ _id: id, schoolSlug })
+      .select('firstName lastName currentGrade currentSection campusId').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    if (!tenantId) return { courses: [], quizzes: { attempted: 0, graded: 0, avgPercentage: null, recent: [] } };
+
+    const filter: any = {
+      tenantId, gradeLevel: (student as any).currentGrade, publishedToStudents: true,
+      $or: [{ sectionName: (student as any).currentSection }, { sectionName: { $exists: false } }, { sectionName: null }],
+    };
+    if ((student as any).campusId) filter.campusId = new Types.ObjectId((student as any).campusId);
+
+    const [syllabi, quizAttempts] = await Promise.all([
+      this.syllabusModel.find(filter).sort({ subjectName: 1 }).lean(),
+      this.quizAttemptModel.find({ studentId: new Types.ObjectId(id), schoolSlug }).sort({ submittedAt: -1 }).limit(20).lean(),
+    ]);
+
+    let courses: any[] = [];
+    if (syllabi.length > 0) {
+      const progressRows = await this.lessonProgressModel.find({
+        studentId: new Types.ObjectId(id), syllabusId: { $in: syllabi.map((s: any) => s._id) },
+      }).lean();
+      const progressByKey = new Map(progressRows.map((p: any) => [`${p.syllabusId}-${p.unitNo}-${p.topicNo}-${p.lessonNo}`, p]));
+
+      courses = syllabi.map((s: any) => {
+        let totalLessons = 0;
+        let completedLessons = 0;
+        for (const u of s.units || []) {
+          for (const t of u.topics || []) {
+            for (const l of t.lessons || []) {
+              totalLessons += 1;
+              if (progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`)?.status === 'completed') completedLessons += 1;
+            }
+          }
+        }
+        return {
+          syllabusId: s._id, subjectName: s.subjectName, teacherName: s.teacherName,
+          totalLessons, completedLessons,
+          completionPct: totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0,
+        };
+      }).filter((c: any) => c.totalLessons > 0);
+    }
+
+    const graded = quizAttempts.filter((a: any) => a.status === 'graded' && a.obtainedMarks != null);
+    const avgPercentage = graded.length > 0
+      ? Math.round(graded.reduce((sum: number, a: any) => sum + ((a.obtainedMarks / a.totalMarks) * 100), 0) / graded.length)
+      : null;
+
+    return {
+      courses,
+      quizzes: {
+        attempted: quizAttempts.length,
+        graded: graded.length,
+        avgPercentage,
+        recent: quizAttempts.slice(0, 10).map((a: any) => ({
+          assessmentTitle: a.assessmentTitle, subject: a.subject, status: a.status,
+          obtainedMarks: a.obtainedMarks, totalMarks: a.totalMarks, submittedAt: a.submittedAt,
+        })),
       },
     };
   }

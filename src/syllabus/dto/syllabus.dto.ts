@@ -1,6 +1,6 @@
 import {
   IsString, IsOptional, IsNumber, IsArray, IsEnum, IsBoolean,
-  ValidateNested, IsMongoId,
+  ValidateNested, IsMongoId, IsDateString,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { CURRICULUM_FRAMEWORKS } from '../../common/constants/curriculum-framework';
@@ -122,6 +122,7 @@ export class CreateLessonDto {
   @IsOptional() @IsString() fileUrl?: string;
   @IsOptional() @IsString() fileName?: string;
   @IsOptional() @IsNumber() order?: number;
+  @IsOptional() @IsDateString() dueDate?: string;
 }
 
 export class UpdateLessonDto {
@@ -135,6 +136,7 @@ export class UpdateLessonDto {
   @IsOptional() @IsString() fileUrl?: string;
   @IsOptional() @IsString() fileName?: string;
   @IsOptional() @IsNumber() order?: number;
+  @IsOptional() @IsDateString() dueDate?: string;
 }
 
 export class DeleteLessonDto {

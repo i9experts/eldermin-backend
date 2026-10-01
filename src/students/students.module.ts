@@ -23,6 +23,9 @@ import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/orga
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { FeeStructure, FeeStructureSchema } from '../finance/schemas/finance.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
+import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
+import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
+import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-attempt.schema';
 
 @Module({
   imports: [
@@ -43,6 +46,14 @@ import { Family, FamilySchema } from '../families/schemas/family.schema';
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: FeeStructure.name, schema: FeeStructureSchema },
+      // LMS Phase 3 - Student 360 "Learning" tab (getStudentLearning).
+      // Registered directly rather than importing SyllabusModule/
+      // AssessmentModule, same "only the read access this actually
+      // needs" convention already used for School/Campus/GroupInstitution
+      // above.
+      { name: Syllabus.name, schema: SyllabusSchema },
+      { name: LessonProgress.name, schema: LessonProgressSchema },
+      { name: QuizAttempt.name, schema: QuizAttemptSchema },
     ]),
   ],
   controllers: [StudentsController],

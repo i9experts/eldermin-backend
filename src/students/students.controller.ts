@@ -31,6 +31,7 @@ export class StudentsController {
       academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
+      tenantId: req?.user?.tenantId,
     };
   }
 
@@ -154,6 +155,13 @@ export class StudentsController {
   async getStudent360(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getStudent360(id, schoolSlug);
+  }
+
+  /** GET /api/v1/students/:id/learning — LMS Phase 3 Student 360 tab */
+  @Get(':id/learning')
+  async getStudentLearning(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, tenantId } = this.ctx(req);
+    return this.studentsService.getStudentLearning(id, schoolSlug, tenantId);
   }
 
   /**

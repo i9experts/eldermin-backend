@@ -34,6 +34,7 @@ import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson
 import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { AssessmentModule } from '../assessments/assessment.module';
+import { CertificatesModule } from '../modules/certificates/certificates.module';
 import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
 
@@ -71,6 +72,7 @@ import { ParentAuthController } from './parent-auth.controller';
     EmailModule,
     AuthModule,
     AssessmentModule,
+    CertificatesModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
   providers: [ParentPortalService, ParentAuthService],
