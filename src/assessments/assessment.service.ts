@@ -22,6 +22,8 @@ import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-she
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { Campus } from '../organization/schemas/organization.schema';
+import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 import {
@@ -61,10 +63,36 @@ export class AssessmentService {
     @InjectModel(ExamPaper.name) private examPaperModel: Model<ExamPaperDocument>,
     @InjectModel(OMRAnswerSheet.name) private omrSheetModel: Model<OMRAnswerSheetDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel('School') private schoolModel: Model<any>,
+    @InjectModel(Campus.name) private campusModel: Model<any>,
+    @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     private configService: ConfigService,
     private pdfService: PdfService,
     private uploadService: UploadService,
   ) {}
+
+  // Same institution/campus resolution as CertificatesService.resolveBranding
+  // and IdCardsService - an institution's own name/logo take priority over
+  // the raw School document when the assessment's campus belongs to a
+  // branded multi-campus group.
+  private async resolveBranding(schoolSlug: string, campusId?: any): Promise<{ name: string; logo: string; campusName: string }> {
+    const school: any = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    let institutionName: string | undefined, institutionLogo: string | undefined;
+    let campusName = '';
+    if (campusId) {
+      const campus: any = await this.campusModel.findOne({ _id: campusId, schoolSlug }).lean();
+      campusName = campus?.name || '';
+      if (campus?.institutionId) {
+        const inst: any = await this.institutionModel.findOne({ _id: campus.institutionId, schoolSlug }).lean();
+        institutionName = inst?.name; institutionLogo = inst?.logoUrl;
+      }
+    }
+    return {
+      name: institutionName || school?.name || 'School',
+      logo: institutionLogo || school?.logo || '',
+      campusName,
+    };
+  }
 
   // ============================================================
   // AI BLOOM'S LEVEL CLASSIFICATION
@@ -422,6 +450,212 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       format: 'A4',
       printBackground: true,
       margin: { top: '15mm', right: '12mm', bottom: '15mm', left: '12mm' },
+    });
+  }
+
+  // ============================================================
+  // EXAMINATION TIMETABLE
+  // A school admin's actual ask: a single printable schedule of which
+  // subject is examined on which date/time/venue - built from the same
+  // SubjectConfig[] array already entered on the Assessment (Create/Edit
+  // Assessment's "Subjects Configuration" section), not a new collection.
+  // ============================================================
+  private fmtTimetableDate(d?: Date | string | null): { date: string; day: string } {
+    if (!d) return { date: 'TBA', day: '' };
+    const dt = new Date(d);
+    return {
+      date: dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      day: dt.toLocaleDateString('en-GB', { weekday: 'long' }),
+    };
+  }
+
+  private fmtTime(t?: string): string {
+    if (!t) return '—';
+    const [hStr, mStr] = t.split(':');
+    const h = Number(hStr);
+    if (Number.isNaN(h)) return t;
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${(mStr || '00').padStart(2, '0')} ${period}`;
+  }
+
+  // Renders a letterheaded timetable from a header line + pre-built table
+  // rows HTML - shared by the single-assessment and combined-schedule
+  // variants below so both ever produce one identical printed look.
+  private renderTimetableHtml(opts: {
+    branding: { name: string; logo: string; campusName: string };
+    heading: string;
+    subheading: string;
+    columns: string[];
+    rowsHtml: string;
+  }): string {
+    const { branding, heading, subheading, columns, rowsHtml } = opts;
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { margin: 15mm 14mm; }
+          body { font-family: 'Segoe UI', Arial, sans-serif; color: #111; font-size: 12px; }
+          .header { display: flex; align-items: center; gap: 12px; border-bottom: 3px solid #0C447C; padding-bottom: 10px; margin-bottom: 16px; }
+          .header img { width: 50px; height: 50px; object-fit: contain; }
+          .header-text h1 { font-size: 17px; color: #0C447C; margin: 0 0 2px; }
+          .header-text p { margin: 1px 0; font-size: 11px; color: #555; }
+          .title-block { text-align: center; margin-bottom: 14px; }
+          .title-block h2 { font-size: 15px; margin: 0 0 3px; color: #111; }
+          .title-block p { font-size: 11px; color: #555; margin: 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th { background: #0C447C; color: white; text-align: left; padding: 7px 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.3px; }
+          td { padding: 7px 10px; border-bottom: 1px solid #e5e7eb; font-size: 11.5px; }
+          tr:nth-child(even) td { background: #f8fafc; }
+          .unscheduled-row td { color: #b45309; font-style: italic; }
+          .footer-note { margin-top: 18px; font-size: 9.5px; color: #999; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          ${branding.logo ? `<img src="${branding.logo}" />` : ''}
+          <div class="header-text">
+            <h1>${this.escapeHtml(branding.name)}</h1>
+            ${branding.campusName ? `<p>${this.escapeHtml(branding.campusName)}</p>` : ''}
+          </div>
+        </div>
+        <div class="title-block">
+          <h2>${this.escapeHtml(heading)}</h2>
+          <p>${this.escapeHtml(subheading)}</p>
+        </div>
+        <table>
+          <thead><tr>${columns.map(c => `<th>${this.escapeHtml(c)}</th>`).join('')}</tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <p class="footer-note">Generated on ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })} · Eldermin</p>
+      </body>
+      </html>
+    `;
+  }
+
+  async generateTimetablePdf(id: string, schoolSlug: string): Promise<Buffer> {
+    const assessment: any = await this.assessmentModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!assessment) throw new NotFoundException('Assessment not found');
+    const branding = await this.resolveBranding(schoolSlug, assessment.campusId);
+
+    // Subjects with no date yet are shown last, under an "Unscheduled" note,
+    // rather than silently dropped - a half-planned timetable is still
+    // useful to print and fill in by hand.
+    const subjects = [...(assessment.subjects || [])].sort((a: any, b: any) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return new Date(a.date).getTime() - new Date(b.date).getTime();
+    });
+
+    const rowsHtml = subjects.map((s: any) => {
+      const { date, day } = this.fmtTimetableDate(s.date);
+      const unscheduled = !s.date;
+      return `
+        <tr${unscheduled ? ' class="unscheduled-row"' : ''}>
+          <td>${date}</td>
+          <td>${this.escapeHtml(day)}</td>
+          <td>${this.fmtTime(s.startTime)}</td>
+          <td>${this.escapeHtml(s.subject)}</td>
+          <td>${s.duration ? `${s.duration} min` : '—'}</td>
+          <td>${this.escapeHtml(s.venue) || '—'}</td>
+          <td>${s.totalMarks ?? '—'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    const subheading = [
+      `${assessment.grade}${assessment.section ? ` - ${assessment.section}` : ''}`,
+      assessment.term, assessment.academicYear,
+    ].filter(Boolean).join(' · ');
+
+    const html = this.renderTimetableHtml({
+      branding,
+      heading: `${assessment.title} — Examination Timetable`,
+      subheading,
+      columns: ['Date', 'Day', 'Time', 'Subject', 'Duration', 'Venue', 'Marks'],
+      rowsHtml: rowsHtml || '<tr><td colspan="7" style="text-align:center;color:#999;">No subjects configured yet.</td></tr>',
+    });
+
+    return this.pdfService.htmlToPdfWithOptions(html, {
+      format: 'A4', printBackground: true,
+      margin: { top: '15mm', right: '14mm', bottom: '15mm', left: '14mm' },
+    });
+  }
+
+  // Combines every subject slot across ALL assessments matching the given
+  // filters (grade/section/term/academicYear/type) into one chronological
+  // schedule - the real-world case of a Mid Term covering several papers
+  // PLUS a separate Practical/Oral assessment in the same window, which a
+  // single assessment's own timetable can't show on its own.
+  async generateCombinedTimetablePdf(schoolSlug: string, query: {
+    grade?: string; section?: string; term?: string; academicYear?: string; type?: string;
+  }): Promise<Buffer> {
+    const filter: any = { schoolSlug };
+    if (query.grade) filter.grade = query.grade;
+    if (query.section) filter.section = query.section;
+    if (query.term) filter.term = query.term;
+    if (query.academicYear) filter.academicYear = query.academicYear;
+    if (query.type) filter.type = query.type;
+
+    const assessments: any[] = await this.assessmentModel.find(filter).sort({ startDate: 1 }).lean();
+    if (assessments.length === 0) throw new NotFoundException('No assessments found matching those filters.');
+
+    const branding = await this.resolveBranding(schoolSlug, assessments[0].campusId);
+
+    type Row = { date: Date | null; day: string; dateLabel: string; time: string; assessmentTitle: string; subject: string; duration: string; venue: string };
+    const rows: Row[] = [];
+    for (const a of assessments) {
+      for (const s of (a.subjects || [])) {
+        const { date, day } = this.fmtTimetableDate(s.date);
+        rows.push({
+          date: s.date ? new Date(s.date) : null,
+          day, dateLabel: date,
+          time: this.fmtTime(s.startTime),
+          assessmentTitle: a.title,
+          subject: s.subject,
+          duration: s.duration ? `${s.duration} min` : '—',
+          venue: s.venue || '—',
+        });
+      }
+    }
+    rows.sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date.getTime() - b.date.getTime();
+    });
+
+    const rowsHtml = rows.map(r => `
+      <tr${!r.date ? ' class="unscheduled-row"' : ''}>
+        <td>${r.dateLabel}</td>
+        <td>${this.escapeHtml(r.day)}</td>
+        <td>${r.time}</td>
+        <td>${this.escapeHtml(r.assessmentTitle)}</td>
+        <td>${this.escapeHtml(r.subject)}</td>
+        <td>${r.duration}</td>
+        <td>${this.escapeHtml(r.venue)}</td>
+      </tr>
+    `).join('');
+
+    const subheading = [
+      query.grade ? `${query.grade}${query.section ? ` - ${query.section}` : ''}` : 'All Grades',
+      query.term, query.academicYear,
+    ].filter(Boolean).join(' · ');
+
+    const html = this.renderTimetableHtml({
+      branding,
+      heading: 'Examination Timetable',
+      subheading,
+      columns: ['Date', 'Day', 'Time', 'Assessment', 'Subject', 'Duration', 'Venue'],
+      rowsHtml: rowsHtml || '<tr><td colspan="7" style="text-align:center;color:#999;">No subjects configured yet.</td></tr>',
+    });
+
+    return this.pdfService.htmlToPdfWithOptions(html, {
+      format: 'A4', printBackground: true,
+      margin: { top: '15mm', right: '14mm', bottom: '15mm', left: '14mm' },
     });
   }
 

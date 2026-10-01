@@ -11,6 +11,8 @@ import {
 import { ExamPaper, ExamPaperSchema } from './schemas/exam-paper.schema';
 import { OMRAnswerSheet, OMRAnswerSheetSchema } from './schemas/omr-answer-sheet.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
+import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { PdfModule } from '../pdf/pdf.module';
 import { UploadModule } from '../upload/upload.module';
 
@@ -26,6 +28,9 @@ import { UploadModule } from '../upload/upload.module';
       { name: ExamPaper.name, schema: ExamPaperSchema },
       { name: OMRAnswerSheet.name, schema: OMRAnswerSheetSchema },
       { name: Student.name, schema: StudentSchema },
+      { name: 'School', schema: SchoolSchema },
+      { name: Campus.name, schema: CampusSchema },
+      { name: GroupInstitution.name, schema: GroupInstitutionSchema },
     ]),
   ],
   controllers: [AssessmentController],

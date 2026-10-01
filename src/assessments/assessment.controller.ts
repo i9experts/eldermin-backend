@@ -143,6 +143,24 @@ export class AssessmentController {
     return this.service.getPerformanceAnalytics(schoolSlug, academicYear, grade);
   }
 
+  // ── Examination Timetable (combined route is static, must precede :id) ──
+  @Get('timetable/pdf')
+  async downloadCombinedTimetablePdf(
+    @Request() req: any, @Res() res: Response,
+    @Query('grade') grade?: string, @Query('section') section?: string,
+    @Query('term') term?: string, @Query('academicYear') academicYear?: string,
+    @Query('type') type?: string,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    const pdf = await this.service.generateCombinedTimetablePdf(schoolSlug, { grade, section, term, academicYear, type });
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="examination-timetable.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
   // ── Dynamic :id (must come AFTER all static GET routes) ───────
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req: any) {
@@ -161,6 +179,18 @@ export class AssessmentController {
   async update(@Param('id') id: string, @Body() dto: UpdateAssessmentDto, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.update(id, schoolSlug, dto);
+  }
+
+  @Get(':id/timetable/pdf')
+  async downloadTimetablePdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const pdf = await this.service.generateTimetablePdf(id, schoolSlug);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="timetable-${id}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
   }
 
   @Patch(':id/status')
