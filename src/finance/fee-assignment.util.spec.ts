@@ -1,4 +1,4 @@
-import { dateRangesOverlap, findConflictingAssignments } from './fee-assignment.util';
+import { dateRangesOverlap, findConflictingAssignments, feeHeadsOverlap } from './fee-assignment.util';
 
 const d = (s: string) => new Date(s);
 
@@ -61,5 +61,35 @@ describe('findConflictingAssignments', () => {
     const bConflicts = findConflictingAssignments(studentB, d('2026-01-01'), null);
     expect(aConflicts).toEqual([]);
     expect(bConflicts).toEqual([]);
+  });
+});
+
+describe('feeHeadsOverlap', () => {
+  it('returns the shared head names when two structures bill the same head', () => {
+    const shared = feeHeadsOverlap(['Tuition Fee', 'Transport'], ['Tuition Fee', 'Lab Fee']);
+    expect(shared).toEqual(['Tuition Fee']);
+  });
+
+  it('returns an empty array when two structures cover entirely different heads', () => {
+    // e.g. a monthly "Tuition Fee" structure stacked with a separate
+    // "August & Annual Fee" structure - a real, common school practice
+    // that should be assignable additively, not blocked as a conflict.
+    const shared = feeHeadsOverlap(['Monthly Tuition Fee'], ['Admission Fee', 'Annual Charges']);
+    expect(shared).toEqual([]);
+  });
+
+  it('is case and whitespace insensitive', () => {
+    const shared = feeHeadsOverlap(['  tuition fee '], ['Tuition Fee']);
+    expect(shared).toEqual(['Tuition Fee']);
+  });
+
+  it('returns an empty array when either side has no fee heads', () => {
+    expect(feeHeadsOverlap([], ['Tuition Fee'])).toEqual([]);
+    expect(feeHeadsOverlap(['Tuition Fee'], [])).toEqual([]);
+  });
+
+  it('returns every shared head when multiple heads overlap', () => {
+    const shared = feeHeadsOverlap(['Tuition Fee', 'Transport', 'Lab Fee'], ['Transport', 'Lab Fee', 'Sports Fee']);
+    expect(shared.sort()).toEqual(['Lab Fee', 'Transport']);
   });
 });

@@ -13,7 +13,7 @@ import {
   FeeAssignment, FeeAssignmentDocument,
   StudentFeeAssignment, StudentFeeAssignmentDocument,
 } from './schemas/finance.schema';
-import { findConflictingAssignments } from './fee-assignment.util';
+import { findConflictingAssignments, feeHeadsOverlap } from './fee-assignment.util';
 import { pickApplicableFeeStructures } from './fee-structure-match.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
@@ -3228,11 +3228,18 @@ export class FinanceService {
     return this.studentFeeAssignmentModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
-  /** Assigns a fee structure to one student for a period. If an active
-   * assignment already covers an overlapping window, this returns a
-   * conflict description instead of silently stacking two structures on
-   * top of each other - the caller (UI) shows the warning and, only if the
-   * user deliberately confirms, resends with replace:true. Replacing never
+  /** Assigns a fee structure to one student for a period. Many schools
+   * deliberately stack several structures on one student at once (e.g. a
+   * monthly tuition structure plus a separate annual-fee structure) - that's
+   * legitimate as long as the structures don't bill the same fee head
+   * twice, since generateInvoices already combines every concurrently-active
+   * structure into one invoice. So a date-overlapping existing assignment
+   * only blocks the new one when the two structures actually share a fee
+   * head (or are the literal same structure) - see feeHeadsOverlap. Anything
+   * else is created ADDITIVELY alongside the existing assignment(s), not as
+   * a replacement. A genuine conflict returns a conflict description
+   * instead - the caller (UI) shows the warning and, only if the user
+   * deliberately confirms, resends with replace:true. Replacing never
    * deletes the old assignment - it's deactivated and dated, preserving
    * assignment history exactly as required. */
   async assignFeeStructure(schoolSlug: string, data: {
@@ -3247,16 +3254,37 @@ export class FinanceService {
 
     const from = new Date(data.effectiveFrom);
     const to = data.effectiveTo ? new Date(data.effectiveTo) : null;
+    const newHeads = ((structure as any).items || []).map((it: any) => it.feeHead);
 
     const existingActive = await this.studentFeeAssignmentModel.find({
       schoolSlug, studentId: data.studentId, isActive: true, academicYear: data.academicYear,
     }).lean();
-    const conflicting = findConflictingAssignments(existingActive as any[], from, to);
+    const dateOverlapping = findConflictingAssignments(existingActive as any[], from, to);
+
+    const conflicting: any[] = [];
+    const sharedHeadsByAssignment = new Map<string, string[]>();
+    if (dateOverlapping.length > 0) {
+      const otherStructureIds = [...new Set(dateOverlapping.map((a: any) => String(a.feeStructureId)))];
+      const otherStructures = await this.feeStructModel.find({ _id: { $in: otherStructureIds } }).lean();
+      const headsByStructureId = new Map(otherStructures.map((s: any) => [String(s._id), ((s as any).items || []).map((it: any) => it.feeHead)]));
+      for (const a of dateOverlapping as any[]) {
+        const otherHeads = headsByStructureId.get(String(a.feeStructureId)) || [];
+        const shared = feeHeadsOverlap(newHeads, otherHeads);
+        // Re-assigning the exact same structure is always a conflict, even
+        // with no (or empty) items to compare heads on.
+        if (shared.length > 0 || String(a.feeStructureId) === String(data.feeStructureId)) {
+          conflicting.push(a);
+          sharedHeadsByAssignment.set(String(a._id), shared);
+        }
+      }
+    }
 
     if (conflicting.length > 0 && !data.replace) {
+      const sharedHeadNames = [...new Set(conflicting.flatMap((c: any) => sharedHeadsByAssignment.get(String(c._id)) || []))];
+      const headsNote = sharedHeadNames.length > 0 ? ` that shares the fee head(s): ${sharedHeadNames.join(', ')}` : '';
       return {
         conflict: true,
-        message: `${(student as any).firstName || ''} ${(student as any).lastName || ''} already has an active fee assignment (${conflicting.map((c: any) => c.feeStructureName).join(', ')}) covering this period. Confirm to replace it.`,
+        message: `${(student as any).firstName || ''} ${(student as any).lastName || ''} already has an active fee assignment (${conflicting.map((c: any) => c.feeStructureName).join(', ')}) covering this period${headsNote}. Confirm to replace it.`,
         conflicting,
       };
     }
