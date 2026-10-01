@@ -21,7 +21,8 @@
     "seed": "ts-node -r tsconfig-paths/register src/seed/seed.ts",
     "seed:report-templates": "ts-node -r tsconfig-paths/register src/modules/report-templates/seed-report-templates.ts",
     "seed:kb": "ts-node -r tsconfig-paths/register src/seed/seed-kb-articles.ts",
-    "audit:campus-scope": "ts-node -r tsconfig-paths/register src/scripts/audit-campus-scope-readiness.ts"
+    "audit:campus-scope": "ts-node -r tsconfig-paths/register src/scripts/audit-campus-scope-readiness.ts",
+    "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
