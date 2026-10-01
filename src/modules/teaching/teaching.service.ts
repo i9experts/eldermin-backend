@@ -1,7 +1,13 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
+import * as XLSX from 'xlsx';
+// mammoth ships without this project's exact TS module resolution in
+// mind - required dynamically and treated as any, matching the existing
+// require('multer').memoryStorage() convention in upload.module.ts.
+const mammoth: any = require('mammoth');
 import { TeacherProfile, TeacherProfileDocument } from './schemas/teacher-profile.schema';
 import { LessonPlan, LessonPlanDocument } from './schemas/lesson-plan.schema';
 import { Timetable, TimetableDocument } from './schemas/timetable.schema';
@@ -36,6 +42,7 @@ export class TeachingService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     private readonly pdfService: PdfService,
+    private readonly configService: ConfigService,
   ) {}
 
   private tid(t: string) { return t; }
@@ -172,6 +179,160 @@ export class TeachingService {
       { $set: data },
       { new: true },
     ).lean();
+  }
+
+  // ============================================================
+  // LESSON PLAN UPLOAD -> AI-ASSISTED DRAFT
+  // A teacher's own pre-made lesson plan (Word, Excel, or a public Google
+  // Doc link) extracted into a draft that pre-fills the Create Lesson
+  // Plan form - never auto-saved. Same "assist the teacher's own
+  // judgement, they review and submit it themselves" philosophy as
+  // classifyBloomsLevel (assessment.service.ts) and
+  // parseSloTemplateUpload (syllabus.service.ts) - the difference from
+  // the latter is this reads a teacher's own arbitrary document, not a
+  // structured fill-in workbook Eldermin provides, so free-form AI
+  // extraction is the only way to make sense of it rather than a fixed
+  // column-header parser.
+  // ============================================================
+  private readonly LESSON_PLAN_METHODOLOGIES = ['lecture', 'discussion', 'activity', 'demo', 'project', 'flipped'];
+  private readonly LESSON_PLAN_RESOURCES = ['Textbook', 'Whiteboard', 'Projector', 'Lab Equipment', 'Handouts', 'Video'];
+
+  private async extractTextFromLessonPlanFile(file: Express.Multer.File): Promise<string> {
+    const name = (file.originalname || '').toLowerCase();
+    const mime = file.mimetype || '';
+
+    if (name.endsWith('.docx') || mime.includes('wordprocessingml')) {
+      const result = await mammoth.extractRawText({ buffer: file.buffer });
+      return result.value || '';
+    }
+    if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv') || mime.includes('spreadsheetml') || mime.includes('ms-excel')) {
+      const wb = XLSX.read(file.buffer, { type: 'buffer' });
+      return wb.SheetNames.map((sheetName) => `--- Sheet: ${sheetName} ---\n${XLSX.utils.sheet_to_csv(wb.Sheets[sheetName])}`).join('\n\n');
+    }
+    if (name.endsWith('.txt') || mime === 'text/plain') {
+      return file.buffer.toString('utf-8');
+    }
+    if (name.endsWith('.doc')) {
+      throw new BadRequestException('Old .doc files aren\'t supported - please save/export it as .docx (File > Save As > Word Document) and try again.');
+    }
+    if (name.endsWith('.pdf') || mime === 'application/pdf') {
+      throw new BadRequestException('PDF upload isn\'t supported yet - please upload the original Word/Excel file, or paste a Google Doc link instead.');
+    }
+    throw new BadRequestException('Unsupported file type. Please upload a .docx, .xlsx, .xls, .csv, or .txt file.');
+  }
+
+  private async extractTextFromGoogleDoc(sourceUrl: string): Promise<string> {
+    const match = sourceUrl.match(/\/d\/([a-zA-Z0-9_-]+)/) || sourceUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (!match) throw new BadRequestException('That doesn\'t look like a Google Docs link. Paste the full link from the document\'s "Share" button.');
+    const docId = match[1];
+
+    let response: Response;
+    try {
+      response = await fetch(`https://docs.google.com/document/d/${docId}/export?format=txt`);
+    } catch {
+      throw new BadGatewayException('Could not reach Google Docs to fetch this document.');
+    }
+    if (!response.ok) {
+      throw new BadRequestException('Could not open this Google Doc. Make sure sharing is set to "Anyone with the link can view", then try again.');
+    }
+    return response.text();
+  }
+
+  private async callClaudeForLessonPlan(systemPrompt: string, userMessage: string): Promise<string> {
+    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
+    if (!apiKey) throw new InternalServerErrorException('AI assistance is not configured on this server.');
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: 1200,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+        }),
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the AI assistance service.');
+    }
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      throw new BadGatewayException(`AI request failed (${response.status}): ${errBody.slice(0, 200)}`);
+    }
+    const result = await response.json();
+    const textBlock = (result?.content || []).find((b: any) => b.type === 'text');
+    return textBlock?.text || '';
+  }
+
+  async parseLessonPlanUpload(file: Express.Multer.File | undefined, sourceUrl: string | undefined) {
+    if (!file && !sourceUrl?.trim()) {
+      throw new BadRequestException('Upload a file or paste a Google Doc link.');
+    }
+
+    const rawText = file
+      ? await this.extractTextFromLessonPlanFile(file)
+      : await this.extractTextFromGoogleDoc(sourceUrl!.trim());
+
+    const trimmed = rawText.trim();
+    if (trimmed.length < 20) {
+      throw new BadRequestException('Could not find any readable text in this document. If it\'s mostly images/scans, you\'ll need to fill the form in manually.');
+    }
+    // Bounded - keeps the prompt (and cost) predictable regardless of how
+    // long the teacher's source document is; a lesson plan's actual
+    // useful content is never anywhere close to this long.
+    const sourceText = trimmed.slice(0, 15000);
+
+    const systemPrompt = `You extract structured lesson plan data from a teacher's own uploaded document (Word doc text, a spreadsheet's rows, or a Google Doc's plain text export) for a school ERP's Create Lesson Plan form.
+Return ONLY a JSON object, no markdown, no preamble:
+{
+  "topic": string | null,
+  "description": string | null (a 1-2 sentence summary, only if the source clearly has one - never invent one),
+  "durationMins": number | null,
+  "teachingMethodology": one of "lecture" | "discussion" | "activity" | "demo" | "project" | "flipped" | null,
+  "objectives": string[] (each a complete "Students will be able to..." style statement, in the source's own words as closely as possible),
+  "resources": string[] (ONLY values from this exact list where the source clearly mentions them: ${JSON.stringify(this.LESSON_PLAN_RESOURCES)}),
+  "otherResources": string[] (any other resource/material mentioned that is NOT in the list above, kept in the source's own wording),
+  "homework": string | null,
+  "subjectGuess": string | null (the subject name as written in the source, even if it doesn't exactly match a known subject - the school will match it),
+  "gradeLevelGuess": string | null (the grade/class as written in the source),
+  "warnings": string[] (short notes on anything you could not find or were unsure about, e.g. "No clear duration found")
+}
+Rules:
+- Extract only what is ACTUALLY present in the source text. Never invent or embellish content the teacher didn't write.
+- If a field genuinely isn't in the source, return null (or an empty array) for it and add a short note to "warnings" instead of guessing a plausible-sounding value.
+- This assists the teacher's own existing work, it does not replace their judgement - they will review and edit everything before saving.`;
+
+    const text = await this.callClaudeForLessonPlan(systemPrompt, `Document content:\n"""\n${sourceText}\n"""`);
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
+    } catch {
+      throw new BadGatewayException('Could not understand this document\'s structure. Try a simpler/cleaner file, or fill the form in manually.');
+    }
+
+    const methodology = this.LESSON_PLAN_METHODOLOGIES.includes(parsed.teachingMethodology) ? parsed.teachingMethodology : null;
+    const resources = Array.isArray(parsed.resources) ? parsed.resources.filter((r: any) => this.LESSON_PLAN_RESOURCES.includes(r)) : [];
+    const otherResources = Array.isArray(parsed.otherResources) ? parsed.otherResources.filter((r: any) => typeof r === 'string' && r.trim()) : [];
+    const warnings: string[] = Array.isArray(parsed.warnings) ? parsed.warnings.filter((w: any) => typeof w === 'string') : [];
+    if (parsed.teachingMethodology && !methodology) warnings.push('Could not confidently match a teaching methodology - left on the default.');
+
+    return {
+      topic: typeof parsed.topic === 'string' ? parsed.topic : '',
+      description: typeof parsed.description === 'string' ? parsed.description : '',
+      durationMins: Number.isFinite(parsed.durationMins) ? parsed.durationMins : null,
+      teachingMethodology: methodology,
+      objectives: Array.isArray(parsed.objectives) ? parsed.objectives.filter((o: any) => typeof o === 'string' && o.trim()) : [],
+      resources,
+      otherResource: otherResources.join('; '),
+      homework: typeof parsed.homework === 'string' ? parsed.homework : '',
+      subjectGuess: typeof parsed.subjectGuess === 'string' ? parsed.subjectGuess : null,
+      gradeLevelGuess: typeof parsed.gradeLevelGuess === 'string' ? parsed.gradeLevelGuess : null,
+      warnings,
+      sourceFileName: file?.originalname || null,
+    };
   }
 
   async approveLessonPlan(tenantId: string, id: string, userId: string, notes: string) {

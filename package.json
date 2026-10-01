@@ -50,6 +50,7 @@
     "class-validator": "^0.15.1",
     "csv-parser": "^3.2.1",
     "ioredis": "^5.11.0",
+    "mammoth": "^1.8.0",
     "mongoose": "^9.6.3",
     "multer": "^2.2.0",
     "passport": "^0.7.0",
