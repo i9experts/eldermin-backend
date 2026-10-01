@@ -25,18 +25,24 @@ export class ModulesController {
   @Post(':moduleId/activate')
   async activate(@Param('moduleId') moduleId: string, @Request() req: any) {
     const schoolSlug = req.headers['x-school-slug'] || req.user.schoolSlug;
-    return this.modulesService.activateModule(schoolSlug, moduleId);
+    return this.modulesService.activateModule(schoolSlug, moduleId, req.user?.name);
   }
 
   @Post(':moduleId/deactivate')
   async deactivate(@Param('moduleId') moduleId: string, @Request() req: any) {
     const schoolSlug = req.headers['x-school-slug'] || req.user.schoolSlug;
-    return this.modulesService.deactivateModule(schoolSlug, moduleId);
+    return this.modulesService.deactivateModule(schoolSlug, moduleId, req.user?.name);
   }
 
   @Post('bulk-activate')
   async bulkActivate(@Body() dto: BulkActivateDto, @Request() req: any) {
     const schoolSlug = req.headers['x-school-slug'] || req.user.schoolSlug;
-    return this.modulesService.bulkActivate(schoolSlug, dto.moduleIds);
+    return this.modulesService.bulkActivate(schoolSlug, dto.moduleIds, req.user?.name);
+  }
+
+  @Post('activate-all')
+  async activateAll(@Request() req: any) {
+    const schoolSlug = req.headers['x-school-slug'] || req.user.schoolSlug;
+    return this.modulesService.activateAll(schoolSlug, req.user?.name);
   }
 }

@@ -203,3 +203,30 @@ export const MODULE_REGISTRY: ModuleDefinition[] = [
 export function getModuleById(id: string): ModuleDefinition | undefined {
   return MODULE_REGISTRY.find((m) => m.id === id);
 }
+
+// Real per-module PKR/month pricing, by pricingTier - the actual answer to
+// "how much should this school be billed given exactly the modules it has
+// active", not a guess. A core module (isCore: true, currently just
+// 'organization') is bundled free with every account, same as every flat
+// SUBSCRIPTION_PLANS tier already implicitly included Institution Setup.
+// Separate from SUBSCRIPTION_PLANS (super-admin.schema.ts) deliberately -
+// that config is the overall account tier (trial length, seat caps), this
+// is what actually drives ModulesService's recomputed monthlyRevenue once
+// a school's real activeModules set is known.
+export const MODULE_PRICE_PKR: Record<ModuleDefinition['pricingTier'], number> = {
+  starter: 1499,
+  academic: 2999,
+  enterprise: 5999,
+};
+
+export function computeModulePricing(activeModuleIds: string[]): {
+  monthlyRevenue: number;
+  lineItems: { moduleId: string; name: string; pricingTier: string; price: number }[];
+} {
+  const lineItems = activeModuleIds
+    .map((id) => getModuleById(id))
+    .filter((m): m is ModuleDefinition => !!m && !m.isCore)
+    .map((m) => ({ moduleId: m.id, name: m.name, pricingTier: m.pricingTier, price: MODULE_PRICE_PKR[m.pricingTier] }));
+  const monthlyRevenue = lineItems.reduce((sum, li) => sum + li.price, 0);
+  return { monthlyRevenue, lineItems };
+}
