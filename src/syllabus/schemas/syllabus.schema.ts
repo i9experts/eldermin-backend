@@ -33,6 +33,32 @@ export class SyllabusSubTopic {
 }
 export const SyllabusSubTopicSchema = SchemaFactory.createForClass(SyllabusSubTopic);
 
+// A single piece of LMS content attached to a syllabus topic - a video
+// link, an uploaded document, a reading reference, or an external link.
+// Identified by lessonNo (1-based, unique within its topic) rather than a
+// Mongo _id, matching this schema's existing topicNo/subTopicNo convention
+// so LessonProgress can address a lesson the same composite-key way
+// markTopic/markSubTopic already address topics/sub-topics.
+@Schema({ _id: false })
+export class SyllabusLesson {
+  @Prop({ required: true }) lessonNo: number;
+  @Prop({ required: true }) title: string;
+  @Prop() description: string;
+  @Prop({ enum: ['video', 'document', 'reading', 'link'], required: true }) type: string;
+  // Video/external link - the frontend detects YouTube/Vimeo URLs and
+  // embeds them; anything else renders as a plain "Open link" button. No
+  // video is ever hosted by Eldermin itself (see Upload service's 10MB
+  // cap/allowlist, which doesn't support video).
+  @Prop() url: string;
+  // An uploaded document (pdf/doc/image) via the existing Upload service.
+  @Prop() fileUrl: string;
+  @Prop() fileName: string;
+  @Prop({ default: 0 }) order: number;
+  @Prop() addedBy: string;
+  @Prop({ default: Date.now }) addedAt: Date;
+}
+export const SyllabusLessonSchema = SchemaFactory.createForClass(SyllabusLesson);
+
 @Schema({ _id: false })
 export class SyllabusTopic {
   @Prop({ required: true }) topicNo: number;
@@ -45,6 +71,7 @@ export class SyllabusTopic {
   @Prop() pageTo: number;
   @Prop({ default: 1 }) estimatedLessons: number;
   @Prop({ type: [SyllabusSubTopicSchema], default: [] }) subTopics: SyllabusSubTopic[];
+  @Prop({ type: [SyllabusLessonSchema], default: [] }) lessons: SyllabusLesson[];
 
   // ── Tracking (merged in from the old SyllabusCoverage collection) ──
   // When subTopics exist, isCovered/coveredDate/coveredBy are DERIVED
@@ -130,6 +157,17 @@ export class Syllabus {
   @Prop() createdByName: string;
   @Prop() approvedBy: string;
   @Prop() approvedAt: Date;
+
+  // ── LMS: student-facing publish toggle ─────────────────────────
+  // Separate from `status` above (which governs the teacher/coordinator
+  // planning workflow) - a syllabus can be fully approved for internal
+  // tracking purposes while its lesson content still isn't ready to show
+  // students, and vice versa. Off by default: a syllabus never becomes
+  // visible in Parent Portal "My Courses" just because a teacher started
+  // filling in topics.
+  @Prop({ default: false }) publishedToStudents: boolean;
+  @Prop() publishedAt: Date;
+  @Prop() publishedBy: string;
 }
 
 export const SyllabusSchema = SchemaFactory.createForClass(Syllabus);
@@ -137,3 +175,4 @@ SyllabusSchema.index({ tenantId: 1, gradeLevel: 1, sectionName: 1, subjectName: 
 SyllabusSchema.index({ tenantId: 1, status: 1 });
 SyllabusSchema.index({ tenantId: 1, teacherId: 1 });
 SyllabusSchema.index({ tenantId: 1, trackStatus: 1 });
+SyllabusSchema.index({ tenantId: 1, gradeLevel: 1, publishedToStudents: 1 });

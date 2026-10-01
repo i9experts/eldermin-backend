@@ -29,6 +29,8 @@ import {
 } from './schemas/notification-and-message.schema';
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
+import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
+import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
 import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { ParentAuthService } from './parent-auth.service';
@@ -62,6 +64,8 @@ import { ParentAuthController } from './parent-auth.controller';
       { name: Message.name, schema: MessageSchema },
       { name: PhoneOtp.name, schema: PhoneOtpSchema },
       { name: Tenant.name, schema: TenantSchema },
+      { name: Syllabus.name, schema: SyllabusSchema },
+      { name: LessonProgress.name, schema: LessonProgressSchema },
     ]),
     EmailModule,
     AuthModule,
