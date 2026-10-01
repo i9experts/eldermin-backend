@@ -39,3 +39,26 @@ export function findConflictingAssignments<T extends { effectiveFrom: Date | str
     new Date(a.effectiveFrom), a.effectiveTo ? new Date(a.effectiveTo) : null,
   ));
 }
+
+/**
+ * Case/whitespace-insensitive comparison of two fee structures' fee-head
+ * names. A date-overlapping assignment is only a genuine double-billing
+ * risk if it would actually bill the same fee head twice - many schools
+ * deliberately stack several structures on one student (e.g. a "Monthly
+ * Tuition Fee" structure plus a separate "August & Annual Fee" structure
+ * covering completely different heads), and that's a legitimate, additive
+ * assignment, not a conflict. Returns the shared head names (empty = no
+ * overlap, safe to assign alongside each other).
+ */
+export function feeHeadsOverlap(headsA: string[], headsB: string[]): string[] {
+  const normalize = (h: string) => h.trim().toLowerCase();
+  const setA = new Set(headsA.map(normalize));
+  const shared = new Set<string>();
+  for (const h of headsB) {
+    const key = normalize(h);
+    if (setA.has(key) && key) shared.add(key);
+  }
+  // Return original-cased labels (from headsB) for display, not the
+  // lowercased comparison keys.
+  return headsB.filter(h => shared.has(normalize(h)));
+}
