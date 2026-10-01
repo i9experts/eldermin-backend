@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleDestroy } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as puppeteer from 'puppeteer';
@@ -536,8 +536,87 @@ const INVOICE_TEMPLATE = (data: any) => `
 `;
 
 @Injectable()
-export class PdfService {
+export class PdfService implements OnModuleDestroy {
   private readonly logger = new Logger(PdfService.name);
+
+  // A real production incident: every PDF (fee challans, report cards, ID
+  // cards, certificates, payslips, timetables...) used to launch a brand
+  // new headless Chromium PROCESS per request and tear it down afterward.
+  // Each launch is 1-3+ seconds and ~100-300MB of real CPU/memory on a
+  // single-process Node server with no clustering - a burst of concurrent
+  // PDF requests (or one certificate batch for a whole class, which used
+  // to launch one browser PER STUDENT) could peg the container's CPU or
+  // exhaust its memory entirely, stalling the Node event loop for EVERY
+  // other concurrent request on completely unrelated routes - exactly the
+  // "a totally unrelated tab won't even open" / "I clicked save and
+  // nothing happened" reports this was built to fix. One Chromium browser
+  // is now launched lazily on first use and kept alive for the life of
+  // the process; each request only opens its own lightweight `page` on
+  // that shared browser and closes just the page when done - the standard
+  // pattern Puppeteer's own docs recommend for server-side PDF generation.
+  private browserPromise: Promise<puppeteer.Browser> | null = null;
+
+  // Still caps how many pages can render concurrently, even on a shared
+  // browser - rendering is real CPU/memory per page, and an unbounded
+  // burst (the old per-student certificate batch, or several schools
+  // generating challans at once) could still contend for the container's
+  // resources without some ceiling. 4 is a conservative starting point
+  // for a small Railway container; raise it if the container is sized up.
+  private readonly maxConcurrentPages = 4;
+  private activePages = 0;
+  private pageWaitQueue: Array<() => void> = [];
+
+  private async acquirePageSlot(): Promise<void> {
+    if (this.activePages < this.maxConcurrentPages) {
+      this.activePages++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.pageWaitQueue.push(resolve));
+    this.activePages++;
+  }
+
+  private releasePageSlot(): void {
+    this.activePages--;
+    const next = this.pageWaitQueue.shift();
+    if (next) next();
+  }
+
+  private async getBrowser(): Promise<puppeteer.Browser> {
+    if (!this.browserPromise) {
+      this.browserPromise = puppeteer.launch({
+        headless: 'new',
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+        ],
+      }).then((browser) => {
+        // The browser can crash or be killed independently of any single
+        // request (OOM, a renderer crash, etc.) - without this, every
+        // subsequent request would keep trying to open a page on a dead
+        // browser and fail forever until the whole process restarted.
+        // Clearing the cached promise means the next call just relaunches.
+        browser.on('disconnected', () => {
+          this.logger.warn('Puppeteer browser disconnected unexpectedly - will relaunch on next PDF request');
+          this.browserPromise = null;
+        });
+        return browser;
+      });
+    }
+    return this.browserPromise;
+  }
+
+  async onModuleDestroy() {
+    if (!this.browserPromise) return;
+    try {
+      const browser = await this.browserPromise;
+      await browser.close();
+    } catch (err: any) {
+      this.logger.warn(`Error closing Puppeteer browser during shutdown: ${err?.message}`);
+    }
+  }
 
   constructor(
     @InjectModel(PdfLog.name) private pdfLogModel: Model<PdfLogDocument>,
@@ -559,39 +638,31 @@ export class PdfService {
    * Puppeteer's own bundled Chromium download is skipped in this project's
    * Docker image (see Dockerfile — it doesn't run on Alpine's musl libc
    * anyway) in favor of Alpine's own `chromium` package, exposed via
-   * PUPPETEER_EXECUTABLE_PATH. Every launch() call must pass that through
-   * explicitly — Puppeteer does not automatically pick it up on its own at
+   * PUPPETEER_EXECUTABLE_PATH - passed through explicitly in getBrowser()
+   * above, since Puppeteer does not automatically pick it up on its own at
    * runtime, only at its own install-time download step. Locally (outside
    * that Docker image) the env var is unset, so this falls back to
    * Puppeteer's normal bundled-Chromium resolution, matching prior
    * behavior for local development.
    */
-  private launchBrowser() {
-    return puppeteer.launch({
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
-  }
-
   private async htmlToPdf(html: string): Promise<Buffer> {
-    const browser = await this.launchBrowser();
+    const browser = await this.getBrowser();
+    await this.acquirePageSlot();
     try {
       const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'load' });
-      const pdfBuffer = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: { top: '0', right: '0', bottom: '0', left: '0' },
-      });
-      return pdfBuffer as Buffer;
+      try {
+        await page.setContent(html, { waitUntil: 'load' });
+        const pdfBuffer = await page.pdf({
+          format: 'A4',
+          printBackground: true,
+          margin: { top: '0', right: '0', bottom: '0', left: '0' },
+        });
+        return pdfBuffer as Buffer;
+      } finally {
+        await page.close();
+      }
     } finally {
-      await browser.close();
+      this.releasePageSlot();
     }
   }
 
@@ -604,17 +675,22 @@ export class PdfService {
     html: string,
     options: puppeteer.PDFOptions,
   ): Promise<Buffer> {
-    const browser = await this.launchBrowser();
+    const browser = await this.getBrowser();
+    await this.acquirePageSlot();
     try {
       const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'load' });
-      const pdfBuffer = await page.pdf({
-        printBackground: true,
-        ...options,
-      });
-      return pdfBuffer as Buffer;
+      try {
+        await page.setContent(html, { waitUntil: 'load' });
+        const pdfBuffer = await page.pdf({
+          printBackground: true,
+          ...options,
+        });
+        return pdfBuffer as Buffer;
+      } finally {
+        await page.close();
+      }
     } finally {
-      await browser.close();
+      this.releasePageSlot();
     }
   }
 
