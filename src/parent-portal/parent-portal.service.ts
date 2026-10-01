@@ -31,6 +31,7 @@ import {
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
 import { AssessmentService } from '../assessments/assessment.service';
+import { CertificatesService } from '../modules/certificates/certificates.service';
 
 @Injectable()
 export class ParentPortalService {
@@ -61,6 +62,7 @@ export class ParentPortalService {
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
     private assessmentService: AssessmentService,
+    private certificatesService: CertificatesService,
   ) {}
 
   // ── Admin: link a guardian's login to their child/children ─────
@@ -319,6 +321,33 @@ export class ParentPortalService {
       },
       { upsert: true, new: true },
     );
+
+    // LMS Phase 3 - check whether this just completed the whole course,
+    // and if so auto-issue a completion certificate. Only worth checking
+    // on the transition that could possibly complete a course; every
+    // other status change can't finish one.
+    if (dto.status === 'completed') {
+      const totalLessons = (syllabus.units || []).reduce(
+        (sum: number, u: any) => sum + (u.topics || []).reduce((s2: number, t: any) => s2 + (t.lessons || []).length, 0), 0,
+      );
+      if (totalLessons > 0) {
+        const completedCount = await this.lessonProgressModel.countDocuments({
+          studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), status: 'completed',
+        });
+        if (completedCount >= totalLessons) {
+          try {
+            await this.certificatesService.autoIssueCourseCompletion(
+              schoolSlug, studentId, syllabus.subjectName, syllabus._id, 'System (course completion)',
+            );
+          } catch {
+            // Never let a certificate hiccup (no template configured yet,
+            // a transient write error) block the student's own progress
+            // from saving - this is a nice-to-have on top of real state,
+            // not the other way around.
+          }
+        }
+      }
+    }
     return updated;
   }
 

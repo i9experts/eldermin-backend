@@ -53,6 +53,11 @@ export class SyllabusLesson {
   // An uploaded document (pdf/doc/image) via the existing Upload service.
   @Prop() fileUrl: string;
   @Prop() fileName: string;
+  // When set, SyllabusService.addLesson/updateLesson auto-spawns (and
+  // keeps in sync) a real Assignment row in the Teaching module so this
+  // lesson surfaces immediately in the already-working Parent Portal
+  // "Homework" list - see Assignment.autoSpawnKey.
+  @Prop() dueDate?: Date;
   @Prop({ default: 0 }) order: number;
   @Prop() addedBy: string;
   @Prop({ default: Date.now }) addedAt: Date;

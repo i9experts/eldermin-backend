@@ -266,6 +266,7 @@ export class CertificatesService {
       migration: 'Migration Certificate', merit: 'Certificate of Merit',
       participation: 'Certificate of Participation', attendance: 'Certificate of Attendance',
       graduation: 'Certificate of Graduation', custom: template.name,
+      course_completion: 'Certificate of Course Completion',
     };
 
     return `
@@ -368,5 +369,57 @@ export class CertificatesService {
 
     await this.issuedModel.insertMany(issuedRecords);
     return pdf;
+  }
+
+  // ── LMS Phase 3: auto-issue on 100% course completion ──────────
+  // Called from ParentPortalService.markLessonProgress the moment a
+  // student finishes the last lesson of a published Syllabus. Deliberately
+  // writes only the audit record (IssuedCertificate), never a PDF - there
+  // is no parent/student-facing surface anywhere in this codebase that
+  // could deliver a PDF yet (see Phase 1/2 notes on the missing parent
+  // app), so generating and storing one now would be build-for-nobody.
+  // An admin can print the real PDF later, on demand, through the exact
+  // same Student 360 -> Certificates flow used for every other type -
+  // this just guarantees the record exists the moment it's earned.
+  // A no-op, not an error, when the school hasn't set up a
+  // 'course_completion' template yet, or already auto-issued this
+  // student this course (the partial unique index on the schema is the
+  // real guard; the findOne below just avoids a noisy duplicate-key
+  // exception on the common path).
+  async autoIssueCourseCompletion(
+    schoolSlug: string, studentId: string, courseName: string, syllabusId: any, issuedBy: string,
+  ): Promise<IssuedCertificateDocument | null> {
+    const template = await this.templateModel.findOne({
+      schoolSlug, certificateType: 'course_completion', isActive: true, isDefault: true,
+    });
+    if (!template) return null;
+
+    const already = await this.issuedModel.findOne({ studentId, sourceType: 'course_completion', sourceId: syllabusId });
+    if (already) return null;
+
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).lean();
+    if (!student) return null;
+
+    const branding = await this.resolveBranding(schoolSlug, (student as any).campusId);
+    const issueDate = this.fmtDate(new Date());
+    const certificateNumber = this.generateCertificateNumber(schoolSlug, 'course_completion');
+    const mergeData: Record<string, string> = {
+      ...this.mapStudentMergeFields(student, branding, issueDate, certificateNumber),
+      courseName, completionDate: issueDate,
+    };
+
+    try {
+      return await this.issuedModel.create({
+        schoolSlug, certificateNumber, templateId: template._id, certificateType: 'course_completion',
+        studentId: (student as any)._id, studentName: mergeData.studentName, dataSnapshot: mergeData,
+        issuedBy, sourceType: 'course_completion', sourceId: syllabusId,
+      });
+    } catch (err: any) {
+      // Duplicate key from a concurrent completion check (e.g. the last
+      // two lessons marked complete in quick succession) - already issued,
+      // not a real failure.
+      if (err?.code === 11000) return null;
+      throw err;
+    }
   }
 }

@@ -6,6 +6,7 @@ import * as XLSX from 'xlsx';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
+import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, CreateSloTemplateDto, SyllabusQueryDto,
   CreateLessonDto, UpdateLessonDto, DeleteLessonDto,
@@ -18,8 +19,35 @@ export class SyllabusService {
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(SloTemplate.name) private sloTemplateModel: Model<SloTemplateDocument>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
+    @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     private configService: ConfigService,
   ) {}
+
+  // LMS Phase 3 - keeps a lesson's auto-spawned Assignment row in sync
+  // with its own dueDate. Upserted on autoSpawnKey so editing the same
+  // lesson's due date repeatedly updates one row instead of piling up
+  // duplicates; clearing dueDate removes the spawned row entirely (a
+  // lesson that's no longer "due" shouldn't keep showing in Homework).
+  private async syncLessonAssignment(syllabus: SyllabusDocument, unitNo: number, topicNo: number, lesson: any, addedBy?: string) {
+    const autoSpawnKey = `lesson:${syllabus._id}:${unitNo}:${topicNo}:${lesson.lessonNo}`;
+    if (!lesson.dueDate) {
+      await this.assignmentModel.deleteOne({ tenantId: syllabus.tenantId, autoSpawnKey });
+      return;
+    }
+    await this.assignmentModel.findOneAndUpdate(
+      { tenantId: syllabus.tenantId, autoSpawnKey },
+      {
+        $set: {
+          institutionId: syllabus.institutionId, campusId: syllabus.campusId,
+          teacherName: syllabus.teacherName, title: `${syllabus.subjectName}: ${lesson.title}`,
+          description: lesson.description, subject: syllabus.subjectName, gradeLevel: syllabus.gradeLevel,
+          sectionName: syllabus.sectionName, type: 'other', dueDate: lesson.dueDate, status: 'assigned', autoSpawnKey,
+        },
+        $setOnInsert: { tenantId: syllabus.tenantId },
+      },
+      { upsert: true, new: true },
+    );
+  }
 
   // Recomputes the cached rollup fields from the actual topic-level state -
   // called after every create/update/mark-topic so dashboard/report reads
@@ -143,13 +171,16 @@ export class SyllabusService {
     }
     const nextLessonNo = (topic.lessons || []).reduce((max: number, l: any) => Math.max(max, l.lessonNo), 0) + 1;
     topic.lessons = topic.lessons || [];
-    topic.lessons.push({
+    const lesson = {
       lessonNo: nextLessonNo, title: dto.title, description: dto.description,
       type: dto.type, url: dto.url, fileUrl: dto.fileUrl, fileName: dto.fileName,
       order: dto.order ?? topic.lessons.length, addedBy, addedAt: new Date(),
-    });
+      dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+    };
+    topic.lessons.push(lesson);
     syllabus.markModified('units');
     await syllabus.save();
+    if (lesson.dueDate) await this.syncLessonAssignment(syllabus, dto.unitNo, dto.topicNo, lesson, addedBy);
     return syllabus;
   }
 
@@ -166,8 +197,10 @@ export class SyllabusService {
     if (dto.fileUrl != null) lesson.fileUrl = dto.fileUrl;
     if (dto.fileName != null) lesson.fileName = dto.fileName;
     if (dto.order != null) lesson.order = dto.order;
+    if (dto.dueDate !== undefined) lesson.dueDate = dto.dueDate ? new Date(dto.dueDate) : undefined;
     syllabus.markModified('units');
     await syllabus.save();
+    await this.syncLessonAssignment(syllabus, dto.unitNo, dto.topicNo, lesson);
     return syllabus;
   }
 
@@ -180,6 +213,9 @@ export class SyllabusService {
     if (topic.lessons.length === before) throw new NotFoundException(`Lesson ${dto.lessonNo} not found in topic ${dto.topicNo}`);
     syllabus.markModified('units');
     await syllabus.save();
+    await this.assignmentModel.deleteOne({
+      tenantId: syllabus.tenantId, autoSpawnKey: `lesson:${syllabus._id}:${dto.unitNo}:${dto.topicNo}:${dto.lessonNo}`,
+    });
     return syllabus;
   }
 
@@ -550,8 +586,26 @@ The four percentages must sum to exactly 100. Base the reasoning on real, sensib
       byGrade[g].avgCoverage = Math.round(byGrade[g].avgCoverage / byGrade[g].count);
     }
 
+    // LMS Phase 3 - lightweight content-authoring stats, computed from
+    // the same `all` fetch above (no extra query). Deliberately just
+    // "how much LMS content exists and is live" - per-student completion
+    // analytics live on the Student 360 Learning tab instead, where a
+    // single student's own numbers actually mean something; averaging
+    // them across a whole school here would hide more than it shows.
+    let publishedCourseCount = 0;
+    let totalLessonsAuthored = 0;
+    for (const s of all as any[]) {
+      if (s.publishedToStudents) publishedCourseCount += 1;
+      for (const u of s.units || []) {
+        for (const t of u.topics || []) {
+          totalLessonsAuthored += (t.lessons || []).length;
+        }
+      }
+    }
+
     return {
       totalSyllabi, avgCoverage, behindCount, completedCount, pendingApprovalCount, draftCount,
+      publishedCourseCount, totalLessonsAuthored,
       byGrade,
       behindList: (all as any[]).filter((s) => s.trackStatus === 'behind').map((s) => ({
         _id: s._id, subjectName: s.subjectName, gradeLevel: s.gradeLevel, sectionName: s.sectionName,

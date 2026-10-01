@@ -15,6 +15,12 @@ export type CertificateTemplateDocument = CertificateTemplate & Document;
 export const CERTIFICATE_TYPES = [
   'transfer', 'character', 'bonafide', 'provisional', 'migration',
   'merit', 'participation', 'attendance', 'graduation', 'custom',
+  // LMS Phase 3 - auto-issued the moment a student finishes every lesson
+  // in a published Syllabus (see CertificatesService.autoIssueCourseCompletion).
+  // A school still has to create its own 'course_completion' template
+  // first (same as every other type here) - auto-issue is a no-op until
+  // one exists, never a hard dependency a school is forced into.
+  'course_completion',
 ] as const;
 
 // Fields resolvable straight from the student's own record (see
@@ -71,6 +77,10 @@ export const EXTRA_FIELD_SUGGESTIONS: Record<string, { key: string; label: strin
   ],
   character: [],
   custom: [],
+  course_completion: [
+    { key: 'courseName', label: 'Course / Subject Name' },
+    { key: 'completionDate', label: 'Completion Date' },
+  ],
 };
 
 @Schema({ _id: false })

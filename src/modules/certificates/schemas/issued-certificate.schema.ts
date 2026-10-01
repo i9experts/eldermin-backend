@@ -25,8 +25,22 @@ export class IssuedCertificate {
   @Prop({ type: Object, default: {} }) dataSnapshot: Record<string, string>;
   @Prop({ required: true }) issuedBy: string;
   @Prop({ default: Date.now }) issuedAt: Date;
+
+  // LMS Phase 3 - set only on a system auto-issue (see
+  // CertificatesService.autoIssueCourseCompletion), never on a manual
+  // batch generation. sourceId is the triggering record (a Syllabus id
+  // for 'course_completion') - together with the partial unique index
+  // below, this is what stops a student's 100%-completion check from
+  // re-issuing a duplicate certificate every time they revisit an
+  // already-finished course.
+  @Prop() sourceType?: string;
+  @Prop({ type: Types.ObjectId }) sourceId?: Types.ObjectId;
 }
 
 export const IssuedCertificateSchema = SchemaFactory.createForClass(IssuedCertificate);
 IssuedCertificateSchema.index({ schoolSlug: 1, studentId: 1, issuedAt: -1 });
 IssuedCertificateSchema.index({ schoolSlug: 1, certificateType: 1, issuedAt: -1 });
+IssuedCertificateSchema.index(
+  { studentId: 1, sourceType: 1, sourceId: 1 },
+  { unique: true, partialFilterExpression: { sourceType: { $exists: true } } },
+);

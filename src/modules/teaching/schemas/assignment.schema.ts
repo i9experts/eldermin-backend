@@ -25,6 +25,12 @@ export class Assignment {
   @Prop({ default: 0 }) avgScore: number;
   @Prop({ type: [String], default: [] }) attachmentS3Keys: string[];
   @Prop() instructions: string;
+  // LMS Phase 3 - set only on a row SyllabusService auto-spawned from a
+  // lesson's own dueDate (format: `lesson:{syllabusId}:{unitNo}:{topicNo}:
+  // {lessonNo}`). Lets a repeat edit of the same lesson's due date update
+  // the same Assignment row instead of creating a duplicate each time;
+  // never set on a teacher-created assignment.
+  @Prop({ index: true }) autoSpawnKey?: string;
 }
 
 export const AssignmentSchema = SchemaFactory.createForClass(Assignment);

@@ -23,5 +23,6 @@ import { PdfModule } from '../../pdf/pdf.module';
   ],
   controllers: [CertificatesController],
   providers: [CertificatesService],
+  exports: [CertificatesService],
 })
 export class CertificatesModule {}
