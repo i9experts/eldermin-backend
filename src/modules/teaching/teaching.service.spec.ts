@@ -44,6 +44,7 @@ function makeService(existingPeriods: any[]) {
     noop, // userModel
     noop, // notificationModel
     noop, // pdfService
+    noop, // configService
   );
   return { service, timetableModel };
 }

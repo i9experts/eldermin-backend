@@ -1,5 +1,7 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { TeachingService } from './teaching.service';
 import { CreateAssignmentDto, UpdateAssignmentDto, GradeSubmissionDto } from './dto/assignment.dto';
@@ -51,6 +53,19 @@ export class TeachingController {
 
   @Post('lesson-plans')
   createLessonPlan(@Request() req, @Body() body: any) { return this.teachingService.createLessonPlan(req.user.tenantId, req.user.institutionId, body, req.user); }
+
+  /** POST /api/v1/teaching/lesson-plans/parse-upload - a teacher's own
+   * pre-made lesson plan (Word/Excel/txt file, or a "sourceUrl" Google
+   * Doc link in the same multipart body) parsed into a draft that
+   * pre-fills the Create Lesson Plan form. Never saves a lesson plan
+   * itself - the teacher reviews/edits the draft and submits it through
+   * the normal createLessonPlan flow above. */
+  @Post('lesson-plans/parse-upload')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  parseLessonPlanUpload(@UploadedFile() file: any, @Body('sourceUrl') sourceUrl?: string) {
+    if (!file && !sourceUrl?.trim()) throw new BadRequestException('Upload a file or paste a Google Doc link.');
+    return this.teachingService.parseLessonPlanUpload(file, sourceUrl);
+  }
 
   @Patch('lesson-plans/:id')
   updateLessonPlan(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateLessonPlan(req.user.tenantId, id, body); }
