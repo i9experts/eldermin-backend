@@ -224,7 +224,17 @@ export class CertificatesService {
     `;
   }
 
-  private async buildCertificateHtml(
+  // Returns just one student's `.sheet` div - the content of a single
+  // certificate page, not a whole standalone HTML document. A batch
+  // generation run shares one template (so one shared @page/CSS block is
+  // valid for the whole batch) and wraps N of these into a single
+  // document via generateCertificatesPdf, one Puppeteer page render for
+  // the entire batch instead of one per student - the same "compose into
+  // one multi-page document, one render" pattern id-cards.service.ts
+  // already used, which this used to NOT follow: a batch of 30-50
+  // students used to launch 30-50 separate page renders (merged after the
+  // fact with pdf-lib), each one real CPU/memory on the shared server.
+  private async buildCertificateSheet(
     template: CertificateTemplateDocument, mergeData: Record<string, string>,
     branding: { name: string; logo: string; campusName: string },
   ): Promise<string> {
@@ -259,13 +269,6 @@ export class CertificatesService {
     };
 
     return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8" />
-        <style>${this.certificateCss(template.layoutStyle, template.primaryColor, template.accentColor, template.orientation)}</style>
-      </head>
-      <body>
         <div class="sheet">
           ${watermarkHtml}
           <div class="cert-date">Date: ${this.escapeHtml(mergeData.issueDate)}</div>
@@ -282,8 +285,6 @@ export class CertificatesService {
           ${signatureRow}
           ${qrHtml}${sealHtml}
         </div>
-      </body>
-      </html>
     `;
   }
 
@@ -321,7 +322,7 @@ export class CertificatesService {
       return brandingCache.get(key)!;
     };
 
-    const pagesHtml: string[] = [];
+    const sheetsHtml: string[] = [];
     const issuedRecords: any[] = [];
     for (const doc of students) {
       const branding = await brandingFor((doc as any).campusId);
@@ -330,39 +331,42 @@ export class CertificatesService {
         ...this.mapStudentMergeFields(doc, branding, issueDate, certificateNumber),
         ...(extraFields || {}),
       };
-      const html = await this.buildCertificateHtml(template, mergeData, branding);
-      pagesHtml.push(html);
+      const sheet = await this.buildCertificateSheet(template, mergeData, branding);
+      sheetsHtml.push(sheet);
       issuedRecords.push({
         schoolSlug, certificateNumber, templateId: template._id, certificateType: template.certificateType,
         studentId: (doc as any)._id, studentName: mergeData.studentName, dataSnapshot: mergeData, issuedBy,
       });
     }
 
-    // Each student is its own full HTML document (own <style>/<html>) -
-    // rendered to its own PDF and merged, rather than concatenating
-    // <body> fragments into one page, since @page sizing/orientation is
-    // per-document in this render path (matches how the ID card and
-    // report-template renderers already isolate whole-document styling).
-    // preferCSSPageSize is required - without it Puppeteer ignores the
-    // @page { size } rule in certificateCss() entirely and silently
+    // One combined HTML document for the whole batch - a single shared
+    // @page/CSS block (every student in one run uses the same template,
+    // so this is always valid) and N `.sheet` divs, each forced onto its
+    // own printed page via `.sheet + .sheet { break-before: page; }`
+    // below. One Puppeteer page render for the entire batch, not one per
+    // student - this used to launch a separate render per student
+    // (merged afterward with pdf-lib), which meant a class-sized batch of
+    // 30-50 students did 30-50 real Chromium page renders in one request.
+    // preferCSSPageSize is required below - without it Puppeteer ignores
+    // the @page { size } rule in certificateCss() entirely and silently
     // defaults to US Letter portrait, which would both crop an A4-sized
     // layout and ignore the landscape orientation option completely.
-    const pdfBuffers = await Promise.all(pagesHtml.map((html) => this.pdfService.htmlToPdfWithOptions(html, { printBackground: true, preferCSSPageSize: true })));
-    const merged = await this.mergePdfBuffers(pdfBuffers);
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          ${this.certificateCss(template.layoutStyle, template.primaryColor, template.accentColor, template.orientation)}
+          .sheet + .sheet { break-before: page; }
+        </style>
+      </head>
+      <body>${sheetsHtml.join('')}</body>
+      </html>
+    `;
+    const pdf = await this.pdfService.htmlToPdfWithOptions(html, { printBackground: true, preferCSSPageSize: true });
 
     await this.issuedModel.insertMany(issuedRecords);
-    return merged;
-  }
-
-  private async mergePdfBuffers(buffers: Buffer[]): Promise<Buffer> {
-    if (buffers.length === 1) return buffers[0];
-    const { PDFDocument } = await import('pdf-lib');
-    const merged = await PDFDocument.create();
-    for (const buf of buffers) {
-      const src = await PDFDocument.load(buf);
-      const pages = await merged.copyPages(src, src.getPageIndices());
-      pages.forEach((p) => merged.addPage(p));
-    }
-    return Buffer.from(await merged.save());
+    return pdf;
   }
 }

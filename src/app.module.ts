@@ -49,8 +49,25 @@ import { EventsModule } from './events/events.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    // No options object here used to mean every Mongo driver default
+    // applied uninspected on a multi-tenant production server - most
+    // consequentially a 30s serverSelectionTimeoutMS, which meant that
+    // under any real contention (several schools hitting the DB at once,
+    // or the event loop briefly stalled by something CPU-heavy elsewhere
+    // in the process) a write could simply hang for up to 30 seconds with
+    // no error and no success - indistinguishable from "I clicked Save
+    // and nothing happened." Trimmed to fail fast enough to actually
+    // surface an error to the user instead of hanging silently, and
+    // socketTimeoutMS bounds how long an already-established connection
+    // can sit on a stuck operation.
     MongooseModule.forRoot(
       process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/eldermin',
+      {
+        maxPoolSize: 50,
+        minPoolSize: 5,
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+      },
     ),
     ScheduleModule.forRoot(),
     AuthModule,

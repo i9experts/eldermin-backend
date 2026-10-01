@@ -178,15 +178,34 @@ export class AccountingIntegrationsService {
   // the "real-time" half of the sync (near-real-time via short polling,
   // rather than hooking directly into FinanceService, which stays entirely
   // unaware this module exists).
+  // Re-entrancy guard: @Cron has no built-in protection against a run
+  // still being in flight when the next tick fires, and this one loops
+  // every connected school sequentially, each doing several DB queries
+  // plus a network call to an external accounting API per pending entry.
+  // On an EVERY_MINUTE schedule, a slow external API or enough connected
+  // schools could make one run take longer than a minute - without this
+  // flag, the next tick would start stacked on top, compounding DB/
+  // connection load rather than just running a little behind.
+  private autoSyncInFlight = false;
+
   @Cron(CronExpression.EVERY_MINUTE)
   async autoSyncAll() {
-    const connections = await this.connectionModel.find({ status: 'connected', autoSyncEnabled: true });
-    for (const conn of connections) {
-      try {
-        await this.syncPendingForConnection(conn, { force: false, limit: AUTO_SYNC_BATCH_SIZE });
-      } catch (e: any) {
-        this.logger.error(`Auto-sync failed for ${conn.schoolSlug}: ${e?.message}`);
+    if (this.autoSyncInFlight) {
+      this.logger.warn('autoSyncAll: previous run still in progress, skipping this tick');
+      return;
+    }
+    this.autoSyncInFlight = true;
+    try {
+      const connections = await this.connectionModel.find({ status: 'connected', autoSyncEnabled: true });
+      for (const conn of connections) {
+        try {
+          await this.syncPendingForConnection(conn, { force: false, limit: AUTO_SYNC_BATCH_SIZE });
+        } catch (e: any) {
+          this.logger.error(`Auto-sync failed for ${conn.schoolSlug}: ${e?.message}`);
+        }
       }
+    } finally {
+      this.autoSyncInFlight = false;
     }
   }
 

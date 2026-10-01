@@ -247,6 +247,14 @@ export class Invoice {
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);
 InvoiceSchema.index({ schoolSlug: 1, studentId: 1, month: -1 });
 InvoiceSchema.index({ schoolSlug: 1, status: 1 });
+// Backs FeeDefaulterService.runAutomatedReminders' exact filter shape
+// (schoolSlug + isDeleted + balanceDue > 0 + dueDate < now). Without this,
+// that daily cron fell back to the schoolSlug-only portion of the index
+// above and scanned every invoice a school has ever issued to apply the
+// rest of the filter in memory - for a school with years of monthly
+// invoices across thousands of students, run once per tenant, daily,
+// inside an already-serial loop.
+InvoiceSchema.index({ schoolSlug: 1, isDeleted: 1, balanceDue: 1, dueDate: 1 });
 InvoiceSchema.pre('validate', function () {
   if (this.isNew && !this.invoiceNumber) {
     const year = new Date().getFullYear();

@@ -251,16 +251,32 @@ export class SchoolCalendarService {
 
   // Fires every minute; publishes any circular whose scheduled time has
   // arrived - same "cron finds due work" shape as
-  // AccountingIntegrationsService.autoSyncAll.
+  // AccountingIntegrationsService.autoSyncAll, including the same
+  // re-entrancy guard: publishCircular resolves the full recipient
+  // audience and writes one Notification per recipient per circular, so
+  // a large due batch could plausibly take longer than a minute, and
+  // without this flag the next tick would stack on top instead of just
+  // running a little behind.
+  private publishCircularsInFlight = false;
+
   @Cron(CronExpression.EVERY_MINUTE)
   async publishScheduledCirculars() {
-    const due = await this.circularModel.find({ status: 'scheduled', publishAt: { $lte: new Date() } });
-    for (const circular of due) {
-      try {
-        await this.publishCircular(circular.schoolSlug, String(circular._id));
-      } catch (e: any) {
-        this.logger.error(`Scheduled publish failed for circular ${circular._id}: ${e?.message}`);
+    if (this.publishCircularsInFlight) {
+      this.logger.warn('publishScheduledCirculars: previous run still in progress, skipping this tick');
+      return;
+    }
+    this.publishCircularsInFlight = true;
+    try {
+      const due = await this.circularModel.find({ status: 'scheduled', publishAt: { $lte: new Date() } });
+      for (const circular of due) {
+        try {
+          await this.publishCircular(circular.schoolSlug, String(circular._id));
+        } catch (e: any) {
+          this.logger.error(`Scheduled publish failed for circular ${circular._id}: ${e?.message}`);
+        }
       }
+    } finally {
+      this.publishCircularsInFlight = false;
     }
   }
 
