@@ -304,6 +304,10 @@ export class FinanceController {
       chequeNumber: dto.paymentMethod === 'cheque' ? dto.referenceNumber : undefined,
       notes: dto.remarks,
       collectedBy: dto.collectedBy || userName,
+      // Which of the school's own bank accounts this non-cash payment was
+      // deposited into - recordPayment already denormalizes bankAccountName
+      // from this (Phase 6), it just was never reachable from Collect Fee.
+      bankAccountId: dto.bankAccountId || undefined,
     });
   }
 
