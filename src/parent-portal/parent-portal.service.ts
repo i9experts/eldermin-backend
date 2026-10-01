@@ -28,6 +28,8 @@ import {
   MessageThread, MessageThreadDocument,
   Message, MessageDocument,
 } from './schemas/notification-and-message.schema';
+import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
+import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
 
 @Injectable()
 export class ParentPortalService {
@@ -55,6 +57,8 @@ export class ParentPortalService {
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     @InjectModel(MessageThread.name) private threadModel: Model<MessageThreadDocument>,
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
+    @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
+    @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
   ) {}
 
   // ── Admin: link a guardian's login to their child/children ─────
@@ -232,6 +236,88 @@ export class ParentPortalService {
     return plans.map((p: any) => ({
       subject: p.subject, topic: p.topic, planDate: p.planDate, resources: p.resources,
     }));
+  }
+
+  // ── LMS: My Courses (published syllabi + this student's own lesson
+  // completion state) ─────────────────────────────────────────────
+  async getMyCourses(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
+    if (!student) throw new NotFoundException('Student not found');
+
+    const filter: any = {
+      tenantId, gradeLevel: (student as any).currentGrade, publishedToStudents: true,
+      $or: [{ sectionName: (student as any).currentSection }, { sectionName: { $exists: false } }, { sectionName: null }],
+    };
+    // Same campus-scoping rule as getHomework - a student's own campusId
+    // decides this, not the syllabus's, so a matching grade/section name
+    // at a different campus never leaks in.
+    if ((student as any).campusId) filter.campusId = new Types.ObjectId((student as any).campusId);
+
+    const syllabi = await this.syllabusModel.find(filter).sort({ subjectName: 1 }).lean();
+    if (syllabi.length === 0) return [];
+
+    const progressRows = await this.lessonProgressModel.find({
+      studentId: new Types.ObjectId(studentId), syllabusId: { $in: syllabi.map((s: any) => s._id) },
+    }).lean();
+    const progressByKey = new Map(progressRows.map((p: any) => [`${p.syllabusId}-${p.unitNo}-${p.topicNo}-${p.lessonNo}`, p]));
+
+    return syllabi.map((s: any) => {
+      let totalLessons = 0;
+      let completedLessons = 0;
+      const units = (s.units || []).map((u: any) => ({
+        unitNo: u.unitNo,
+        unitName: u.unitName,
+        topics: (u.topics || []).map((t: any) => ({
+          topicNo: t.topicNo,
+          topicName: t.topicName,
+          lessons: (t.lessons || []).slice().sort((a: any, b: any) => a.order - b.order).map((l: any) => {
+            const progress = progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`);
+            const status = progress?.status || 'not_started';
+            totalLessons += 1;
+            if (status === 'completed') completedLessons += 1;
+            return {
+              lessonNo: l.lessonNo, title: l.title, description: l.description,
+              type: l.type, url: l.url, fileUrl: l.fileUrl, fileName: l.fileName,
+              status,
+            };
+          }),
+        })).filter((t: any) => t.lessons.length > 0),
+      })).filter((u: any) => u.topics.length > 0);
+
+      return {
+        syllabusId: s._id, subjectName: s.subjectName, teacherName: s.teacherName,
+        academicYearLabel: s.academicYearLabel, term: s.term,
+        totalLessons, completedLessons,
+        completionPct: totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0,
+        units,
+      };
+    }).filter((c: any) => c.totalLessons > 0); // a published syllabus with no lessons yet has nothing to show
+  }
+
+  async markLessonProgress(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string }) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!['not_started', 'in_progress', 'completed'].includes(dto.status)) {
+      throw new BadRequestException('Invalid status');
+    }
+    const syllabus = await this.syllabusModel.findOne({ _id: dto.syllabusId, tenantId, publishedToStudents: true }).lean();
+    if (!syllabus) throw new NotFoundException('Course not found');
+    const unit = (syllabus.units || []).find((u: any) => u.unitNo === dto.unitNo);
+    const topic = unit?.topics?.find((t: any) => t.topicNo === dto.topicNo);
+    const lesson = topic?.lessons?.find((l: any) => l.lessonNo === dto.lessonNo);
+    if (!lesson) throw new NotFoundException('Lesson not found');
+
+    const updated = await this.lessonProgressModel.findOneAndUpdate(
+      { studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), unitNo: dto.unitNo, topicNo: dto.topicNo, lessonNo: dto.lessonNo },
+      {
+        $set: {
+          status: dto.status, completedAt: dto.status === 'completed' ? new Date() : undefined,
+          tenantId, schoolSlug,
+        },
+      },
+      { upsert: true, new: true },
+    );
+    return updated;
   }
 
   // ── Results ──────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema'
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, CreateSloTemplateDto, SyllabusQueryDto,
+  CreateLessonDto, UpdateLessonDto, DeleteLessonDto,
 } from './dto/syllabus.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
@@ -107,7 +108,7 @@ export class SyllabusService {
         topics: (u.topics || []).map((t) => {
           const prior = existingTopicMap.get(`${u.unitNo}-${t.topicNo}`);
           return prior
-            ? { ...t, isCovered: prior.isCovered, coveredDate: prior.coveredDate, coveredBy: prior.coveredBy, actualLessonsUsed: prior.actualLessonsUsed, notes: prior.notes }
+            ? { ...t, isCovered: prior.isCovered, coveredDate: prior.coveredDate, coveredBy: prior.coveredBy, actualLessonsUsed: prior.actualLessonsUsed, notes: prior.notes, lessons: prior.lessons }
             : t;
         }),
       }));
@@ -122,6 +123,77 @@ export class SyllabusService {
     const result = await this.syllabusModel.findOneAndDelete({ _id: id, tenantId });
     if (!result) throw new NotFoundException('Syllabus not found');
     return { message: 'Syllabus deleted' };
+  }
+
+  // ── LMS: lessons (content attached to a topic) ─────────────────
+  private findTopic(syllabus: any, unitNo: number, topicNo: number): any {
+    const unit = (syllabus.units as any[]).find((u) => u.unitNo === unitNo);
+    if (!unit) throw new NotFoundException(`Unit ${unitNo} not found`);
+    const topic = (unit.topics as any[]).find((t: any) => t.topicNo === topicNo);
+    if (!topic) throw new NotFoundException(`Topic ${topicNo} not found in unit ${unitNo}`);
+    return topic;
+  }
+
+  async addLesson(tenantId: string, id: string, dto: CreateLessonDto, addedBy: string) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    const topic = this.findTopic(syllabus, dto.unitNo, dto.topicNo);
+    if (!dto.url?.trim() && !dto.fileUrl?.trim()) {
+      throw new BadRequestException('A lesson needs a link (video, document, or reading).');
+    }
+    const nextLessonNo = (topic.lessons || []).reduce((max: number, l: any) => Math.max(max, l.lessonNo), 0) + 1;
+    topic.lessons = topic.lessons || [];
+    topic.lessons.push({
+      lessonNo: nextLessonNo, title: dto.title, description: dto.description,
+      type: dto.type, url: dto.url, fileUrl: dto.fileUrl, fileName: dto.fileName,
+      order: dto.order ?? topic.lessons.length, addedBy, addedAt: new Date(),
+    });
+    syllabus.markModified('units');
+    await syllabus.save();
+    return syllabus;
+  }
+
+  async updateLesson(tenantId: string, id: string, dto: UpdateLessonDto) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    const topic = this.findTopic(syllabus, dto.unitNo, dto.topicNo);
+    const lesson = (topic.lessons as any[]).find((l: any) => l.lessonNo === dto.lessonNo);
+    if (!lesson) throw new NotFoundException(`Lesson ${dto.lessonNo} not found in topic ${dto.topicNo}`);
+    if (dto.title != null) lesson.title = dto.title;
+    if (dto.description != null) lesson.description = dto.description;
+    if (dto.type != null) lesson.type = dto.type;
+    if (dto.url != null) lesson.url = dto.url;
+    if (dto.fileUrl != null) lesson.fileUrl = dto.fileUrl;
+    if (dto.fileName != null) lesson.fileName = dto.fileName;
+    if (dto.order != null) lesson.order = dto.order;
+    syllabus.markModified('units');
+    await syllabus.save();
+    return syllabus;
+  }
+
+  async deleteLesson(tenantId: string, id: string, dto: DeleteLessonDto) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    const topic = this.findTopic(syllabus, dto.unitNo, dto.topicNo);
+    const before = (topic.lessons || []).length;
+    topic.lessons = (topic.lessons as any[]).filter((l: any) => l.lessonNo !== dto.lessonNo);
+    if (topic.lessons.length === before) throw new NotFoundException(`Lesson ${dto.lessonNo} not found in topic ${dto.topicNo}`);
+    syllabus.markModified('units');
+    await syllabus.save();
+    return syllabus;
+  }
+
+  // Deliberately separate from `status` (the teacher/coordinator planning
+  // workflow) - toggled only when the school is ready for this syllabus's
+  // lesson content to actually appear in Parent Portal.
+  async setPublished(tenantId: string, id: string, published: boolean, publishedBy: string) {
+    const syllabus = await this.syllabusModel.findOneAndUpdate(
+      { _id: id, tenantId },
+      { $set: { publishedToStudents: published, publishedAt: published ? new Date() : undefined, publishedBy: published ? publishedBy : undefined } },
+      { new: true },
+    );
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    return syllabus;
   }
 
   async approve(tenantId: string, id: string, approverName: string) {

@@ -112,6 +112,41 @@ export class ApproveSyllabusDto {
   @IsString() approverName: string;
 }
 
+export class CreateLessonDto {
+  @IsNumber() unitNo: number;
+  @IsNumber() topicNo: number;
+  @IsString() title: string;
+  @IsOptional() @IsString() description?: string;
+  @IsEnum(['video', 'document', 'reading', 'link']) type: string;
+  @IsOptional() @IsString() url?: string;
+  @IsOptional() @IsString() fileUrl?: string;
+  @IsOptional() @IsString() fileName?: string;
+  @IsOptional() @IsNumber() order?: number;
+}
+
+export class UpdateLessonDto {
+  @IsNumber() unitNo: number;
+  @IsNumber() topicNo: number;
+  @IsNumber() lessonNo: number;
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsEnum(['video', 'document', 'reading', 'link']) type?: string;
+  @IsOptional() @IsString() url?: string;
+  @IsOptional() @IsString() fileUrl?: string;
+  @IsOptional() @IsString() fileName?: string;
+  @IsOptional() @IsNumber() order?: number;
+}
+
+export class DeleteLessonDto {
+  @IsNumber() unitNo: number;
+  @IsNumber() topicNo: number;
+  @IsNumber() lessonNo: number;
+}
+
+export class SetPublishedDto {
+  @IsBoolean() published: boolean;
+}
+
 export class SyllabusQueryDto {
   @IsOptional() @IsString() gradeLevel?: string;
   @IsOptional() @IsString() sectionName?: string;

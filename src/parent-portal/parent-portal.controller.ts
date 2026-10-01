@@ -95,6 +95,24 @@ export class ParentPortalController {
     return this.service.getLearningResources(studentId, requestingUser, tenantId, schoolSlug);
   }
 
+  // ── LMS: My Courses ─────────────────────────────────────────
+  @Get('students/:studentId/courses')
+  async getMyCourses(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getMyCourses(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
+  @Post('students/:studentId/lessons/progress')
+  @HttpCode(HttpStatus.OK)
+  async markLessonProgress(
+    @Param('studentId') studentId: string,
+    @Body() dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string },
+    @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.markLessonProgress(studentId, requestingUser, tenantId, schoolSlug, dto);
+  }
+
   @Get('students/:studentId/results')
   async getResults(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);

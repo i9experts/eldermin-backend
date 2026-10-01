@@ -9,6 +9,7 @@ import type { Response } from 'express';
 import { SyllabusService } from './syllabus.service';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, CreateSloTemplateDto, SyllabusQueryDto,
+  CreateLessonDto, UpdateLessonDto, DeleteLessonDto, SetPublishedDto,
 } from './dto/syllabus.dto';
 
 @Controller('syllabus')
@@ -144,5 +145,27 @@ export class SyllabusController {
   @Patch(':id/behind-schedule')
   setBehindSchedule(@Request() req: any, @Param('id') id: string, @Body('behind') behind: boolean) {
     return this.service.setBehindSchedule(req.user.tenantId, id, behind);
+  }
+
+  // ── LMS: lessons + publish ──────────────────────────────────
+  @Post(':id/lessons')
+  @HttpCode(HttpStatus.CREATED)
+  addLesson(@Request() req: any, @Param('id') id: string, @Body() dto: CreateLessonDto) {
+    return this.service.addLesson(req.user.tenantId, id, dto, req.user.name);
+  }
+
+  @Patch(':id/lessons')
+  updateLesson(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateLessonDto) {
+    return this.service.updateLesson(req.user.tenantId, id, dto);
+  }
+
+  @Delete(':id/lessons')
+  deleteLesson(@Request() req: any, @Param('id') id: string, @Body() dto: DeleteLessonDto) {
+    return this.service.deleteLesson(req.user.tenantId, id, dto);
+  }
+
+  @Patch(':id/publish')
+  setPublished(@Request() req: any, @Param('id') id: string, @Body() dto: SetPublishedDto) {
+    return this.service.setPublished(req.user.tenantId, id, dto.published, req.user.name);
   }
 }
