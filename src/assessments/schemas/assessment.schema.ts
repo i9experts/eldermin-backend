@@ -20,6 +20,13 @@ export class SubjectConfig {
   @Prop() startTime: string;
   @Prop() duration: number; // minutes
   @Prop() venue: string;
+  // LMS Phase 2 — self-paced online quiz. The ExamPaper already compiles
+  // real Question Bank items into a graded set for this exact
+  // subject/grade (built via the existing Paper Generation screen) - it
+  // becomes the quiz's question set rather than a second "pick your
+  // questions" flow being built just for online delivery.
+  @Prop({ type: Types.ObjectId, ref: 'ExamPaper', default: null }) examPaperId: Types.ObjectId | null;
+  @Prop({ default: 1 }) attemptsAllowed: number;
 }
 export const SubjectConfigSchema = SchemaFactory.createForClass(SubjectConfig);
 
@@ -57,6 +64,14 @@ export class Assessment {
   @Prop() resultPublishedBy: string;
 
   @Prop({ default: false }) gradeCardsGenerated: boolean;
+
+  // LMS Phase 2 — 'self_paced_online' lets a student take a subject's
+  // quiz themselves (via Parent Portal) against the ExamPaper linked on
+  // that subject's SubjectConfig.examPaperId, instead of a teacher always
+  // entering marks by hand or scanning OMR sheets. Per-assessment, not
+  // per-subject - a mixed assessment (some subjects online, some not)
+  // just leaves examPaperId unset on the subjects staying teacher-marked.
+  @Prop({ enum: ['teacher_marked', 'self_paced_online'], default: 'teacher_marked' }) deliveryMode: string;
 
   // Grading config
   @Prop({

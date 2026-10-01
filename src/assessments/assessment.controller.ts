@@ -20,6 +20,7 @@ import {
   PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
+  GradeQuizAttemptDto,
 } from './dto/assessment.dto';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
@@ -159,6 +160,25 @@ export class AssessmentController {
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);
+  }
+
+  // ── LMS Phase 2: quiz review queue (static, before :id) ────────
+  @Get('quiz-attempts')
+  async getQuizAttemptsPendingReview(@Request() req: any, @Query('assessmentId') assessmentId?: string, @Query('subject') subject?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getQuizAttemptsPendingReview(schoolSlug, assessmentId, subject);
+  }
+
+  @Get('quiz-attempts/:attemptId')
+  async getQuizAttemptForReview(@Param('attemptId') attemptId: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getQuizAttemptForReview(schoolSlug, attemptId);
+  }
+
+  @Post('quiz-attempts/:attemptId/grade') @HttpCode(HttpStatus.OK)
+  async gradeQuizAttempt(@Param('attemptId') attemptId: string, @Body() dto: GradeQuizAttemptDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.gradeQuizAttempt(schoolSlug, attemptId, dto.grades, userName);
   }
 
   // ── Dynamic :id (must come AFTER all static GET routes) ───────

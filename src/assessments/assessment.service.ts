@@ -19,6 +19,7 @@ import {
 } from './schemas/assessment.schema';
 import { ExamPaper, ExamPaperDocument } from './schemas/exam-paper.schema';
 import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-sheet.schema';
+import { QuizAttempt, QuizAttemptDocument } from './schemas/quiz-attempt.schema';
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
@@ -62,6 +63,7 @@ export class AssessmentService {
     @InjectModel(ReportCard.name) private reportCardModel: Model<ReportCardDocument>,
     @InjectModel(ExamPaper.name) private examPaperModel: Model<ExamPaperDocument>,
     @InjectModel(OMRAnswerSheet.name) private omrSheetModel: Model<OMRAnswerSheetDocument>,
+    @InjectModel(QuizAttempt.name) private quizAttemptModel: Model<QuizAttemptDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(Campus.name) private campusModel: Model<any>,
@@ -1298,6 +1300,248 @@ You are assisting a teacher's professional judgement, not replacing it - classif
         schoolSlug: dto.schoolSlug,
       },
       { $set: { verified: true, verifiedBy: dto.verifiedBy } },
+    );
+  }
+
+  // ============================================================
+  // LMS PHASE 2 — SELF-PACED ONLINE QUIZZES
+  // A student's own run through an Assessment subject's linked ExamPaper.
+  // Objective types (mcq/true_false) auto-grade at submit; everything
+  // else (short/long/fill_blank/matching) is free text held for a
+  // teacher's manual review - never auto-marked "correct" on a fuzzy
+  // text match. Once every answer has a mark, the result is upserted
+  // into the exact same MarkEntry collection bulkEnterMarks already
+  // writes to, so Report Cards pick it up with zero changes.
+  // ============================================================
+  private readonly AUTO_GRADABLE_TYPES = ['mcq', 'true_false'];
+
+  // Strips answer keys (isCorrect/correctAnswer) before a question ever
+  // reaches the student - the only information that must never leak into
+  // an in-progress quiz response.
+  private sanitizeQuestionForStudent(q: any) {
+    return {
+      _id: q._id, subject: q.subject, type: q.type, questionText: q.questionText,
+      questionImage: q.questionImage, marks: q.marks,
+      options: q.type === 'mcq' ? (q.options || []).map((o: any) => ({ text: o.text })) : undefined,
+    };
+  }
+
+  private async loadExamPaperQuestions(examPaperId: any, schoolSlug: string) {
+    const paper = await this.examPaperModel.findOne({ _id: examPaperId, schoolSlug }).lean();
+    if (!paper) throw new NotFoundException('This subject has no quiz paper linked - ask your teacher to link one in Paper Generation.');
+    const questionIds = (paper as any).sections.flatMap((s: any) => s.questionIds);
+    const questions = await this.questionModel.find({ _id: { $in: questionIds }, schoolSlug }).lean();
+    const byId = new Map(questions.map((q: any) => [String(q._id), q]));
+    // Preserve the paper's own question order, not Mongo's natural order.
+    return questionIds.map((id: any) => byId.get(String(id))).filter(Boolean);
+  }
+
+  /** Student starts (or resumes, if already in progress) a subject's
+   * online quiz. Returns the attempt plus answer-key-free questions. */
+  async startQuizAttempt(schoolSlug: string, studentId: string, dto: { assessmentId: string; subject: string }) {
+    const assessment = await this.assessmentModel.findOne({ _id: dto.assessmentId, schoolSlug }).lean();
+    if (!assessment) throw new NotFoundException('Assessment not found');
+    if ((assessment as any).deliveryMode !== 'self_paced_online') throw new BadRequestException('This assessment is not delivered online.');
+    const subjectConfig = (assessment as any).subjects.find((s: any) => s.subject === dto.subject);
+    if (!subjectConfig) throw new BadRequestException(`Subject ${dto.subject} not in this assessment`);
+    if (!subjectConfig.examPaperId) throw new BadRequestException('No quiz paper linked to this subject yet.');
+
+    const existingInProgress = await this.quizAttemptModel.findOne({
+      studentId: new Types.ObjectId(studentId), assessmentId: new Types.ObjectId(dto.assessmentId),
+      subject: dto.subject, status: 'in_progress',
+    }).lean();
+    const questions = await this.loadExamPaperQuestions(subjectConfig.examPaperId, schoolSlug);
+
+    if (existingInProgress) {
+      return { attempt: existingInProgress, questions: questions.map((q: any) => this.sanitizeQuestionForStudent(q)) };
+    }
+
+    const priorAttempts = await this.quizAttemptModel.countDocuments({
+      studentId: new Types.ObjectId(studentId), assessmentId: new Types.ObjectId(dto.assessmentId), subject: dto.subject,
+    });
+    if (priorAttempts >= (subjectConfig.attemptsAllowed || 1)) {
+      throw new BadRequestException('No attempts remaining for this quiz.');
+    }
+
+    const student: any = await this.studentModel.findOne({ _id: studentId, schoolSlug }).lean();
+    if (!student) throw new NotFoundException('Student not found');
+
+    const attempt = await this.quizAttemptModel.create({
+      studentId, studentName: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+      rollNumber: student.currentRollNumber,
+      assessmentId: dto.assessmentId, assessmentTitle: (assessment as any).title, subject: dto.subject,
+      examPaperId: subjectConfig.examPaperId, grade: (assessment as any).grade, section: student.currentSection,
+      academicYear: (assessment as any).academicYear,
+      totalMarks: subjectConfig.totalMarks, passingMarks: subjectConfig.passingMarks,
+      attemptNumber: priorAttempts + 1, status: 'in_progress', schoolSlug,
+    });
+    return { attempt, questions: questions.map((q: any) => this.sanitizeQuestionForStudent(q)) };
+  }
+
+  /** Grades every answer against the real question (server-side only -
+   * the answer key never reached the student) and upserts a MarkEntry
+   * the moment nothing is left needing manual review. */
+  async submitQuizAttempt(schoolSlug: string, studentId: string, attemptId: string, answers: { questionId: string; selectedOptionIndex?: number; textAnswer?: string }[]) {
+    const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, studentId, schoolSlug });
+    if (!attempt) throw new NotFoundException('Quiz attempt not found');
+    if (attempt.status !== 'in_progress') throw new BadRequestException('This attempt has already been submitted.');
+
+    const questions = await this.loadExamPaperQuestions(attempt.examPaperId, schoolSlug);
+    const answerByQuestionId = new Map(answers.map(a => [a.questionId, a]));
+
+    let autoGradedMarks = 0;
+    let anyPending = false;
+    const gradedAnswers = questions.map((q: any) => {
+      const submitted = answerByQuestionId.get(String(q._id));
+      const needsManualGrading = !this.AUTO_GRADABLE_TYPES.includes(q.type);
+      let isCorrect: boolean | null = null;
+      let marksAwarded: number | null = null;
+
+      if (needsManualGrading) {
+        anyPending = true;
+      } else if (submitted) {
+        if (q.type === 'mcq') {
+          const correctIndex = (q.options || []).findIndex((o: any) => o.isCorrect);
+          isCorrect = submitted.selectedOptionIndex === correctIndex;
+        } else if (q.type === 'true_false') {
+          isCorrect = (submitted.textAnswer || '').trim().toLowerCase() === (q.correctAnswer || '').trim().toLowerCase();
+        }
+        marksAwarded = isCorrect ? q.marks : 0;
+        autoGradedMarks += marksAwarded || 0;
+      } else {
+        // Left blank - auto-gradable but unanswered scores 0, not pending.
+        isCorrect = false;
+        marksAwarded = 0;
+      }
+
+      return {
+        questionId: q._id, selectedOptionIndex: submitted?.selectedOptionIndex,
+        textAnswer: submitted?.textAnswer, needsManualGrading, isCorrect, marksAwarded,
+      };
+    });
+
+    attempt.answers = gradedAnswers as any;
+    attempt.autoGradedMarks = autoGradedMarks;
+    attempt.submittedAt = new Date();
+    if (anyPending) {
+      attempt.status = 'submitted';
+      attempt.obtainedMarks = null;
+    } else {
+      attempt.status = 'graded';
+      attempt.obtainedMarks = autoGradedMarks;
+      attempt.gradedAt = new Date();
+    }
+    await attempt.save();
+
+    if (attempt.status === 'graded') await this.upsertMarkEntryFromAttempt(attempt);
+    return attempt;
+  }
+
+  /** Teacher-side review queue - attempts with at least one subjective
+   * answer still awaiting a mark. */
+  async getQuizAttemptsPendingReview(schoolSlug: string, assessmentId?: string, subject?: string) {
+    const filter: any = { schoolSlug, status: 'submitted' };
+    if (assessmentId) filter.assessmentId = new Types.ObjectId(assessmentId);
+    if (subject) filter.subject = subject;
+    return this.quizAttemptModel.find(filter).sort({ submittedAt: 1 }).lean();
+  }
+
+  async getQuizAttemptForReview(schoolSlug: string, attemptId: string) {
+    const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug }).lean();
+    if (!attempt) throw new NotFoundException('Quiz attempt not found');
+    const questions = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
+    const questionById = new Map(questions.map((q: any) => [String(q._id), q]));
+    return {
+      ...attempt,
+      answers: (attempt as any).answers.map((a: any) => ({ ...a, question: questionById.get(String(a.questionId)) })),
+    };
+  }
+
+  /** Teacher awards marks for the subjective answers on one attempt.
+   * Once nothing is left pending, finalizes obtainedMarks and upserts
+   * the MarkEntry - same completion path submitQuizAttempt uses when an
+   * attempt happens to need no manual grading at all. */
+  async gradeQuizAttempt(schoolSlug: string, attemptId: string, grades: { questionId: string; marksAwarded: number }[], gradedBy: string) {
+    const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug });
+    if (!attempt) throw new NotFoundException('Quiz attempt not found');
+    if (attempt.status === 'in_progress') throw new BadRequestException('This attempt has not been submitted yet.');
+
+    const gradeByQuestionId = new Map(grades.map(g => [g.questionId, g.marksAwarded]));
+    for (const answer of attempt.answers as any[]) {
+      if (!answer.needsManualGrading) continue;
+      const awarded = gradeByQuestionId.get(String(answer.questionId));
+      if (awarded != null) {
+        answer.marksAwarded = awarded;
+        answer.isCorrect = null; // subjective - "correct" isn't binary, only a mark is recorded
+      }
+    }
+    attempt.markModified('answers');
+
+    const stillPending = (attempt.answers as any[]).some((a: any) => a.needsManualGrading && a.marksAwarded == null);
+    if (!stillPending) {
+      attempt.obtainedMarks = (attempt.answers as any[]).reduce((sum: number, a: any) => sum + (a.marksAwarded || 0), 0);
+      attempt.status = 'graded';
+      attempt.gradedAt = new Date();
+      attempt.gradedBy = gradedBy;
+    }
+    await attempt.save();
+    if (attempt.status === 'graded') await this.upsertMarkEntryFromAttempt(attempt);
+    return attempt;
+  }
+
+  // Shared completion path for both a fully-auto-graded submission and a
+  // manually-completed review - writes into the same MarkEntry collection
+  // and upsert key (assessmentId/studentId/subject/schoolSlug)
+  // bulkEnterMarks already uses, so Report Cards aggregate quiz results
+  // and teacher-entered marks identically.
+  private async upsertMarkEntryFromAttempt(attempt: any) {
+    const percentage = attempt.totalMarks > 0 ? parseFloat(((attempt.obtainedMarks / attempt.totalMarks) * 100).toFixed(1)) : 0;
+    const gradeInfo = getGrade(percentage);
+    const result = percentage >= ((attempt.passingMarks / (attempt.totalMarks || 1)) * 100) ? 'pass' : 'fail';
+    await this.markModel.updateOne(
+      { assessmentId: attempt.assessmentId, studentId: attempt.studentId, subject: attempt.subject, schoolSlug: attempt.schoolSlug },
+      {
+        $set: {
+          assessmentTitle: attempt.assessmentTitle, studentName: attempt.studentName, rollNumber: attempt.rollNumber,
+          grade: attempt.grade, section: attempt.section, totalMarks: attempt.totalMarks, passingMarks: attempt.passingMarks,
+          obtainedMarks: attempt.obtainedMarks, isAbsent: false, isExempt: false,
+          percentage, grade_result: gradeInfo.grade, gpa: gradeInfo.gpa, result,
+          enteredBy: 'Online Quiz (auto)', academicYear: attempt.academicYear, schoolSlug: attempt.schoolSlug,
+        },
+      },
+      { upsert: true },
+    );
+  }
+
+  /** Student-facing list: every self-paced subject available to this
+   * student (by grade/section) across all assessments, with their own
+   * attempt status per subject - powers Parent Portal's quiz list the
+   * same way getMyCourses powers "My Courses". */
+  async listAvailableQuizzes(schoolSlug: string, studentId: string, grade: string, section: string, campusId?: any) {
+    const filter: any = { schoolSlug, grade, deliveryMode: 'self_paced_online', status: { $in: ['scheduled', 'ongoing', 'completed'] } };
+    if (campusId) filter.campusId = campusId;
+    const assessments = await this.assessmentModel.find(filter).lean();
+    const assessmentIds = assessments.map((a: any) => a._id);
+    const attempts = await this.quizAttemptModel.find({ studentId: new Types.ObjectId(studentId), assessmentId: { $in: assessmentIds } }).lean();
+    const attemptsByKey = new Map<string, any[]>();
+    for (const a of attempts) {
+      const key = `${a.assessmentId}-${a.subject}`;
+      (attemptsByKey.get(key) ?? attemptsByKey.set(key, []).get(key)!).push(a);
+    }
+
+    return assessments.flatMap((a: any) =>
+      (a.subjects || [])
+        .filter((s: any) => s.examPaperId && (!s.section || !section || s.section === section))
+        .map((s: any) => {
+          const myAttempts = attemptsByKey.get(`${a._id}-${s.subject}`) || [];
+          const latest = myAttempts.sort((x: any, y: any) => y.attemptNumber - x.attemptNumber)[0] || null;
+          return {
+            assessmentId: a._id, assessmentTitle: a.title, type: a.type, subject: s.subject,
+            totalMarks: s.totalMarks, passingMarks: s.passingMarks, attemptsAllowed: s.attemptsAllowed || 1,
+            attemptsUsed: myAttempts.length,
+            latestAttempt: latest ? { id: latest._id, status: latest.status, obtainedMarks: latest.obtainedMarks } : null,
+          };
+        }),
     );
   }
 

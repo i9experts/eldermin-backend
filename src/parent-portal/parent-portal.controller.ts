@@ -113,6 +113,31 @@ export class ParentPortalController {
     return this.service.markLessonProgress(studentId, requestingUser, tenantId, schoolSlug, dto);
   }
 
+  // ── LMS Phase 2: self-paced online quizzes ─────────────────────
+  @Get('students/:studentId/quizzes')
+  async listMyQuizzes(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.listMyQuizzes(studentId, requestingUser, schoolSlug);
+  }
+
+  @Post('students/:studentId/quizzes/start')
+  @HttpCode(HttpStatus.OK)
+  async startQuiz(@Param('studentId') studentId: string, @Body() dto: { assessmentId: string; subject: string }, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.startQuiz(studentId, requestingUser, schoolSlug, dto);
+  }
+
+  @Post('students/:studentId/quizzes/:attemptId/submit')
+  @HttpCode(HttpStatus.OK)
+  async submitQuiz(
+    @Param('studentId') studentId: string, @Param('attemptId') attemptId: string,
+    @Body() dto: { answers: { questionId: string; selectedOptionIndex?: number; textAnswer?: string }[] },
+    @Request() req: any,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.submitQuiz(studentId, requestingUser, schoolSlug, attemptId, dto.answers);
+  }
+
   @Get('students/:studentId/results')
   async getResults(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
