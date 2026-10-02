@@ -2776,7 +2776,16 @@ export class FinanceService {
         date: new Date(),
         reference: original.reference,
         narration,
-        sourceType: `${sourceType}_reversal`,
+        // Reuse the original's own sourceType (never a templated
+        // `${sourceType}_reversal` string) - JournalEntry.sourceType is a
+        // strict Mongoose enum with no "_reversal" variants, so that
+        // previously threw an uncaught ValidationError here on every
+        // delete/revert that had a real posting to reverse (surfaced to the
+        // user as a generic "Internal server error"). Matches cancelVoucher's
+        // existing convention: the reversal is distinguished by its own
+        // `status: 'posted'` next to the original's `status: 'reversed'`,
+        // not by a different sourceType.
+        sourceType,
         sourceId,
         postedBy,
         lines: reverseJournalLines((original.lines || []) as any) as any,
