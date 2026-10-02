@@ -625,6 +625,12 @@ export class FinanceController {
   }
 
   @RequireModuleAccess('finance', 'assignments', 'manage')
+  @Patch('fee-assignments/:id') async updateFeeAssignment(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateFeeAssignment(id, schoolSlug, dto);
+  }
+
+  @RequireModuleAccess('finance', 'assignments', 'manage')
   @Delete('fee-assignments/:id') async deleteFeeAssignment(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteFeeAssignment(id, schoolSlug);
