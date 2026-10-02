@@ -16,7 +16,7 @@ import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.s
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
 import { SmsService } from '../email/sms.service';
-import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -85,8 +85,20 @@ export class FeeDefaulterService {
   async getAgingReport(schoolSlug: string, requestingUser?: ScopedUser) {
     const policy = await this.getPolicy(schoolSlug);
     const filter: any = { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 } };
-    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, undefined) : undefined;
-    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // Inclusive, not exclusive: an invoice with no campusId tagged (the
+    // overwhelming common case - campusId is only ever backfilled from the
+    // linked Student's own campusId, and most schools are single-campus
+    // anyway per scope.util's documented "single-campus only for now"
+    // constraint) must still show up for a campus-/department-scoped
+    // caller, not silently vanish. Previously used the exclusive
+    // resolveCampusScope() + `filter.campusId = effectiveCampusId`
+    // pattern, which hid every untagged invoice from any non-owner role
+    // (Principal, Admin, Finance Manager, ...) even when that role's
+    // Edit Role permissions grant full Finance access.
+    if (requestingUser) {
+      const campusFilter = buildInclusiveCampusFilter(requestingUser, undefined);
+      if (campusFilter) Object.assign(filter, campusFilter);
+    }
 
     const invoices = await this.invoiceModel.find(filter).lean();
     const now = new Date();
@@ -124,8 +136,15 @@ export class FeeDefaulterService {
     const policy = await this.getPolicy(schoolSlug);
 
     const filter: any = { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 }, dueDate: { $lt: new Date() } };
-    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, requestedCampusId) : requestedCampusId;
-    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // See the same note in getAgingReport above - inclusive campus filter,
+    // not exclusive, so an untagged invoice still reaches a campus-scoped
+    // caller instead of silently disappearing.
+    if (requestingUser) {
+      const campusFilter = buildInclusiveCampusFilter(requestingUser, requestedCampusId);
+      if (campusFilter) Object.assign(filter, campusFilter);
+    } else if (requestedCampusId) {
+      filter.campusId = requestedCampusId;
+    }
 
     const invoices = await this.invoiceModel.find(filter).sort({ dueDate: 1 }).lean();
     const now = new Date();
@@ -362,8 +381,13 @@ export class FeeDefaulterService {
     const filter: any = { schoolSlug };
     if (status) filter.status = status;
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
-    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, requestedCampusId) : requestedCampusId;
-    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // Same inclusive-campus-filter rationale as getAgingReport/getDefaulters.
+    if (requestingUser) {
+      const campusFilter = buildInclusiveCampusFilter(requestingUser, requestedCampusId);
+      if (campusFilter) Object.assign(filter, campusFilter);
+    } else if (requestedCampusId) {
+      filter.campusId = requestedCampusId;
+    }
     const [data, total] = await Promise.all([
       this.commitmentModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.commitmentModel.countDocuments(filter),
