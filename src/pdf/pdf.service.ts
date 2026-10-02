@@ -1247,6 +1247,7 @@ export class PdfService implements OnModuleDestroy {
         // older invoices just print the old unlabeled total instead.
         discountBreakdown: (it.discountBreakdown || []).filter((d: any) => (d.amount || 0) > 0),
         netAmount: it.netAmount ?? (it.amount || 0) - (it.discount || 0),
+        feeHead: it.feeHead,
       })),
       totalAmount: invoice.totalAmount || 0,
       lateFine: invoice.lateFine || 0,
@@ -1352,8 +1353,12 @@ export class PdfService implements OnModuleDestroy {
 
       for (const item of data.items) {
         y -= 11;
-        page.drawText(String(item.description || '').slice(0, 42), { x: colX + 3, y, size: 6.5, font, color: black });
-        page.drawText((item.amount || 0).toLocaleString(), { x: amountColX, y, size: 6.5, font, color: black });
+        // Arrears (carried-forward prior dues, see FinanceService.generateInvoices)
+        // print in red, same as the late-fine notice below - a parent
+        // should never mistake it for this month's own regular fee.
+        const itemColor = item.feeHead === 'arrears' ? red : black;
+        page.drawText(String(item.description || '').slice(0, 42), { x: colX + 3, y, size: 6.5, font: item.feeHead === 'arrears' ? bold : font, color: itemColor });
+        page.drawText((item.amount || 0).toLocaleString(), { x: amountColX, y, size: 6.5, font: item.feeHead === 'arrears' ? bold : font, color: itemColor });
         for (const d of (item.discountBreakdown || [])) {
           y -= 10;
           page.drawText(String(d.label || 'Discount').slice(0, 38), { x: colX + 9, y, size: 6, font, color: green });

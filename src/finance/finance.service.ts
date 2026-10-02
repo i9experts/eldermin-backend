@@ -3208,6 +3208,56 @@ export class FinanceService {
     return resynced;
   }
 
+  /** Edits an existing discount assignment's discount source (program or
+   * custom override), fee-head restriction, effective dates, and notes.
+   * Deliberately does NOT allow re-targeting a different student/family/
+   * class/section/campus - the "Assign Discount" list had no edit action
+   * at all before this (only Remove), so a school correcting a wrong
+   * discount value had to delete and recreate the assignment from
+   * scratch, losing its original creation date in the process. Reuses
+   * the exact same validation as createFeeAssignment, and the same
+   * resync-eligible-unpaid-invoices follow-up (FEE-06) so a corrected
+   * discount actually reaches an already-generated-but-unpaid challan
+   * without the admin needing to remember a separate "Generate Challans"
+   * re-run. */
+  async updateFeeAssignment(id: string, schoolSlug: string, data: any) {
+    const assignment = await this.feeAssignmentModel.findOne({ _id: id, schoolSlug, isActive: true });
+    if (!assignment) throw new NotFoundException('Fee assignment not found');
+
+    if (data.discountProgramId) {
+      const program = await this.discountProgramModel.findOne({ _id: data.discountProgramId, schoolSlug });
+      if (!program) throw new BadRequestException('Discount program not found');
+      assignment.discountProgramId = data.discountProgramId;
+      assignment.discountProgramName = program.name;
+      assignment.overrideValueType = undefined as any;
+      assignment.overrideValue = undefined as any;
+    } else {
+      if (data.overrideValue == null || !data.overrideValueType) {
+        throw new BadRequestException('Either a discount program or an override value/type is required');
+      }
+      if (data.overrideValue < 0) throw new BadRequestException('Discount value cannot be negative');
+      if (data.overrideValueType === 'percentage' && data.overrideValue > 100) {
+        throw new BadRequestException('A percentage discount cannot exceed 100%');
+      }
+      assignment.discountProgramId = null as any;
+      assignment.discountProgramName = undefined as any;
+      assignment.overrideValueType = data.overrideValueType;
+      assignment.overrideValue = data.overrideValue;
+    }
+    if ('feeHeadName' in data) assignment.feeHeadName = data.feeHeadName || undefined as any;
+    if ('effectiveFrom' in data) assignment.effectiveFrom = data.effectiveFrom || undefined as any;
+    if ('effectiveTo' in data) assignment.effectiveTo = data.effectiveTo || undefined as any;
+    if ('notes' in data) assignment.notes = data.notes || undefined as any;
+    await assignment.save();
+
+    let resynced = 0;
+    try {
+      resynced = await this.resyncInvoicesForNewAssignment(schoolSlug, assignment);
+    } catch { /* the edit is saved either way; next manual "Generate Challans" run still picks it up */ }
+
+    return { ...assignment.toObject(), _resynced: resynced };
+  }
+
   async deleteFeeAssignment(id: string, schoolSlug: string) {
     const assignment = await this.feeAssignmentModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { isActive: false } });
     if (!assignment) throw new NotFoundException('Fee assignment not found');
@@ -3473,12 +3523,12 @@ export class FinanceService {
       studentMatch._id = new Types.ObjectId(scopeValue);
     } else if (scopeType === 'campus' && scopeValue) {
       const campus = await this.campusModel.findOne({ schoolSlug, name: scopeValue }).lean();
-      if (!campus) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: [`Campus "${scopeValue}" not found`], totalStudents: 0 };
+      if (!campus) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, skippedStudents: [], noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: [`Campus "${scopeValue}" not found`], totalStudents: 0 };
       studentMatch.campusId = String((campus as any)._id);
     }
 
     const students = await this.studentModel.find(studentMatch).lean();
-    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
+    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, skippedStudents: [], noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
 
     const [feeStructures, assignments, discountPrograms, campuses, studentFeeAssignments] = await Promise.all([
       // Match on isActive + grade/section/campus only, not academicYear.
@@ -3523,15 +3573,41 @@ export class FinanceService {
     // bug already found once before in the bulk student import).
     const existingInvoices = await this.invoiceModel
       .find({ schoolSlug, month, academicYear, isDeleted: { $ne: true } },
-        { studentId: 1, paidAmount: 1, status: 1, totalDiscount: 1 })
+        { studentId: 1, paidAmount: 1, status: 1, totalDiscount: 1, 'items.feeHead': 1 })
       .lean();
     const alreadyInvoiced = new Set(existingInvoices.map((inv: any) => String(inv.studentId)));
     const existingInvoiceByStudent = new Map(existingInvoices.map((inv: any) => [String(inv.studentId), inv]));
+
+    // Arrears — every OTHER still-outstanding invoice this student has,
+    // from any earlier billing month, carried forward as its own line on
+    // the new challan (see drawChallanPage) instead of silently never
+    // appearing anywhere except the Receivables ledger. Batch-fetched
+    // once for the whole run (same reasoning as existingInvoices above -
+    // ~179 students means ~179 round-trips otherwise). Excludes THIS
+    // month - an invoice being generated/resynced never counts as its
+    // own arrears - and excludes isDeleted/cancelled/waived invoices,
+    // which carry no real debt.
+    const arrearsInvoices = await this.invoiceModel
+      .find(
+        { schoolSlug, studentId: { $in: students.map((s: any) => s._id) }, month: { $ne: month }, isDeleted: { $ne: true }, status: { $nin: ['cancelled', 'waived'] }, balanceDue: { $gt: 0 } },
+        { studentId: 1, balanceDue: 1 },
+      )
+      .lean();
+    const arrearsByStudent = new Map<string, number>();
+    for (const inv of arrearsInvoices as any[]) {
+      const key = String(inv.studentId);
+      arrearsByStudent.set(key, (arrearsByStudent.get(key) || 0) + (inv.balanceDue || 0));
+    }
 
     let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, skippedAmbiguousMatch = 0, discountsSynced = 0;
     const errors: string[] = [];
     const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
     const gradesWithAmbiguousMatch = new Map<string, number>(); // grade/section -> count of students affected
+    // Named, per-student detail for every skip - "16 already billed" tells
+    // an admin nothing about WHICH 16 or whether that's actually correct;
+    // this is what actually answers "some students are being skipped or
+    // showing as already billed" instead of leaving it a mystery count.
+    const skippedStudents: { name: string; grade: string; reason: string; detail?: string }[] = [];
 
     for (const student of students) {
       try {
@@ -3547,7 +3623,16 @@ export class FinanceService {
         // place - never touching an invoice with money already against it.
         const existingInvoiceForStudent = existingInvoiceByStudent.get(String(student._id));
         const canResyncDiscount = !!existingInvoiceForStudent && canResyncInvoiceDiscount(existingInvoiceForStudent);
-        if (alreadyInvoiced.has(String(student._id)) && !canResyncDiscount) { skippedAlreadyBilled++; continue; }
+        const studentDisplayName = `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim() || 'Unnamed student';
+        const studentDisplayGrade = `${(student as any).currentGrade || 'Unknown'}${(student as any).currentSection ? ' - ' + (student as any).currentSection : ''}`;
+        if (alreadyInvoiced.has(String(student._id)) && !canResyncDiscount) {
+          skippedAlreadyBilled++;
+          skippedStudents.push({
+            name: studentDisplayName, grade: studentDisplayGrade, reason: 'already_billed',
+            detail: `Already has an invoice for ${month}${existingInvoiceForStudent?.status ? ` (${existingInvoiceForStudent.status})` : ''} - delete/revert it first if this is wrong.`,
+          });
+          continue;
+        }
 
         const studentCampusName = campusIdToName.get(String((student as any).campusId)) || '';
 
@@ -3582,13 +3667,22 @@ export class FinanceService {
           if (applicableStructures.length > 1) {
             skippedAmbiguousMatch++;
             gradesWithAmbiguousMatch.set(key, (gradesWithAmbiguousMatch.get(key) || 0) + 1);
-            errors.push(`${(student as any).firstName || ''} ${(student as any).lastName || ''}: ${applicableStructures.length} equally-specific active fee structures match ${key} for this billing month (${applicableStructures.map((fs: any) => `"${fs.name}"`).join(', ')}) - deactivate the stale one(s) in Fee Structures, or assign this student a fee structure explicitly.`);
+            const structureNames = applicableStructures.map((fs: any) => `"${fs.name}"`).join(', ');
+            errors.push(`${studentDisplayName}: ${applicableStructures.length} equally-specific active fee structures match ${key} for this billing month (${structureNames}) - deactivate the stale one(s) in Fee Structures, or assign this student a fee structure explicitly.`);
+            skippedStudents.push({
+              name: studentDisplayName, grade: studentDisplayGrade, reason: 'ambiguous_match',
+              detail: `${applicableStructures.length} equally-specific fee structures match: ${structureNames}`,
+            });
             continue;
           }
         }
         if (applicableStructures.length === 0) {
           skippedNoMatch++;
           gradesWithNoMatch.set(key, (gradesWithNoMatch.get(key) || 0) + 1);
+          skippedStudents.push({
+            name: studentDisplayName, grade: studentDisplayGrade, reason: 'no_match',
+            detail: `No active Fee Structure defined for ${key}.`,
+          });
           continue;
         }
 
@@ -3685,14 +3779,41 @@ export class FinanceService {
         const { taxAmount: totalTax, taxTemplate } = await this.computeSalesTax(
           schoolSlug, 'fee', { grade: (student as any).currentGrade, campus: studentCampusName }, netBeforeTax,
         );
-        const totalAmount = Math.round((netBeforeTax + totalTax) * 100) / 100;
+
+        // Arrears — added AFTER tax is resolved so it's never taxed again
+        // (it was already taxed, if applicable, on the original invoice(s)
+        // it carries forward from). Shown as its own particulars line on
+        // the challan (see drawChallanPage), not silently folded into an
+        // existing fee head where a parent could mistake it for this
+        // month's actual tuition.
+        const arrears = Math.round((arrearsByStudent.get(String(student._id)) || 0) * 100) / 100;
+        if (arrears > 0) {
+          items.push({
+            description: 'Arrears (Previous Outstanding Dues)',
+            amount: arrears,
+            discount: 0,
+            discountBreakdown: [],
+            netAmount: arrears,
+            feeStructureId: null,
+            feeHead: 'arrears',
+          });
+        }
+        // Recomputed after the arrears push so subtotal/items stay in sync
+        // (an auditor adding up `items` should get exactly `subtotal`) -
+        // totalDiscount is unaffected since arrears always carries 0 discount.
+        const subtotalWithArrears = subtotal + arrears;
+        const totalAmount = Math.round((netBeforeTax + totalTax + arrears) * 100) / 100;
 
         if (canResyncDiscount) {
           // This student already has an unpaid invoice this month - only
           // touch it if the freshly-computed discount actually differs
-          // (a program/assignment created after the original generation),
-          // otherwise leave it alone exactly like the old skip behaviour.
-          if (!discountActuallyChanged(totalDiscount, existingInvoiceForStudent!.totalDiscount || 0)) {
+          // (a program/assignment created after the original generation)
+          // OR real arrears now exist that this invoice was generated
+          // before and so never carried forward - otherwise leave it
+          // alone exactly like the old skip behaviour.
+          const alreadyHasArrearsLine = (existingInvoiceForStudent!.items || []).some((it: any) => it.feeHead === 'arrears');
+          const arrearsNowApply = arrears > 0 && !alreadyHasArrearsLine;
+          if (!discountActuallyChanged(totalDiscount, existingInvoiceForStudent!.totalDiscount || 0) && !arrearsNowApply) {
             skippedAlreadyBilled++;
             continue;
           }
@@ -3705,11 +3826,11 @@ export class FinanceService {
           // (see reverseLedgerForSource/reversePayment convention).
           await this.reverseLedgerForSource(
             schoolSlug, 'fee_invoice', String(invoiceDoc._id),
-            `Invoice ${invoiceDoc.invoiceNumber} resynced - discount/scholarship assigned after original generation`,
+            `Invoice ${invoiceDoc.invoiceNumber} resynced - ${arrearsNowApply ? 'arrears carried forward' : 'discount/scholarship assigned after original generation'}`,
             createdBy,
           );
           invoiceDoc.items = items as any;
-          invoiceDoc.subtotal = subtotal;
+          invoiceDoc.subtotal = subtotalWithArrears;
           invoiceDoc.totalDiscount = totalDiscount;
           invoiceDoc.totalTax = totalTax;
           invoiceDoc.totalAmount = totalAmount;
@@ -3741,7 +3862,7 @@ export class FinanceService {
           campus: studentCampusName || undefined,
           campusId: (student as any).campusId ? (() => { try { return new Types.ObjectId((student as any).campusId); } catch { return null; } })() : null,
           month, academicYear,
-          items, subtotal, totalDiscount, totalTax, totalAmount,
+          items, subtotal: subtotalWithArrears, totalDiscount, totalTax, totalAmount,
           balanceDue: totalAmount,
           status: 'sent',
           dueDate,
@@ -3753,7 +3874,17 @@ export class FinanceService {
         await this.postFeeInvoiceJournal(schoolSlug, invoice, taxTemplate);
         created++;
       } catch (err: any) {
-        errors.push(`${(student as any).firstName || ''} ${(student as any).lastName || ''}: ${err.message}`);
+        const name = `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim() || 'Unnamed student';
+        errors.push(`${name}: ${err.message}`);
+        // A thrown exception (tax resolution failure, a bad ObjectId, etc.)
+        // used to just vanish into the `errors` array - which the frontend
+        // confirm dialog never actually rendered, so this student silently
+        // dropped out of `willCreate` with zero visible explanation. Now
+        // counted and named exactly like every other skip reason.
+        skippedStudents.push({
+          name, grade: `${(student as any).currentGrade || 'Unknown'}${(student as any).currentSection ? ' - ' + (student as any).currentSection : ''}`,
+          reason: 'error', detail: err.message,
+        });
       }
     }
 
@@ -3767,7 +3898,8 @@ export class FinanceService {
       // canResyncDiscount above).
       discountsSynced: dryRun ? 0 : discountsSynced,
       willSyncDiscounts: dryRun ? discountsSynced : discountsSynced,
-      skipped: skippedAlreadyBilled + skippedNoMatch + skippedAmbiguousMatch,
+      skipped: skippedAlreadyBilled + skippedNoMatch + skippedAmbiguousMatch + skippedStudents.filter((s) => s.reason === 'error').length,
+      skippedStudents,
       skippedAlreadyBilled,
       skippedNoMatch,
       noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, count]) => ({ grade, count })),
