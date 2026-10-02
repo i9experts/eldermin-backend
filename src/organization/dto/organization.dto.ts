@@ -22,6 +22,7 @@ export class UpdateSchoolDto {
   @IsOptional() @IsNumber() establishedYear?: number;
   @IsOptional() @IsString() currency?: string;
   @IsOptional() @IsString() timezone?: string;
+  @IsOptional() @IsEnum(['DD/MM/YYYY','MM/DD/YYYY']) dateFormat?: string;
   @IsOptional() @IsBoolean() multiCampus?: boolean;
   @IsOptional() @IsBoolean() hostelEnabled?: boolean;
   @IsOptional() @IsBoolean() transportEnabled?: boolean;

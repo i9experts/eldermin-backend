@@ -72,6 +72,10 @@ export class School {
   @Prop({ default: 'Asia/Karachi' }) timezone: string;
   @Prop({ default: 'en' }) language: string;
   @Prop({ default: 'Urdu' }) mediumOfInstruction: string;
+  // How dates are displayed/printed across the app (invoices, challans,
+  // reports, tables) - day-first is the Pakistani/most-of-the-world
+  // standard, so it's the default rather than the US-only MM/DD/YYYY.
+  @Prop({ enum: ['DD/MM/YYYY', 'MM/DD/YYYY'], default: 'DD/MM/YYYY' }) dateFormat: string;
 
   // Academic settings
   @Prop({ default: 3 }) termsPerYear: number;
