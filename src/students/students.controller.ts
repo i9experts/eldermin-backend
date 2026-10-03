@@ -407,6 +407,24 @@ export class StudentsController {
     res.send(pdfBuffer);
   }
 
+  /** GET /api/v1/students/reports/tenure - "School Age" report: how long
+   * each student has been enrolled, computed from admissionDate (not
+   * dateOfBirth). */
+  @Get('reports/tenure')
+  async getStudentTenureReport(
+    @Query('grade') grade: string | string[],
+    @Query('section') section: string | string[],
+    @Query('campusId') campusId: string,
+    @Query('status') status: string,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    const toArray = (v: string | string[] | undefined) => (v ? (Array.isArray(v) ? v : [v]) : undefined);
+    return this.studentsService.getStudentTenureReport(schoolSlug, {
+      grade: toArray(grade), section: toArray(section), campusId, status,
+    });
+  }
+
   /** POST /api/v1/students/reports/gr-register */
   @Post('reports/gr-register')
   async generateGrRegisterPdf(
