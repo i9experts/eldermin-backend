@@ -181,6 +181,16 @@ export class AssessmentController {
     return this.service.gradeQuizAttempt(schoolSlug, attemptId, dto.grades, userName);
   }
 
+  // ── Exam Papers (static GET must precede :id below) ───────────
+  // GET /assessments/papers was being swallowed by the ':id' route
+  // below (Nest/Express match routes in declaration order, and both
+  // are one path segment) - every call 500'd with a CastError trying
+  // to treat the literal string "papers" as an Assessment ObjectId.
+  @Get('papers') async getExamPapers(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getExamPapers(schoolSlug, query);
+  }
+
   // ── Dynamic :id (must come AFTER all static GET routes) ───────
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req: any) {
@@ -258,12 +268,7 @@ export class AssessmentController {
     return this.service.classifyBloomsLevel(dto.questionText, dto.questionType, dto.options);
   }
 
-  // ── Exam Papers ──────────────────────────────────────────────
-  @Get('papers') async getExamPapers(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getExamPapers(schoolSlug, query);
-  }
-
+  // ── Exam Papers (continued) ───────────────────────────────────
   @Get('papers/:id') async getExamPaperById(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getExamPaperById(id, schoolSlug);
