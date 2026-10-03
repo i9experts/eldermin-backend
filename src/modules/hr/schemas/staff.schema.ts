@@ -111,6 +111,16 @@ export class Staff {
   @Prop({ default: true })
   isActive: boolean;
 
+  // Self-referencing "reports to" link for the Organization Hierarchy /
+  // staff org-chart report - who this person's line manager is. Separate
+  // from the pre-existing `employment.reportingTo` free-text field (kept
+  // untouched - that one is cosmetic, printed on offer/appointment
+  // letters as typed by the recruiter, not a real relational link). Null
+  // means no manager set yet, or this person is a chain root (e.g. the
+  // Principal).
+  @Prop({ type: Types.ObjectId, ref: 'Staff', default: null })
+  reportingManagerId: Types.ObjectId | null;
+
   // The shift this staff member is assigned to, for attendance status
   // computation. Null means they fall back to the school's default shift
   // (Shift.isDefault) or, if no shifts are configured at all, the school's

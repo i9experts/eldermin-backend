@@ -45,6 +45,11 @@ export class HrController {
   @Patch('staff/:id')
   updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
 
+  @Patch('staff/:id/reporting-manager')
+  setReportingManager(@Request() req, @Param('id') id: string, @Body('managerId') managerId: string | null) {
+    return this.hrService.setReportingManager(req.user.tenantId, id, managerId);
+  }
+
   @Delete('staff/:id')
   deleteStaff(@Request() req, @Param('id') id: string, @Query('hardDelete') hardDelete?: string) {
     return this.hrService.deleteStaff(req.user.tenantId, id, hardDelete === 'true');
@@ -690,6 +695,9 @@ export class HrController {
   }
 
   // ── REPORTS: STAFF LIST / ALLOCATION / SALARY / NEW / LEFT ────────────
+
+  @Get('reports/org-chart')
+  getOrgChart(@Request() req) { return this.hrService.getOrgChart(req.user.tenantId, req.user); }
 
   @Get('reports/staff-list')
   getStaffListReport(@Request() req, @Query() query: any) { return this.hrService.getStaffListReport(req.user.tenantId, query, req.user); }

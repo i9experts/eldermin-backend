@@ -373,6 +373,60 @@ export class HrService {
     return staff;
   }
 
+  /** Sets (or clears, with managerId null) who this staff member reports
+   * to - the real relational link behind the Organization Hierarchy /
+   * org-chart report (see Staff.reportingManagerId). Rejects a self-link
+   * and any assignment that would create a cycle (A reports to B who,
+   * through however many hops, already reports to A) - a cycle would
+   * make the chain unrenderable (infinite loop) and has no real-world
+   * meaning anyway. */
+  async setReportingManager(tenantId: string, staffId: string, managerId: string | null) {
+    const tid = this.newTid(tenantId);
+    if (managerId) {
+      if (String(managerId) === String(staffId)) throw new BadRequestException('A staff member cannot report to themself');
+      const manager = await this.staffModel.findOne({ _id: managerId, tenantId: tid }).select('_id reportingManagerId').lean();
+      if (!manager) throw new NotFoundException('Manager not found');
+
+      let cursor: any = manager;
+      const seen = new Set<string>([String(staffId)]);
+      while (cursor?.reportingManagerId) {
+        const nextId = String(cursor.reportingManagerId);
+        if (seen.has(nextId)) throw new BadRequestException('This assignment would create a reporting-chain cycle');
+        seen.add(nextId);
+        cursor = await this.staffModel.findOne({ _id: nextId, tenantId: tid }).select('_id reportingManagerId').lean();
+      }
+    }
+    const staff = await this.staffModel
+      .findOneAndUpdate({ _id: staffId, tenantId: tid }, { $set: { reportingManagerId: managerId || null } }, { new: true })
+      .lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    return staff;
+  }
+
+  /** The staff reporting-chain org chart: every active staff member,
+   * nested under their reportingManagerId, rooted at whoever has no
+   * manager set (or whose manager isn't active/found - treated the same
+   * as a root rather than silently dropped, so a broken link is still
+   * visible instead of making that whole sub-tree disappear). */
+  async getOrgChart(tenantId: string, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.newTid(tenantId), isActive: true };
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = this.newTid(effectiveCampusId);
+    }
+    const staff = await this.staffModel.find(filter).select('firstName lastName employeeId designation department campusId reportingManagerId').lean();
+
+    const byId = new Map<string, any>(staff.map((s: any) => [String(s._id), { ...s, directReports: [] as any[] }]));
+    const roots: any[] = [];
+    for (const node of byId.values()) {
+      const managerId = node.reportingManagerId ? String(node.reportingManagerId) : null;
+      const manager = managerId ? byId.get(managerId) : null;
+      if (manager) manager.directReports.push(node);
+      else roots.push(node);
+    }
+    return { roots, totalStaff: staff.length };
+  }
+
   /** #1: there was no way to remove a staff record at all - no controller
    * route, no service method (deleteStaffAttendance only deletes attendance
    * rows for a date, unrelated). A staff row is routinely referenced by
