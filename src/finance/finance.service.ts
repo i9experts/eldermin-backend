@@ -3069,6 +3069,256 @@ export class FinanceService {
   }
 
   // ============================================================
+  // DISCOUNT SUMMARY REPORT
+  // Every discount/scholarship actually billed - not the assignment
+  // config (see getDiscountPrograms/FeeAssignment CRUD below), but what
+  // those assignments produced on real invoices: who got how much, from
+  // which program, on which fee head, and the resulting concentration by
+  // class/campus/program plus a month-over-month trend - with
+  // auto-generated insight sentences a finance admin can read without
+  // doing their own analysis first.
+  // ============================================================
+  async getDiscountSummaryReport(schoolSlug: string, params: {
+    academicYear?: string; grade?: string; campusId?: string; programId?: string; from?: string; to?: string;
+  }) {
+    const { academicYear, grade, campusId, programId, from, to } = params;
+
+    const baseMatch: any = { schoolSlug, isDeleted: { $ne: true } };
+    if (academicYear) baseMatch.academicYear = academicYear;
+    if (grade) baseMatch.grade = grade;
+    if (campusId) baseMatch.campusId = new Types.ObjectId(campusId);
+    if (from || to) {
+      baseMatch.createdAt = {};
+      if (from) baseMatch.createdAt.$gte = new Date(from);
+      if (to) baseMatch.createdAt.$lte = new Date(to);
+    }
+
+    // Total billed revenue for the same scope (discounted or not) - the
+    // denominator for "what % of revenue was given away" below. Computed
+    // from the same match minus the discount filter, so a grade/campus/
+    // date-range filter narrows both sides consistently.
+    const [{ totalBilled = 0 } = {}] = await this.invoiceModel.aggregate([
+      { $match: baseMatch },
+      { $group: { _id: null, totalBilled: { $sum: '$totalAmount' } } },
+    ]);
+
+    const invoices = await this.invoiceModel.aggregate([
+      { $match: { ...baseMatch, totalDiscount: { $gt: 0 } } },
+      { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+      { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+      { $project: {
+        invoiceNumber: 1, studentId: 1, studentName: 1, grade: 1, section: 1, campus: 1,
+        month: 1, academicYear: 1, totalAmount: 1, totalDiscount: 1, paidAmount: 1, balanceDue: 1, status: 1, items: 1,
+        grNo: '$student.grNo',
+        guardianName: { $arrayElemAt: ['$student.guardians.name', 0] },
+        guardianPhone: { $arrayElemAt: ['$student.guardians.phone', 0] },
+      } },
+    ]);
+
+    const programs = await this.discountProgramModel.find({ schoolSlug }).lean();
+    const programByName = new Map(programs.map((p: any) => [p.name, p]));
+    const wantProgram = programId ? programs.find((p: any) => String(p._id) === programId) : null;
+
+    // Explode every invoice -> every discounted line -> every contributing
+    // breakdown entry (one program can share a line with e.g. a structure-
+    // wide default discount) into one flat detail row. A pre-breakdown
+    // invoice (discount>0 but no discountBreakdown entries, from before
+    // that field existed) still gets a single generic row rather than
+    // silently vanishing from the report.
+    const detail: any[] = [];
+    for (const inv of invoices) {
+      for (const item of (inv.items || [])) {
+        if (!item.discount) continue;
+        const entries = (item.discountBreakdown && item.discountBreakdown.length > 0)
+          ? item.discountBreakdown
+          : [{ label: 'Discount', amount: item.discount }];
+        for (const entry of entries) {
+          const program = programByName.get(entry.label);
+          if (wantProgram && program?._id?.toString() !== programId) continue;
+          if (wantProgram && !program) continue;
+          detail.push({
+            invoiceId: String(inv._id), invoiceNumber: inv.invoiceNumber,
+            studentId: String(inv.studentId || ''), studentName: inv.studentName,
+            grNo: inv.grNo || '', grade: inv.grade || 'Unassigned', section: inv.section || '', campus: inv.campus || '',
+            guardianName: inv.guardianName || '', guardianPhone: inv.guardianPhone || '',
+            month: inv.month, academicYear: inv.academicYear,
+            feeHead: item.feeHead || item.description || 'Fee',
+            baseAmount: item.amount, discountAmount: entry.amount,
+            programLabel: entry.label, programType: program?.type || 'other',
+            invoiceTotal: inv.totalAmount, invoiceStatus: inv.status, paidAmount: inv.paidAmount, balanceDue: inv.balanceDue,
+          });
+        }
+      }
+    }
+
+    const totalDiscountAmount = detail.reduce((a, d) => a + d.discountAmount, 0);
+    const uniqueStudentIds = new Set(detail.map(d => d.studentId).filter(Boolean));
+    const uniqueInvoiceIds = new Set(detail.map(d => d.invoiceId));
+
+    // By program (and the "Structure Discount"/pre-breakdown rows, which
+    // group under their own label with type 'other' rather than being
+    // forced into a program they don't belong to).
+    const programGroupMap = new Map<string, any>();
+    for (const d of detail) {
+      const key = d.programLabel;
+      if (!programGroupMap.has(key)) {
+        programGroupMap.set(key, { label: d.programLabel, type: d.programType, studentIds: new Set<string>(), invoiceIds: new Set<string>(), totalAmount: 0 });
+      }
+      const g = programGroupMap.get(key);
+      g.studentIds.add(d.studentId); g.invoiceIds.add(d.invoiceId); g.totalAmount += d.discountAmount;
+    }
+    const byProgram = Array.from(programGroupMap.values())
+      .map(g => ({ label: g.label, type: g.type, studentsCount: g.studentIds.size, invoicesCount: g.invoiceIds.size, totalAmount: g.totalAmount, avgAmount: g.totalAmount / g.studentIds.size }))
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+
+    // By class & section, with "% of that class actually discounted"
+    // against the school's real current enrollment for the same scope.
+    const classGroupMap = new Map<string, any>();
+    for (const d of detail) {
+      const key = d.grade + '||' + d.section;
+      if (!classGroupMap.has(key)) {
+        classGroupMap.set(key, { grade: d.grade, section: d.section, studentIds: new Set<string>(), totalAmount: 0 });
+      }
+      const g = classGroupMap.get(key);
+      g.studentIds.add(d.studentId); g.totalAmount += d.discountAmount;
+    }
+    const classEnrollmentMatch: any = { schoolSlug, status: 'active' };
+    if (academicYear) classEnrollmentMatch.currentAcademicYear = academicYear;
+    if (grade) classEnrollmentMatch.currentGrade = grade;
+    const classEnrollment = await this.studentModel.aggregate([
+      { $match: classEnrollmentMatch },
+      { $group: { _id: { grade: '$currentGrade', section: '$currentSection' }, count: { $sum: 1 } } },
+    ]);
+    const enrollmentByClass = new Map(classEnrollment.map((c: any) => [`${c._id.grade}||${c._id.section || ''}`, c.count]));
+    const byClass = Array.from(classGroupMap.values())
+      .map(g => {
+        const label = g.section ? `${g.grade} - ${g.section}` : g.grade;
+        const classTotalStudents = enrollmentByClass.get(`${g.grade}||${g.section || ''}`) || g.studentIds.size;
+        return {
+          grade: g.grade, section: g.section, label,
+          studentsCount: g.studentIds.size, classTotalStudents,
+          pctOfClass: classTotalStudents > 0 ? (g.studentIds.size / classTotalStudents) * 100 : 0,
+          totalAmount: g.totalAmount,
+        };
+      })
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+
+    // By campus.
+    const campusGroupMap = new Map<string, any>();
+    for (const d of detail) {
+      const key = d.campus || 'Unassigned';
+      if (!campusGroupMap.has(key)) campusGroupMap.set(key, { campus: key, studentIds: new Set<string>(), totalAmount: 0 });
+      const g = campusGroupMap.get(key);
+      g.studentIds.add(d.studentId); g.totalAmount += d.discountAmount;
+    }
+    const byCampus = Array.from(campusGroupMap.values())
+      .map(g => ({ campus: g.campus, studentsCount: g.studentIds.size, totalAmount: g.totalAmount }))
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+
+    // Month-over-month trend.
+    const monthGroupMap = new Map<string, any>();
+    for (const d of detail) {
+      if (!monthGroupMap.has(d.month)) monthGroupMap.set(d.month, { month: d.month, studentIds: new Set<string>(), totalAmount: 0 });
+      const g = monthGroupMap.get(d.month);
+      g.studentIds.add(d.studentId); g.totalAmount += d.discountAmount;
+    }
+    const trend = Array.from(monthGroupMap.values())
+      .map(g => ({ month: g.month, studentsCount: g.studentIds.size, totalAmount: g.totalAmount }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    // Top discounted students, each with every program they draw from.
+    const studentGroupMap = new Map<string, any>();
+    for (const d of detail) {
+      if (!d.studentId) continue;
+      if (!studentGroupMap.has(d.studentId)) {
+        studentGroupMap.set(d.studentId, {
+          studentId: d.studentId, studentName: d.studentName, grNo: d.grNo,
+          grade: d.grade, section: d.section, guardianName: d.guardianName, guardianPhone: d.guardianPhone,
+          programs: new Set<string>(), totalAmount: 0,
+        });
+      }
+      const g = studentGroupMap.get(d.studentId);
+      g.programs.add(d.programLabel); g.totalAmount += d.discountAmount;
+    }
+    const topStudents = Array.from(studentGroupMap.values())
+      .map(g => ({ ...g, programs: Array.from(g.programs) }))
+      .sort((a, b) => b.totalAmount - a.totalAmount)
+      .slice(0, 25);
+
+    // Cap utilization — percentage-type programs with a maxAmount cap:
+    // how much of that cap has each student-program pairing actually used
+    // (billed so far), flagged once utilization crosses 80% so finance can
+    // review before it's fully exhausted mid-year.
+    const capUtilization: any[] = [];
+    for (const [studentId, student] of studentGroupMap.entries()) {
+      for (const programLabel of student.programs) {
+        const program = programByName.get(programLabel);
+        if (!program || !program.maxAmount) continue;
+        const usedAmount = detail
+          .filter(d => d.studentId === studentId && d.programLabel === programLabel)
+          .reduce((a, d) => a + d.discountAmount, 0);
+        const utilizationPct = (usedAmount / program.maxAmount) * 100;
+        if (utilizationPct >= 80) {
+          capUtilization.push({
+            studentId, studentName: student.studentName, grNo: student.grNo,
+            programLabel, usedAmount, maxAmount: program.maxAmount, utilizationPct,
+          });
+        }
+      }
+    }
+    capUtilization.sort((a, b) => b.utilizationPct - a.utilizationPct);
+
+    // By type (scholarship / discount / grant / incentive / other).
+    const typeGroupMap = new Map<string, number>();
+    for (const d of detail) typeGroupMap.set(d.programType, (typeGroupMap.get(d.programType) || 0) + d.discountAmount);
+    const byType = Array.from(typeGroupMap.entries()).map(([type, totalAmount]) => ({ type, totalAmount })).sort((a, b) => b.totalAmount - a.totalAmount);
+
+    // Auto-generated, plain-English insights.
+    const insights: string[] = [];
+    const pctOfRevenue = totalBilled > 0 ? (totalDiscountAmount / totalBilled) * 100 : 0;
+    insights.push(`Rs ${Math.round(totalDiscountAmount).toLocaleString()} in total discounts/scholarships was extended across ${uniqueStudentIds.size} student(s) and ${uniqueInvoiceIds.size} invoice(s)${totalBilled > 0 ? ` - ${pctOfRevenue.toFixed(1)}% of total billed revenue in this scope` : ''}.`);
+    if (byProgram.length > 0) {
+      const top = byProgram[0];
+      const topPct = totalDiscountAmount > 0 ? (top.totalAmount / totalDiscountAmount) * 100 : 0;
+      insights.push(`"${top.label}" is the single largest source of discounts: Rs ${Math.round(top.totalAmount).toLocaleString()} (${topPct.toFixed(1)}% of all discounts) across ${top.studentsCount} student(s).`);
+    }
+    if (byClass.length > 0) {
+      const topClass = [...byClass].sort((a, b) => b.pctOfClass - a.pctOfClass)[0];
+      if (topClass && topClass.classTotalStudents > 0) {
+        insights.push(`${topClass.label} has the highest concentration of discounted students: ${topClass.studentsCount} of ${topClass.classTotalStudents} (${topClass.pctOfClass.toFixed(1)}%).`);
+      }
+    }
+    if (capUtilization.length > 0) {
+      insights.push(`${capUtilization.length} student-program assignment(s) have used 80% or more of their discount program's maximum cap and may need review before the cap is fully exhausted.`);
+    }
+    if (trend.length >= 2) {
+      const last = trend[trend.length - 1], prev = trend[trend.length - 2];
+      if (prev.totalAmount > 0) {
+        const change = ((last.totalAmount - prev.totalAmount) / prev.totalAmount) * 100;
+        insights.push(`Discounts ${change >= 0 ? 'rose' : 'fell'} ${Math.abs(change).toFixed(1)}% from ${this.formatInvoiceMonth(prev.month)} to ${this.formatInvoiceMonth(last.month)}.`);
+      }
+    }
+    if (byType.length > 1) {
+      const scholarshipAmount = typeGroupMap.get('scholarship') || 0;
+      if (scholarshipAmount > 0 && totalDiscountAmount > 0) {
+        insights.push(`Scholarships make up ${((scholarshipAmount / totalDiscountAmount) * 100).toFixed(1)}% of total discount value; the remainder is general discounts, grants and incentives.`);
+      }
+    }
+
+    return {
+      summary: {
+        totalDiscountAmount, totalBilled, pctOfRevenue,
+        uniqueStudentsCount: uniqueStudentIds.size, invoicesCount: uniqueInvoiceIds.size,
+        avgDiscountPerStudent: uniqueStudentIds.size > 0 ? totalDiscountAmount / uniqueStudentIds.size : 0,
+        activeProgramsCount: programs.filter((p: any) => p.isActive).length,
+      },
+      insights,
+      byProgram, byClass, byCampus, byType, trend, topStudents, capUtilization,
+      detail,
+    };
+  }
+
+  // ============================================================
   // DISCOUNT / SCHOLARSHIP PROGRAMS
   // ============================================================
   async getDiscountPrograms(schoolSlug: string) {
