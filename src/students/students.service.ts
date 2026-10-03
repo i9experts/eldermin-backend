@@ -1023,6 +1023,80 @@ export class StudentsService {
     return `${years}y ${months}m`;
   }
 
+  // Same exact-diff shape as calculateAge above, but driven by
+  // admissionDate rather than dateOfBirth - "how long has this student
+  // actually been enrolled," not their physical age. Measured to the
+  // student's own leftDate if they've already left (so a graduated/
+  // transferred student's tenure doesn't keep silently growing after
+  // they're gone), otherwise to `asOf` (today). Falls back to
+  // reAdmissionDate when later than admissionDate - a student who left
+  // and came back has their CURRENT stint counted, not their original one.
+  private calculateTenureYears(admissionDate: Date, asOf: Date): { years: number; months: number } {
+    let years = asOf.getFullYear() - admissionDate.getFullYear();
+    let months = asOf.getMonth() - admissionDate.getMonth();
+    if (asOf.getDate() < admissionDate.getDate()) months--;
+    if (months < 0) { years--; months += 12; }
+    return { years: Math.max(0, years), months: Math.max(0, months) };
+  }
+
+  private tenureBucketFor(years: number): string {
+    if (years < 1) return 'Less than 1 year';
+    if (years <= 2) return '1-2 years';
+    if (years <= 5) return '3-5 years';
+    return '6+ years';
+  }
+
+  /** "School Age" report - how long each student has actually been
+   * enrolled (NOT their physical age from dateOfBirth, a separate field
+   * entirely - see sectionAgeStats/getDashboardStats for that one).
+   * Unpaginated by design (same convention as generateStudentListPdf
+   * below) - a report needs every matching student, not one page. */
+  async getStudentTenureReport(schoolSlug: string, filters: { grade?: string[]; section?: string[]; campusId?: string; status?: string } = {}) {
+    const query: any = { schoolSlug };
+    if (filters.grade?.length) query.currentGrade = { $in: filters.grade };
+    if (filters.section?.length) query.currentSection = { $in: filters.section };
+    if (filters.campusId) query.campusId = filters.campusId;
+    query.status = filters.status || 'active';
+
+    const students = await this.studentModel.find(query)
+      .select('studentId admissionNumber firstName lastName currentGrade currentSection campusId status admissionDate reAdmissionDate leftDate')
+      .sort({ currentGrade: 1, currentSection: 1, firstName: 1 })
+      .lean();
+
+    const campusIds = [...new Set((students as any[]).map((s: any) => s.campusId).filter(Boolean))];
+    const campuses = campusIds.length > 0 ? await this.campusModel.find({ _id: { $in: campusIds } }).select('name').lean() : [];
+    const campusNameById = new Map(campuses.map((c: any) => [String(c._id), c.name]));
+
+    const buckets: Record<string, number> = { 'Less than 1 year': 0, '1-2 years': 0, '3-5 years': 0, '6+ years': 0, 'Unknown (no admission date on file)': 0 };
+    const rows = (students as any[]).map((s: any) => {
+      const effectiveAdmission = s.reAdmissionDate && s.admissionDate && new Date(s.reAdmissionDate) > new Date(s.admissionDate)
+        ? s.reAdmissionDate : s.admissionDate;
+      if (!effectiveAdmission) {
+        buckets['Unknown (no admission date on file)']++;
+        return {
+          studentId: s.studentId, admissionNumber: s.admissionNumber || '—',
+          name: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+          grade: s.currentGrade, section: s.currentSection || '—',
+          campus: campusNameById.get(String(s.campusId)) || '—',
+          admissionDate: null, tenureYears: null, tenureLabel: '—', bucket: 'Unknown (no admission date on file)',
+        };
+      }
+      const asOf = s.leftDate ? new Date(s.leftDate) : new Date();
+      const { years, months } = this.calculateTenureYears(new Date(effectiveAdmission), asOf);
+      const bucket = this.tenureBucketFor(years);
+      buckets[bucket]++;
+      return {
+        studentId: s.studentId, admissionNumber: s.admissionNumber || '—',
+        name: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+        grade: s.currentGrade, section: s.currentSection || '—',
+        campus: campusNameById.get(String(s.campusId)) || '—',
+        admissionDate: effectiveAdmission, tenureYears: years, tenureLabel: `${years}y ${months}m`, bucket,
+      };
+    });
+
+    return { rows, buckets, total: rows.length };
+  }
+
   async generateStudentListPdf(
     schoolSlug: string,
     filters: { grades?: string[]; sections?: string[]; statuses?: string[] },
