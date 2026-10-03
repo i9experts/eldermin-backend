@@ -14,7 +14,7 @@ import { UploadService } from '../upload/upload.service';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
 import { Campus } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
-import { FeeStructure, FeeStructureDocument } from '../finance/schemas/finance.schema';
+import { FeeStructure, FeeStructureDocument, StudentFeeAssignment, StudentFeeAssignmentDocument } from '../finance/schemas/finance.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
 import * as fs from 'fs';
@@ -76,6 +76,7 @@ export class StudentsService {
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     @InjectModel(FeeStructure.name) private feeStructureModel: Model<FeeStructureDocument>,
+    @InjectModel(StudentFeeAssignment.name) private studentFeeAssignmentModel: Model<StudentFeeAssignmentDocument>,
     @InjectModel(MedicalRecord.name) private medicalRecordModel: Model<MedicalRecordDocument>,
     @InjectModel(StudentNote.name) private studentNoteModel: Model<StudentNoteDocument>,
     @InjectModel(StudentDocumentRecord.name) private studentDocumentRecordModel: Model<StudentDocumentRecordDocument>,
@@ -558,15 +559,37 @@ export class StudentsService {
       this.studentModel.countDocuments(filter),
     ]);
 
-    // Monthly Tuition Fee - not a field on Student at all, has to be
-    // matched from FeeStructure by grade/section/campus/academicYear.
-    // Batch-fetched once for the whole page rather than queried per
-    // student (N+1). FeeStructure.section is optional (unset = applies
-    // to the whole grade) and .campus is a free-text field that may not
-    // always be set either, so this picks the most SPECIFIC matching
-    // structure for each student rather than just the first one found.
+    // Monthly Tuition Fee - not a field on Student at all. An explicit
+    // per-student StudentFeeAssignment (set via Finance's "Assign Fee"
+    // screen) always wins when one is in force for the student today -
+    // same assignment-first/auto-match-fallback precedence
+    // generateInvoices uses, so this list agrees with what actually gets
+    // billed. Falls back to the grade/section/campus/academicYear
+    // auto-match against FeeStructure only when a student has no active
+    // assignment, so a school that never touches "Assign Fee" sees no
+    // change in behaviour. Both batch-fetched once for the whole page
+    // rather than queried per student (N+1).
+    const tuitionLineAmount = (structure: any): number | null => {
+      const tuitionLine = (structure?.items || []).find((i: any) => i.feeHead?.toLowerCase().includes('tuition'));
+      return tuitionLine ? tuitionLine.amount : null;
+    };
     const activeStructures = await this.feeStructureModel.find({ schoolSlug, isActive: true }).lean();
+    const feeStructureById = new Map(activeStructures.map((fs: any) => [String(fs._id), fs]));
+    const now = new Date();
+    const activeAssignments = await this.studentFeeAssignmentModel.find({
+      schoolSlug, isActive: true, studentId: { $in: data.map((s: any) => s._id) },
+    }).lean();
+    const assignmentByStudent = new Map<string, any>();
+    for (const a of activeAssignments as any[]) {
+      if (new Date(a.effectiveFrom) > now || (a.effectiveTo && new Date(a.effectiveTo) < now)) continue;
+      assignmentByStudent.set(String(a.studentId), a);
+    }
     const tuitionAmountFor = (s: any): number | null => {
+      const assignment = assignmentByStudent.get(String(s._id));
+      if (assignment) {
+        const structure = feeStructureById.get(String(assignment.feeStructureId));
+        if (structure) return tuitionLineAmount(structure);
+      }
       let best: { structure: any; specificity: number } | null = null;
       for (const fs of activeStructures) {
         if (fs.grade !== s.currentGrade) continue;
@@ -576,9 +599,7 @@ export class StudentsService {
         const specificity = (fs.section ? 1 : 0) + (fs.campus ? 1 : 0) + (fs.academicYear ? 1 : 0);
         if (!best || specificity > best.specificity) best = { structure: fs, specificity };
       }
-      if (!best) return null;
-      const tuitionLine = (best.structure.items || []).find((i: any) => i.feeHead?.toLowerCase().includes('tuition'));
-      return tuitionLine ? tuitionLine.amount : null;
+      return best ? tuitionLineAmount(best.structure) : null;
     };
     const dataWithFees = data.map((s: any) => {
       const obj = s.toObject ? s.toObject() : s;
