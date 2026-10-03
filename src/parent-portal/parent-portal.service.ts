@@ -30,6 +30,7 @@ import {
 } from './schemas/notification-and-message.schema';
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { ParentDevice, ParentDeviceDocument } from './schemas/parent-device.schema';
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
 
@@ -61,9 +62,31 @@ export class ParentPortalService {
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
+    @InjectModel(ParentDevice.name) private deviceModel: Model<ParentDeviceDocument>,
     private assessmentService: AssessmentService,
     private certificatesService: CertificatesService,
   ) {}
+
+  // ── Device ping: a real "this parent has the app open" signal ──────
+  // Called on every login and every app cold-start. Upserts by
+  // (userId, deviceId) so re-pinging the same device just advances
+  // lastSeenAt instead of creating duplicates - the count of distinct
+  // documents per user is the honest "how many devices this parent
+  // actually uses the app on" number.
+  async recordDevicePing(userId: string, tenantId: string, dto: { deviceId: string; platform: string; appVersion?: string }) {
+    if (!dto?.deviceId) throw new BadRequestException('deviceId is required');
+    if (!['android', 'ios'].includes(dto.platform)) throw new BadRequestException('platform must be android or ios');
+
+    await this.deviceModel.findOneAndUpdate(
+      { userId: new Types.ObjectId(userId), deviceId: dto.deviceId },
+      {
+        $set: { tenantId: new Types.ObjectId(tenantId), platform: dto.platform, appVersion: dto.appVersion, lastSeenAt: new Date() },
+        $setOnInsert: { firstSeenAt: new Date() },
+      },
+      { upsert: true, new: true },
+    );
+    return { ok: true };
+  }
 
   // ── Admin: link a guardian's login to their child/children ─────
   // This is the foundational step - without it, a parent account has

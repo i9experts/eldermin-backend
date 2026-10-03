@@ -23,6 +23,7 @@ import { UploadService } from '../upload/upload.service';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
+import { ParentDevice, ParentDeviceDocument } from '../parent-portal/schemas/parent-device.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -41,6 +42,7 @@ export class OrganizationService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(ParentDevice.name) private parentDeviceModel: Model<ParentDeviceDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -693,7 +695,25 @@ export class OrganizationService {
       for (const sid of u.guardianOfStudentIds || []) activatedStudentIds.add(String(sid));
     }
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const recentlyActiveParents = (parentUsers as any[]).filter((u: any) => u.lastLoginAt && new Date(u.lastLoginAt) >= sevenDaysAgo).length;
+
+    // Real install proxy: devices the app itself pinged us about (on login
+    // and on every cold start) - unlike `lastLoginAt`, this isn't a single
+    // overwritten timestamp, it's one row per device the parent actually
+    // has the app on, so it survives even if this particular parent hasn't
+    // logged in again recently.
+    const parentUserIds = (parentUsers as any[]).map((u: any) => u._id);
+    const devices = parentUserIds.length > 0
+      ? await this.parentDeviceModel.find({ userId: { $in: parentUserIds } }).select('platform firstSeenAt lastSeenAt').lean()
+      : [];
+    const totalDevicesRegistered = devices.length;
+    const devicesActiveLast7Days = (devices as any[]).filter((d: any) => new Date(d.lastSeenAt) >= sevenDaysAgo).length;
+    const devicesActiveLast30Days = (devices as any[]).filter((d: any) => new Date(d.lastSeenAt) >= thirtyDaysAgo).length;
+    const devicesByPlatform = (devices as any[]).reduce((acc: Record<string, number>, d: any) => {
+      acc[d.platform] = (acc[d.platform] || 0) + 1;
+      return acc;
+    }, {});
 
     const staffByCampus = tenantId
       ? await this.staffModel.aggregate([
@@ -727,10 +747,13 @@ export class OrganizationService {
     }
 
     return {
-      overall: { ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents },
+      overall: {
+        ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents,
+        totalDevicesRegistered, devicesActiveLast7Days, devicesActiveLast30Days, devicesByPlatform,
+      },
       campuses: campusRows,
       notes: {
-        downloads: 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads.',
+        downloads: 'Real Play Store/App Store download counts require integrating those stores’ own Developer APIs, which isn’t connected yet. "Devices Registered" above is a real, already-tracked proxy instead — the app pings us on every login and app open, so it reflects actual installs in use, not raw store downloads.',
         staffApp: 'Staff currently access Eldermin through the web dashboard - there is no separate staff mobile app login yet to measure activation for, so staff numbers above are headcount only.',
       },
     };

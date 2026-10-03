@@ -37,6 +37,13 @@ export class ParentPortalController {
     return this.service.getMyStudents(requestingUser, schoolSlug);
   }
 
+  @Post('device-ping')
+  @HttpCode(HttpStatus.OK)
+  async pingDevice(@Body() dto: { deviceId: string; platform: string; appVersion?: string }, @Request() req: any) {
+    const { userId, tenantId } = this.ctx(req);
+    return this.service.recordDevicePing(userId, tenantId, dto);
+  }
+
   @Get('circulars')
   async getCirculars(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);
