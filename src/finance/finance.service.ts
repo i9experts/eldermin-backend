@@ -3609,6 +3609,20 @@ export class FinanceService {
     const programById = new Map(discountPrograms.map((p: any) => [String(p._id), p]));
     const campusIdToName = new Map(campuses.map((c: any) => [String(c._id), c.name]));
     const feeStructureById = new Map(feeStructures.map((fs: any) => [String(fs._id), fs]));
+    // An explicit StudentFeeAssignment can (and routinely does, e.g. a
+    // grandfathered student kept on last year's pricing) point at a
+    // FeeStructure that's since been deactivated - assignFeeStructure()
+    // never required isActive at assignment time, only existence. The
+    // `isActive: true` fetch above is the current-catalog pool for the
+    // auto-match fallback; an assignment's own referenced structure must
+    // resolve regardless of that flag, or every grandfathered student
+    // silently falls through to the (wrong) auto-match or no match at all.
+    const assignedStructureIds = [...new Set((studentFeeAssignments as any[]).map(a => String(a.feeStructureId)))]
+      .filter(id => !feeStructureById.has(id));
+    if (assignedStructureIds.length > 0) {
+      const assignedStructures = await this.feeStructModel.find({ _id: { $in: assignedStructureIds }, schoolSlug }).lean();
+      for (const fs of assignedStructures) feeStructureById.set(String((fs as any)._id), fs);
+    }
     const studentFeeAssignmentsByStudent = new Map<string, any[]>();
     for (const a of studentFeeAssignments as any[]) {
       const key = String(a.studentId);

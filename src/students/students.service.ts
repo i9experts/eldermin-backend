@@ -584,6 +584,19 @@ export class StudentsService {
       if (new Date(a.effectiveFrom) > now || (a.effectiveTo && new Date(a.effectiveTo) < now)) continue;
       assignmentByStudent.set(String(a.studentId), a);
     }
+    // An assignment can (and routinely does, e.g. a grandfathered student
+    // kept on last year's pricing) point at a FeeStructure that's since
+    // been deactivated - assignFeeStructure() never required isActive at
+    // assignment time, only existence. feeStructureById above is the
+    // current-catalog pool for the auto-match fallback below; an
+    // assignment's own referenced structure must resolve regardless of
+    // that flag, or every grandfathered student silently shows "-" again.
+    const assignedStructureIds = [...new Set([...assignmentByStudent.values()].map((a: any) => String(a.feeStructureId)))]
+      .filter(id => !feeStructureById.has(id));
+    if (assignedStructureIds.length > 0) {
+      const assignedStructures = await this.feeStructureModel.find({ _id: { $in: assignedStructureIds }, schoolSlug }).lean();
+      for (const fs of assignedStructures) feeStructureById.set(String((fs as any)._id), fs);
+    }
     const tuitionAmountFor = (s: any): number | null => {
       const assignment = assignmentByStudent.get(String(s._id));
       if (assignment) {
