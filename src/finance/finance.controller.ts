@@ -538,6 +538,24 @@ export class FinanceController {
     return res.json(data);
   }
 
+  @RequireModuleAccess('finance', 'reports', 'view')
+  @Get('reports/discounts')
+  async getDiscountSummaryReport(@Request() req: any, @Query() query: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const data = await this.service.getDiscountSummaryReport(schoolSlug, {
+      academicYear: query.academicYear, grade: query.grade, campusId: query.campusId,
+      programId: query.programId, from: query.from, to: query.to,
+    });
+
+    if (query.format === 'csv') {
+      const csv = this.toCsv(data.detail);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="discount-summary-detail.csv"');
+      return res.send(csv);
+    }
+    return res.json(data);
+  }
+
   // Item 43 — Fee Revenue by Batch (Grade+Section, e.g. "Grade 3-Boys").
   // JSON here backs both an in-app preview and the landscape PDF
   // (POST /pdf/fee-revenue-report, which calls this same service method).
