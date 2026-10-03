@@ -3601,7 +3601,7 @@ export class HrService {
   // All read-only report views over data that already exists elsewhere
   // (Staff, ExitRecord) - no new schema needed for any of these.
 
-  async getStaffListReport(tenantId: string, filters: { campusId?: string; department?: string; employmentType?: string; status?: string; designation?: string } = {}, requestingUser?: ScopedUser) {
+  async getStaffListReport(tenantId: string, filters: { staffId?: string; campusId?: string; department?: string; employmentType?: string; status?: string; designation?: string } = {}, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.newTid(tenantId) };
     if (requestingUser) {
       const effectiveCampusId = resolveCampusScope(requestingUser, filters.campusId);
@@ -3619,6 +3619,7 @@ export class HrService {
     if (filters.employmentType) filter.employmentType = filters.employmentType;
     if (filters.status) filter.status = filters.status;
     if (filters.designation) filter.designation = filters.designation;
+    if (filters.staffId) filter._id = this.newTid(filters.staffId);
 
     return this.staffModel
       .find(filter)
@@ -3630,7 +3631,7 @@ export class HrService {
 
   /** Same data as getStaffListReport, grouped by campus then department -
    * the "Staff Allocation" report (who's assigned where). */
-  async getStaffAllocationReport(tenantId: string, filters: { campusId?: string; department?: string } = {}, requestingUser?: ScopedUser) {
+  async getStaffAllocationReport(tenantId: string, filters: { staffId?: string; campusId?: string; department?: string } = {}, requestingUser?: ScopedUser) {
     const staff = await this.getStaffListReport(tenantId, { ...filters, status: undefined }, requestingUser);
     const active = staff.filter((s: any) => s.isActive !== false && s.status !== 'resigned' && s.status !== 'terminated');
     const groups = new Map<string, { campus: string; department: string; staff: any[] }>();
@@ -3648,7 +3649,7 @@ export class HrService {
    * Salary". Deliberately exposes the figures a payroll/HR admin already
    * has view access to via the Payroll tab; this report just presents it
    * as one printable/exportable list instead of per-staff lookups. */
-  async getStaffSalaryReport(tenantId: string, filters: { campusId?: string; department?: string } = {}, requestingUser?: ScopedUser) {
+  async getStaffSalaryReport(tenantId: string, filters: { staffId?: string; campusId?: string; department?: string } = {}, requestingUser?: ScopedUser) {
     const staff = await this.getStaffListReport(tenantId, filters, requestingUser);
     return (staff as any[]).map((s) => ({
       ...s,
@@ -3657,8 +3658,8 @@ export class HrService {
     }));
   }
 
-  async getNewStaffReport(tenantId: string, from?: string, to?: string, requestingUser?: ScopedUser) {
-    const staff = await this.getStaffListReport(tenantId, {}, requestingUser);
+  async getNewStaffReport(tenantId: string, from?: string, to?: string, requestingUser?: ScopedUser, staffId?: string) {
+    const staff = await this.getStaffListReport(tenantId, { staffId }, requestingUser);
     return (staff as any[])
       .filter((s) => {
         if (!s.dateOfJoining) return false;
@@ -3670,13 +3671,14 @@ export class HrService {
       .sort((a, b) => new Date(b.dateOfJoining).getTime() - new Date(a.dateOfJoining).getTime());
   }
 
-  async getStaffLeftReport(tenantId: string, from?: string, to?: string) {
+  async getStaffLeftReport(tenantId: string, from?: string, to?: string, staffId?: string) {
     const filter: any = { tenantId: this.newTid(tenantId) };
     if (from || to) {
       filter.lastWorkingDay = {};
       if (from) filter.lastWorkingDay.$gte = new Date(from);
       if (to) filter.lastWorkingDay.$lte = new Date(to);
     }
+    if (staffId) filter.staffId = this.newTid(staffId);
     return this.exitRecordModel.find(filter).sort({ lastWorkingDay: -1 }).lean();
   }
 
@@ -3727,6 +3729,82 @@ export class HrService {
       else summary.other++;
     }
     return { data: filtered, summary, total: filtered.length };
+  }
+
+  /** The actually useful shape of an attendance report for a school admin:
+   * one row PER EMPLOYEE (not one row per day across everyone), answering
+   * "is this person punctual/regular" - attendance rate, punctuality rate
+   * (the share of their attended days they were actually ON TIME, not
+   * late), average check-in/out, and a late-day count. A raw aggregate
+   * like "292 present, 2 absent" across the whole school says nothing
+   * about any individual - this is the report an admin actually wants
+   * when reviewing staff discipline. Built over the same filtered query
+   * as getStaffAttendanceReport (status filter dropped here - an
+   * aggregate summary needs every status in range, not just one). */
+  async getStaffAttendanceSummaryReport(
+    tenantId: string,
+    filters: { from?: string; to?: string; campusId?: string; department?: string; staffId?: string } = {},
+    requestingUser?: ScopedUser,
+  ) {
+    const { data: records } = await this.getStaffAttendanceReport(tenantId, filters, requestingUser);
+
+    const byStaff = new Map<string, { staff: any; records: any[] }>();
+    for (const r of records as any[]) {
+      const sid = String(r.staffId?._id || r.staffId);
+      if (!byStaff.has(sid)) byStaff.set(sid, { staff: r.staffId, records: [] });
+      byStaff.get(sid)!.records.push(r);
+    }
+
+    const toMinutes = (t?: string) => {
+      if (!t) return null;
+      const [h, m] = t.split(':').map(Number);
+      return Number.isNaN(h) || Number.isNaN(m) ? null : h * 60 + m;
+    };
+    const fromMinutes = (mins: number) => {
+      const h = Math.floor(mins / 60), m = Math.round(mins % 60);
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    };
+
+    const rows = Array.from(byStaff.values()).map(({ staff, records: recs }) => {
+      const counts: Record<string, number> = {};
+      let lateMinsSum = 0, lateMinsCount = 0, checkInSum = 0, checkInCount = 0, checkOutSum = 0, checkOutCount = 0;
+      for (const r of recs) {
+        counts[r.status] = (counts[r.status] || 0) + 1;
+        if (r.status === 'late') { lateMinsSum += r.lateByMins || 0; lateMinsCount++; }
+        const ci = toMinutes(r.checkInTime);
+        if (ci !== null) { checkInSum += ci; checkInCount++; }
+        const co = toMinutes(r.checkOutTime);
+        if (co !== null) { checkOutSum += co; checkOutCount++; }
+      }
+      const presentCount = counts.present || 0;
+      const lateCount = counts.late || 0;
+      const halfDayCount = counts.half_day || 0;
+      const absentCount = counts.absent || 0;
+      const onLeaveCount = (counts.on_leave || 0) + (counts.sick_leave || 0);
+      // "Attended" = actually showed up in some form (on time, late, half
+      // day, remote, or covering an extra day) - the denominator for
+      // punctuality below.
+      const attendedCount = presentCount + lateCount + halfDayCount + (counts.remote || 0) + (counts.extra_day || 0);
+      // "Workable" days exclude holidays/weekends from the denominator for
+      // attendance rate - a holiday was never a day this person could have
+      // been marked present, so it shouldn't drag their rate down.
+      const workableDays = recs.length - (counts.holiday || 0) - (counts.weekend || 0);
+      const attendanceRate = workableDays > 0 ? Math.round((attendedCount / workableDays) * 1000) / 10 : 0;
+      const punctualityRate = attendedCount > 0 ? Math.round((presentCount / attendedCount) * 1000) / 10 : 0;
+
+      return {
+        staffId: staff?._id, staffName: `${staff?.firstName || ''} ${staff?.lastName || ''}`.trim(),
+        employeeId: staff?.employeeId, designation: staff?.designation, department: staff?.department,
+        markedDays: recs.length, workableDays,
+        presentCount, lateCount, halfDayCount, absentCount, onLeaveCount,
+        attendanceRate, punctualityRate,
+        avgLateByMins: lateMinsCount > 0 ? Math.round(lateMinsSum / lateMinsCount) : 0,
+        avgCheckIn: checkInCount > 0 ? fromMinutes(checkInSum / checkInCount) : null,
+        avgCheckOut: checkOutCount > 0 ? fromMinutes(checkOutSum / checkOutCount) : null,
+      };
+    }).sort((a, b) => a.staffName.localeCompare(b.staffName));
+
+    return { rows, from: filters.from, to: filters.to };
   }
 
   /** The classic monthly staff attendance register: one row per staff

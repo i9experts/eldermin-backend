@@ -215,6 +215,11 @@ export class HrController {
     return this.hrService.getStaffAttendanceReport(req.user.tenantId, q, req.user);
   }
 
+  @Get('attendance/summary-report')
+  getAttendanceSummaryReport(@Request() req, @Query() q: any) {
+    return this.hrService.getStaffAttendanceSummaryReport(req.user.tenantId, q, req.user);
+  }
+
   @Get('attendance/muster-roll')
   getMusterRoll(@Request() req, @Query() q: any) {
     return this.hrService.getStaffMusterRoll(req.user.tenantId, { month: parseInt(q.month), year: parseInt(q.year), campusId: q.campusId, department: q.department }, req.user);
@@ -709,13 +714,13 @@ export class HrController {
   getStaffSalaryReport(@Request() req, @Query() query: any) { return this.hrService.getStaffSalaryReport(req.user.tenantId, query, req.user); }
 
   @Get('reports/new-staff')
-  getNewStaffReport(@Request() req, @Query('from') from?: string, @Query('to') to?: string) {
-    return this.hrService.getNewStaffReport(req.user.tenantId, from, to, req.user);
+  getNewStaffReport(@Request() req, @Query('from') from?: string, @Query('to') to?: string, @Query('staffId') staffId?: string) {
+    return this.hrService.getNewStaffReport(req.user.tenantId, from, to, req.user, staffId);
   }
 
   @Get('reports/staff-left')
-  getStaffLeftReport(@Request() req, @Query('from') from?: string, @Query('to') to?: string) {
-    return this.hrService.getStaffLeftReport(req.user.tenantId, from, to);
+  getStaffLeftReport(@Request() req, @Query('from') from?: string, @Query('to') to?: string, @Query('staffId') staffId?: string) {
+    return this.hrService.getStaffLeftReport(req.user.tenantId, from, to, staffId);
   }
 
   @Get('staff/:id/file-cover')
