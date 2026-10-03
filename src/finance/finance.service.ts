@@ -3656,6 +3656,40 @@ export class FinanceService {
       arrearsByStudent.set(key, (arrearsByStudent.get(key) || 0) + (inv.balanceDue || 0));
     }
 
+    // A Fee Structure whose frequency is "Annually"/"One-time" bills
+    // exactly once per academic year, not every month - the structure's
+    // own frequency field (FeeStructure.frequency) previously had zero
+    // effect on billing, so an annual fee collected in August reappeared
+    // again on every later month's challan. Batched once for the whole
+    // run (same reasoning as existingInvoices/arrearsInvoices above):
+    // finds every (student, feeStructureId) pair that already has a
+    // non-deleted invoice line item from a non-recurring structure in
+    // ANY other month this academic year, so this month's item-building
+    // loop below can skip re-adding it. `month: { $ne: month }` excludes
+    // this exact month's own (possibly already-existing, resync-eligible)
+    // invoice, so resyncing August's own challan never strips its own
+    // annual-fee line.
+    const nonRecurringFrequencies = new Set(['annually', 'annual', 'one-time', 'one time', 'onetime', 'once']);
+    const isNonRecurringFrequency = (freq: any) => nonRecurringFrequencies.has(String(freq || '').trim().toLowerCase());
+    const nonRecurringStructureIds = feeStructures.filter((fs: any) => isNonRecurringFrequency(fs.frequency)).map((fs: any) => fs._id);
+    const alreadyBilledNonRecurring = new Set<string>(); // `${studentId}::${feeStructureId}`
+    if (nonRecurringStructureIds.length > 0) {
+      const priorNonRecurringInvoices = await this.invoiceModel
+        .find(
+          { schoolSlug, academicYear, month: { $ne: month }, isDeleted: { $ne: true }, 'items.feeStructureId': { $in: nonRecurringStructureIds } },
+          { studentId: 1, 'items.feeStructureId': 1 },
+        )
+        .lean();
+      const nonRecurringIdStrings = new Set(nonRecurringStructureIds.map((id: any) => String(id)));
+      for (const inv of priorNonRecurringInvoices as any[]) {
+        for (const it of (inv as any).items || []) {
+          if (it.feeStructureId && nonRecurringIdStrings.has(String(it.feeStructureId))) {
+            alreadyBilledNonRecurring.add(`${inv.studentId}::${it.feeStructureId}`);
+          }
+        }
+      }
+    }
+
     let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, skippedAmbiguousMatch = 0, discountsSynced = 0;
     const errors: string[] = [];
     const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
@@ -3759,6 +3793,13 @@ export class FinanceService {
         let lateFine = 0;
 
         for (const fs of applicableStructures) {
+          // Annual/one-time structure already billed to this student
+          // earlier in this academic year - skip it entirely for this
+          // month (not just its items) so a now-irrelevant structure's
+          // dueDay/lateFeeAmount also doesn't leak into this invoice.
+          if (isNonRecurringFrequency(fs.frequency) && alreadyBilledNonRecurring.has(`${student._id}::${fs._id}`)) {
+            continue;
+          }
           if (fs.dueDay) dueDay = fs.dueDay;
           if (fs.lateFeeAmount) lateFine += fs.lateFeeAmount;
           for (const item of (fs.items || [])) {
