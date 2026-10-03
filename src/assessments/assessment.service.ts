@@ -1144,8 +1144,17 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
-    if (subject) filter.subject = subject;
-    if (grade) filter.grade = grade;
+    // Subject/grade on a question are free-typed strings (bulk import
+    // only trims them, no lookup against the canonical Subjects/Grades
+    // lists) - matching them case-sensitively against the canonical
+    // dropdown value the exam-paper builder sends ("Urdu" vs "urdu",
+    // trailing spaces, etc.) silently hid real questions from paper
+    // generation while the Question Bank list screen (unfiltered by
+    // default) kept showing them fine. Same case-insensitive/trimmed
+    // approach as `topic` below fixes both without needing a data
+    // migration.
+    if (subject) filter.subject = { $regex: `^${this.escapeRegex(subject.trim())}$`, $options: 'i' };
+    if (grade) filter.grade = { $regex: `^${this.escapeRegex(grade.trim())}$`, $options: 'i' };
     if (topic) filter.topic = { $regex: this.escapeRegex(topic), $options: 'i' };
     if (type) filter.type = type;
     if (difficulty) filter.difficulty = difficulty;
@@ -1167,8 +1176,10 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
   async getQuestionStats(schoolSlug: string, subject?: string, grade?: string) {
     const filter: any = { schoolSlug };
-    if (subject) filter.subject = subject;
-    if (grade) filter.grade = grade;
+    // Same case-insensitive/trimmed matching as getQuestions - see the
+    // comment there.
+    if (subject) filter.subject = { $regex: `^${this.escapeRegex(subject.trim())}$`, $options: 'i' };
+    if (grade) filter.grade = { $regex: `^${this.escapeRegex(grade.trim())}$`, $options: 'i' };
 
     const [byType, byDifficulty, byBlooms, bySubject] = await Promise.all([
       this.questionModel.aggregate([
