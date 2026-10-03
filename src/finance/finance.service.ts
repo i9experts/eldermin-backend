@@ -3493,12 +3493,60 @@ export class FinanceService {
     };
   }
 
+  /** A direct, in-place correction of an existing assignment's dates/notes
+   * (and, optionally, which fee structure it points to) - the same
+   * "didn't exist before" gap as the sibling discount assignment's
+   * updateFeeAssignment, fixed the same way: edit the record itself
+   * instead of deleting and recreating it (which would lose its original
+   * creation date). Deliberately does NOT re-run assignFeeStructure's
+   * conflict-detection - that logic exists to stop a NEW assignment from
+   * silently double-booking a fee head; correcting an assignment that
+   * already exists (a typo'd date, a wrong structure picked) is an
+   * admin-initiated fix, not a new booking, so it's trusted the same way
+   * updateFeeAssignment trusts a discount edit. */
+  async updateStudentFeeAssignment(id: string, schoolSlug: string, data: {
+    feeStructureId?: string; academicYear?: string;
+    effectiveFrom?: string | Date; effectiveTo?: string | Date | null; notes?: string;
+  }) {
+    const assignment = await this.studentFeeAssignmentModel.findOne({ _id: id, schoolSlug, isActive: true });
+    if (!assignment) throw new NotFoundException('Fee assignment not found');
+
+    if (data.feeStructureId) {
+      const structure = await this.feeStructModel.findOne({ _id: data.feeStructureId, schoolSlug }).lean();
+      if (!structure) throw new BadRequestException('Fee structure not found');
+      assignment.feeStructureId = data.feeStructureId as any;
+      assignment.feeStructureName = structure.name;
+    }
+    if (data.academicYear) assignment.academicYear = data.academicYear;
+    if (data.effectiveFrom) assignment.effectiveFrom = new Date(data.effectiveFrom);
+    if ('effectiveTo' in data) assignment.effectiveTo = data.effectiveTo ? new Date(data.effectiveTo) : undefined as any;
+    if ('notes' in data) assignment.notes = data.notes || undefined as any;
+    await assignment.save();
+    return assignment.toObject();
+  }
+
   async deleteStudentFeeAssignment(id: string, schoolSlug: string) {
     const assignment = await this.studentFeeAssignmentModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: { isActive: false, replacedAt: new Date() } },
     );
     if (!assignment) throw new NotFoundException('Fee assignment not found');
     return { message: 'Fee assignment removed' };
+  }
+
+  /** Bulk variant of deleteStudentFeeAssignment - the "select rows, then
+   * delete" action behind the Assign Fee table's checkbox column. Same
+   * soft-delete shape as the single-id version (isActive:false,
+   * replacedAt), just applied via $in instead of looping one at a time -
+   * looping would work too, but a single updateMany is both faster and
+   * avoids a partial-failure state where some of N selected rows are
+   * removed and others aren't for no visible reason. */
+  async bulkDeleteStudentFeeAssignments(ids: string[], schoolSlug: string) {
+    if (!Array.isArray(ids) || ids.length === 0) throw new BadRequestException('No assignments selected');
+    const result = await this.studentFeeAssignmentModel.updateMany(
+      { _id: { $in: ids }, schoolSlug },
+      { $set: { isActive: false, replacedAt: new Date() } },
+    );
+    return { removed: result.modifiedCount };
   }
 
   // ============================================================
