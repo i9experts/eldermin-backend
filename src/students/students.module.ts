@@ -21,7 +21,7 @@ import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-fie
 import { UploadModule } from '../upload/upload.module';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
-import { FeeStructure, FeeStructureSchema } from '../finance/schemas/finance.schema';
+import { FeeStructure, FeeStructureSchema, StudentFeeAssignment, StudentFeeAssignmentSchema } from '../finance/schemas/finance.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
@@ -46,6 +46,7 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: FeeStructure.name, schema: FeeStructureSchema },
+      { name: StudentFeeAssignment.name, schema: StudentFeeAssignmentSchema },
       // LMS Phase 3 - Student 360 "Learning" tab (getStudentLearning).
       // Registered directly rather than importing SyllabusModule/
       // AssessmentModule, same "only the read access this actually
