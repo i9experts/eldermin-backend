@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   School, SchoolDocument,
   Campus, CampusDocument,
@@ -22,6 +22,7 @@ import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { UploadService } from '../upload/upload.service';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
+import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -39,6 +40,7 @@ export class OrganizationService {
     @InjectModel(StudentFee.name) private feeModel: Model<StudentFeeDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private uploadService: UploadService,
   ) {}
 
@@ -654,5 +656,87 @@ export class OrganizationService {
       };
     }
     return result;
+  }
+
+  // ── PARENT APP ACTIVATION ────────────────────────────────────────────
+  // Deliberately NOT a "download statistics" report - a backend has no
+  // way to know real Play Store/App Store install counts without
+  // integrating those stores' own Developer APIs (not done here), so a
+  // "Total Downloads" number would be fabricated. What IS real and
+  // already happening: the parent mobile app's WhatsApp-OTP login
+  // creates/updates a `User` document with primaryRole 'parent' (see
+  // ParentAuthService.issueSessionForPhone) - that's a genuine "this
+  // parent actually opened and used the app" signal. This report is
+  // built entirely on that, per-campus, and is honest about what it
+  // can't measure (store-level downloads, staff app usage - staff have
+  // no separate mobile app/login path to distinguish from the web ERP).
+  //
+  // Excludes the hardcoded Play Store reviewer bypass phone
+  // (+923172573105, see ParentAuthService) from every count - a real
+  // reviewer login must never inflate a school's own adoption numbers.
+  private static readonly PLAY_STORE_REVIEWER_PHONE = '+923172573105';
+
+  async getParentAppActivation(schoolSlug: string, tenantId?: string) {
+    const [campuses, students] = await Promise.all([
+      this.campusModel.find({ schoolSlug, isActive: true }).select('name').lean(),
+      this.studentModel.find({ schoolSlug, status: 'active' }).select('campusId guardians').lean(),
+    ]);
+
+    const parentUserFilter: any = { primaryRole: 'parent', phone: { $ne: OrganizationService.PLAY_STORE_REVIEWER_PHONE } };
+    if (tenantId) parentUserFilter.tenantId = tenantId;
+    const parentUsers = tenantId
+      ? await this.userModel.find(parentUserFilter).select('guardianOfStudentIds lastLoginAt createdAt').lean()
+      : [];
+
+    const activatedStudentIds = new Set<string>();
+    for (const u of parentUsers as any[]) {
+      for (const sid of u.guardianOfStudentIds || []) activatedStudentIds.add(String(sid));
+    }
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const recentlyActiveParents = (parentUsers as any[]).filter((u: any) => u.lastLoginAt && new Date(u.lastLoginAt) >= sevenDaysAgo).length;
+
+    const staffByCampus = tenantId
+      ? await this.staffModel.aggregate([
+          { $match: { tenantId: this.toObjectIdOrSkip(tenantId), isActive: true } },
+          { $group: { _id: '$campusId', count: { $sum: 1 } } },
+        ])
+      : [];
+    const staffCountByCampus = new Map(staffByCampus.map((r: any) => [String(r._id), r.count]));
+    const totalStaff = staffByCampus.reduce((sum: number, r: any) => sum + r.count, 0);
+
+    const buildBucket = (list: any[]) => {
+      const totalStudents = list.length;
+      const studentsWithGuardianPhone = list.filter((s: any) => (s.guardians || []).some((g: any) => g.phone)).length;
+      const studentsWithActivatedParent = list.filter((s: any) => activatedStudentIds.has(String(s._id))).length;
+      return {
+        totalStudents, studentsWithGuardianPhone, studentsWithActivatedParent,
+        activationRate: studentsWithGuardianPhone > 0 ? Math.round((studentsWithActivatedParent / studentsWithGuardianPhone) * 1000) / 10 : 0,
+      };
+    };
+
+    const campusRows = (campuses as any[]).map((c: any) => {
+      const campusStudents = (students as any[]).filter((s: any) => String(s.campusId) === String(c._id));
+      return {
+        campusId: c._id, campusName: c.name, totalStaff: staffCountByCampus.get(String(c._id)) || 0,
+        ...buildBucket(campusStudents),
+      };
+    });
+    const unassignedStudents = (students as any[]).filter((s: any) => !s.campusId || !campuses.some((c: any) => String(c._id) === String(s.campusId)));
+    if (unassignedStudents.length > 0) {
+      campusRows.push({ campusId: null, campusName: 'Unassigned Campus', totalStaff: 0, ...buildBucket(unassignedStudents) } as any);
+    }
+
+    return {
+      overall: { ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents },
+      campuses: campusRows,
+      notes: {
+        downloads: 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads.',
+        staffApp: 'Staff currently access Eldermin through the web dashboard - there is no separate staff mobile app login yet to measure activation for, so staff numbers above are headcount only.',
+      },
+    };
+  }
+
+  private toObjectIdOrSkip(id: string) {
+    try { return new Types.ObjectId(id); } catch { return id; }
   }
 }
