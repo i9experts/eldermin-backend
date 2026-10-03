@@ -52,6 +52,8 @@ import { Grievance, GrievanceDocument } from './schemas/grievance.schema';
 import { DailyWorkSummary, DailyWorkSummaryDocument } from './schemas/daily-work-summary.schema';
 import { ExpenseClaim, ExpenseClaimDocument } from './schemas/expense-claim.schema';
 import { Advance, AdvanceDocument } from './schemas/advance.schema';
+import { StaffIncrement, StaffIncrementDocument } from './schemas/staff-increment.schema';
+import { SecurityDeposit, SecurityDepositDocument } from './schemas/security-deposit.schema';
 import { FinanceService } from '../../finance/finance.service';
 
 @Injectable()
@@ -91,6 +93,8 @@ export class HrService {
     @InjectModel(DailyWorkSummary.name) private dailyWorkSummaryModel: Model<DailyWorkSummaryDocument>,
     @InjectModel(ExpenseClaim.name) private expenseClaimModel: Model<ExpenseClaimDocument>,
     @InjectModel(Advance.name) private advanceModel: Model<AdvanceDocument>,
+    @InjectModel(StaffIncrement.name) private incrementModel: Model<StaffIncrementDocument>,
+    @InjectModel(SecurityDeposit.name) private securityDepositModel: Model<SecurityDepositDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
     private readonly uploadService: UploadService,
@@ -450,6 +454,155 @@ export class HrService {
       .lean();
     if (!staff) throw new NotFoundException('Staff member not found');
     return staff.documents;
+  }
+
+  /** The printable "File Cover" - a staff personal file's cover sheet:
+   * photo, core profile, employment/designation history summary, and a
+   * document checklist, on the school's own letterhead. Built with pdf-lib
+   * directly (same approach as generatePayslipPdf below) rather than via
+   * PdfService.generateFromTemplate - a profile-sheet-plus-photo doesn't
+   * fit that engine's table/key_value section vocabulary. */
+  async generateStaffFileCoverPdf(tenantId: string, schoolSlug: string, staffId: string): Promise<Buffer> {
+    const staff = await this.staffModel
+      .findOne({ _id: staffId, tenantId: this.newTid(tenantId) })
+      .populate('designationId', 'name code department')
+      .populate('campusId', 'name code')
+      .lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    const school = await this.schoolModel.findOne({ slug: schoolSlug }).lean();
+    const schoolName = (school as any)?.name || 'Eldermin School';
+    const schoolAddress = [(school as any)?.address?.street, (school as any)?.address?.city].filter(Boolean).join(', ');
+
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.registerFontkit(fontkit);
+    const page = pdfDoc.addPage([595, 842]); // A4
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const arabicFontBytes = fs.readFileSync(
+      require.resolve('@fontsource/noto-sans-arabic/files/noto-sans-arabic-arabic-400-normal.woff2'),
+    );
+    const arabicFont = await pdfDoc.embedFont(arabicFontBytes);
+    const navy = rgb(0.11, 0.23, 0.37);
+    const gray = rgb(0.42, 0.45, 0.5);
+    const lightGray = rgb(0.95, 0.96, 0.97);
+    const border = rgb(0.8, 0.84, 0.89);
+    const margin = 40;
+    const pageWidth = 595;
+    const contentWidth = pageWidth - margin * 2;
+    let y = 800;
+
+    const drawText = (text: string, x: number, yPos: number, opts: { size?: number; f?: any; color?: any } = {}) => {
+      const drawOpts = { x, y: yPos, size: opts.size ?? 10, font: opts.f ?? font, color: opts.color ?? rgb(0.15, 0.15, 0.18) };
+      try { page.drawText(text ?? '', drawOpts); } catch { page.drawText(text ?? '', { ...drawOpts, font: arabicFont }); }
+    };
+
+    // ── Letterhead (logo best-effort - a missing/unreachable logo must
+    // never block the document itself from printing) ──────────────────
+    let logoImg: any = null;
+    if ((school as any)?.logo) {
+      try {
+        const res = await fetch((school as any).logo);
+        if (res.ok) {
+          const bytes = await res.arrayBuffer();
+          const isPng = (res.headers.get('content-type') || '').includes('png') || String((school as any).logo).toLowerCase().includes('.png');
+          logoImg = isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+        }
+      } catch { /* non-fatal - render without the logo */ }
+    }
+    if (logoImg) {
+      const h = 40, w = (logoImg.width / logoImg.height) * h;
+      page.drawImage(logoImg, { x: margin, y: y - h + 10, width: w, height: h });
+      drawText(schoolName, margin + w + 12, y - 14, { size: 15, f: bold, color: navy });
+      if (schoolAddress) drawText(schoolAddress, margin + w + 12, y - 30, { size: 8.5, color: gray });
+    } else {
+      drawText(schoolName, margin, y, { size: 16, f: bold, color: navy });
+      if (schoolAddress) drawText(schoolAddress, margin, y - 16, { size: 8.5, color: gray });
+    }
+    y -= 48;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 1.2, color: navy });
+    y -= 6;
+    drawText('STAFF PERSONAL FILE — COVER SHEET', margin, y - 14, { size: 11, f: bold, color: navy });
+    y -= 36;
+
+    // ── Photo placeholder box + core identity ──────────────────────────
+    const photoW = 90, photoH = 108, photoX = pageWidth - margin - photoW;
+    let photoImg: any = null;
+    if ((staff as any).avatarUrl) {
+      try {
+        const res = await fetch((staff as any).avatarUrl);
+        if (res.ok) {
+          const bytes = await res.arrayBuffer();
+          const isPng = (res.headers.get('content-type') || '').includes('png') || String((staff as any).avatarUrl).toLowerCase().includes('.png');
+          photoImg = isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+        }
+      } catch { /* non-fatal - render with an empty photo box */ }
+    }
+    page.drawRectangle({ x: photoX, y: y - photoH, width: photoW, height: photoH, borderColor: border, borderWidth: 1, color: lightGray });
+    if (photoImg) {
+      // Cover-fit into the box, cropped to the box's aspect ratio center.
+      const scale = Math.max(photoW / photoImg.width, photoH / photoImg.height);
+      const dw = photoImg.width * scale, dh = photoImg.height * scale;
+      page.drawImage(photoImg, { x: photoX - (dw - photoW) / 2, y: (y - photoH) - (dh - photoH) / 2, width: dw, height: dh });
+    } else {
+      drawText('PHOTO', photoX + photoW / 2 - 16, y - photoH / 2, { size: 9, color: gray });
+    }
+
+    const fieldsTop = y;
+    const fieldRows: [string, string][] = [
+      ['Employee Name', `${staff.firstName || ''} ${staff.lastName || ''}`.trim() || '—'],
+      ['Employee ID', staff.employeeId || '—'],
+      ["Father's Name", (staff as any).fatherName || '—'],
+      ['Designation', (staff as any).designation || (staff as any).designationId?.name || '—'],
+      ['Department', (staff as any).department || (staff as any).designationId?.department || '—'],
+      ['Campus', (staff as any).campusId?.name || (staff as any).campus || '—'],
+      ['Employment Type', ((staff as any).employmentType || 'full_time').replace(/_/g, ' ')],
+      ['Date of Joining', (staff as any).dateOfJoining ? new Date((staff as any).dateOfJoining).toLocaleDateString('en-GB') : '—'],
+      ['Date of Birth', (staff as any).dateOfBirth ? new Date((staff as any).dateOfBirth).toLocaleDateString('en-GB') : '—'],
+      ['Phone', (staff as any).phone || '—'],
+      ['Email', (staff as any).email || '—'],
+      ['Status', ((staff as any).status || 'active').replace(/_/g, ' ')],
+    ];
+    let fy = fieldsTop;
+    for (const [label, value] of fieldRows) {
+      drawText(label, margin, fy, { size: 8.5, color: gray });
+      drawText(value, margin + 120, fy, { size: 9.5, f: bold });
+      fy -= 16;
+    }
+    y = Math.min(fy, fieldsTop - photoH) - 18;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: border });
+    y -= 22;
+
+    // ── Document checklist ──────────────────────────────────────────────
+    drawText('ATTACHED DOCUMENTS', margin, y, { size: 10, f: bold, color: navy });
+    y -= 18;
+    const documents: any[] = (staff as any).documents || [];
+    if (documents.length === 0) {
+      drawText('No documents uploaded yet.', margin, y, { size: 9, color: gray });
+      y -= 16;
+    } else {
+      for (const doc of documents) {
+        page.drawRectangle({ x: margin, y: y - 8, width: 8, height: 8, borderColor: gray, borderWidth: 0.75 });
+        if (doc.verified) {
+          drawText('✓', margin + 0.5, y - 8, { size: 8, f: bold });
+        }
+        drawText(doc.label || doc.fileName || 'Document', margin + 16, y, { size: 9 });
+        const uploadedLabel = doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString('en-GB') : '';
+        drawText(uploadedLabel, pageWidth - margin - 70, y, { size: 8, color: gray });
+        y -= 16;
+        if (y < 80) break; // file cover is a one-page summary - full document list/content lives in the Documents tab
+      }
+    }
+
+    y = Math.max(y, 100) - 20;
+    page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: border });
+    y -= 30;
+    drawText('_________________________', margin, y, { size: 10 });
+    drawText('HR Signature', margin, y - 14, { size: 8, color: gray });
+    drawText('_________________________', pageWidth - margin - 180, y, { size: 10 });
+    drawText('Staff Signature', pageWidth - margin - 180, y - 14, { size: 8, color: gray });
+
+    const bytes = await pdfDoc.save();
+    return Buffer.from(bytes);
   }
 
   // ── Designations ─────────────────────────────────────────────────────
@@ -3200,5 +3353,366 @@ export class HrService {
       });
     }
     return advance;
+  }
+
+  // ── STAFF INCREMENTS ─────────────────────────────────────────────────
+  // A flat, append-only history of raises. Applying one updates Staff.salary
+  // going forward but never rewrites past increment records, so "what did
+  // this person earn before the March 2026 raise" stays answerable.
+
+  async getIncrements(tenantId: string, filters: { staffId?: string; from?: string; to?: string; department?: string; campusId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    if (filters.department) filter.department = filters.department;
+    if (filters.campusId) filter.campus = filters.campusId;
+    if (filters.from || filters.to) {
+      filter.effectiveDate = {};
+      if (filters.from) filter.effectiveDate.$gte = new Date(filters.from);
+      if (filters.to) filter.effectiveDate.$lte = new Date(filters.to);
+    }
+    return this.incrementModel.find(filter).sort({ effectiveDate: -1 }).lean();
+  }
+
+  async createIncrement(tenantId: string, institutionId: string, schoolSlug: string, dto: any, createdBy?: string) {
+    const staff = await this.staffModel.findOne({ _id: this.newTid(dto.staffId), tenantId: this.newTid(tenantId) });
+    if (!staff) throw new NotFoundException('Staff member not found');
+
+    const previousSalary = staff.salary || 0;
+    const newSalary = Number(dto.newSalary);
+    if (!(newSalary > 0)) throw new BadRequestException('newSalary must be a positive number');
+    const incrementAmount = Math.round((newSalary - previousSalary) * 100) / 100;
+    const incrementPercent = previousSalary > 0 ? Math.round((incrementAmount / previousSalary) * 10000) / 100 : 0;
+
+    const increment = await this.incrementModel.create({
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+      staffId: staff._id,
+      staffName: `${staff.firstName} ${staff.lastName}`,
+      employeeId: staff.employeeId,
+      designation: staff.designation,
+      department: staff.department,
+      campus: staff.campus,
+      effectiveDate: dto.effectiveDate ? new Date(dto.effectiveDate) : new Date(),
+      previousSalary, newSalary, incrementAmount, incrementPercent,
+      reason: dto.reason || 'annual_review',
+      notes: dto.notes,
+      performanceReviewId: dto.performanceReviewId ? this.newTid(dto.performanceReviewId) : undefined,
+      approvedBy: dto.approvedBy,
+      createdBy,
+    });
+
+    // Takes effect immediately on the staff record - a school running this
+    // report wants Staff.salary to already reflect it, same as manually
+    // editing the salary field would. Past payslips/increment records are
+    // untouched either way.
+    await this.staffModel.updateOne({ _id: staff._id }, { $set: { salary: newSalary } });
+
+    return increment;
+  }
+
+  // ── SECURITY DEPOSITS ────────────────────────────────────────────────
+  // Standard practice: withhold a fixed amount or % of salary each payroll
+  // period, refundable (or forfeitable) when the staff member leaves.
+  // See schemas/security-deposit.schema.ts for the transaction-log model.
+
+  async getSecurityDeposits(tenantId: string, filters: { staffId?: string; status?: string; department?: string; campusId?: string } = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    if (filters.status) filter.status = filters.status;
+    if (filters.department) filter.department = filters.department;
+    if (filters.campusId) filter.campus = filters.campusId;
+    return this.securityDepositModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async createSecurityDeposit(tenantId: string, institutionId: string, schoolSlug: string, dto: any, createdBy?: string) {
+    const staff = await this.staffModel.findOne({ _id: this.newTid(dto.staffId), tenantId: this.newTid(tenantId) });
+    if (!staff) throw new NotFoundException('Staff member not found');
+    if (dto.deductionType === 'fixed' && !(Number(dto.fixedAmount) > 0)) {
+      throw new BadRequestException('fixedAmount must be a positive number for a fixed deduction plan');
+    }
+    if (dto.deductionType === 'percentage' && !(Number(dto.percentOfSalary) > 0)) {
+      throw new BadRequestException('percentOfSalary must be a positive number for a percentage deduction plan');
+    }
+    const existingActive = await this.securityDepositModel.findOne({ tenantId: this.newTid(tenantId), staffId: staff._id, status: 'active' });
+    if (existingActive) throw new BadRequestException('This staff member already has an active security deposit plan');
+
+    return this.securityDepositModel.create({
+      tenantId: this.newTid(tenantId),
+      institutionId: this.newTid(institutionId),
+      schoolSlug,
+      staffId: staff._id,
+      staffName: `${staff.firstName} ${staff.lastName}`,
+      employeeId: staff.employeeId,
+      designation: staff.designation,
+      department: staff.department,
+      campus: staff.campus,
+      deductionType: dto.deductionType,
+      fixedAmount: dto.fixedAmount || 0,
+      percentOfSalary: dto.percentOfSalary || 0,
+      startDate: dto.startDate ? new Date(dto.startDate) : new Date(),
+      durationMonths: dto.durationMonths || null,
+      targetAmount: dto.targetAmount || 0,
+      notes: dto.notes,
+      createdBy,
+    });
+  }
+
+  /** Records one period's deduction against an active plan - called
+   * explicitly (from the payroll screen or this report) rather than
+   * silently hooked into every payslip creation, so a school can review
+   * the computed amount before it's logged. Computes the amount from the
+   * staff's CURRENT salary at record time for a percentage plan, so a
+   * later raise correctly changes future deductions without needing to
+   * edit the plan. */
+  async recordSecurityDepositDeduction(tenantId: string, id: string, dto: { periodLabel?: string; payslipId?: string; amount?: number; notes?: string }, recordedBy?: string) {
+    const plan = await this.securityDepositModel.findOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (!plan) throw new NotFoundException('Security deposit plan not found');
+    if (plan.status !== 'active') throw new BadRequestException(`Cannot record a deduction on a ${plan.status} plan`);
+
+    let amount = dto.amount;
+    if (!(amount! > 0)) {
+      if (plan.deductionType === 'fixed') {
+        amount = plan.fixedAmount;
+      } else {
+        const staff = await this.staffModel.findById(plan.staffId).select('salary').lean();
+        amount = Math.round(((staff?.salary || 0) * plan.percentOfSalary / 100) * 100) / 100;
+      }
+    }
+    if (!(amount! > 0)) throw new BadRequestException('Could not determine a positive deduction amount');
+
+    plan.transactions.push({
+      type: 'deduction', amount: amount!, date: new Date(),
+      periodLabel: dto.periodLabel, payslipId: dto.payslipId ? this.newTid(dto.payslipId) : null,
+      notes: dto.notes, recordedBy,
+    } as any);
+    plan.accumulatedAmount = Math.round((plan.accumulatedAmount + amount!) * 100) / 100;
+
+    if (plan.targetAmount > 0 && plan.accumulatedAmount >= plan.targetAmount) {
+      plan.status = 'completed';
+    }
+    await plan.save();
+    return plan;
+  }
+
+  /** Refunds (or forfeits) the full accumulated balance and closes the
+   * plan - the standard "staff member is leaving" action. Posts to the
+   * GL exactly like Advance disbursement does (safePostJournal swallows
+   * posting failures rather than blocking the refund itself, same
+   * convention as every other HR->Finance posting in this file). */
+  async refundSecurityDeposit(tenantId: string, id: string, schoolSlug: string | undefined, dto: { amount?: number; notes?: string; forfeit?: boolean }, refundedBy?: string) {
+    const plan = await this.securityDepositModel.findOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (!plan) throw new NotFoundException('Security deposit plan not found');
+    if (plan.status === 'refunded' || plan.status === 'forfeited') {
+      throw new BadRequestException(`This plan has already been ${plan.status}`);
+    }
+
+    const amount = dto.amount! > 0 ? dto.amount! : plan.accumulatedAmount;
+    const isForfeit = !!dto.forfeit;
+
+    plan.transactions.push({
+      type: isForfeit ? 'forfeiture' : 'refund', amount, date: new Date(),
+      notes: dto.notes, recordedBy: refundedBy,
+    } as any);
+    plan.status = isForfeit ? 'forfeited' : 'refunded';
+    plan.refundDate = new Date();
+    plan.refundAmount = amount;
+    plan.refundNotes = dto.notes || '';
+    plan.refundedBy = refundedBy || '';
+    await plan.save();
+
+    // Security deposits are held as a staff liability (the school owes
+    // this back) while accumulating; refunding pays it out, forfeiting
+    // recognizes it as income instead.
+    if (amount > 0) {
+      await this.safePostJournal(schoolSlug, {
+        date: new Date(),
+        reference: `SECDEP-${plan._id}`,
+        narration: `Security deposit ${isForfeit ? 'forfeited' : 'refunded'} — ${plan.staffName}`,
+        sourceType: 'manual',
+        sourceId: String(plan._id),
+        lines: isForfeit ? [
+          { accountCode: '2500', debit: amount, partnerType: 'staff', partnerId: String(plan.staffId), partnerName: plan.staffName },
+          { accountCode: '4900', credit: amount, partnerType: 'staff', partnerId: String(plan.staffId), partnerName: plan.staffName },
+        ] : [
+          { accountCode: '2500', debit: amount, partnerType: 'staff', partnerId: String(plan.staffId), partnerName: plan.staffName },
+          { accountCode: '1000', credit: amount, partnerType: 'staff', partnerId: String(plan.staffId), partnerName: plan.staffName },
+        ],
+      });
+    }
+    return plan;
+  }
+
+  // ── STAFF LIST / ALLOCATION / SALARY / NEW / LEFT REPORTS ─────────────
+  // All read-only report views over data that already exists elsewhere
+  // (Staff, ExitRecord) - no new schema needed for any of these.
+
+  async getStaffListReport(tenantId: string, filters: { campusId?: string; department?: string; employmentType?: string; status?: string; designation?: string } = {}, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, filters.campusId);
+      const effectiveDepartment = resolveDepartmentScope(requestingUser, filters.department);
+      if (effectiveCampusId) filter.campusId = this.newTid(effectiveCampusId);
+      if (effectiveDepartment) filter.department = effectiveDepartment;
+    } else {
+      if (filters.campusId) filter.campusId = this.newTid(filters.campusId);
+      if (filters.department) filter.department = filters.department;
+    }
+    // Unlike getStaff (used by every staff-picker dropdown, which only
+    // ever wants active staff), a report should be able to show resigned/
+    // terminated staff too - e.g. "New Staff Left List" below reuses this
+    // same filter shape - so isActive is NOT hardcoded here.
+    if (filters.employmentType) filter.employmentType = filters.employmentType;
+    if (filters.status) filter.status = filters.status;
+    if (filters.designation) filter.designation = filters.designation;
+
+    return this.staffModel
+      .find(filter)
+      .populate('designationId', 'name code department')
+      .populate('campusId', 'name code')
+      .sort({ firstName: 1 })
+      .lean();
+  }
+
+  /** Same data as getStaffListReport, grouped by campus then department -
+   * the "Staff Allocation" report (who's assigned where). */
+  async getStaffAllocationReport(tenantId: string, filters: { campusId?: string; department?: string } = {}, requestingUser?: ScopedUser) {
+    const staff = await this.getStaffListReport(tenantId, { ...filters, status: undefined }, requestingUser);
+    const active = staff.filter((s: any) => s.isActive !== false && s.status !== 'resigned' && s.status !== 'terminated');
+    const groups = new Map<string, { campus: string; department: string; staff: any[] }>();
+    for (const s of active as any[]) {
+      const campusName = s.campusId?.name || s.campus || 'Unassigned Campus';
+      const deptName = s.department || 'Unassigned Department';
+      const key = `${campusName}::${deptName}`;
+      if (!groups.has(key)) groups.set(key, { campus: campusName, department: deptName, staff: [] });
+      groups.get(key)!.staff.push(s);
+    }
+    return Array.from(groups.values()).sort((a, b) => a.campus.localeCompare(b.campus) || a.department.localeCompare(b.department));
+  }
+
+  /** Staff List + current salary structure/gross total - "Staff List With
+   * Salary". Deliberately exposes the figures a payroll/HR admin already
+   * has view access to via the Payroll tab; this report just presents it
+   * as one printable/exportable list instead of per-staff lookups. */
+  async getStaffSalaryReport(tenantId: string, filters: { campusId?: string; department?: string } = {}, requestingUser?: ScopedUser) {
+    const staff = await this.getStaffListReport(tenantId, filters, requestingUser);
+    return (staff as any[]).map((s) => ({
+      ...s,
+      grossSalary: s.salary || 0,
+      salaryStructure: s.salaryStructure || [],
+    }));
+  }
+
+  async getNewStaffReport(tenantId: string, from?: string, to?: string, requestingUser?: ScopedUser) {
+    const staff = await this.getStaffListReport(tenantId, {}, requestingUser);
+    return (staff as any[])
+      .filter((s) => {
+        if (!s.dateOfJoining) return false;
+        const d = new Date(s.dateOfJoining).getTime();
+        if (from && d < new Date(from).getTime()) return false;
+        if (to && d > new Date(to).getTime()) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(b.dateOfJoining).getTime() - new Date(a.dateOfJoining).getTime());
+  }
+
+  async getStaffLeftReport(tenantId: string, from?: string, to?: string) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (from || to) {
+      filter.lastWorkingDay = {};
+      if (from) filter.lastWorkingDay.$gte = new Date(from);
+      if (to) filter.lastWorkingDay.$lte = new Date(to);
+    }
+    return this.exitRecordModel.find(filter).sort({ lastWorkingDay: -1 }).lean();
+  }
+
+  // ── STAFF ATTENDANCE REPORT / MUSTER ROLL ─────────────────────────────
+
+  /** Comprehensive, multi-filter attendance report - the richer sibling of
+   * getStaffAttendance (which stays as-is for the day-marking screen's
+   * narrower needs). Adds date-range, campus, department and status
+   * filtering plus RBAC campus/department scoping, all backed by the
+   * existing StaffAttendance collection (already indexed on
+   * {tenantId,campusId,date} - see the schema). */
+  async getStaffAttendanceReport(
+    tenantId: string,
+    filters: { from?: string; to?: string; month?: number; year?: number; campusId?: string; department?: string; status?: string; staffId?: string } = {},
+    requestingUser?: ScopedUser,
+  ) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (filters.staffId) filter.staffId = this.newTid(filters.staffId);
+    if (filters.status) filter.status = filters.status;
+
+    if (filters.from || filters.to) {
+      filter.date = {};
+      if (filters.from) filter.date.$gte = new Date(filters.from);
+      if (filters.to) filter.date.$lte = new Date(filters.to);
+    } else if (filters.month && filters.year) {
+      filter.date = { $gte: new Date(Date.UTC(filters.year, filters.month - 1, 1)), $lte: new Date(Date.UTC(filters.year, filters.month, 0, 23, 59, 59, 999)) };
+    }
+
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, filters.campusId) : filters.campusId;
+    const effectiveDepartment = requestingUser ? resolveDepartmentScope(requestingUser, filters.department) : filters.department;
+    if (effectiveCampusId) filter.campusId = this.newTid(effectiveCampusId);
+
+    const records = await this.staffAttendanceModel
+      .find(filter)
+      .populate('staffId', 'firstName lastName employeeId designation department campusId')
+      .sort({ date: -1 })
+      .lean();
+
+    // department isn't stored on StaffAttendance itself (only on the
+    // populated Staff doc), so that filter is applied after populate.
+    const filtered = effectiveDepartment
+      ? records.filter((r: any) => r.staffId?.department === effectiveDepartment)
+      : records;
+
+    const summary = { present: 0, absent: 0, late: 0, half_day: 0, on_leave: 0, sick_leave: 0, other: 0 };
+    for (const r of filtered as any[]) {
+      if (r.status in summary) (summary as any)[r.status]++;
+      else summary.other++;
+    }
+    return { data: filtered, summary, total: filtered.length };
+  }
+
+  /** The classic monthly staff attendance register: one row per staff
+   * member, one column per calendar day, cell = that day's status code.
+   * Built as a grid over getStaffAttendanceReport's own query (same
+   * filters/scoping) rather than a separate aggregation path. */
+  async getStaffMusterRoll(
+    tenantId: string,
+    filters: { month: number; year: number; campusId?: string; department?: string },
+    requestingUser?: ScopedUser,
+  ) {
+    const daysInMonth = new Date(filters.year, filters.month, 0).getDate();
+    const { data: records } = await this.getStaffAttendanceReport(tenantId, { month: filters.month, year: filters.year, campusId: filters.campusId, department: filters.department }, requestingUser);
+
+    const byStaff = new Map<string, { staff: any; days: Record<number, string> }>();
+    for (const r of records as any[]) {
+      const sid = String(r.staffId?._id || r.staffId);
+      if (!byStaff.has(sid)) byStaff.set(sid, { staff: r.staffId, days: {} });
+      const day = new Date(r.date).getUTCDate();
+      byStaff.get(sid)!.days[day] = r.status;
+    }
+
+    // Include every staff member in scope even if they have zero marked
+    // days this month (shows as entirely blank row) - a muster roll that
+    // silently drops unmarked staff would hide exactly the gap an admin
+    // is trying to spot.
+    const staffList = await this.getStaffListReport(tenantId, { campusId: filters.campusId, department: filters.department }, requestingUser);
+    const rows = (staffList as any[])
+      .filter((s) => s.isActive !== false)
+      .map((s) => {
+        const entry = byStaff.get(String(s._id));
+        const days: string[] = [];
+        for (let d = 1; d <= daysInMonth; d++) days.push(entry?.days[d] || '');
+        return {
+          staffId: s._id, staffName: `${s.firstName} ${s.lastName}`, employeeId: s.employeeId,
+          designation: s.designation, department: s.department, campus: s.campusId?.name || s.campus,
+          days,
+        };
+      });
+
+    return { month: filters.month, year: filters.year, daysInMonth, rows };
   }
 }

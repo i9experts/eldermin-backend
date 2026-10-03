@@ -205,6 +205,16 @@ export class HrController {
   @UseInterceptors(FileInterceptor('file'))
   importAttendance(@Request() req, @UploadedFile() file: Express.Multer.File) { return this.hrService.importAttendanceCsv(req.user.tenantId, this.iid(req), file, req.user.schoolSlug); }
 
+  @Get('attendance/report')
+  getAttendanceReport(@Request() req, @Query() q: any) {
+    return this.hrService.getStaffAttendanceReport(req.user.tenantId, q, req.user);
+  }
+
+  @Get('attendance/muster-roll')
+  getMusterRoll(@Request() req, @Query() q: any) {
+    return this.hrService.getStaffMusterRoll(req.user.tenantId, { month: parseInt(q.month), year: parseInt(q.year), campusId: q.campusId, department: q.department }, req.user);
+  }
+
   // ── LEAVE ─────────────────────────────────────────────────────────────
 
   // ── Self-service "My Leave" (leave:self) — narrowly scoped: a Teacher (or
@@ -647,5 +657,63 @@ export class HrController {
   @Patch('advances/:id/status')
   updateAdvanceStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; approvedBy?: string }) {
     return this.hrService.updateAdvanceStatus(req.user.tenantId, id, body.status, req.user.schoolSlug, body.approvedBy);
+  }
+
+  // ── STAFF INCREMENTS ───────────────────────────────────────────────────
+
+  @Get('increments')
+  getIncrements(@Request() req, @Query() query: any) { return this.hrService.getIncrements(req.user.tenantId, query); }
+
+  @Post('increments')
+  createIncrement(@Request() req, @Body() body: any) {
+    return this.hrService.createIncrement(req.user.tenantId, this.iid(req), req.user.schoolSlug, body, req.user.name);
+  }
+
+  // ── SECURITY DEPOSITS ──────────────────────────────────────────────────
+
+  @Get('security-deposits')
+  getSecurityDeposits(@Request() req, @Query() query: any) { return this.hrService.getSecurityDeposits(req.user.tenantId, query); }
+
+  @Post('security-deposits')
+  createSecurityDeposit(@Request() req, @Body() body: any) {
+    return this.hrService.createSecurityDeposit(req.user.tenantId, this.iid(req), req.user.schoolSlug, body, req.user.name);
+  }
+
+  @Post('security-deposits/:id/deductions')
+  recordSecurityDepositDeduction(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.hrService.recordSecurityDepositDeduction(req.user.tenantId, id, body, req.user.name);
+  }
+
+  @Post('security-deposits/:id/refund')
+  refundSecurityDeposit(@Request() req, @Param('id') id: string, @Body() body: { amount?: number; notes?: string; forfeit?: boolean }) {
+    return this.hrService.refundSecurityDeposit(req.user.tenantId, id, req.user.schoolSlug, body, req.user.name);
+  }
+
+  // ── REPORTS: STAFF LIST / ALLOCATION / SALARY / NEW / LEFT ────────────
+
+  @Get('reports/staff-list')
+  getStaffListReport(@Request() req, @Query() query: any) { return this.hrService.getStaffListReport(req.user.tenantId, query, req.user); }
+
+  @Get('reports/staff-allocation')
+  getStaffAllocationReport(@Request() req, @Query() query: any) { return this.hrService.getStaffAllocationReport(req.user.tenantId, query, req.user); }
+
+  @Get('reports/staff-salary')
+  getStaffSalaryReport(@Request() req, @Query() query: any) { return this.hrService.getStaffSalaryReport(req.user.tenantId, query, req.user); }
+
+  @Get('reports/new-staff')
+  getNewStaffReport(@Request() req, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.hrService.getNewStaffReport(req.user.tenantId, from, to, req.user);
+  }
+
+  @Get('reports/staff-left')
+  getStaffLeftReport(@Request() req, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.hrService.getStaffLeftReport(req.user.tenantId, from, to);
+  }
+
+  @Get('staff/:id/file-cover')
+  async getStaffFileCoverPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
+    const buffer = await this.hrService.generateStaffFileCoverPdf(req.user.tenantId, req.user.schoolSlug, id);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="file-cover-${id}.pdf"` });
+    res.status(HttpStatus.OK).send(buffer);
   }
 }

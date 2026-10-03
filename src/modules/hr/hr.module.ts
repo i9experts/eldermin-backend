@@ -40,6 +40,8 @@ import { Grievance, GrievanceSchema } from './schemas/grievance.schema';
 import { DailyWorkSummary, DailyWorkSummarySchema } from './schemas/daily-work-summary.schema';
 import { ExpenseClaim, ExpenseClaimSchema } from './schemas/expense-claim.schema';
 import { Advance, AdvanceSchema } from './schemas/advance.schema';
+import { StaffIncrement, StaffIncrementSchema } from './schemas/staff-increment.schema';
+import { SecurityDeposit, SecurityDepositSchema } from './schemas/security-deposit.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
@@ -84,6 +86,8 @@ import { School, SchoolSchema } from '../../organization/schemas/organization.sc
       { name: DailyWorkSummary.name, schema: DailyWorkSummarySchema },
       { name: ExpenseClaim.name, schema: ExpenseClaimSchema },
       { name: Advance.name, schema: AdvanceSchema },
+      { name: StaffIncrement.name, schema: StaffIncrementSchema },
+      { name: SecurityDeposit.name, schema: SecurityDepositSchema },
       { name: User.name, schema: UserSchema },
       { name: School.name, schema: SchoolSchema },
     ]),
