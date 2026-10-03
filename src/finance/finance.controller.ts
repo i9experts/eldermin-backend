@@ -669,6 +669,19 @@ export class FinanceController {
   }
 
   @RequireModuleAccess('finance', 'assignments', 'manage')
+  @Patch('student-fee-assignments/:id') async updateStudentFeeAssignment(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateStudentFeeAssignment(id, schoolSlug, dto);
+  }
+
+  @RequireModuleAccess('finance', 'assignments', 'manage')
+  @Post('student-fee-assignments/bulk-delete') @HttpCode(HttpStatus.OK)
+  async bulkDeleteStudentFeeAssignments(@Body() dto: { ids: string[] }, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.bulkDeleteStudentFeeAssignments(dto?.ids || [], schoolSlug);
+  }
+
+  @RequireModuleAccess('finance', 'assignments', 'manage')
   @Delete('student-fee-assignments/:id') async deleteStudentFeeAssignment(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteStudentFeeAssignment(id, schoolSlug);
