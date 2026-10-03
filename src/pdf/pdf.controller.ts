@@ -6,8 +6,16 @@ import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SchoolGuard } from '../auth/school.guard';
 import { PdfService, GenerateReportCardDto, GenerateInvoiceDto, BulkReportCardDto } from './pdf.service';
-import { IsIn, IsMongoId, IsObject, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsIn, IsMongoId, IsObject, IsOptional, IsString } from 'class-validator';
 import { REPORT_TEMPLATE_TYPES } from '../modules/report-templates/schemas/report-template.schema';
+
+export class GenerateTabularReportDto {
+  @IsString() title: string;
+  @IsOptional() @IsString() subtitle?: string;
+  @IsOptional() @IsString() filterSummary?: string;
+  @IsArray() columns: string[];
+  @IsArray() rows: (string | number)[][];
+}
 
 export class GenerateFromTemplateDto {
   @IsOptional() @IsMongoId() templateId?: string;
@@ -155,6 +163,23 @@ export class PdfController {
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="fee-revenue-report-${dto.month}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('tabular-report')
+  async tabularReport(
+    @Body() dto: GenerateTabularReportDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = req.user?.schoolSlug || req.headers['x-school-slug'] || 'demo-school';
+    const pdf = await this.pdfService.generateTabularReportPdf(schoolSlug, dto);
+    const safeName = dto.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${safeName || 'report'}.pdf"`,
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);
