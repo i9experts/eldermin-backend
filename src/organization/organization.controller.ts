@@ -260,4 +260,10 @@ export class OrganizationController {
     const { schoolSlug } = this.ctx(req);
     return this.service.assignCampusToInstitution(id, schoolSlug, institutionId);
   }
+
+  @Get('hierarchy')
+  async getOrganizationHierarchy(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getOrganizationHierarchy(schoolSlug, req?.user?.tenantId);
+  }
 }

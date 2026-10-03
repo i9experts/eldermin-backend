@@ -560,4 +560,99 @@ export class OrganizationService {
     if (!campus) throw new NotFoundException('Campus not found');
     return campus;
   }
+
+  // ── ORGANIZATION HIERARCHY REPORT ──────────────────────────────────────
+  // Institution -> Campus -> Department -> staff, with a count at every
+  // level. Deliberately does NOT go through Designation: the 'designations'
+  // collection is written to by two structurally different schemas (this
+  // module's schoolSlug-keyed Designation vs HR's tenantId-keyed one,
+  // both registered under the same Mongoose model name) - which one
+  // `.populate()` resolves to is ambiguous today, so this report groups
+  // staff under a Department by matching Staff.department (a plain
+  // string) against Department.name instead, the same fragile-but-
+  // working name-match convention DepartmentsTab.tsx's save flow already
+  // relies on. Staff.institutionId is also deliberately never read here -
+  // it resolves against a dead/different 'Institution' model (see
+  // assignCampusToInstitution's sibling tabs) - institution membership is
+  // derived transitively via Staff.campusId -> Campus.institutionId instead.
+  async getOrganizationHierarchy(schoolSlug: string, tenantId?: string) {
+    const [institutions, campuses, departments, staffList] = await Promise.all([
+      this.groupInstitutionModel.find({ schoolSlug }).sort({ createdAt: 1 }).lean(),
+      this.campusModel.find({ schoolSlug, isActive: true }).sort({ name: 1 }).lean(),
+      this.deptModel.find({ schoolSlug, isActive: true }).sort({ name: 1 }).lean(),
+      tenantId
+        ? this.staffModel.find({ tenantId, isActive: true }).select('firstName lastName department campusId designation').lean()
+        : Promise.resolve([] as any[]),
+    ]);
+
+    const staffByCampus = new Map<string, any[]>();
+    for (const s of staffList as any[]) {
+      const key = s.campusId ? String(s.campusId) : '__none__';
+      if (!staffByCampus.has(key)) staffByCampus.set(key, []);
+      staffByCampus.get(key)!.push(s);
+    }
+
+    const deptsByCampus = new Map<string, any[]>();
+    for (const d of departments as any[]) {
+      const key = d.campusId ? String(d.campusId) : '__all__';
+      if (!deptsByCampus.has(key)) deptsByCampus.set(key, []);
+      deptsByCampus.get(key)!.push(d);
+    }
+    // Departments with no campusId apply school-wide (see schema comment) -
+    // every campus node includes them alongside its own campus-specific ones.
+    const crossCampusDepts = deptsByCampus.get('__all__') || [];
+
+    const toStaffSummary = (s: any) => ({ id: s._id, name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), designation: s.designation || null });
+
+    const buildCampusNode = (campus: any) => {
+      const campusStaff = staffByCampus.get(String(campus._id)) || [];
+      const campusDepts = [...(deptsByCampus.get(String(campus._id)) || []), ...crossCampusDepts];
+      const assignedNames = new Set<string>();
+      const departmentNodes = campusDepts.map((d: any) => {
+        assignedNames.add(d.name.toLowerCase());
+        const deptStaff = campusStaff.filter((s: any) => (s.department || '').toLowerCase() === d.name.toLowerCase());
+        return { type: 'department', id: d._id, name: d.name, staffCount: deptStaff.length, staff: deptStaff.map(toStaffSummary) };
+      });
+      const unassignedStaff = campusStaff.filter((s: any) => !s.department || !assignedNames.has(s.department.toLowerCase()));
+      if (unassignedStaff.length > 0) {
+        departmentNodes.push({ type: 'department', id: null, name: 'Unassigned Department', staffCount: unassignedStaff.length, staff: unassignedStaff.map(toStaffSummary) });
+      }
+      return {
+        type: 'campus', id: campus._id, name: campus.name, principalName: campus.principalName || null,
+        staffCount: campusStaff.length, departments: departmentNodes,
+      };
+    };
+
+    const campusesByInstitution = new Map<string, any[]>();
+    const unassignedCampuses: any[] = [];
+    for (const c of campuses as any[]) {
+      if (c.institutionId) {
+        const key = String(c.institutionId);
+        if (!campusesByInstitution.has(key)) campusesByInstitution.set(key, []);
+        campusesByInstitution.get(key)!.push(c);
+      } else {
+        unassignedCampuses.push(c);
+      }
+    }
+
+    const institutionNodes = (institutions as any[]).map((inst: any) => {
+      const campusNodes = (campusesByInstitution.get(String(inst._id)) || []).map(buildCampusNode);
+      return {
+        type: 'institution', id: inst._id, name: inst.name,
+        staffCount: campusNodes.reduce((sum, c) => sum + c.staffCount, 0),
+        campuses: campusNodes,
+      };
+    });
+
+    const result: { institutions: any[]; unassignedCampuses?: any } = { institutions: institutionNodes };
+    if (unassignedCampuses.length > 0) {
+      const campusNodes = unassignedCampuses.map(buildCampusNode);
+      result.unassignedCampuses = {
+        type: 'group', name: 'Campuses Not Linked to an Institution',
+        staffCount: campusNodes.reduce((sum, c) => sum + c.staffCount, 0),
+        campuses: campusNodes,
+      };
+    }
+    return result;
+  }
 }
