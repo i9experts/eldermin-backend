@@ -25,6 +25,7 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceSchema, StudentFee, StudentFeeSchema } from '../students/schemas/student-supporting.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
+import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { UploadModule } from '../upload/upload.module';
 import { EmailModule } from '../email/email.module';
 
@@ -51,6 +52,7 @@ import { EmailModule } from '../email/email.module';
       { name: StudentFee.name, schema: StudentFeeSchema },
       { name: Staff.name, schema: StaffSchema },
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
+      { name: User.name, schema: UserSchema },
     ]),
   ],
   controllers: [OrganizationController, InstitutionSetupController],

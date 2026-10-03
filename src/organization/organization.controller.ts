@@ -266,4 +266,10 @@ export class OrganizationController {
     const { schoolSlug } = this.ctx(req);
     return this.service.getOrganizationHierarchy(schoolSlug, req?.user?.tenantId);
   }
+
+  @Get('parent-app-activation')
+  async getParentAppActivation(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getParentAppActivation(schoolSlug, req?.user?.tenantId);
+  }
 }
