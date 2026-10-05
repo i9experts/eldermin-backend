@@ -16,7 +16,7 @@ export type NotificationDocument = Notification & Document;
 export class Notification {
   @Prop({ required: true, type: Types.ObjectId, ref: 'User' }) recipientUserId: Types.ObjectId;
   @Prop({
-    enum: ['circular', 'consent', 'leave_decision', 'fee_due', 'homework', 'result', 'behaviour', 'message', 'other'],
+    enum: ['circular', 'consent', 'leave_decision', 'fee_due', 'homework', 'result', 'behaviour', 'message', 'ptm', 'substitution', 'lesson_plan', 'leave_status', 'other'],
     default: 'other',
   })
   type: string;
