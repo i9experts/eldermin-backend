@@ -1040,6 +1040,21 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     );
   }
 
+  // Only a 'draft' assessment can be deleted - the Planner's own action
+  // list only ever offers "Delete" for that status (every later status has
+  // real downstream data: scheduled timetables, ongoing/completed mark
+  // entry, published report cards), so this mirrors what the UI already
+  // promises rather than silently accepting a delete the UI never offered.
+  async deleteAssessment(id: string, schoolSlug: string) {
+    const a = await this.assessmentModel.findOne({ _id: id, schoolSlug });
+    if (!a) throw new NotFoundException('Assessment not found');
+    if (a.status !== 'draft') {
+      throw new BadRequestException('Only a draft assessment can be deleted. Cancel it instead if it has already been scheduled.');
+    }
+    await this.assessmentModel.deleteOne({ _id: id, schoolSlug });
+    return { message: 'Assessment deleted' };
+  }
+
   // ============================================================
   // QUESTION BANK
   // ============================================================
