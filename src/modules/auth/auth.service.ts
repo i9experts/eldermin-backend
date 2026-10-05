@@ -54,10 +54,13 @@ export class AuthService {
     // was actually assigned to them.
     let subjectsCanTeach: string[] | undefined;
     let gradeLevelsCanTeach: string[] | undefined;
+    // Staff-portal (teacher app) identity - additive. The web ignores these.
+    const staffId: string | undefined = staffRecord ? String((staffRecord as any)._id) : undefined;
+    let teacherProfileId: string | undefined;
     if (staffRecord) {
       const teacherProfile = await this.teacherProfileModel
         .findOne({ staffId: (staffRecord as any)._id })
-        .select('isClassTeacher classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName subjectsCanTeach gradeLevelsCanTeach')
+        .select('_id isClassTeacher classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName subjectsCanTeach gradeLevelsCanTeach')
         .lean();
       if (teacherProfile?.isClassTeacher) {
         classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
@@ -66,6 +69,9 @@ export class AuthService {
       }
       subjectsCanTeach = teacherProfile?.subjectsCanTeach?.length ? teacherProfile.subjectsCanTeach : undefined;
       gradeLevelsCanTeach = teacherProfile?.gradeLevelsCanTeach?.length ? teacherProfile.gradeLevelsCanTeach : undefined;
+      // The class-teacher lookup above is no longer filtered, so the profile
+      // id is available for every teacher (staff-portal identity, additive).
+      teacherProfileId = teacherProfile ? String((teacherProfile as any)._id) : undefined;
     }
 
     if (!campusId && schoolSlug) {
@@ -76,7 +82,7 @@ export class AuthService {
     return {
       campusId, department, supervisedClusterIds, isBoardLevel,
       classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName,
-      subjectsCanTeach, gradeLevelsCanTeach,
+      subjectsCanTeach, gradeLevelsCanTeach, staffId, teacherProfileId,
     };
   }
 
@@ -177,7 +183,7 @@ export class AuthService {
     const {
       supervisedClusterIds, isBoardLevel, department,
       classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName,
-      subjectsCanTeach, gradeLevelsCanTeach,
+      subjectsCanTeach, gradeLevelsCanTeach, staffId, teacherProfileId,
     } = scopeFields;
     const campusId = scopeFields.campusId;
 
@@ -203,6 +209,8 @@ export class AuthService {
       // every other role, exactly as campusId/department are.
       subjectsCanTeach,
       gradeLevelsCanTeach,
+      staffId,
+      teacherProfileId,
       // Real parent/student ownership scoping - see assertStudentAccess
       // in scope.util.ts. Absent for every other role, exactly as
       // campusId/department are absent for roles they don't apply to.
@@ -236,6 +244,8 @@ export class AuthService {
         classTeacherOfSectionName,
         subjectsCanTeach,
         gradeLevelsCanTeach,
+        staffId,
+        teacherProfileId,
       },
       institution: {
         name: tenant?.displayName || slugToUse || 'Unknown',
