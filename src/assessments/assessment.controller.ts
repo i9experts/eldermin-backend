@@ -22,15 +22,13 @@ import {
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
 } from './dto/assessment.dto';
+import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
 // Read-only routes stay open to any authenticated role (matches the rest of
 // this codebase's convention of broad-permissive backend access).
-const QUESTION_BANK_EDITOR_ROLES = [
-  UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
-  UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.ACADEMIC_COORDINATOR,
-  UserRole.TEACHER,
-];
+const QUESTION_BANK_EDITOR_ROLES = STAFF_WRITE_ROLES;
 
 @Controller('assessments')
 export class AssessmentController {
@@ -117,6 +115,7 @@ export class AssessmentController {
     return this.service.generateReportCards({ ...dto, schoolSlug });
   }
 
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('report-cards/:id/remarks')
   async updateRemarks(
     @Param('id') id: string,
@@ -175,6 +174,7 @@ export class AssessmentController {
     return this.service.getQuizAttemptForReview(schoolSlug, attemptId);
   }
 
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('quiz-attempts/:attemptId/grade') @HttpCode(HttpStatus.OK)
   async gradeQuizAttempt(@Param('attemptId') attemptId: string, @Body() dto: GradeQuizAttemptDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
@@ -346,6 +346,7 @@ export class AssessmentController {
     return this.service.confirmOMRSheet(id, schoolSlug, userName, dto.answers);
   }
 
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('marks/bulk')
   @HttpCode(HttpStatus.CREATED)
   async bulkEnterMarks(@Body() dto: BulkMarkEntryDto, @Request() req: any) {

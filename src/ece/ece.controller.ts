@@ -15,6 +15,8 @@ import {
   SuggestMappingsDto, CheckQualityDto,
   CreateCareRecordDto, CreateSupportCaseDto, AddSupportStrategyDto, AddSupportReviewDto, UpdateSupportCaseDto,
 } from './dto/ece.dto';
+import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('ece')
 export class EceController {
@@ -115,12 +117,14 @@ export class EceController {
     return this.service.getObservations(this.ctx(req).schoolSlug, query);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('observations') @HttpCode(HttpStatus.CREATED)
   createObservation(@Request() req: any, @Body() dto: CreateObservationDto) {
     const { schoolSlug, academicYear, userId, userName } = this.ctx(req);
     return this.service.createObservation(schoolSlug, academicYear, userId, userName, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('observations/quick') @HttpCode(HttpStatus.CREATED)
   quickObserve(@Request() req: any, @Body() dto: QuickObserveDto) {
     const { schoolSlug, academicYear, userId, userName } = this.ctx(req);
@@ -158,11 +162,13 @@ export class EceController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('portfolio') @HttpCode(HttpStatus.CREATED)
   createPortfolioEntry(@Request() req: any, @Body() dto: CreatePortfolioEntryDto) {
     return this.service.createPortfolioEntry(this.ctx(req).schoolSlug, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('portfolio/:id/share')
   shareEntry(@Request() req: any, @Param('id') id: string, @Body('isVisibleToFamily') isVisibleToFamily: boolean) {
     return this.service.shareEntry(this.ctx(req).schoolSlug, id, isVisibleToFamily);
@@ -206,6 +212,7 @@ export class EceController {
     return this.service.getWeeklyPlan(this.ctx(req).schoolSlug, gradeLevel, sectionName, weekStartDate);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('weekly-plan') @HttpCode(HttpStatus.OK)
   upsertWeeklyPlan(@Request() req: any, @Body() dto: UpsertWeeklyPlanDto) {
     const { schoolSlug, userName } = this.ctx(req);

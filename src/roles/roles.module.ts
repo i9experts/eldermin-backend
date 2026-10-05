@@ -6,6 +6,7 @@ import { RolesService } from './roles.service';
 import { Role, RoleSchema } from './schemas/role.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { CustomRoleGuard } from './guards/custom-role.guard';
+import { RolesOrModuleManageGuard } from './guards/roles-or-module-manage.guard';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { CustomRoleGuard } from './guards/custom-role.guard';
   providers: [
     RolesService,
     CustomRoleGuard,
+    RolesOrModuleManageGuard,
     // Registered here (rather than app.module.ts) so it can be constructed
     // with the Role/User models already scoped to this module - NestJS
     // recognizes APP_GUARD as a global-guard token regardless of which
@@ -25,6 +27,8 @@ import { CustomRoleGuard } from './guards/custom-role.guard';
     // globally: it is a no-op for every route/user not explicitly opted
     // into the custom-role system.
     { provide: APP_GUARD, useExisting: CustomRoleGuard },
+    // Role-list OR live custom-role grant (see RolesOrModuleManageGuard).
+    { provide: APP_GUARD, useExisting: RolesOrModuleManageGuard },
   ],
   exports: [RolesService],
 })

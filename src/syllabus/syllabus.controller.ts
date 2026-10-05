@@ -11,6 +11,8 @@ import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, CreateSloTemplateDto, SyllabusQueryDto,
   CreateLessonDto, UpdateLessonDto, DeleteLessonDto, SetPublishedDto,
 } from './dto/syllabus.dto';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('syllabus')
 export class SyllabusController {
@@ -122,21 +124,25 @@ export class SyllabusController {
     return this.service.update(req.user.tenantId, id, dto);
   }
 
+  @RolesOrModuleManage('academics', TEACHING_ADMIN_ROLES)
   @Delete(':id')
   remove(@Request() req: any, @Param('id') id: string) {
     return this.service.remove(req.user.tenantId, id);
   }
 
+  @RolesOrModuleManage('academics', TEACHING_ADMIN_ROLES)
   @Patch(':id/approve')
   approve(@Request() req: any, @Param('id') id: string, @Body() dto: ApproveSyllabusDto) {
     return this.service.approve(req.user.tenantId, id, dto.approverName);
   }
 
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/mark-topic')
   markTopic(@Request() req: any, @Param('id') id: string, @Body() dto: MarkTopicDto) {
     return this.service.markTopic(req.user.tenantId, id, dto);
   }
 
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/mark-sub-topic')
   markSubTopic(@Request() req: any, @Param('id') id: string, @Body() dto: MarkSubTopicDto) {
     return this.service.markSubTopic(req.user.tenantId, id, dto);
@@ -148,22 +154,26 @@ export class SyllabusController {
   }
 
   // ── LMS: lessons + publish ──────────────────────────────────
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post(':id/lessons')
   @HttpCode(HttpStatus.CREATED)
   addLesson(@Request() req: any, @Param('id') id: string, @Body() dto: CreateLessonDto) {
     return this.service.addLesson(req.user.tenantId, id, dto, req.user.name);
   }
 
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/lessons')
   updateLesson(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateLessonDto) {
     return this.service.updateLesson(req.user.tenantId, id, dto);
   }
 
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Delete(':id/lessons')
   deleteLesson(@Request() req: any, @Param('id') id: string, @Body() dto: DeleteLessonDto) {
     return this.service.deleteLesson(req.user.tenantId, id, dto);
   }
 
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/publish')
   setPublished(@Request() req: any, @Param('id') id: string, @Body() dto: SetPublishedDto) {
     return this.service.setPublished(req.user.tenantId, id, dto.published, req.user.name);

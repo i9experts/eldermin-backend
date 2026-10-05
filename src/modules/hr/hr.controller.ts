@@ -4,6 +4,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { HrService } from './hr.service';
 import { RequirePermission } from '../../auth/decorators';
+import { HR_LEAVE_ADMIN_ROLES } from '../../auth/role-sets';
+import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('hr')
 @UseGuards(AuthGuard('jwt'))
@@ -101,6 +103,7 @@ export class HrController {
   @Get('leave/applications')
   getLeaveApplications(@Request() req) { return this.hrService.getLeaveApplications(req.user.tenantId); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/applications')
   submitLeaveApplication(@Request() req, @Body() body: any) { return this.hrService.submitLeaveApplication(req.user.tenantId, body); }
 
@@ -263,37 +266,45 @@ export class HrController {
   @Get('leave/balances/:staffId')
   getLeaveBalanceAlt(@Request() req, @Param('staffId') sid: string) { return this.hrService.getLeaveBalance(req.user.tenantId, sid); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/balances/allocate')
   allocateLeaveBalances(@Request() req, @Body() body: { policyId: string; academicYear?: string }) { return this.hrService.bulkAssignLeavePolicy(req.user.tenantId, body.policyId, body.academicYear); }
 
   // ── Leave Policies (must be before generic leave/: routes) ────────────
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies/seed-defaults')
   seedLeavePolicies(@Request() req) { return this.hrService.seedLeavePolicies(req.user.tenantId); }
 
   @Get('leave/policies')
   getLeavePolicies(@Request() req) { return this.hrService.getLeavePolicies(req.user.tenantId); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies')
   createLeavePolicy(@Request() req, @Body() body: any) { return this.hrService.createLeavePolicy(req.user.tenantId, body); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Patch('leave/policies/:id')
   updateLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateLeavePolicy(req.user.tenantId, id, body); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies/:id/assign')
   assignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { staffId: string; academicYearId: string }) { return this.hrService.assignLeavePolicy(req.user.tenantId, id, body.staffId, body.academicYearId); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies/:id/bulk-assign')
   bulkAssignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { academicYearId: string }) { return this.hrService.bulkAssignLeavePolicy(req.user.tenantId, id, body.academicYearId); }
 
   @Get('leave')
   getLeave(@Request() req, @Query() q: any) { return this.hrService.getLeaveApplications(req.user.tenantId, q); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave')
   createLeave(@Request() req, @Body() body: any) { return this.hrService.createLeaveApplication(req.user.tenantId, this.iid(req), body); }
 
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES, { level: 'view' }) // web gates leave approval at hr:view
   @Patch('leave/:id/status')
-  updateLeaveStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string }) { return this.hrService.updateLeaveStatus(req.user.tenantId, id, body.status, req.user.userId, body.note); }
+  updateLeaveStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string }) { return this.hrService.updateLeaveStatus(req.user.tenantId, id, body.status, req.user.userId, body.note, req.user.role); }
 
   // ── PAYROLL ───────────────────────────────────────────────────────────
 

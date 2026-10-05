@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { BehaviourService } from './behaviour.service';
 import { TARBIYAH_TRAITS } from './schemas/behaviour.schema';
+import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 // ── CONTROLLER ────────────────────────────────────────────────
 @Controller('behaviour')
@@ -50,6 +52,7 @@ export class BehaviourController {
     return this.service.getRecordById(id, schoolSlug);
   }
 
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('records')
   @HttpCode(HttpStatus.CREATED)
   async createRecord(@Body() dto: any, @Request() req: any) {
@@ -61,6 +64,7 @@ export class BehaviourController {
     }, requestingUser);
   }
 
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('records/:id')
   async updateRecord(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -104,6 +108,7 @@ export class BehaviourController {
     return this.service.getTarbiyahTraitAnalytics(schoolSlug, grade, period);
   }
 
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('tarbiyah')
   @HttpCode(HttpStatus.CREATED)
   async createTarbiyah(@Body() dto: any, @Request() req: any) {
@@ -127,6 +132,7 @@ export class BehaviourController {
     return this.service.updateCharacterSettings(schoolSlug, dto);
   }
 
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('tarbiyah/:id')
   async updateTarbiyah(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);

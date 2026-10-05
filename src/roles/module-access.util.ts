@@ -61,3 +61,31 @@ export function satisfiesRequiredLevel(
   if (required === 'view') return granted === 'view' || granted === 'manage';
   return granted === 'manage';
 }
+
+/**
+ * Used by RolesOrModuleManageGuard: does a custom role's moduleAccess grant
+ * `level` on `moduleKey` in a way that counts for a role-list-or-custom-role
+ * route?
+ *
+ *  - allowModuleWide=false (admin-set routes): only an entry WITH a
+ *    subModuleKey (granular grant) counts. A module-wide entry is ignored,
+ *    because the stock seeded "Teacher" role carries module-wide
+ *    teaching:manage and must not unlock admin actions.
+ *  - allowModuleWide=true (staff-write routes): a module-wide entry OR any
+ *    sub-module entry of that module counts.
+ */
+export function customRoleGrants(
+  moduleAccess: ModuleAccessEntry[] | null | undefined,
+  moduleKey: string,
+  level: 'view' | 'manage',
+  allowModuleWide: boolean,
+): boolean {
+  if (!Array.isArray(moduleAccess)) return false;
+  return moduleAccess.some(
+    m =>
+      m &&
+      m.moduleKey === moduleKey &&
+      (allowModuleWide || !!m.subModuleKey) &&
+      satisfiesRequiredLevel(m.level, level),
+  );
+}

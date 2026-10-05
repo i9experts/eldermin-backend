@@ -3,6 +3,8 @@ import {
   Body, Param, Query, Request,
 } from '@nestjs/common';
 import { PTMService } from './ptm.service';
+import { STAFF_WRITE_ROLES } from '../../auth/role-sets';
+import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('teaching/ptm')
 export class PTMController {
@@ -36,26 +38,31 @@ export class PTMController {
     return this.service.getMeetingById(id, req.user.tenantId);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post()
   async create(@Body() dto: any, @Request() req: any) {
-    return this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name);
+    return this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name, req.user.userId);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/confirm')
   async confirm(@Param('id') id: string, @Request() req: any) {
     return this.service.confirmMeeting(id, req.user.tenantId);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/reschedule')
   async reschedule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     return this.service.reschedule(id, req.user.tenantId, dto);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/outcome')
   async recordOutcome(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     return this.service.recordOutcome(id, req.user.tenantId, dto);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/action-items/:actionItemId')
   async updateActionItem(
     @Param('id') id: string, @Param('actionItemId') actionItemId: string,
@@ -64,6 +71,7 @@ export class PTMController {
     return this.service.updateActionItem(id, actionItemId, req.user.tenantId, dto.status);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/cancel')
   async cancel(@Param('id') id: string, @Body() dto: { reason: string }, @Request() req: any) {
     return this.service.cancelMeeting(id, req.user.tenantId, dto.reason, req.user.name);

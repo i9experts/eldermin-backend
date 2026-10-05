@@ -20,6 +20,8 @@ import {
 import { resolveClassSectionScope } from '../auth/scope.util';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
+import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('students')
 export class StudentsController {
@@ -468,6 +470,7 @@ export class StudentsController {
   }
 
   /** POST /api/v1/students/attendance */
+  @RolesOrModuleManage('students', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('attendance')
   @HttpCode(HttpStatus.CREATED)
   async markAttendance(@Body() dto: MarkAttendanceDto, @Request() req: any) {
@@ -479,6 +482,7 @@ export class StudentsController {
   }
 
   /** POST /api/v1/students/attendance/bulk */
+  @RolesOrModuleManage('students', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('attendance/bulk')
   @HttpCode(HttpStatus.CREATED)
   async bulkMarkAttendance(@Body() dto: BulkAttendanceDto, @Request() req: any) {
