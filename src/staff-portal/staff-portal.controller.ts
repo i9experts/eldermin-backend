@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { StaffPortalService } from './staff-portal.service';
+import { StaffTeachingService } from './staff-teaching.service';
 import {
   AccountDeleteRequestDto, CreateStaffThreadDto, RegisterDeviceTokenDto,
   RemoveDeviceTokenDto, ReviewStudentLeaveDto, SendThreadMessageDto,
@@ -21,7 +22,10 @@ import {
 )
 @Controller('staff-portal')
 export class StaffPortalController {
-  constructor(private readonly service: StaffPortalService) {}
+  constructor(
+    private readonly service: StaffPortalService,
+    private readonly teaching: StaffTeachingService,
+  ) {}
 
   @Get('me')
   getMe(@Request() req: any) { return this.service.getMe(req.user); }
@@ -78,6 +82,10 @@ export class StaffPortalController {
   reviewStudentLeave(@Request() req: any, @Param('id') id: string, @Body() dto: ReviewStudentLeaveDto) {
     return this.service.reviewStudentLeave(req.user, id, dto);
   }
+
+  // Homework to grade (own assignments)
+  @Get('homework/pending-grading')
+  pendingGrading(@Request() req: any, @Query() q: any) { return this.teaching.pendingGrading(req.user, q); }
 
   // Device token
   @Post('device-token')

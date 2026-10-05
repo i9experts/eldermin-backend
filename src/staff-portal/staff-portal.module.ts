@@ -16,6 +16,9 @@ import {
 import {
   StaffDeviceToken, StaffDeviceTokenSchema, StaffDeletionRequest, StaffDeletionRequestSchema,
 } from './schemas/staff-portal.schema';
+import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
+import { Timetable, TimetableSchema } from '../modules/teaching/schemas/timetable.schema';
+import { StaffTeachingService } from './staff-teaching.service';
 import { RolesModule } from '../roles/roles.module';
 
 @Module({
@@ -34,10 +37,12 @@ import { RolesModule } from '../roles/roles.module';
       { name: Message.name, schema: MessageSchema },
       { name: StaffDeviceToken.name, schema: StaffDeviceTokenSchema },
       { name: StaffDeletionRequest.name, schema: StaffDeletionRequestSchema },
+      { name: Assignment.name, schema: AssignmentSchema },
+      { name: Timetable.name, schema: TimetableSchema },
     ]),
   ],
   controllers: [StaffPortalController],
-  providers: [StaffPortalService, StaffNotifier],
+  providers: [StaffPortalService, StaffTeachingService, StaffNotifier],
   exports: [StaffNotifier],
 })
 export class StaffPortalModule {}
