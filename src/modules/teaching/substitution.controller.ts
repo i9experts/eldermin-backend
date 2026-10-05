@@ -3,6 +3,8 @@ import {
   Body, Param, Query, Request,
 } from '@nestjs/common';
 import { SubstitutionService } from './substitution.service';
+import { STAFF_WRITE_ROLES } from '../../auth/role-sets';
+import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('teaching/fixtures')
 export class SubstitutionController {
@@ -31,6 +33,7 @@ export class SubstitutionController {
     return this.service.cancelFixture(id, req.user.tenantId);
   }
 
+  @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/complete')
   async complete(@Param('id') id: string, @Request() req: any) {
     return this.service.completeFixture(id, req.user.tenantId);
