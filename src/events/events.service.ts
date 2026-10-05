@@ -169,11 +169,34 @@ export class EventsService {
     return this.ticketTypeModel.create({ ...data, eventId, schoolSlug });
   }
 
+  // setEventStatus requires >=1 active ticket type to publish, but nothing
+  // stopped an admin from deactivating or deleting that same ticket type
+  // afterwards with zero warning - the event silently stayed "published"
+  // with getPublicEventBySlug now returning an empty ticketTypes array, so
+  // the public page's own "Tickets aren't available yet" fallback (the
+  // only state it has for an empty list) was indistinguishable from a
+  // genuinely not-yet-configured event. Only matters once an event is
+  // actually published; freely add/remove/deactivate ticket types on a
+  // draft event same as always.
+  private async assertKeepsPublishedEventSellable(schoolSlug: string, eventId: any, excludeTicketTypeId: string) {
+    const event = await this.eventModel.findOne({ _id: eventId, schoolSlug }).select('status').lean();
+    if (!event || event.status !== 'published') return;
+    const remainingActive = await this.ticketTypeModel.countDocuments({
+      schoolSlug, eventId, isActive: true, _id: { $ne: excludeTicketTypeId },
+    });
+    if (remainingActive === 0) {
+      throw new BadRequestException('This is the only active ticket type left on a published event - parents would have nothing to buy. Add another active ticket type first, or unpublish the event.');
+    }
+  }
+
   async updateTicketType(schoolSlug: string, id: string, data: any) {
     const tt = await this.ticketTypeModel.findOne({ _id: id, schoolSlug });
     if (!tt) throw new NotFoundException('Ticket type not found');
     if (data.capacity !== undefined && data.capacity < tt.soldCount) {
       throw new BadRequestException(`Cannot set capacity below ${tt.soldCount} - that many are already sold.`);
+    }
+    if (data.isActive === false && tt.isActive) {
+      await this.assertKeepsPublishedEventSellable(schoolSlug, tt.eventId, id);
     }
     Object.assign(tt, data);
     await tt.save();
@@ -184,6 +207,9 @@ export class EventsService {
     const tt = await this.ticketTypeModel.findOne({ _id: id, schoolSlug }).lean();
     if (!tt) throw new NotFoundException('Ticket type not found');
     if (tt.soldCount > 0) throw new BadRequestException('Cannot delete a ticket type that already has sales - deactivate it instead.');
+    if (tt.isActive) {
+      await this.assertKeepsPublishedEventSellable(schoolSlug, tt.eventId, id);
+    }
     await this.ticketTypeModel.deleteOne({ _id: id, schoolSlug });
     return { message: 'Deleted' };
   }
