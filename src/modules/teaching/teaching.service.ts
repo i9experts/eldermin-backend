@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { Optional, Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -24,6 +24,8 @@ import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
 import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
 import { PdfService } from '../../pdf/pdf.service';
+import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
+import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { GradeSubmissionDto } from './dto/assignment.dto';
 
 @Injectable()
@@ -44,6 +46,7 @@ export class TeachingService {
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     private readonly pdfService: PdfService,
     private readonly configService: ConfigService,
+    @Optional() private readonly staffNotifier?: StaffNotifier,
   ) {}
 
   private tid(t: string) { return t; }
@@ -337,20 +340,48 @@ Rules:
     };
   }
 
+  /** Best-effort: tell the plan's author about the decision. Never throws. */
+  private async notifyLessonPlanAuthor(tenantId: string, plan: any, title: string, body: string) {
+    if (!this.staffNotifier || !plan?.teacherId) return;
+    try {
+      let staff: any = await this.staffModel.findById(plan.teacherId).select('userId').lean();
+      if (!staff) {
+        const profile: any = await this.teacherProfileModel.findById(plan.teacherId).select('staffId').lean();
+        if (profile?.staffId) staff = await this.staffModel.findById(profile.staffId).select('userId').lean();
+      }
+      if (!staff?.userId) return;
+      const schoolSlug = await resolveSchoolSlug(this.staffModel.db, tenantId);
+      if (!schoolSlug) return;
+      await this.staffNotifier.notify({
+        recipientUserId: staff.userId, schoolSlug, type: 'lesson_plan', title, body, relatedEntityId: String(plan._id),
+      });
+    } catch { /* never fail the main action */ }
+  }
+
   async approveLessonPlan(tenantId: string, id: string, userId: string, notes: string) {
-    return this.lessonPlanModel.findOneAndUpdate(
+    const result = await this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'approved', approvedBy: new Types.ObjectId(userId), approvedAt: new Date(), approverNotes: notes } },
       { new: true },
     ).lean();
+    if (result) {
+      const n = (notes || '').trim();
+      await this.notifyLessonPlanAuthor(tenantId, result, 'Lesson plan approved', `Your lesson plan "${(result as any).title || ''}" was approved.${n ? ' Note: ' + n.slice(0, 120) : ''}`);
+    }
+    return result;
   }
 
   async rejectLessonPlan(tenantId: string, id: string, reason: string) {
-    return this.lessonPlanModel.findOneAndUpdate(
+    const result = await this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'rejected', rejectionReason: reason } },
       { new: true },
     ).lean();
+    if (result) {
+      const r = (reason || '').trim();
+      await this.notifyLessonPlanAuthor(tenantId, result, 'Lesson plan rejected', `Your lesson plan "${(result as any).title || ''}" was rejected.${r ? ' Reason: ' + (r.length > 120 ? r.slice(0, 117) + '...' : r) : ''}`);
+    }
+    return result;
   }
 
   // ── TIMETABLE ─────────────────────────────────────────────────────────────────

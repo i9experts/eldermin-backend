@@ -45,9 +45,12 @@ import { SecurityDeposit, SecurityDepositSchema } from './schemas/security-depos
 import { User, UserSchema } from '../organization/schemas/user.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
+import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
+
 @Module({
   imports: [
     UploadModule,
+    StaffPortalModule,
     FinanceModule,
     EmailModule,
     PdfModule,

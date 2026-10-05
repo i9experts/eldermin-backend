@@ -32,8 +32,11 @@ import { TimetableVariantController } from './timetable-variant.controller';
 import { ExamService } from './exam.service';
 import { ExamController } from './exam.controller';
 
+import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
+
 @Module({
   imports: [
+    StaffPortalModule,
     MongooseModule.forFeature([
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: LessonPlan.name, schema: LessonPlanSchema },
