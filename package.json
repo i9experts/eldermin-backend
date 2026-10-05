@@ -22,6 +22,7 @@
     "seed:report-templates": "ts-node -r tsconfig-paths/register src/modules/report-templates/seed-report-templates.ts",
     "seed:kb": "ts-node -r tsconfig-paths/register src/seed/seed-kb-articles.ts",
     "audit:campus-scope": "ts-node -r tsconfig-paths/register src/scripts/audit-campus-scope-readiness.ts",
+    "audit:teacher-class-matching": "ts-node -r tsconfig-paths/register src/scripts/audit-teacher-class-matching.ts",
     "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts"
   },
   "dependencies": {
