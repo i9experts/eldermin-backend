@@ -54,3 +54,13 @@ Existing specs untouched. These notify paths have no dedicated unit tests yet (o
 5. Student class match uses `Student.currentGrade/currentSection` vs `TeacherProfile.classTeacherOf*`/`currentAssignments[].gradeLevel/sectionName` string equality — verify the values align in real school data.
 6. Deploy note: parent app shows unknown notification types as generic; staff types are only written to staff users.
 7. Not changed (backlog): marks-entry ownership/max-marks checks, student/360 scoping and fee leak, attendance scope holes.
+
+---
+## Addendum — follow-up after review (supersedes the matching parts above)
+
+- **Custom-role fallback implemented** (`RolesOrModuleManage` + `RolesOrModuleManageGuard`, see `guards-added.md` "Option B"). A user passes if their JWT base role is allowed OR their live-looked-up custom role grants access. Admin-set routes honour only sub-module-specific custom grants (so the stock "Teacher" role's module-wide `teaching:manage` does not pass); teacher-app write routes also honour module-wide `manage`. parent/student/reseller are always refused. Fails closed on any DB error. Tests: base-role pass, custom-role pass, both-fail 403, plus edge cases. Known consequence: a hand-made role with only a module-wide `teaching`/`hr`/`apps` grant and a non-admin base role loses those admin routes — run the pre-flight query (guard-inventory §4.2) on production before deploy.
+- **Legacy `POST /hr/leave/applications`**: grep of `Eldermin-Frontend` (all 126 `origin/*` branches incl. `main`) and `eldermin-parent-mobile-app` (all `origin/*` branches): the only reference is the unused `submitLeave` definition in `src/services/hr.service.ts`; no caller anywhere. Guard kept.
+- **Grade/section matching**: `src/common/utils/class-match.util.ts` (trim, collapse spaces, case-insensitive, `Grade 5`/`Class 5`/`G5`/`5` equal; `5`≠`15`, `Grade 1`≠`Grade 11`). Used in staff-portal scoping and `resolveClassSectionScope`. Known remaining exact match: `students.controller` attendance list queries Mongo by the class teacher's own grade string.
+- **Audit script**: `npm run audit:teacher-class-matching -- --schoolSlug=<slug> --yes` (read-only; refuses to run without both args; never run by us).
+- **Notification hooks** now have tests (each hook fires; failures never fail the action; works without a notifier). Fixed PTM self-notify check by passing `actorUserId` separately (stored `requestedBy` unchanged).
+- Totals: build clean; 36 suites / 653 tests pass (stable over 3 runs).
