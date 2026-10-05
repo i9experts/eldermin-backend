@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Optional, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { PTMMeeting, PTMMeetingDocument } from './schemas/ptm-meeting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
+import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
+import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { EmailService } from '../../email/email.service';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 
@@ -15,6 +17,7 @@ export class PTMService {
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     private emailService: EmailService,
+    @Optional() private readonly staffNotifier?: StaffNotifier,
   ) {}
 
   private tid(t: string) { return t; }
@@ -31,7 +34,24 @@ export class PTMService {
     } catch { /* never fail the main action */ }
   }
 
-  async createMeeting(tenantId: string, institutionId: string, data: any, requestedBy: string) {
+  /** Best-effort notify of the meeting's teacher; never throws. */
+  private async notifyTeacher(tenantId: string, meeting: any, title: string, skipUserId?: string) {
+    if (!this.staffNotifier) return;
+    try {
+      const staff: any = await this.staffModel.findById(meeting.teacherId).select('userId').lean();
+      if (!staff?.userId) return;
+      if (skipUserId && String(staff.userId) === String(skipUserId)) return;
+      const schoolSlug = await resolveSchoolSlug(this.staffModel.db, tenantId);
+      if (!schoolSlug) return;
+      await this.staffNotifier.notify({
+        recipientUserId: staff.userId, schoolSlug, type: 'ptm', title,
+        body: `${meeting.studentName || 'Student'} on ${new Date(meeting.scheduledDate).toDateString()}${meeting.startTime ? ' at ' + meeting.startTime : ''}${meeting.endTime ? '-' + meeting.endTime : ''}.`,
+        relatedEntityId: String(meeting._id),
+      });
+    } catch { /* never fail the main action */ }
+  }
+
+  async createMeeting(tenantId: string, institutionId: string, data: any, requestedBy: string, actorUserId?: string) {
     const [student, teacher] = await Promise.all([
       this.studentModel.findById(data.studentId).lean(),
       this.staffModel.findById(data.teacherId).lean(),
@@ -63,6 +83,7 @@ export class PTMService {
     });
     await meeting.save();
     await this.notifyGuardians(tenantId, meeting, 'Parent-teacher meeting scheduled');
+    await this.notifyTeacher(tenantId, meeting, 'Parent-teacher meeting scheduled', actorUserId ?? requestedBy);
 
     // E-Alert - a real attempt, honestly logged.
     if (primaryGuardian?.email) {
@@ -128,6 +149,7 @@ export class PTMService {
     );
     if (!meeting) throw new NotFoundException('Meeting not found or already completed/cancelled');
     await this.notifyGuardians(tenantId, meeting, 'Parent-teacher meeting rescheduled');
+    await this.notifyTeacher(tenantId, meeting, 'Parent-teacher meeting rescheduled');
     return meeting;
   }
 

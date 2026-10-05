@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Optional, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Substitution, SubstitutionDocument } from './schemas/substitution.schema';
 import { Timetable, TimetableDocument } from './schemas/timetable.schema';
 import { TeacherProfile, TeacherProfileDocument } from './schemas/teacher-profile.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
+import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
+import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { EmailService } from '../../email/email.service';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 
@@ -18,6 +20,7 @@ export class SubstitutionService {
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     private emailService: EmailService,
+    @Optional() private readonly staffNotifier?: StaffNotifier,
   ) {}
 
   private tid(t: string) { return t; }
@@ -174,6 +177,20 @@ export class SubstitutionService {
     fixture.assignedBy = assignedBy;
     fixture.assignedAt = new Date();
     await fixture.save();
+
+    if (this.staffNotifier && (staff as any).userId) {
+      try {
+        const schoolSlug = await resolveSchoolSlug(this.staffModel.db, tid);
+        if (schoolSlug) {
+          await this.staffNotifier.notify({
+            recipientUserId: (staff as any).userId, schoolSlug, type: 'substitution',
+            title: 'Substitution assigned',
+            body: `You are covering ${fixture.gradeLevel} ${fixture.sectionName}, Period ${fixture.periodNo} on ${new Date(fixture.date).toDateString()} for ${fixture.originalTeacherName}.`,
+            relatedEntityId: String(fixture._id),
+          });
+        }
+      } catch { /* never fail the main action */ }
+    }
 
     // Real-time notify - actually sends via the school's configured
     // email service if the substitute has one on file; honestly

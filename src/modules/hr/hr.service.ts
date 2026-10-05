@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Optional, Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as net from 'net';
@@ -37,6 +37,8 @@ import { School, SchoolDocument } from '../../organization/schemas/organization.
 import { StaffContract, StaffContractDocument } from './schemas/staff-contract.schema';
 import { ContractTemplate, ContractTemplateDocument } from './schemas/contract-template.schema';
 import { PdfService } from '../../pdf/pdf.service';
+import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
+import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { OfferLetter, OfferLetterDocument } from './schemas/offer-letter.schema';
 import { OfferLetterTemplate, OfferLetterTemplateDocument } from './schemas/offer-letter-template.schema';
 import { AppointmentLetter, AppointmentLetterDocument } from './schemas/appointment-letter.schema';
@@ -101,6 +103,7 @@ export class HrService {
     private readonly emailService: EmailService,
     private readonly financeService: FinanceService,
     private readonly pdfService: PdfService,
+    @Optional() private readonly staffNotifier?: StaffNotifier,
   ) {}
 
   // Ledger postings must never block the underlying HR transaction (payroll
@@ -1269,10 +1272,22 @@ export class HrService {
     hajj: 'hajjUsed', unpaid: 'unpaidUsed',
   };
 
-  async updateLeaveStatus(tenantId: string, id: string, status: string, approverId: string, note: string) {
+  async updateLeaveStatus(tenantId: string, id: string, status: string, approverId: string, note: string, approverRole?: string) {
+    if (!['approved', 'rejected', 'cancelled', 'pending'].includes(status)) {
+      throw new BadRequestException('Invalid status');
+    }
     const tid = this.newTid(tenantId);
     const existing = await this.leaveApplicationModel.findOne({ _id: id, tenantId: tid }).lean();
     if (!existing) throw new NotFoundException('Leave application not found');
+
+    // Self-approval protection (super_admin / institution_owner have no one above them).
+    if (approverRole !== 'super_admin' && approverRole !== 'institution_owner') {
+      const approverStaff: any = await this.staffModel
+        .findOne({ tenantId: tid, userId: this.newTid(approverId) }).select('_id').lean();
+      if (approverStaff && String(approverStaff._id) === String(existing.staffId)) {
+        throw new ForbiddenException('You cannot approve or reject your own leave request.');
+      }
+    }
 
     const updated = await this.leaveApplicationModel.findOneAndUpdate(
       { _id: id, tenantId: tid },
@@ -1307,6 +1322,23 @@ export class HrService {
         tenantId: tid, staffId: existing.staffId, status: 'on_leave',
         date: { $gte: new Date(existing.fromDate), $lte: new Date(existing.toDate) },
       });
+    }
+
+    if (this.staffNotifier && updated) {
+      try {
+        const applicant: any = await this.staffModel.findById(existing.staffId).select('userId').lean();
+        const schoolSlug = applicant?.userId ? await resolveSchoolSlug(this.staffModel.db, tenantId) : null;
+        if (schoolSlug) {
+          const verb = status === 'approved' ? 'approved' : status === 'rejected' ? 'rejected' : status;
+          const fmt = (d: any) => { try { return new Date(d).toDateString(); } catch { return ''; } };
+          await this.staffNotifier.notify({
+            recipientUserId: applicant.userId, schoolSlug, type: 'leave_status',
+            title: `Leave request ${verb}`,
+            body: `Your ${existing.leaveType} leave (${fmt(existing.fromDate)} - ${fmt(existing.toDate)}) was ${verb}.${note ? ' Note: ' + String(note).slice(0, 200) : ''}`,
+            relatedEntityId: String(existing._id),
+          });
+        }
+      } catch { /* never fail the main action */ }
     }
 
     return updated;
