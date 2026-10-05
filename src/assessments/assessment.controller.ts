@@ -211,6 +211,12 @@ export class AssessmentController {
     return this.service.update(id, schoolSlug, dto);
   }
 
+  @Delete(':id')
+  async remove(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteAssessment(id, schoolSlug);
+  }
+
   @Get(':id/timetable/pdf')
   async downloadTimetablePdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
     const { schoolSlug } = this.ctx(req);
