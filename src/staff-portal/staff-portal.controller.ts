@@ -87,6 +87,10 @@ export class StaffPortalController {
   @Get('homework/pending-grading')
   pendingGrading(@Request() req: any, @Query() q: any) { return this.teaching.pendingGrading(req.user, q); }
 
+  // Own timetable slots (date or range)
+  @Get('timetable')
+  timetable(@Request() req: any, @Query() q: any) { return this.teaching.timetable(req.user, q); }
+
   // Device token
   @Post('device-token')
   @HttpCode(HttpStatus.OK)
