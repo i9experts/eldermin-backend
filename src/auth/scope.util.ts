@@ -1,5 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { UserRole } from './roles.enum';
+import { sameGrade, sameSection } from '../common/utils/class-match.util';
 
 // ============================================================
 // CAMPUS / DEPARTMENT ACCESS MODEL
@@ -60,6 +61,8 @@ export interface ScopedUser {
   classTeacherOfSectionName?: string;
   subjectsCanTeach?: string[];
   gradeLevelsCanTeach?: string[];
+  staffId?: string;
+  teacherProfileId?: string;
   resellerId?: string;
 }
 
@@ -195,10 +198,10 @@ export function resolveClassSectionScope(
     return { grade: requestedGrade, section: requestedSection };
   }
 
-  if (requestedGrade && String(requestedGrade) !== String(user.classTeacherOfGradeName)) {
+  if (requestedGrade && !sameGrade(requestedGrade, user.classTeacherOfGradeName)) {
     throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
   }
-  if (requestedSection && user.classTeacherOfSectionName && String(requestedSection) !== String(user.classTeacherOfSectionName)) {
+  if (requestedSection && user.classTeacherOfSectionName && !sameSection(requestedSection, user.classTeacherOfSectionName)) {
     throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
   }
 
