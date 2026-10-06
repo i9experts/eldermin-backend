@@ -153,9 +153,9 @@ export class OrganizationController {
   }
 
   // Grades
-  @Get('grades') async getGrades(@Request() req: any, @Query('campusId') campusId?: string) {
+  @Get('grades') async getGrades(@Request() req: any, @Query('campusId') campusId?: string, @Query('assignedOnly') assignedOnly?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.service.getGrades(schoolSlug, campusId, requestingUser);
+    return this.service.getGrades(schoolSlug, campusId, requestingUser, assignedOnly === 'true');
   }
 
   @Post('grades') @HttpCode(HttpStatus.CREATED)

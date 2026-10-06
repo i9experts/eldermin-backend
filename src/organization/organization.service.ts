@@ -18,7 +18,7 @@ import {
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
-import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { resolveCampusScope, resolveTeacherGradeScope, ScopedUser } from '../auth/scope.util';
 import { UploadService } from '../upload/upload.service';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
@@ -302,10 +302,20 @@ export class OrganizationService {
   }
 
   // ── Grades ────────────────────────────────────────────────
-  async getGrades(schoolSlug: string, campusId?: string, requestingUser?: ScopedUser) {
+  async getGrades(schoolSlug: string, campusId?: string, requestingUser?: ScopedUser, assignedOnly?: boolean) {
     const filter: any = { schoolSlug, isActive: true };
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // Opt-in only (Question Bank, Syllabus) - every other caller of this
+    // same endpoint (Institution Setup, Finance, Timetable, …) keeps
+    // seeing the full school-wide grade list exactly as before.
+    if (assignedOnly && requestingUser) {
+      const assignedGrades = resolveTeacherGradeScope(requestingUser);
+      if (assignedGrades) {
+        const escaped = (s: string) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filter.name = { $in: assignedGrades.map((g) => new RegExp(`^${escaped(g)}$`, 'i')) };
+      }
+    }
     return this.gradeModel.find(filter).sort({ displayOrder: 1, name: 1 });
   }
 

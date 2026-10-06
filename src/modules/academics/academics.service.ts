@@ -15,7 +15,7 @@ import { Timetable, TimetableDocument } from '../teaching/schemas/timetable.sche
 import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/elective-group.schema';
 import { Student, StudentDocument } from '../../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
-import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
+import { resolveCampusScope, resolveTeacherSubjectScope, ScopedUser } from '../../auth/scope.util';
 import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
 import { buildSubjectCategoryInUseMessage } from './subject-category-reference.util';
 import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
@@ -94,6 +94,17 @@ export class AcademicsService {
     }
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // Opt-in only (Question Bank, Syllabus) - callers that didn't ask to
+    // be scoped to the teacher's own assignment keep seeing the full
+    // school-wide list exactly as before, e.g. admins building the master
+    // Subjects list itself, or Timetable's own subject pickers.
+    if (query.assignedOnly === 'true' && requestingUser) {
+      const assignedSubjects = resolveTeacherSubjectScope(requestingUser);
+      if (assignedSubjects) {
+        const escaped = (s: string) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        filter.name = { $in: assignedSubjects.map((s) => new RegExp(`^${escaped(s)}$`, 'i')) };
+      }
+    }
     return this.subjectModel.find(filter).sort({ name: 1 }).lean();
   }
 
