@@ -54,6 +54,9 @@ Fixed on `feat/staff-portal` for **role `teacher` only**; every other role (prin
 | POST `/parent-portal/students/:studentId/leave` | studentId from path, `requestedBy` from JWT | no (app uses `/staff-portal` student-leave review) | VERIFIED; any-studentId issue already Critical #8 | parent-portal.controller.ts:206 |
 | POST/PATCH `/teaching/behaviour` (old store) | yes: `reportedBy` (Staff ref) from raw body | no (app uses `behaviour/records`) | LEFT | teaching.controller.ts:225,229; teaching.service.ts:1125,1139 |
 
+### Follow-up fix: teacher self-approval via lesson-plan create/PATCH
+`POST /teaching/lesson-plans` and the raw-`$set` `PATCH /teaching/lesson-plans/:id` let a teacher set `status: 'approved'` (and `approvedBy`/`approvedAt`/`approverNotes`/`rejectionReason`), bypassing the guarded approve/reject routes. FIXED for role `teacher` only: status may only be `draft` or `submitted` (403 otherwise) and the approver-owned fields are stripped (`teaching.service.ts` `sanitizeTeacherLessonPlanApproval`). Other roles unchanged. Found by the Phase 6a audit (lesson-plan PATCH accepts anything).
+
 ### Left, and why
 - **Grade submission ownership**: gradedBy is already server-side; restricting to the assignment owner would break co-teachers/substitutes and needs a product rule.
 - **PTM confirm/cancel/action-items, fixtures complete, syllabus mark-topic**: no body identity is trusted (they act on a path id); the gap is missing ownership/scoping, tracked here rather than changed because the teacher app does not call them yet and the rules (substitutes, HODs) need a decision.
