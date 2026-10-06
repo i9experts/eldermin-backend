@@ -177,8 +177,8 @@ export class AssessmentController {
   @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('quiz-attempts/:attemptId/grade') @HttpCode(HttpStatus.OK)
   async gradeQuizAttempt(@Param('attemptId') attemptId: string, @Body() dto: GradeQuizAttemptDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.gradeQuizAttempt(schoolSlug, attemptId, dto.grades, userName);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.gradeQuizAttempt(schoolSlug, attemptId, dto.grades, userName, requestingUser);
   }
 
   // ── Exam Papers (static GET must precede :id below) ───────────
