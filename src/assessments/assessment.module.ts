@@ -14,6 +14,8 @@ import { QuizAttempt, QuizAttemptSchema } from './schemas/quiz-attempt.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
 import { PdfModule } from '../pdf/pdf.module';
 import { UploadModule } from '../upload/upload.module';
 
@@ -33,6 +35,8 @@ import { UploadModule } from '../upload/upload.module';
       { name: 'School', schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
+      { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
     ]),
   ],
   controllers: [AssessmentController],

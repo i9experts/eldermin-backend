@@ -3,7 +3,7 @@
 // ============================================================
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
-import { Injectable, NotFoundException, BadRequestException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -24,6 +24,10 @@ import { QuizAttempt, QuizAttemptDocument } from './schemas/quiz-attempt.schema'
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
+import { isTeacherCaller, resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
+import { sameGrade, sameSection } from '../common/utils/class-match.util';
 import { Campus } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
@@ -69,10 +73,31 @@ export class AssessmentService {
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     private configService: ConfigService,
     private pdfService: PdfService,
     private uploadService: UploadService,
   ) {}
+
+  /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
+  private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; isClassTeacher: boolean; classTeacherClass?: TeacherClassRef }> {
+    const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user);
+    const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+      .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName currentAssignments').lean();
+    const isClassTeacher = !!(profile?.isClassTeacher && profile.classTeacherOfGradeName);
+    return {
+      staffId: me.staffId,
+      classes: teacherClassesOf(profile),
+      isClassTeacher,
+      classTeacherClass: isClassTeacher
+        ? { grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined } : undefined,
+    };
+  }
+
+  private classIncludes(classes: TeacherClassRef[], grade: any, section: any): boolean {
+    return classes.some(c => sameGrade(c.grade, grade) && (!c.section || sameSection(c.section, section)));
+  }
 
   // Same institution/campus resolution as CertificatesService.resolveBranding
   // and IdCardsService - an institution's own name/logo take priority over
@@ -1237,12 +1262,40 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // ============================================================
   // MARK ENTRY
   // ============================================================
-  async bulkEnterMarks(dto: BulkMarkEntryDto) {
+  async bulkEnterMarks(dto: BulkMarkEntryDto, requestingUser?: ScopedUser) {
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
 
     const subjectConfig = assessment.subjects.find(s => s.subject === dto.subject);
     if (!subjectConfig) throw new BadRequestException(`Subject ${dto.subject} not in assessment`);
+
+    // TEACHER role only (other roles keep today's overwrite behaviour):
+    // validate EVERYTHING first, then write. Nothing is written when any
+    // row is out of bounds or already verified (locked).
+    const teacher = isTeacherCaller(requestingUser);
+    if (teacher) {
+      const bad: string[] = [];
+      for (const m of dto.marks) {
+        if (m.isAbsent || m.isExempt) continue;
+        const v: any = m.obtainedMarks;
+        if (v === undefined || v === null) continue;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > subjectConfig.totalMarks) {
+          bad.push(`${m.studentName || m.studentId}${m.rollNumber ? ` (roll ${m.rollNumber})` : ''}: ${v}`);
+        }
+      }
+      if (bad.length) {
+        throw new BadRequestException(`Marks must be between 0 and ${subjectConfig.totalMarks} for ${dto.subject}. Invalid for ${bad.length} student(s): ${bad.join('; ')}`);
+      }
+      const ids = dto.marks.map(m => new Types.ObjectId(m.studentId));
+      const locked: any[] = await this.markModel.find({
+        assessmentId: new Types.ObjectId(dto.assessmentId), subject: dto.subject, schoolSlug: dto.schoolSlug,
+        studentId: { $in: ids }, verified: true,
+      }).select('studentId studentName rollNumber').lean() as any;
+      if (locked.length) {
+        const names = locked.map(l => `${l.studentName || l.studentId}${l.rollNumber ? ` (roll ${l.rollNumber})` : ''}`);
+        throw new ConflictException(`Marks for ${locked.length} students are verified and locked: ${names.join('; ')}`);
+      }
+    }
 
     const ops = dto.marks.map(m => {
       let percentage: number | undefined;
@@ -1283,7 +1336,11 @@ You are assisting a teacher's professional judgement, not replacing it - classif
               obtainedMarks: m.obtainedMarks,
               isAbsent: m.isAbsent || false,
               isExempt: m.isExempt || false,
-              percentage, grade_result, gpa, result,
+              // Mongoose strips undefined keys from $set, so for an
+              // absent/exempt row percentage/grade/gpa of an earlier score
+              // would survive. Teacher writes clear them explicitly.
+              ...(teacher ? { percentage: percentage ?? null, grade_result: grade_result ?? null, gpa: gpa ?? null } : { percentage, grade_result, gpa }),
+              result,
               remarks: m.remarks,
               enteredBy: dto.enteredBy,
               academicYear: dto.academicYear,
