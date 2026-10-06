@@ -7,7 +7,7 @@ Found during Phase 0/1 audits. Deliberately out of scope per "minimal, additive"
 2. **Nearly all of `/hr/*` unguarded** except `leave/self*`: staff PATCH, `staff/:id/reset-password`, `staff/:id/create-login`, payroll runs/payslips/payments.
 3. **`ModulesController` trusts `x-school-slug` header over the JWT slug** (cross-school module targeting).
 4. **Custom roles are not evaluated server-side for these routes.** `RolesGuard` only sees `primaryRole`; custom `user.permissions` are login-response only. The stock "Teacher" custom role carries module-wide `teaching:manage`. See "Custom-role decision" in the phase report.
-5. **Marks entry integrity:** `POST /assessments/marks/bulk` has no subject/class/campus ownership check, no `verified` lock, accepts marks > total. `PATCH report-cards/:id/remarks` open to any staff token. Quiz-attempt grading unscoped.
+5. **Marks entry integrity:** ~~`POST /assessments/marks/bulk` no `verified` lock, accepts marks > total~~ FIXED for role `teacher`; ~~`PATCH report-cards/:id/remarks` open to any staff token~~ FIXED for teacher; ~~quiz-attempt grading unscoped~~ FIXED for teacher. Still OPEN: marks/bulk has no subject/class/campus ownership check for teachers; non-teacher roles unchanged by design. See "Phase 6 fixes and candidates" below.
 6. **Student data scoping:** `GET /students` is campus-scoped only (not class-scoped); `GET /students/:id` and `/:id/360` have no campus/class check; list and 360 payloads include fee data (`monthlyTuitionFee` etc.).
 7. **Student attendance scope:** teachers without a class-teacher assignment pass `resolveClassSectionScope` unrestricted; `studentId` in attendance writes is not checked against the class. Web sends `date=` which the DTO strips (use `from`/`to`).
 8. **Student leave (parent-portal) GET/POST accept any studentId from any staff token.**
@@ -75,3 +75,33 @@ Fixed on `feat/staff-portal` for **role `teacher` only**; every other role (prin
 
 ### P3. Remaining trusts-body-identity routes
 See the "Left" list above: `POST /syllabus` / `PUT /syllabus/:id` (syllabus.dto.ts:68-69, 88-89; syllabus.controller.ts:116,122), `POST/PATCH /teaching/behaviour` (teaching.controller.ts:225,229; teaching.service.ts:1125,1139), PUT behaviour records ownership (behaviour.controller.ts:69-77), PTM confirm/cancel/action-items (ptm.controller.ts:48,67,75), fixtures complete (substitution.controller.ts:37), syllabus mark-topic/sub-topic (syllabus.controller.ts:140,146), grade submission ownership (teaching.service.ts:1044).
+
+
+## Phase 6 fixes and candidates (marks, remarks, quiz, library, curriculum)
+
+Source: `PHASE6B_REPORT.md` (section 7 candidates) plus the Phase 6 fixes on `feat/staff-portal` (`PHASE6_FIXES.md`). FIXED (teacher role) = enforced only when the caller's role is `teacher` (`isTeacherCaller`); every other role behaves exactly as before. Line numbers are of the current branch (after the rebase onto origin/main `e2486db`).
+
+| # | Item | Status | Where |
+|---|---|---|---|
+| 1 | `POST /assessments/marks/bulk`: marks > subject total or negative accepted | FIXED (teacher): 400 listing rows; DTO already has `@Min(0)` for all roles but no upper bound | `assessment.service.ts` `bulkEnterMarks` |
+| 2 | `marks/bulk` overwrites `verified` marks (and the `$set` omits `verified`, so a verified row stays verified after overwrite) | FIXED (teacher): any verified row rejects the whole request (409, nothing written). OPEN for admin roles (they still overwrite) | same |
+| 3 | `marks/bulk` stale `percentage`/`grade_result`/`gpa` when a scored row becomes absent/exempt (Mongoose 9 strips `undefined` keys from `$set`; proven with `_castUpdate`) | FIXED (teacher): explicit nulls. OPEN for other roles | same |
+| 4 | `marks/bulk` has no ownership / subject-class / campus / status scoping for teachers (any teacher can write any assessment's marks) | OPEN (needs the same string-matching decision as the app's "my assessments") | same |
+| 5 | `marks/bulk` row with `obtainedMarks: null` and neither absent nor exempt is stored as 0% (null/total) | OPEN (note only; the app never sends it) | same |
+| 6 | `PATCH /assessments/report-cards/:id/remarks`: any staff token; `principalRemarks` writable by anyone | FIXED (teacher): must be class teacher of the card's grade/section (403), only `classTeacherRemarks` writable | `updateReportCardRemarks` |
+| 7 | Remarks: unknown id answers 200 with an empty body | FIXED (teacher: 404). OPEN for admin roles (200-empty quirk kept on purpose) | same |
+| 8 | Remarks: published cards remain editable | OPEN (all roles; needs a product rule) | same |
+| 9 | `POST quiz-attempts/:id/grade`: no per-question bounds | FIXED (teacher): 0..question marks, 400 listing questions | `gradeQuizAttempt` |
+| 10 | Quiz grade: re-grade of an already graded attempt | FIXED (teacher: 409). OPEN for admins (they may re-grade) | same |
+| 11 | Quiz completion overwrote ANY existing MarkEntry (verified or manual) | FIXED for ALL roles (data-integrity bug): never overwrites verified or manually entered entries; only quiz-written entries (`quizAttemptId` marker or legacy `enteredBy: 'Online Quiz (auto)'`) are updated | `upsertMarkEntryFromAttempt` |
+| 12 | Quiz grade: any teacher could grade any attempt | FIXED (teacher): must teach the attempt's class (403). Added beyond the original ask, same helper as #13 | `gradeQuizAttempt` |
+| 13 | `GET /assessments/quiz-attempts` (+ `/:attemptId`) school-wide, incl. answer keys | FIXED (teacher): list filtered to classes taught; detail 403 outside them. OPEN for other roles (school-wide as today) | `getQuizAttemptsPendingReview`, `getQuizAttemptForReview` |
+| 14 | `GET /assessments` is campus-scoped only (not teacher-scoped) and `limit` has no maximum (`PaginationDto.limit` only `@Min(1)`, `assessment.dto.ts:14`) | OPEN | `assessment.service.ts` `findAll`; `assessment.controller.ts` `@Get()` |
+| 15 | `GET /assessments/marks/list` is not grade/section scoped (schoolSlug only); rollNumber sorted as a string | OPEN | `getMarks` |
+| 16 | `GET /academics/library/books/:id` WRITES on a GET (`ensureCopies` persists inferred copies via `findByIdAndUpdate`) and returns the last 20 issue records (borrower history) | OPEN (the teacher app deliberately does not call it) | `academics.service.ts:531-545` (`getBookById`), `:574-579` (`ensureCopies`); route `academics.controller.ts:175` |
+| 17 | `GET /academics/curriculum` is tenant-wide and includes drafts unless the client passes `status` | OPEN (the app asks `status=active`) | `academics.service.ts:387-395`; route `academics.controller.ts:111` |
+| 18 | `GET /academics/library/search` is `$text` on `tenantId` only (no campus scope), 20 rows | OPEN | `academics.service.ts:699-705`; route `academics.controller.ts:160` |
+| 19 | JWT carries no `academicYear` (the app sends `x-academic-year`; the controller falls back to a hard-coded `'2025-26'`) | OPEN | `jwt.strategy.ts`; `assessment.controller.ts` `ctx()` |
+| 20 | Non-atomic `marks/bulk` (`bulkWrite` is ordered; a mid-batch failure leaves a written prefix) | OPEN (note) | `bulkEnterMarks` |
+| 21 | MarkEntry/quiz upsert read-then-write is not atomic (a manual entry created between the check and the upsert could be overwritten; unique index prevents duplicates) | OPEN (narrow race, noted) | `upsertMarkEntryFromAttempt` |
+| 22 | Assessment status gate (marks only while `ongoing`/`completed`) is app-side only | OPEN (product question 1 in PHASE6B_REPORT) | - |
