@@ -79,7 +79,7 @@ export class TeachingController {
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('lesson-plans/:id')
-  updateLessonPlan(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateLessonPlan(req.user.tenantId, id, body); }
+  updateLessonPlan(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateLessonPlan(req.user.tenantId, id, body, req.user); }
 
   // ── TIMETABLE ─────────────────────────────────────────────────────────────────
 
@@ -204,7 +204,7 @@ export class TeachingController {
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Delete('assignments/:id')
-  deleteAssignment(@Request() req, @Param('id') id: string) { return this.teachingService.deleteAssignment(req.user.tenantId, id); }
+  deleteAssignment(@Request() req, @Param('id') id: string) { return this.teachingService.deleteAssignment(req.user.tenantId, id, req.user); }
 
   @Get('assignments/:id/submissions')
   getSubmissions(@Request() req, @Param('id') id: string) { return this.teachingService.getSubmissionsForAssignment(req.user.tenantId, id, req.user); }

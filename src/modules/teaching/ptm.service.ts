@@ -5,6 +5,10 @@ import { Model, Types } from 'mongoose';
 import { PTMMeeting, PTMMeetingDocument } from './schemas/ptm-meeting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from './schemas/teacher-profile.schema';
+import {
+  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc,
+} from '../../staff-portal/teacher-identity.util';
 import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
 import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { EmailService } from '../../email/email.service';
@@ -18,7 +22,17 @@ export class PTMService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     private emailService: EmailService,
     @Optional() private readonly staffNotifier?: StaffNotifier,
+    @Optional() @InjectModel(TeacherProfile.name) private teacherProfileModel?: Model<TeacherProfileDocument>,
   ) {}
+
+  /** TEACHER callers only: 403 unless the meeting is mine (Staff._id or legacy TeacherProfile._id). */
+  private async assertTeacherOwnsMeeting(id: string, tenantId: string, user?: ScopedUser) {
+    if (!isTeacherCaller(user)) return;
+    const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user as any);
+    const m: any = await this.ptmModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).select('teacherId').lean();
+    if (!m) throw new NotFoundException('Meeting not found');
+    assertOwnsTeacherDoc(me, m.teacherId, 'You can only modify your own meetings');
+  }
 
   private tid(t: string) { return t; }
 
@@ -51,7 +65,11 @@ export class PTMService {
     } catch { /* never fail the main action */ }
   }
 
-  async createMeeting(tenantId: string, institutionId: string, data: any, requestedBy: string, actorUserId?: string) {
+  async createMeeting(tenantId: string, institutionId: string, data: any, requestedBy: string, actorUserId?: string, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
+      data = { ...data, teacherId: normaliseTeacherIdForWrite(me, data?.teacherId, 'You can only create meetings for yourself') };
+    }
     const [student, teacher] = await Promise.all([
       this.studentModel.findById(data.studentId).lean(),
       this.staffModel.findById(data.teacherId).lean(),
@@ -141,7 +159,8 @@ export class PTMService {
     return meeting;
   }
 
-  async reschedule(id: string, tenantId: string, data: { scheduledDate: string; startTime?: string; endTime?: string }) {
+  async reschedule(id: string, tenantId: string, data: { scheduledDate: string; startTime?: string; endTime?: string }, requestingUser?: ScopedUser) {
+    await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId), status: { $in: ['requested', 'confirmed'] } },
       { $set: { scheduledDate: new Date(data.scheduledDate), startTime: data.startTime, endTime: data.endTime, status: 'requested' } },
@@ -154,7 +173,8 @@ export class PTMService {
   }
 
   /** E-Management - record what actually happened once the meeting takes place. */
-  async recordOutcome(id: string, tenantId: string, data: { meetingNotes?: string; actionItems?: any[]; parentAttended: boolean }) {
+  async recordOutcome(id: string, tenantId: string, data: { meetingNotes?: string; actionItems?: any[]; parentAttended: boolean }, requestingUser?: ScopedUser) {
+    await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!meeting) throw new NotFoundException('Meeting not found');
     if (meeting.status === 'cancelled') throw new BadRequestException('Cannot record an outcome for a cancelled meeting');

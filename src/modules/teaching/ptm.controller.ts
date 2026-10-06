@@ -41,7 +41,7 @@ export class PTMController {
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post()
   async create(@Body() dto: any, @Request() req: any) {
-    return this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name, req.user.userId);
+    return this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name, req.user.userId, req.user);
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
@@ -53,13 +53,13 @@ export class PTMController {
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/reschedule')
   async reschedule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    return this.service.reschedule(id, req.user.tenantId, dto);
+    return this.service.reschedule(id, req.user.tenantId, dto, req.user);
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/outcome')
   async recordOutcome(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    return this.service.recordOutcome(id, req.user.tenantId, dto);
+    return this.service.recordOutcome(id, req.user.tenantId, dto, req.user);
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
