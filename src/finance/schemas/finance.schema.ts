@@ -242,6 +242,17 @@ export class Invoice {
   // lets the fee defaulter engine (and any other reporting) scope by
   // campus without a join.
   @Prop({ type: Types.ObjectId, ref: 'Campus', default: null }) campusId: Types.ObjectId | null;
+  // Set when this invoice's still-outstanding balance was carried forward
+  // as an "Arrears (Previous Outstanding Dues)" line onto a LATER invoice
+  // (see generateInvoices) - that newer invoice's own totalAmount/
+  // balanceDue already includes this debt, so this invoice must be
+  // excluded from any receivables/aging/defaulter SUM to avoid counting
+  // the same outstanding amount twice. The invoice itself is left
+  // completely untouched otherwise (status, balanceDue, items all stay
+  // exactly as originally billed) - this is purely a "don't double-count
+  // me" marker, not a payment or a write-off, so the per-month billing
+  // history and whatever's already posted to the ledger both stay intact.
+  @Prop({ type: Types.ObjectId, ref: 'Invoice', default: null, index: true }) rolledForwardInto: Types.ObjectId | null;
 }
 
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);
