@@ -720,6 +720,18 @@ export class FinanceController {
     });
   }
 
+  // One-time repair for invoices generated before rolledForwardInto
+  // existed - see FinanceService.backfillRolledForwardInvoices. Defaults
+  // to a dry run (dto.dryRun=true unless explicitly set false) so an
+  // admin can review exactly what it would change - including any
+  // amountMismatch cases - before actually applying it.
+  @RequireModuleAccess('finance', 'fee', 'manage')
+  @Post('invoices/backfill-rolled-forward') @HttpCode(HttpStatus.OK)
+  async backfillRolledForwardInvoices(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.backfillRolledForwardInvoices(schoolSlug, dto.dryRun !== false);
+  }
+
   // ============================================================
   // PHASE 2 — VENDOR MASTER / ACCOUNTS PAYABLE
   // ============================================================
