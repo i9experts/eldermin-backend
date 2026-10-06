@@ -1525,16 +1525,27 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
   /** Teacher-side review queue - attempts with at least one subjective
    * answer still awaiting a mark. */
-  async getQuizAttemptsPendingReview(schoolSlug: string, assessmentId?: string, subject?: string) {
+  async getQuizAttemptsPendingReview(schoolSlug: string, assessmentId?: string, subject?: string, requestingUser?: ScopedUser) {
     const filter: any = { schoolSlug, status: 'submitted' };
     if (assessmentId) filter.assessmentId = new Types.ObjectId(assessmentId);
     if (subject) filter.subject = subject;
-    return this.quizAttemptModel.find(filter).sort({ submittedAt: 1 }).lean();
+    const rows: any[] = await this.quizAttemptModel.find(filter).sort({ submittedAt: 1 }).lean() as any;
+    if (!isTeacherCaller(requestingUser)) return rows;
+    // TEACHER role only: just the attempts of classes I teach (class teacher
+    // class + currentAssignments), matched with the tolerant grade/section rules.
+    const t = await this.teacherContext(requestingUser);
+    return rows.filter(a => this.classIncludes(t.classes, a.grade, a.section));
   }
 
-  async getQuizAttemptForReview(schoolSlug: string, attemptId: string) {
+  async getQuizAttemptForReview(schoolSlug: string, attemptId: string, requestingUser?: ScopedUser) {
     const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug }).lean();
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
+    if (isTeacherCaller(requestingUser)) {
+      const t = await this.teacherContext(requestingUser);
+      if (!this.classIncludes(t.classes, (attempt as any).grade, (attempt as any).section)) {
+        throw new ForbiddenException('You can only review quiz attempts for classes you teach.');
+      }
+    }
     const questions = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
     const questionById = new Map(questions.map((q: any) => [String(q._id), q]));
     return {
