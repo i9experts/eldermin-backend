@@ -85,3 +85,21 @@ export function applyTeacherAuthorship(body: any, user: { userId?: string; name?
   body.reportedBy = user?.name || fallbackName;
   body.reportedById = me;
 }
+
+export interface TeacherClassRef { grade: string; section?: string }
+
+/**
+ * Classes a TEACHER may act on: their class-teacher class plus every
+ * TeacherProfile.currentAssignments entry (same rule as the staff portal:
+ * grade must match, section is only compared when the assignment has one).
+ */
+export function teacherClassesOf(profile: any): TeacherClassRef[] {
+  const out: TeacherClassRef[] = [];
+  if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
+    out.push({ grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined });
+  }
+  for (const a of profile?.currentAssignments || []) {
+    if (a?.gradeLevel) out.push({ grade: a.gradeLevel, section: a.sectionName || undefined });
+  }
+  return out;
+}

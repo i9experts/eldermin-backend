@@ -15,6 +15,8 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { Subject, SubjectSchema } from '../modules/academics/schemas/subject.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
 import { PdfModule } from '../pdf/pdf.module';
 import { UploadModule } from '../upload/upload.module';
 
@@ -36,6 +38,8 @@ import { UploadModule } from '../upload/upload.module';
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: Grade.name, schema: GradeSchema },
       { name: Subject.name, schema: SubjectSchema },
+      { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
     ]),
   ],
   controllers: [AssessmentController],

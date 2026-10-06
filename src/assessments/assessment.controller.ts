@@ -350,8 +350,8 @@ export class AssessmentController {
   @Post('marks/bulk')
   @HttpCode(HttpStatus.CREATED)
   async bulkEnterMarks(@Body() dto: BulkMarkEntryDto, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
-    return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName });
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
+    return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName }, requestingUser);
   }
 
   @Patch('marks/verify')
