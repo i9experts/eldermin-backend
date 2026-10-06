@@ -4322,6 +4322,73 @@ export class FinanceService {
     };
   }
 
+  /**
+   * One-time repair for invoices generated BEFORE rolledForwardInto
+   * existed - generateInvoices only sets it going forward, at the moment
+   * an arrears line is created, so every already-existing invoice pair
+   * (e.g. September's balance rolled into October's arrears line) is
+   * still double-counted in every receivables/aging/dashboard total
+   * until this runs once. Purely a backfill of that one field; never
+   * touches balanceDue, status, items, or anything already posted to the
+   * ledger. Safe to re-run - already-marked invoices are skipped.
+   */
+  async backfillRolledForwardInvoices(schoolSlug: string, dryRun = true) {
+    const arrearsCarriers = await this.invoiceModel
+      .find({ schoolSlug, isDeleted: { $ne: true }, 'items.feeHead': 'arrears' })
+      .select('studentId month items')
+      .lean();
+
+    const fixes: { arrearsInvoiceId: string; studentId: string; sourceInvoiceIds: string[]; arrearsAmount: number; sourceTotal: number; amountMismatch: boolean }[] = [];
+    for (const carrier of arrearsCarriers as any[]) {
+      const arrearsLine = (carrier.items || []).find((it: any) => it.feeHead === 'arrears');
+      if (!arrearsLine) continue;
+
+      // Candidates: same student, strictly earlier month, still unpaid,
+      // not already marked - exactly the pool generateInvoices itself
+      // would have drawn the arrears amount from at the time.
+      const candidates = await this.invoiceModel
+        .find({
+          schoolSlug, studentId: carrier.studentId, month: { $lt: carrier.month },
+          isDeleted: { $ne: true }, status: { $nin: ['cancelled', 'waived'] },
+          balanceDue: { $gt: 0 }, rolledForwardInto: null,
+        })
+        .select('balanceDue').lean();
+      if (candidates.length === 0) continue;
+
+      const sourceTotal = Math.round(candidates.reduce((a: number, c: any) => a + (c.balanceDue || 0), 0) * 100) / 100;
+      // A partial payment made against an older invoice AFTER the newer
+      // one was generated means its balanceDue has since drifted from
+      // the amount actually baked into the arrears line - still marked
+      // (the debt was always meant to be tracked via the newer invoice,
+      // not doubly), just flagged so the amount mismatch is visible
+      // rather than silently assumed correct.
+      const amountMismatch = Math.abs(sourceTotal - arrearsLine.amount) > 1;
+
+      fixes.push({
+        arrearsInvoiceId: String(carrier._id), studentId: String(carrier.studentId),
+        sourceInvoiceIds: candidates.map((c: any) => String(c._id)),
+        arrearsAmount: arrearsLine.amount, sourceTotal, amountMismatch,
+      });
+    }
+
+    if (!dryRun) {
+      for (const fix of fixes) {
+        await this.invoiceModel.updateMany(
+          { _id: { $in: fix.sourceInvoiceIds }, schoolSlug },
+          { $set: { rolledForwardInto: fix.arrearsInvoiceId } },
+        );
+      }
+    }
+
+    return {
+      dryRun,
+      invoicesFixed: dryRun ? 0 : fixes.reduce((a, f) => a + f.sourceInvoiceIds.length, 0),
+      willFix: fixes.reduce((a, f) => a + f.sourceInvoiceIds.length, 0),
+      mismatchCount: fixes.filter((f) => f.amountMismatch).length,
+      fixes,
+    };
+  }
+
   // ============================================================
   // PHASE 2 — VENDOR MASTER / ACCOUNTS PAYABLE (formal bills, terms,
   // partial payment), plus AR/AP aging, credit balance, and payment
