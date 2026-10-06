@@ -163,6 +163,19 @@ export class TeachingService {
     return this.lessonPlanModel.find(filter).sort({ planDate: -1 }).limit(100).lean();
   }
 
+  /**
+   * A teacher authors and submits their own plans; approval belongs to the
+   * guarded approve/reject routes. Stops a teacher self-approving through
+   * create or the raw-$set PATCH: only draft|submitted may be set, and the
+   * approver-owned fields are never writable by a teacher.
+   */
+  private sanitizeTeacherLessonPlanApproval(data: any): void {
+    if (data.status !== undefined && data.status !== 'draft' && data.status !== 'submitted') {
+      throw new ForbiddenException('Teachers can only save a lesson plan as draft or submit it for approval.');
+    }
+    delete data.approvedBy; delete data.approvedAt; delete data.approverNotes; delete data.rejectionReason;
+  }
+
   async createLessonPlan(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     const { objectives, teacherId, ...rest } = data;
     const payload: any = {
@@ -179,6 +192,7 @@ export class TeachingService {
       // A teacher can only author plans for themselves: derived server-side, never trusted from the body.
       const me = await this.teacherIdentity(requestingUser!);
       payload.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId, 'You can only create lesson plans for yourself'));
+      this.sanitizeTeacherLessonPlanApproval(payload);
     } else if (teacherId) {
       try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore invalid id */ }
     }
@@ -200,6 +214,7 @@ export class TeachingService {
       // Ownership/tenancy are not editable by a teacher; teacherId may only be (re)stated as myself.
       delete data.tenantId; delete data.institutionId; delete data.campusId;
       if ('teacherId' in data) data.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, data.teacherId, 'You can only create lesson plans for yourself'));
+      this.sanitizeTeacherLessonPlanApproval(data);
     }
     return this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },

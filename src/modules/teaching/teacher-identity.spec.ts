@@ -164,6 +164,54 @@ describe('TeachingService lesson plans: teacher identity', () => {
   });
 });
 
+describe('TeachingService lesson plans: teacher cannot self-approve', () => {
+  const forbiddenStatuses = ['approved', 'rejected', 'overdue'];
+
+  it.each(forbiddenStatuses)('create with status %s -> 403 and nothing is created', async (status) => {
+    const { service, lessonPlanModel } = makeTeaching();
+    await expect(service.createLessonPlan('t', oid().toString(), { status }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    expect(lessonPlanModel.create).not.toHaveBeenCalled();
+  });
+
+  it.each(forbiddenStatuses)('update to status %s -> 403 and nothing is written', async (status) => {
+    const { service, lessonPlanModel } = makeTeaching({ existingPlan: { teacherId: me.staffId } });
+    await expect(service.updateLessonPlan('t', 'p1', { status }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    expect(lessonPlanModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['draft', 'submitted'])('create/update with status %s is allowed', async (status) => {
+    const c = makeTeaching();
+    await c.service.createLessonPlan('t', oid().toString(), { status }, teacherUser());
+    expect(c.lessonPlanModel.create.mock.calls[0][0].status).toBe(status);
+    const u = makeTeaching({ existingPlan: { teacherId: me.staffId } });
+    await u.service.updateLessonPlan('t', 'p1', { status }, teacherUser());
+    expect(u.lessonPlanModel.findOneAndUpdate.mock.calls[0][1].$set.status).toBe(status);
+  });
+
+  it('approver-owned fields are stripped on create and update (even with a valid status)', async () => {
+    const c = makeTeaching();
+    await c.service.createLessonPlan('t', oid().toString(),
+      { status: 'submitted', approvedBy: oid().toString(), approvedAt: new Date(), approverNotes: 'ok', rejectionReason: 'x' }, teacherUser());
+    const created = c.lessonPlanModel.create.mock.calls[0][0];
+    for (const k of ['approvedBy', 'approvedAt', 'approverNotes', 'rejectionReason']) expect(created[k]).toBeUndefined();
+
+    const u = makeTeaching({ existingPlan: { teacherId: me.staffId } });
+    await u.service.updateLessonPlan('t', 'p1',
+      { topic: 'x', approvedBy: oid().toString(), approvedAt: new Date(), approverNotes: 'ok', rejectionReason: 'x' }, teacherUser());
+    const set = u.lessonPlanModel.findOneAndUpdate.mock.calls[0][1].$set;
+    expect(set.topic).toBe('x');
+    for (const k of ['approvedBy', 'approvedAt', 'approverNotes', 'rejectionReason']) expect(set[k]).toBeUndefined();
+  });
+
+  it('principal can still set any status and approver fields (unchanged)', async () => {
+    const { service, lessonPlanModel } = makeTeaching();
+    await service.updateLessonPlan('t', 'p1', { status: 'approved', approverNotes: 'good' }, teacherUser({ role: 'principal' }));
+    expect(lessonPlanModel.findOneAndUpdate.mock.calls[0][1]).toEqual({ $set: { status: 'approved', approverNotes: 'good' } });
+    await service.createLessonPlan('t', oid().toString(), { status: 'approved' }, teacherUser({ role: 'principal' }));
+    expect(lessonPlanModel.create.mock.calls[0][0].status).toBe('approved');
+  });
+});
+
 describe('PTMService: teacher identity', () => {
   function makePtm(meeting: any = null) {
     const staffModel: any = {
