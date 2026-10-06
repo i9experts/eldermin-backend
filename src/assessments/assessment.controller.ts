@@ -164,14 +164,14 @@ export class AssessmentController {
   // ── LMS Phase 2: quiz review queue (static, before :id) ────────
   @Get('quiz-attempts')
   async getQuizAttemptsPendingReview(@Request() req: any, @Query('assessmentId') assessmentId?: string, @Query('subject') subject?: string) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getQuizAttemptsPendingReview(schoolSlug, assessmentId, subject);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getQuizAttemptsPendingReview(schoolSlug, assessmentId, subject, requestingUser);
   }
 
   @Get('quiz-attempts/:attemptId')
   async getQuizAttemptForReview(@Param('attemptId') attemptId: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getQuizAttemptForReview(schoolSlug, attemptId);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getQuizAttemptForReview(schoolSlug, attemptId, requestingUser);
   }
 
   @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
