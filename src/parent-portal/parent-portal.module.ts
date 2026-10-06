@@ -35,6 +35,8 @@ import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { AssessmentModule } from '../assessments/assessment.module';
 import { CertificatesModule } from '../modules/certificates/certificates.module';
+import { UploadModule } from '../upload/upload.module';
+import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
 
@@ -73,9 +75,10 @@ import { ParentAuthController } from './parent-auth.controller';
     AuthModule,
     AssessmentModule,
     CertificatesModule,
+    UploadModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
-  providers: [ParentPortalService, ParentAuthService],
+  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor],
   exports: [ParentPortalService, ParentAuthService],
 })
 export class ParentPortalModule {}

@@ -1,9 +1,18 @@
 import {
-  Controller, Get, Post, Param, Body, Query, Request, HttpCode, HttpStatus,
+  Controller, Get, Post, Param, Body, Query, Request, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
+import { Roles } from '../auth/decorators';
+import { UserRole } from '../auth/roles.enum';
+
+const CONSENT_ADMIN_ROLES = [
+  UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
+  UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.ACADEMIC_COORDINATOR,
+];
+import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentPortalService } from './parent-portal.service';
 
 @Controller('parent-portal')
+@UseInterceptors(GuardianRefreshInterceptor)
 export class ParentPortalController {
   constructor(private readonly service: ParentPortalService) {}
 
@@ -16,6 +25,30 @@ export class ParentPortalController {
       userId: req?.user?.userId,
       name: req?.user?.name || 'Parent',
     };
+  }
+
+  // ── Consent management (school side) ───────────────────────────
+  @Roles(...CONSENT_ADMIN_ROLES)
+  @Get('consent-requests')
+  async listConsentRequests(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.listConsentRequests(schoolSlug);
+  }
+
+  @Roles(...CONSENT_ADMIN_ROLES)
+  @Post('consent-requests')
+  @HttpCode(HttpStatus.CREATED)
+  async createConsentRequest(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug, name } = this.ctx(req);
+    return this.service.createConsentRequest(schoolSlug, name, dto);
+  }
+
+  @Roles(...CONSENT_ADMIN_ROLES)
+  @Post('consent-requests/:id/close')
+  @HttpCode(HttpStatus.OK)
+  async closeConsentRequest(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.closeConsentRequest(schoolSlug, id);
   }
 
   @Post('link-guardian')
@@ -39,14 +72,21 @@ export class ParentPortalController {
 
   @Get('circulars')
   async getCirculars(@Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getCirculars(schoolSlug);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getCirculars(schoolSlug, requestingUser);
+  }
+
+  @Post('circulars/:id/acknowledge')
+  @HttpCode(HttpStatus.OK)
+  async acknowledgeCircular(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser, name } = this.ctx(req);
+    return this.service.acknowledgeCircular(id, requestingUser, schoolSlug, name);
   }
 
   @Get('events')
   async getEvents(@Request() req: any, @Query() query: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getEvents(schoolSlug, query);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getEvents(schoolSlug, query, requestingUser);
   }
 
   @Get('students/:studentId/profile')
@@ -178,6 +218,30 @@ export class ParentPortalController {
   async getPTM(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, tenantId } = this.ctx(req);
     return this.service.getPTMHistory(studentId, requestingUser, tenantId);
+  }
+
+  @Get('students/:studentId/ptm/teachers')
+  async getPTMTeachers(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getPTMTeachers(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
+  @Post('students/:studentId/ptm')
+  @HttpCode(HttpStatus.CREATED)
+  async requestPTM(
+    @Param('studentId') studentId: string,
+    @Body() dto: { teacherId: string; scheduledDate: string; startTime?: string; endTime?: string; reason?: string },
+    @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, institutionId, schoolSlug, name } = this.ctx(req);
+    return this.service.requestPTM(studentId, requestingUser, tenantId, institutionId, schoolSlug, name, dto);
+  }
+
+  @Post('students/:studentId/ptm/:meetingId/cancel')
+  @HttpCode(HttpStatus.OK)
+  async cancelPTM(@Param('studentId') studentId: string, @Param('meetingId') meetingId: string, @Request() req: any) {
+    const { requestingUser, tenantId, name } = this.ctx(req);
+    return this.service.cancelPTMRequest(studentId, meetingId, requestingUser, tenantId, name);
   }
 
   @Get('students/:studentId/consent')

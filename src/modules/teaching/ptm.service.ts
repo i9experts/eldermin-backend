@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { PTMMeeting, PTMMeetingDocument } from './schemas/ptm-meeting.schema';
@@ -17,6 +18,18 @@ export class PTMService {
   ) {}
 
   private tid(t: string) { return t; }
+
+  /** Best-effort in-app notification to the guardian login(s) of the meeting's student (shows up in the parent app); never throws. */
+  private async notifyGuardians(tenantId: string, meeting: any, title: string) {
+    try {
+      const schoolSlug = await schoolSlugForTenant(this.staffModel.db, tenantId);
+      if (!schoolSlug) return;
+      const body = `${meeting.teacherName || 'Teacher'} - ${meeting.studentName || 'your child'}, ${new Date(meeting.scheduledDate).toDateString()}${meeting.startTime ? ' at ' + meeting.startTime : ''}${meeting.endTime ? '-' + meeting.endTime : ''}.`;
+      await notifyGuardiansOfStudents(this.staffModel.db, [meeting.studentId], {
+        schoolSlug, type: 'ptm', title, body, relatedEntityId: String(meeting._id),
+      });
+    } catch { /* never fail the main action */ }
+  }
 
   async createMeeting(tenantId: string, institutionId: string, data: any, requestedBy: string) {
     const [student, teacher] = await Promise.all([
@@ -49,6 +62,7 @@ export class PTMService {
       requestedBy,
     });
     await meeting.save();
+    await this.notifyGuardians(tenantId, meeting, 'Parent-teacher meeting scheduled');
 
     // E-Alert - a real attempt, honestly logged.
     if (primaryGuardian?.email) {
@@ -102,6 +116,7 @@ export class PTMService {
       { $set: { status: 'confirmed' } }, { new: true },
     );
     if (!meeting) throw new NotFoundException('Meeting not found or not in a requested state');
+    await this.notifyGuardians(tenantId, meeting, 'Your meeting request was confirmed');
     return meeting;
   }
 
@@ -112,6 +127,7 @@ export class PTMService {
       { new: true },
     );
     if (!meeting) throw new NotFoundException('Meeting not found or already completed/cancelled');
+    await this.notifyGuardians(tenantId, meeting, 'Parent-teacher meeting rescheduled');
     return meeting;
   }
 
@@ -149,6 +165,7 @@ export class PTMService {
       { $set: { status: 'cancelled', cancelledReason: reason, cancelledBy } }, { new: true },
     );
     if (!meeting) throw new NotFoundException('Meeting not found');
+    await this.notifyGuardians(tenantId, meeting, 'Parent-teacher meeting cancelled');
     return meeting;
   }
 

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -263,6 +264,14 @@ export class FeeDefaulterService {
     } catch (err: any) {
       status = 'failed';
       reason = err.message;
+    }
+
+    if (status === 'sent' && invoice.studentId) {
+      await notifyGuardiansOfStudents(this.reminderLogModel.db, [invoice.studentId as any], {
+        schoolSlug: invoice.schoolSlug, type: 'fee_due', title: 'Fee payment reminder',
+        body: `${invoice.studentName || 'Your child'}: ${invoice.balanceDue} outstanding${invoice.dueDate ? ', due ' + new Date(invoice.dueDate).toDateString() : ''}.`,
+        relatedEntityId: String(invoice._id),
+      });
     }
 
     await this.reminderLogModel.create({

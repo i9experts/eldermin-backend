@@ -3,6 +3,7 @@
 // Eldermin ERP | NestJS + MongoDB
 // ============================================================
 
+import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -164,7 +165,15 @@ export class BehaviourService {
       followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return record.save();
+    const saved: any = await record.save();
+    if (saved.parentNotified) {
+      await notifyGuardiansOfStudents(this.recordModel.db, [saved.studentId], {
+        schoolSlug: saved.schoolSlug, type: 'behaviour',
+        title: saved.points >= 0 ? 'Positive behaviour record' : 'Behaviour record from school',
+        body: String(saved.title || '').slice(0, 140), relatedEntityId: String(saved._id),
+      });
+    }
+    return saved;
   }
 
   async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -385,7 +394,16 @@ export class BehaviourService {
       data.overallPercentage = parseFloat(overallPercentage.toFixed(1));
       data.overallRating = getTarbiyahRating(overallPercentage);
     }
-    return this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (data.parentShared === true) data.parentSharedDate = new Date();
+    const before: any = data.parentShared === true ? await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('parentShared').lean() : null;
+    const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (updated && data.parentShared === true && !before?.parentShared) {
+      await notifyGuardiansOfStudents(this.tarbiyahModel.db, [updated.studentId], {
+        schoolSlug, type: 'behaviour', title: 'New character development report',
+        body: `${updated.period} assessment for ${updated.studentName} has been shared with you.`, relatedEntityId: String(updated._id),
+      });
+    }
+    return updated;
   }
 
   // ============================================================

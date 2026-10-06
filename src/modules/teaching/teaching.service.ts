@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -1053,12 +1054,23 @@ Rules:
 
   async createBehaviourNote(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     try {
-      return await this.behaviourModel.create({
+      const note: any = await this.behaviourModel.create({
         ...data,
         tenantId: this.tid(tenantId),
         institutionId: new Types.ObjectId(institutionId),
         campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
       });
+      if (note.parentNotified) {
+        const slug = await schoolSlugForTenant(this.behaviourModel.db, tenantId);
+        if (slug) {
+          await notifyGuardiansOfStudents(this.behaviourModel.db, [note.studentId], {
+            schoolSlug: slug, type: 'behaviour',
+            title: note.type === 'positive' ? 'Positive behaviour note' : 'Behaviour note from school',
+            body: String(note.note || '').slice(0, 140), relatedEntityId: String(note._id),
+          });
+        }
+      }
+      return note;
     } catch (err: any) {
       if (err.name === 'ValidationError') throw new BadRequestException(err.message);
       throw err;

@@ -2,6 +2,7 @@
 // ASSESSMENT SERVICE — Eldermin ERP | NestJS
 // ============================================================
 
+import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { Injectable, NotFoundException, BadRequestException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -1656,7 +1657,6 @@ You are assisting a teacher's professional judgement, not replacing it - classif
         overallGrade: gradeInfo.grade,
         overallGPA: gradeInfo.gpa,
         overallResult: anyFail ? 'fail' : 'pass',
-        published: false,
         schoolSlug: dto.schoolSlug,
       });
     }
@@ -1665,7 +1665,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const ops = reportCards.map(rc => ({
       updateOne: {
         filter: { assessmentId: rc.assessmentId, studentId: rc.studentId, schoolSlug: rc.schoolSlug },
-        update: { $set: rc },
+        // published is only defaulted on first insert so regenerating a
+        // published assessment never hides it from parents again.
+        update: { $set: rc, $setOnInsert: { published: false } },
         upsert: true,
       },
     }));
@@ -1731,8 +1733,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       { assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug },
       { $set: { published: true, publishedAt: new Date() } },
     );
-    await this.assessmentModel.findByIdAndUpdate(dto.assessmentId, {
+    const assessment: any = await this.assessmentModel.findByIdAndUpdate(dto.assessmentId, {
       $set: { status: 'result_published', resultPublished: true, resultPublishedAt: new Date(), resultPublishedBy: dto.publishedBy },
+    });
+    const cards: any[] = await this.reportCardModel.find({ assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug }).select('studentId').lean();
+    await notifyGuardiansOfStudents(this.reportCardModel.db, cards.map((c) => c.studentId), {
+      schoolSlug: dto.schoolSlug as string, type: 'result', title: 'Results published',
+      body: `${assessment?.title || 'Assessment'} results are now available.`, relatedEntityId: String(dto.assessmentId),
     });
     return { message: 'Results published successfully' };
   }

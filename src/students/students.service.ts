@@ -3,6 +3,7 @@
 // Eldermin ERP | NestJS + MongoDB
 // ============================================================
 
+import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import {
   Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
@@ -1800,11 +1801,24 @@ export class StudentsService {
     const date = new Date(dto.date);
     date.setHours(0, 0, 0, 0);
 
-    return this.attendanceModel.findOneAndUpdate(
+    const saved = await this.attendanceModel.findOneAndUpdate(
       { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug },
       { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId) } },
       { upsert: true, new: true },
     );
+    await this.notifyAttendance(dto.schoolSlug as string, [{ studentId: dto.studentId, status: (dto as any).status, date }]);
+    return saved;
+  }
+
+  /** In-app heads-up to the guardian when their child is marked absent or late. */
+  private async notifyAttendance(schoolSlug: string, rows: Array<{ studentId: string; status?: string; date: Date }>) {
+    for (const r of rows) {
+      if (r.status !== 'absent' && r.status !== 'late') continue;
+      await notifyGuardiansOfStudents(this.attendanceModel.db, [r.studentId], {
+        schoolSlug, type: 'other', title: r.status === 'absent' ? 'Marked absent today' : 'Marked late today',
+        body: `Your child was marked ${r.status} on ${r.date.toDateString()}.`, relatedEntityId: String(r.studentId),
+      });
+    }
   }
 
   async bulkMarkAttendance(dto: BulkAttendanceDto) {
@@ -1819,7 +1833,9 @@ export class StudentsService {
         },
       };
     });
-    return this.attendanceModel.bulkWrite(ops as any);
+    const result = await this.attendanceModel.bulkWrite(ops as any);
+    await this.notifyAttendance(dto.schoolSlug as string, dto.records.map((r: any) => ({ studentId: r.studentId, status: r.status, date: new Date(r.date) })));
+    return result;
   }
 
   async getAttendance(schoolSlug: string, query: AttendanceQueryDto) {
