@@ -37,4 +37,12 @@ export class GenerateIdCardsDto {
   @IsOptional() @IsMongoId() templateId?: string;
   @IsArray() @ArrayMinSize(1) @IsMongoId({ each: true }) ids: string[];
   @IsOptional() @IsBoolean() includeBack?: boolean;
+  // 'pvc_card' - one page per card face, sized to the exact CR80 card
+  // (85.6mm x 54mm), front immediately followed by back for each person -
+  // the format a direct-to-card PVC printer (Zebra/Evolis/Magicard etc.)
+  // expects. 'a4_sheet' - the original multi-card-per-page layout, for
+  // schools printing on plain/PVC-coated A4 sheet stock and cutting the
+  // cards out by hand. Defaults to 'pvc_card' since that's the standard,
+  // print-ready output schools actually need from a dedicated card printer.
+  @IsOptional() @IsEnum(['pvc_card', 'a4_sheet']) printMode?: string;
 }
