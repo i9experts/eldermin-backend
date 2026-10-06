@@ -97,6 +97,7 @@ export class TeachingService {
     }
     return this.teacherProfileModel
       .find(filter)
+      .populate('campusId', 'name code')
       .sort({ lastName: 1 })
       .lean();
   }
@@ -105,7 +106,7 @@ export class TeachingService {
     return this.teacherProfileModel.findOne({
       tenantId: this.tid(tenantId),
       staffId: new Types.ObjectId(staffId),
-    }).lean();
+    }).populate('campusId', 'name code').lean();
   }
 
   async createTeacherProfile(tenantId: string, institutionId: string, data: any) {
