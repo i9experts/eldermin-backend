@@ -27,6 +27,9 @@ import { PdfService } from '../../pdf/pdf.service';
 import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
 import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { GradeSubmissionDto } from './dto/assignment.dto';
+import {
+  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+} from '../../staff-portal/teacher-identity.util';
 
 @Injectable()
 export class TeachingService {
@@ -50,6 +53,11 @@ export class TeachingService {
   ) {}
 
   private tid(t: string) { return t; }
+
+  /** TEACHER callers only: who am I, from the DB (Staff.userId), never from the JWT claims. 403 when no Staff record. */
+  private teacherIdentity(user: ScopedUser): Promise<TeacherIdentity> {
+    return resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user as any);
+  }
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
@@ -167,7 +175,11 @@ export class TeachingService {
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     };
     if (objectives) payload.learningObjectives = objectives;
-    if (teacherId) {
+    if (isTeacherCaller(requestingUser)) {
+      // A teacher can only author plans for themselves: derived server-side, never trusted from the body.
+      const me = await this.teacherIdentity(requestingUser!);
+      payload.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId, 'You can only create lesson plans for yourself'));
+    } else if (teacherId) {
       try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore invalid id */ }
     }
     try {
@@ -178,7 +190,17 @@ export class TeachingService {
     }
   }
 
-  async updateLessonPlan(tenantId: string, id: string, data: any) {
+  async updateLessonPlan(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      const existing: any = await this.lessonPlanModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).select('teacherId').lean();
+      if (!existing) return null;
+      assertOwnsTeacherDoc(me, existing.teacherId, 'You can only modify your own lesson plans');
+      data = { ...data };
+      // Ownership/tenancy are not editable by a teacher; teacherId may only be (re)stated as myself.
+      delete data.tenantId; delete data.institutionId; delete data.campusId;
+      if ('teacherId' in data) data.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, data.teacherId, 'You can only create lesson plans for yourself'));
+    }
     return this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: data },
@@ -885,7 +907,11 @@ Rules:
       assignedDate: assignedDate || assessmentDate || null,
       dueDate: dueDate || assessmentDate || null,
     };
-    if (teacherId) {
+    if (isTeacherCaller(requestingUser)) {
+      // Identity comes from the authenticated user (Staff.userId), not the body.
+      const me = await this.teacherIdentity(requestingUser!);
+      payload.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId));
+    } else if (teacherId) {
       try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore */ }
     }
     let created: AssignmentDocument;
@@ -912,6 +938,16 @@ Rules:
   async updateAssignment(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
     const existing = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!existing) throw new NotFoundException('Assignment not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, existing.teacherId, 'You can only modify your own assignments');
+      if (data && 'teacherId' in data) {
+        // May only restate myself; never reassign to another teacher.
+        normaliseTeacherIdForWrite(me, data.teacherId, 'You can only modify your own assignments');
+        data = { ...data };
+        delete data.teacherId;
+      }
+    }
     const wasDraft = existing.status === 'draft';
     Object.assign(existing, data);
     await existing.save();
@@ -921,9 +957,13 @@ Rules:
     return existing.toObject();
   }
 
-  async deleteAssignment(tenantId: string, id: string) {
+  async deleteAssignment(tenantId: string, id: string, requestingUser?: ScopedUser) {
     const assignment = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!assignment) throw new NotFoundException('Assignment not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, assignment.teacherId, 'You can only modify your own assignments');
+    }
     await this.submissionModel.deleteMany({ tenantId: this.tid(tenantId), assignmentId: assignment._id });
     await assignment.deleteOne();
     return { deleted: true };

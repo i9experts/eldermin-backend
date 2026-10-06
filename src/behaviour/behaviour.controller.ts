@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { BehaviourService } from './behaviour.service';
 import { TARBIYAH_TRAITS } from './schemas/behaviour.schema';
+import { isTeacherCaller, applyTeacherAuthorship } from '../staff-portal/teacher-identity.util';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
@@ -57,17 +58,22 @@ export class BehaviourController {
   @HttpCode(HttpStatus.CREATED)
   async createRecord(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
-    return this.service.createRecord({
-      ...dto, schoolSlug,
-      academicYear: dto.academicYear || academicYear,
-      reportedBy: dto.reportedBy || userName,
-    }, requestingUser);
+    const body = { ...dto, schoolSlug, academicYear: dto.academicYear || academicYear, reportedBy: dto.reportedBy || userName };
+    // TEACHER callers: authorship is derived server-side. The display name
+    // is overridden from the token; reportedById must be me (or absent) else 403.
+    if (isTeacherCaller(requestingUser)) applyTeacherAuthorship(body, requestingUser, userName);
+    return this.service.createRecord(body, requestingUser);
   }
 
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('records/:id')
   async updateRecord(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    // A teacher cannot re-attribute a record to someone else (or tenancy fields) via PUT.
+    if (isTeacherCaller(requestingUser)) {
+      dto = { ...dto };
+      delete dto.reportedBy; delete dto.reportedById; delete dto.schoolSlug; delete dto.campusId; delete dto.verifiedBy;
+    }
     return this.service.updateRecord(id, schoolSlug, dto);
   }
 
