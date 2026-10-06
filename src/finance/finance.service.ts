@@ -147,8 +147,12 @@ export class FinanceService {
         { $match: { schoolSlug } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
+      // rolledForwardInto excluded - that invoice's balance is already
+      // carried forward as an "Arrears" line onto a later invoice (see
+      // generateInvoices), whose own balanceDue already includes it, so
+      // summing both here double-counted the same outstanding debt.
       this.invoiceModel.aggregate([
-        { $match: { ...base, status: { $in: ['sent','partial','overdue'] }, isDeleted: { $ne: true } } },
+        { $match: { ...base, status: { $in: ['sent','partial','overdue'] }, isDeleted: { $ne: true }, rolledForwardInto: null } },
         { $group: { _id: null, total: { $sum: '$balanceDue' } } },
       ]),
       this.paymentModel.aggregate([
@@ -2582,10 +2586,14 @@ export class FinanceService {
     groupBy: string; grade?: string; academicYear?: string;
   }) {
     const { groupBy, grade, academicYear } = params;
+    // rolledForwardInto excluded - already counted via the later invoice
+    // that carried this balance forward as an "Arrears" line (see
+    // generateInvoices) - same double-counting fix as getDashboard/
+    // getAgingReport/ReceivableTab.
     const match: any = {
       schoolSlug, isDeleted: { $ne: true },
       status: { $in: ['sent', 'partial', 'overdue'] },
-      balanceDue: { $gt: 0 },
+      balanceDue: { $gt: 0 }, rolledForwardInto: null,
     };
     if (grade) match.grade = grade;
     if (academicYear) match.academicYear = academicYear;
@@ -2657,7 +2665,7 @@ export class FinanceService {
             { $group: { _id: null, totalOutstanding: { $sum: '$balanceDue' }, invoiceCount: { $sum: 1 } } },
           ]),
           this.invoiceModel.aggregate([
-            { $match: { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 } } },
+            { $match: { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 }, rolledForwardInto: null } },
             { $group: { _id: '$status', count: { $sum: 1 }, total: { $sum: '$balanceDue' } } },
           ]),
         ]);
@@ -2912,10 +2920,12 @@ export class FinanceService {
 
   async getOutstandingDetailReport(schoolSlug: string, params: { grade?: string; academicYear?: string }) {
     const { grade, academicYear } = params;
+    // rolledForwardInto excluded - same double-counting fix as
+    // getOutstandingReport/getDashboard/getAgingReport above.
     const match: any = {
       schoolSlug, isDeleted: { $ne: true },
       status: { $in: ['sent', 'partial', 'overdue'] },
-      balanceDue: { $gt: 0 },
+      balanceDue: { $gt: 0 }, rolledForwardInto: null,
     };
     if (grade) match.grade = grade;
     if (academicYear) match.academicYear = academicYear;
@@ -3835,7 +3845,36 @@ export class FinanceService {
     }
 
     const students = await this.studentModel.find(studentMatch).lean();
-    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, skippedStudents: [], noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
+
+    // Named, per-student detail for every skip - "16 already billed" tells
+    // an admin nothing about WHICH 16 or whether that's actually correct;
+    // this is what actually answers "some students are being skipped or
+    // showing as already billed" instead of leaving it a mystery count.
+    const skippedStudents: { name: string; grade: string; reason: string; detail?: string }[] = [];
+
+    // studentMatch above hard-requires status:'active', so a student whose
+    // status is anything else (inactive/graduated/transferred/expelled/
+    // on_leave/academic_gap - see student.schema.ts) is excluded from
+    // `students` before this function's own skip-diagnostics loop even
+    // starts - with zero trace anywhere in skippedStudents/errors. An
+    // admin bulk-generating for a whole class had no way to tell "this
+    // student wasn't billed because of their status" apart from one that
+    // genuinely has no matching fee structure - both looked identical
+    // (just absent). Surfacing it the same way as every other skip reason.
+    const { status: _activeOnly, ...scopeMatchOnly } = studentMatch;
+    const inactiveStudents = await this.studentModel.find({ ...scopeMatchOnly, status: { $ne: 'active' } })
+      .select('firstName lastName currentGrade currentSection status').lean();
+    for (const s of inactiveStudents as any[]) {
+      skippedStudents.push({
+        name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Unnamed student',
+        grade: `${s.currentGrade || 'Unknown'}${s.currentSection ? ' - ' + s.currentSection : ''}`,
+        reason: 'inactive_status',
+        detail: `Student status is "${s.status}", not "active" - not billed. If this is wrong, correct the student's status in Student 360 first.`,
+      });
+    }
+
+    if (students.length === 0 && inactiveStudents.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: 0, skippedAlreadyBilled: 0, skippedNoMatch: 0, skippedStudents: [], noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: ['No matching active students found for this scope'], totalStudents: 0 };
+    if (students.length === 0) return { dryRun, created: 0, willCreate: 0, skipped: skippedStudents.length, skippedAlreadyBilled: 0, skippedNoMatch: 0, skippedStudents, noMatchBreakdown: [], skippedAmbiguousMatch: 0, ambiguousMatchBreakdown: [], errors: [], totalStudents: 0 };
 
     const [feeStructures, assignments, discountPrograms, campuses, studentFeeAssignments] = await Promise.all([
       // Match on isActive + grade/section/campus only, not academicYear.
@@ -3908,16 +3947,24 @@ export class FinanceService {
     // month - an invoice being generated/resynced never counts as its
     // own arrears - and excludes isDeleted/cancelled/waived invoices,
     // which carry no real debt.
+    // rolledForwardInto: null excludes an invoice whose balance was
+    // already carried forward onto a PREVIOUS later invoice (e.g. July's
+    // balance rolled into August) - without this, generating September
+    // would pull July's balance in a second time (once directly, once via
+    // August's own arrears line, which already includes it), inflating
+    // the arrears total with the same debt counted twice over.
     const arrearsInvoices = await this.invoiceModel
       .find(
-        { schoolSlug, studentId: { $in: students.map((s: any) => s._id) }, month: { $ne: month }, isDeleted: { $ne: true }, status: { $nin: ['cancelled', 'waived'] }, balanceDue: { $gt: 0 } },
+        { schoolSlug, studentId: { $in: students.map((s: any) => s._id) }, month: { $ne: month }, isDeleted: { $ne: true }, status: { $nin: ['cancelled', 'waived'] }, balanceDue: { $gt: 0 }, rolledForwardInto: null },
         { studentId: 1, balanceDue: 1 },
       )
       .lean();
     const arrearsByStudent = new Map<string, number>();
+    const arrearsSourceInvoiceIdsByStudent = new Map<string, string[]>();
     for (const inv of arrearsInvoices as any[]) {
       const key = String(inv.studentId);
       arrearsByStudent.set(key, (arrearsByStudent.get(key) || 0) + (inv.balanceDue || 0));
+      (arrearsSourceInvoiceIdsByStudent.get(key) ?? arrearsSourceInvoiceIdsByStudent.set(key, []).get(key)!).push(String(inv._id));
     }
 
     // A Fee Structure whose frequency is "Annually"/"One-time" bills
@@ -3958,11 +4005,6 @@ export class FinanceService {
     const errors: string[] = [];
     const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
     const gradesWithAmbiguousMatch = new Map<string, number>(); // grade/section -> count of students affected
-    // Named, per-student detail for every skip - "16 already billed" tells
-    // an admin nothing about WHICH 16 or whether that's actually correct;
-    // this is what actually answers "some students are being skipped or
-    // showing as already billed" instead of leaving it a mystery count.
-    const skippedStudents: { name: string; grade: string; reason: string; detail?: string }[] = [];
 
     for (const student of students) {
       try {
@@ -4200,6 +4242,10 @@ export class FinanceService {
           invoiceDoc.lateFine = lateFine;
           await invoiceDoc.save();
           await this.postFeeInvoiceJournal(schoolSlug, invoiceDoc, taxTemplate);
+          if (arrearsNowApply) {
+            const sourceIds = arrearsSourceInvoiceIdsByStudent.get(String(student._id)) || [];
+            if (sourceIds.length) await this.invoiceModel.updateMany({ _id: { $in: sourceIds }, schoolSlug }, { $set: { rolledForwardInto: invoiceDoc._id } });
+          }
           discountsSynced++;
           continue;
         }
@@ -4234,6 +4280,10 @@ export class FinanceService {
         });
         await invoice.save();
         await this.postFeeInvoiceJournal(schoolSlug, invoice, taxTemplate);
+        if (arrears > 0) {
+          const sourceIds = arrearsSourceInvoiceIdsByStudent.get(String(student._id)) || [];
+          if (sourceIds.length) await this.invoiceModel.updateMany({ _id: { $in: sourceIds }, schoolSlug }, { $set: { rolledForwardInto: invoice._id } });
+        }
         created++;
       } catch (err: any) {
         const name = `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim() || 'Unnamed student';
@@ -4260,7 +4310,7 @@ export class FinanceService {
       // canResyncDiscount above).
       discountsSynced: dryRun ? 0 : discountsSynced,
       willSyncDiscounts: dryRun ? discountsSynced : discountsSynced,
-      skipped: skippedAlreadyBilled + skippedNoMatch + skippedAmbiguousMatch + skippedStudents.filter((s) => s.reason === 'error').length,
+      skipped: skippedAlreadyBilled + skippedNoMatch + skippedAmbiguousMatch + skippedStudents.filter((s) => s.reason === 'error' || s.reason === 'inactive_status').length,
       skippedStudents,
       skippedAlreadyBilled,
       skippedNoMatch,

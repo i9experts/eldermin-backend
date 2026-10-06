@@ -84,7 +84,11 @@ export class FeeDefaulterService {
   // ── Aging report — "Paid & Unpaid with Aging in one click" ─────
   async getAgingReport(schoolSlug: string, requestingUser?: ScopedUser) {
     const policy = await this.getPolicy(schoolSlug);
-    const filter: any = { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 } };
+    // rolledForwardInto: an invoice whose balance was carried forward as
+    // an "Arrears" line onto a later invoice (see generateInvoices) -
+    // that later invoice's own balanceDue already includes this amount,
+    // so counting this invoice too would double the real outstanding debt.
+    const filter: any = { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 }, rolledForwardInto: null };
     // Inclusive, not exclusive: an invoice with no campusId tagged (the
     // overwhelming common case - campusId is only ever backfilled from the
     // linked Student's own campusId, and most schools are single-campus
@@ -135,7 +139,10 @@ export class FeeDefaulterService {
     const { skip } = paged(page, limit);
     const policy = await this.getPolicy(schoolSlug);
 
-    const filter: any = { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 }, dueDate: { $lt: new Date() } };
+    // rolledForwardInto excluded for the same reason as getAgingReport
+    // above - this invoice's balance already counts toward a later
+    // invoice's own balanceDue, so it isn't a second, independent debt.
+    const filter: any = { schoolSlug, isDeleted: { $ne: true }, balanceDue: { $gt: 0 }, dueDate: { $lt: new Date() }, rolledForwardInto: null };
     // See the same note in getAgingReport above - inclusive campus filter,
     // not exclusive, so an untagged invoice still reaches a campus-scoped
     // caller instead of silently disappearing.
