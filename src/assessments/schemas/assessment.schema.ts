@@ -195,6 +195,11 @@ export class MarkEntry {
   @Prop() verifiedBy: string;
   @Prop({ default: false }) verified: boolean;
 
+  // Provenance marker (additive): set only when the entry was written from
+  // an online quiz attempt (upsertMarkEntryFromAttempt). Entries without it
+  // were entered manually and are never overwritten by a quiz completion.
+  @Prop({ type: Types.ObjectId, ref: 'QuizAttempt' }) quizAttemptId?: Types.ObjectId;
+
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop({ required: true }) academicYear: string;
 }

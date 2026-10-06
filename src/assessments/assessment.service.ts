@@ -3,7 +3,7 @@
 // ============================================================
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -61,6 +61,8 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
 
 @Injectable()
 export class AssessmentService {
+  private readonly logger = new Logger(AssessmentService.name);
+
   constructor(
     @InjectModel(Assessment.name) private assessmentModel: Model<AssessmentDocument>,
     @InjectModel(Question.name) private questionModel: Model<QuestionDocument>,
@@ -1545,10 +1547,32 @@ You are assisting a teacher's professional judgement, not replacing it - classif
    * Once nothing is left pending, finalizes obtainedMarks and upserts
    * the MarkEntry - same completion path submitQuizAttempt uses when an
    * attempt happens to need no manual grading at all. */
-  async gradeQuizAttempt(schoolSlug: string, attemptId: string, grades: { questionId: string; marksAwarded: number }[], gradedBy: string) {
+  async gradeQuizAttempt(schoolSlug: string, attemptId: string, grades: { questionId: string; marksAwarded: number }[], gradedBy: string, requestingUser?: ScopedUser) {
     const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug });
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
     if (attempt.status === 'in_progress') throw new BadRequestException('This attempt has not been submitted yet.');
+
+    if (isTeacherCaller(requestingUser)) {
+      // TEACHER role only. Must teach the attempt's class; no re-grade of an
+      // already graded attempt; every mark within 0..that question's marks.
+      const t = await this.teacherContext(requestingUser);
+      if (!this.classIncludes(t.classes, (attempt as any).grade, (attempt as any).section)) {
+        throw new ForbiddenException('You can only grade quiz attempts for classes you teach.');
+      }
+      if (attempt.status === 'graded') throw new ConflictException('This attempt is already graded.');
+      const questions: any[] = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
+      const maxById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
+      const manual = new Set((attempt.answers as any[]).filter(a => a.needsManualGrading).map(a => String(a.questionId)));
+      const bad: string[] = [];
+      for (const g of grades) {
+        const qid = String(g.questionId);
+        const max = maxById.get(qid);
+        const v: any = g.marksAwarded;
+        if (!manual.has(qid) || max === undefined) bad.push(`${qid}: not a manually graded question of this attempt`);
+        else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > max) bad.push(`${qid}: ${v} (allowed 0..${max})`);
+      }
+      if (bad.length) throw new BadRequestException(`Invalid marks for ${bad.length} question(s): ${bad.join('; ')}`);
+    }
 
     const gradeByQuestionId = new Map(grades.map(g => [g.questionId, g.marksAwarded]));
     for (const answer of attempt.answers as any[]) {
@@ -1578,14 +1602,30 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // and upsert key (assessmentId/studentId/subject/schoolSlug)
   // bulkEnterMarks already uses, so Report Cards aggregate quiz results
   // and teacher-entered marks identically.
+  //
+  // Data-integrity guard (ALL roles): an existing MarkEntry is overwritten
+  // only when it is NOT verified AND it was itself written from a quiz
+  // (quizAttemptId set, or the legacy 'Online Quiz (auto)' enteredBy marker
+  // from before the marker existed). Manually entered or verified entries
+  // are left untouched (logged); with no entry the result is inserted.
   private async upsertMarkEntryFromAttempt(attempt: any) {
+    const key = { assessmentId: attempt.assessmentId, studentId: attempt.studentId, subject: attempt.subject, schoolSlug: attempt.schoolSlug };
+    const existing: any = await this.markModel.findOne(key).select('verified enteredBy quizAttemptId').lean();
+    if (existing) {
+      const fromQuiz = !!existing.quizAttemptId || existing.enteredBy === 'Online Quiz (auto)';
+      if (existing.verified || !fromQuiz) {
+        this.logger.warn(`Quiz attempt ${attempt._id}: not overwriting ${existing.verified ? 'verified' : 'manually entered'} mark for student ${attempt.studentId} (${attempt.subject})`);
+        return;
+      }
+    }
     const percentage = attempt.totalMarks > 0 ? parseFloat(((attempt.obtainedMarks / attempt.totalMarks) * 100).toFixed(1)) : 0;
     const gradeInfo = getGrade(percentage);
     const result = percentage >= ((attempt.passingMarks / (attempt.totalMarks || 1)) * 100) ? 'pass' : 'fail';
     await this.markModel.updateOne(
-      { assessmentId: attempt.assessmentId, studentId: attempt.studentId, subject: attempt.subject, schoolSlug: attempt.schoolSlug },
+      key,
       {
         $set: {
+          quizAttemptId: attempt._id,
           assessmentTitle: attempt.assessmentTitle, studentName: attempt.studentName, rollNumber: attempt.rollNumber,
           grade: attempt.grade, section: attempt.section, totalMarks: attempt.totalMarks, passingMarks: attempt.passingMarks,
           obtainedMarks: attempt.obtainedMarks, isAbsent: false, isExempt: false,
