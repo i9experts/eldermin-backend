@@ -371,6 +371,7 @@ export class IdCardsService {
     ids: string[],
     templateId: string | undefined,
     includeBack: boolean,
+    printMode: string = 'pvc_card',
   ): Promise<Buffer> {
     let template: IdCardTemplateDocument | null = templateId
       ? await this.templateModel.findOne({ _id: templateId, schoolSlug, entityType })
@@ -409,6 +410,75 @@ export class IdCardsService {
       nationality: 'Nationality', emergencyContact: 'Emergency Contact', email: 'Email', fatherName: "Father's Name",
     };
 
+    const hasBackContent = (template.showFields || []).some((f) => IdCardsService.BACK_ONLY_FIELDS.includes(f))
+      || !!template.validityText || !!template.noteText || template.showSignatureLine;
+    const makeBack = includeBack && hasBackContent;
+
+    if (printMode === 'a4_sheet') {
+      return this.generateA4SheetPdf(people, template, fieldLabels, makeBack);
+    }
+    return this.generatePvcCardPdf(people, template, fieldLabels, makeBack);
+  }
+
+  // Direct-to-card PVC printer output (Zebra/Evolis/Magicard etc.) - every
+  // page is the card itself: the PDF page size IS the exact CR80 card
+  // (85.6mm x 54mm), never an A4 sheet with small cards floating on it.
+  // Pages are ordered front, back, front, back, ... one pair per person,
+  // matching how a card printer driver's duplex/two-sided job expects to
+  // receive a single physical card's two faces back-to-back, then feed the
+  // next card.
+  private async generatePvcCardPdf(
+    people: { entity: any; person: any; branding: { name: string; logo: string; phone: string } }[],
+    template: IdCardTemplateDocument,
+    fieldLabels: Record<string, string>,
+    makeBack: boolean,
+  ): Promise<Buffer> {
+    const pages: string[] = [];
+    for (const entry of people) {
+      pages.push(await this.buildCardFace(entry.person, 'front', template, entry.branding, fieldLabels));
+      if (makeBack) pages.push(await this.buildCardFace(entry.person, 'back', template, entry.branding, fieldLabels));
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { size: ${CARD_WIDTH_MM}mm ${CARD_HEIGHT_MM}mm; margin: 0; }
+          body { margin: 0; }
+          .page { position: relative; width: ${CARD_WIDTH_MM}mm; height: ${CARD_HEIGHT_MM}mm; page-break-after: always; }
+          ${this.cardCss(template.layoutStyle, template.primaryColor, template.accentColor)}
+          /* The dashed border/radius below is a cut-GUIDE for the A4-sheet
+             layout (cards cut out by hand) - printed directly onto the
+             blank PVC card itself here, it would show up as a visible gray
+             dashed line on the finished card, so it's suppressed. Corner
+             rounding is the card blank's own physical die-cut, not
+             something the printer should render. */
+          .page .card { border: none; border-radius: 0; }
+        </style>
+      </head>
+      <body>
+        ${pages.map((p) => `<div class="page">${p}</div>`).join('')}
+      </body>
+      </html>
+    `;
+
+    return this.pdfService.htmlToPdfWithOptions(html, {
+      width: `${CARD_WIDTH_MM}mm`, height: `${CARD_HEIGHT_MM}mm`, printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+  }
+
+  // The original "print on a regular printer, cut out by hand" layout -
+  // several cards arranged on an A4 sheet. Still useful for schools
+  // without a dedicated card printer, printing on PVC-coated A4 stock.
+  private async generateA4SheetPdf(
+    people: { entity: any; person: any; branding: { name: string; logo: string; phone: string } }[],
+    template: IdCardTemplateDocument,
+    fieldLabels: Record<string, string>,
+    makeBack: boolean,
+  ): Promise<Buffer> {
     const positions: { x: number; y: number }[] = [];
     for (let r = 0; r < CARDS_PER_COL; r++) {
       for (let c = 0; c < CARDS_PER_ROW; c++) {
@@ -426,7 +496,7 @@ export class IdCardsService {
         const batch = people.slice(i, i + perPage);
         const cardsHtml = await Promise.all(batch.map((entry, idx) => {
           const pos = positions[idx];
-          return this.buildCardFace(entry.person, side, template!, entry.branding, fieldLabels).then(
+          return this.buildCardFace(entry.person, side, template, entry.branding, fieldLabels).then(
             (html) => `<div style="position:absolute; left:${pos.x}mm; top:${pos.y}mm;">${html}</div>`,
           );
         }));
@@ -436,9 +506,7 @@ export class IdCardsService {
     };
 
     const frontSheets = await buildSheetsHtml('front');
-    const hasBackContent = (template.showFields || []).some((f) => IdCardsService.BACK_ONLY_FIELDS.includes(f))
-      || !!template.validityText || !!template.noteText || template.showSignatureLine;
-    const backSheets = includeBack && hasBackContent ? await buildSheetsHtml('back') : '';
+    const backSheets = makeBack ? await buildSheetsHtml('back') : '';
 
     const html = `
       <!DOCTYPE html>

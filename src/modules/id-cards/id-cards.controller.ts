@@ -74,7 +74,7 @@ export class IdCardsController {
   async generate(@Body() dto: GenerateIdCardsDto, @Request() req: any, @Res() res: Response) {
     const { schoolSlug, tenantId } = this.ctx(req);
     const pdf = await this.service.generateIdCardsPdf(
-      schoolSlug, tenantId, dto.entityType, dto.ids, dto.templateId, dto.includeBack ?? false,
+      schoolSlug, tenantId, dto.entityType, dto.ids, dto.templateId, dto.includeBack ?? false, dto.printMode ?? 'pvc_card',
     );
     res.set({
       'Content-Type': 'application/pdf',
