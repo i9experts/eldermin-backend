@@ -46,14 +46,26 @@ export class AuthService {
     let classTeacherOfGradeId: string | undefined;
     let classTeacherOfGradeName: string | undefined;
     let classTeacherOfSectionName: string | undefined;
+    // Not just the isClassTeacher: true lookup above was ever run - a
+    // teacher's own subjectsCanTeach/gradeLevelsCanTeach (admin-assigned
+    // on their Teaching Profile) were never surfaced anywhere a teacher
+    // could read their own scope, so the Question Bank and Syllabus
+    // forms had no way to filter the subject/grade pickers down to what
+    // was actually assigned to them.
+    let subjectsCanTeach: string[] | undefined;
+    let gradeLevelsCanTeach: string[] | undefined;
     if (staffRecord) {
       const teacherProfile = await this.teacherProfileModel
-        .findOne({ staffId: (staffRecord as any)._id, isClassTeacher: true })
-        .select('classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName')
+        .findOne({ staffId: (staffRecord as any)._id })
+        .select('isClassTeacher classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName subjectsCanTeach gradeLevelsCanTeach')
         .lean();
-      classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
-      classTeacherOfGradeName = teacherProfile?.classTeacherOfGradeName || undefined;
-      classTeacherOfSectionName = teacherProfile?.classTeacherOfSectionName || undefined;
+      if (teacherProfile?.isClassTeacher) {
+        classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
+        classTeacherOfGradeName = teacherProfile?.classTeacherOfGradeName || undefined;
+        classTeacherOfSectionName = teacherProfile?.classTeacherOfSectionName || undefined;
+      }
+      subjectsCanTeach = teacherProfile?.subjectsCanTeach?.length ? teacherProfile.subjectsCanTeach : undefined;
+      gradeLevelsCanTeach = teacherProfile?.gradeLevelsCanTeach?.length ? teacherProfile.gradeLevelsCanTeach : undefined;
     }
 
     if (!campusId && schoolSlug) {
@@ -61,7 +73,11 @@ export class AuthService {
       if (campuses.length === 1) campusId = String(campuses[0]._id);
     }
 
-    return { campusId, department, supervisedClusterIds, isBoardLevel, classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName };
+    return {
+      campusId, department, supervisedClusterIds, isBoardLevel,
+      classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName,
+      subjectsCanTeach, gradeLevelsCanTeach,
+    };
   }
 
   async login(email: string, password: string, slug?: string) {
@@ -158,7 +174,11 @@ export class AuthService {
     // payload, so every logged-in user's campusId was silently
     // undefined regardless of their actual Staff assignment.
     const scopeFields = await this.resolveScopeFieldsForUser(user._id, schoolSlug);
-    const { supervisedClusterIds, isBoardLevel, department, classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName } = scopeFields;
+    const {
+      supervisedClusterIds, isBoardLevel, department,
+      classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName,
+      subjectsCanTeach, gradeLevelsCanTeach,
+    } = scopeFields;
     const campusId = scopeFields.campusId;
 
     const payload = {
@@ -176,6 +196,13 @@ export class AuthService {
       classTeacherOfGradeId,
       classTeacherOfGradeName,
       classTeacherOfSectionName,
+      // The subjects/grades an admin assigned this teacher on their
+      // Teaching Profile - lets subject/grade pickers (Question Bank,
+      // Syllabus) scope themselves to what was actually assigned,
+      // instead of showing the whole school's master list. Absent for
+      // every other role, exactly as campusId/department are.
+      subjectsCanTeach,
+      gradeLevelsCanTeach,
       // Real parent/student ownership scoping - see assertStudentAccess
       // in scope.util.ts. Absent for every other role, exactly as
       // campusId/department are absent for roles they don't apply to.
@@ -207,6 +234,8 @@ export class AuthService {
         classTeacherOfGradeId,
         classTeacherOfGradeName,
         classTeacherOfSectionName,
+        subjectsCanTeach,
+        gradeLevelsCanTeach,
       },
       institution: {
         name: tenant?.displayName || slugToUse || 'Unknown',

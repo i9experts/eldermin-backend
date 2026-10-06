@@ -58,7 +58,33 @@ export interface ScopedUser {
   classTeacherOfGradeId?: string;
   classTeacherOfGradeName?: string;
   classTeacherOfSectionName?: string;
+  subjectsCanTeach?: string[];
+  gradeLevelsCanTeach?: string[];
   resellerId?: string;
+}
+
+/**
+ * The subjects/grades a teacher is allowed to pick from in a form like
+ * Question Bank or Syllabus creation, given what their Teaching Profile
+ * was actually assigned. Returns undefined for any non-teacher role
+ * (unrestricted - same "unrestricted unless scope says otherwise"
+ * convention as resolveCampusScope/resolveDepartmentScope), and for a
+ * teacher with nothing assigned yet (fail open to the full list rather
+ * than hiding every subject/grade from someone just not set up yet -
+ * unlike campus/department, an empty assignment here is far more likely
+ * to mean "admin hasn't gotten to it" than "deliberately scoped to
+ * nothing").
+ */
+export function resolveTeacherSubjectScope(user: ScopedUser): string[] | undefined {
+  const role = user.role || user.primaryRole;
+  if (role !== UserRole.TEACHER) return undefined;
+  return user.subjectsCanTeach?.length ? user.subjectsCanTeach : undefined;
+}
+
+export function resolveTeacherGradeScope(user: ScopedUser): string[] | undefined {
+  const role = user.role || user.primaryRole;
+  if (role !== UserRole.TEACHER) return undefined;
+  return user.gradeLevelsCanTeach?.length ? user.gradeLevelsCanTeach : undefined;
 }
 
 /**
