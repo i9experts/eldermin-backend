@@ -122,8 +122,8 @@ export class AssessmentController {
     @Body() dto: UpdateReportCardRemarksDto,
     @Request() req: any,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateReportCardRemarks(id, schoolSlug, dto);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateReportCardRemarks(id, schoolSlug, dto, requestingUser);
   }
 
   @Post('report-cards/publish')

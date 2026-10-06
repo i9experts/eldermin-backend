@@ -1779,7 +1779,21 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return rc;
   }
 
-  async updateReportCardRemarks(id: string, schoolSlug: string, dto: UpdateReportCardRemarksDto) {
+  async updateReportCardRemarks(id: string, schoolSlug: string, dto: UpdateReportCardRemarksDto, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      // TEACHER role only: must be the CLASS TEACHER of the card's class,
+      // may only write classTeacherRemarks, unknown id is a 404.
+      const t = await this.teacherContext(requestingUser);
+      const card: any = Types.ObjectId.isValid(id) ? await this.reportCardModel.findOne({ _id: id, schoolSlug }).select('grade section').lean() : null;
+      if (!card) throw new NotFoundException('Report card not found');
+      if (!t.classTeacherClass || !this.classIncludes([t.classTeacherClass], card.grade, card.section)) {
+        throw new ForbiddenException('Only the class teacher of this class can edit report card remarks.');
+      }
+      const $set: any = {};
+      if (dto.classTeacherRemarks !== undefined) $set.classTeacherRemarks = dto.classTeacherRemarks;
+      if (!Object.keys($set).length) return this.reportCardModel.findOne({ _id: id, schoolSlug });
+      return this.reportCardModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
+    }
     return this.reportCardModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: dto }, { new: true },
     );
