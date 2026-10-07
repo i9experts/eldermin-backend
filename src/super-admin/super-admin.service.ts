@@ -701,12 +701,25 @@ export class SuperAdminService {
   // right after onboarding a school.
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
   async syncUsageSnapshots() {
-    const institutions = await this.institutionModel.find().select('slug').lean();
-    if (institutions.length === 0) return { message: 'No institutions to sync', synced: 0 };
+    const institutions = await this.institutionModel.find().select('slug name').lean();
+    if (institutions.length === 0) return { message: 'No institutions to sync', synced: 0, unmatched: [] };
 
     const slugs = institutions.map((i) => i.slug);
     const tenants = await this.tenantModel.find({ slug: { $in: slugs } }).select('slug').lean();
     const tenantIdBySlug = new Map(tenants.map((t) => [t.slug, t._id]));
+
+    // Flags institutions whose slug matches no real Tenant AND has no real
+    // Student records either - almost always means this platform_institutions
+    // row's slug was hand-typed (e.g. via Create Institution) rather than
+    // generated from/linked to the school's actual tenant, so there is
+    // nothing real for this sync to ever find under that slug no matter
+    // how many times it runs. Most common for a school onboarded before
+    // this SaaS-tracking layer existed, or for a multi-campus group where
+    // each campus got its own Super Admin row even though the real app
+    // only has ONE tenant (with multiple Campus records inside it) for
+    // the whole group - see activateInstitutionFromLead, which only ever
+    // creates one Tenant per school, not one per campus.
+    const unmatched: { slug: string; name: string }[] = [];
 
     const bulk = await Promise.all(institutions.map(async (inst) => {
       const tenantId = tenantIdBySlug.get(inst.slug);
@@ -714,6 +727,9 @@ export class SuperAdminService {
         this.studentModel.countDocuments({ schoolSlug: inst.slug, status: 'active' }),
         tenantId ? this.staffModel.countDocuments({ tenantId, isActive: true }) : Promise.resolve(0),
       ]);
+      if (!tenantId && totalStudents === 0) {
+        unmatched.push({ slug: inst.slug, name: inst.name });
+      }
       return {
         updateOne: {
           filter: { _id: inst._id },
@@ -723,7 +739,13 @@ export class SuperAdminService {
     }));
 
     await this.institutionModel.bulkWrite(bulk);
-    return { message: `Synced usage for ${institutions.length} institutions`, synced: institutions.length };
+    return {
+      message: unmatched.length > 0
+        ? `Synced usage for ${institutions.length} institutions - ${unmatched.length} have no matching tenant/student records under their current slug`
+        : `Synced usage for ${institutions.length} institutions`,
+      synced: institutions.length,
+      unmatched,
+    };
   }
 
   // ============================================================
