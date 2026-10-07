@@ -95,6 +95,15 @@ export class SuperAdminController {
     return this.service.recordDailyUsage(slug, dto);
   }
 
+  // Manual trigger for the same sync that otherwise only runs nightly
+  // (see SuperAdminService.syncUsageSnapshots) - lets an admin see real
+  // Students/Staff counts right away (e.g. right after onboarding a
+  // school) instead of waiting for the next 2am run.
+  @Post('institutions/usage/recalculate')
+  async recalculateUsage() {
+    return this.service.syncUsageSnapshots();
+  }
+
   // ── Alerts ────────────────────────────────────────────────
   @Get('alerts')
   async getAlerts() {

@@ -6,6 +6,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
 import {
@@ -19,6 +20,8 @@ import { User, UserDocument } from '../modules/organization/schemas/user.schema'
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { MarketingLead } from '../leads/schemas/lead.schema';
 import { Campus, Grade, AcademicYear } from '../organization/schemas/organization.schema';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { ModulesService } from '../modules/modules.service';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
@@ -79,6 +82,8 @@ export class SuperAdminService {
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(Grade.name) private gradeModel: Model<any>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<any>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     private modulesService: ModulesService,
     private jwtService: JwtService,
   ) {}
@@ -681,6 +686,44 @@ export class SuperAdminService {
       { $set: { ...usageData, institutionSlug: slug, date: today } },
       { upsert: true, new: true },
     );
+  }
+
+  // Institution.usage (the Students/Staff counts shown on the
+  // Institutions table and used by calcHealthScore) was a real schema
+  // field that nothing ever actually wrote to - every institution sat
+  // at its default (0) forever, even an Active, paying school that's
+  // been in daily use for months. This is the sync that was missing:
+  // counts the real per-tenant Student (keyed by schoolSlug) and Staff
+  // (keyed by tenantId) collections and writes the result back onto
+  // each institution's own usage snapshot. Runs nightly, and can also be
+  // triggered on demand (see recalculateUsage in the controller) since
+  // an admin shouldn't have to wait until 2am to see a number corrected
+  // right after onboarding a school.
+  @Cron(CronExpression.EVERY_DAY_AT_2AM)
+  async syncUsageSnapshots() {
+    const institutions = await this.institutionModel.find().select('slug').lean();
+    if (institutions.length === 0) return { message: 'No institutions to sync', synced: 0 };
+
+    const slugs = institutions.map((i) => i.slug);
+    const tenants = await this.tenantModel.find({ slug: { $in: slugs } }).select('slug').lean();
+    const tenantIdBySlug = new Map(tenants.map((t) => [t.slug, t._id]));
+
+    const bulk = await Promise.all(institutions.map(async (inst) => {
+      const tenantId = tenantIdBySlug.get(inst.slug);
+      const [totalStudents, totalStaff] = await Promise.all([
+        this.studentModel.countDocuments({ schoolSlug: inst.slug, status: 'active' }),
+        tenantId ? this.staffModel.countDocuments({ tenantId, isActive: true }) : Promise.resolve(0),
+      ]);
+      return {
+        updateOne: {
+          filter: { _id: inst._id },
+          update: { $set: { 'usage.totalStudents': totalStudents, 'usage.totalStaff': totalStaff, 'usage.lastUpdated': new Date() } },
+        },
+      };
+    }));
+
+    await this.institutionModel.bulkWrite(bulk);
+    return { message: `Synced usage for ${institutions.length} institutions`, synced: institutions.length };
   }
 
   // ============================================================
