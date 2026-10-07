@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SuperAdminController } from './super-admin.controller';
 import { SuperAdminService } from './super-admin.service';
 import {
@@ -19,6 +21,17 @@ import { ModulesModule } from '../modules/modules.module';
 @Module({
   imports: [
     ModulesModule,
+    // Same secret/expiry source as AuthModule's own JwtModule - a real,
+    // normally-verifiable JWT for impersonation (see
+    // generateImpersonationToken), not the throwaway base64 blob this
+    // used to return, which nothing could ever actually log in with.
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get('JWT_SECRET'),
+      }),
+      inject: [ConfigService],
+    }),
     MongooseModule.forFeature([
       { name: Institution.name, schema: InstitutionSchema },
       { name: SubscriptionHistory.name, schema: SubscriptionHistorySchema },

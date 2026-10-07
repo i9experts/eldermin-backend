@@ -76,8 +76,7 @@ export class SuperAdminController {
 
   @Post('institutions/:slug/impersonate')
   async impersonate(@Param('slug') slug: string, @Request() req: any) {
-    const token = await this.service.generateImpersonationToken(slug, this.adminUser(req));
-    return { token, message: 'Impersonation token valid for 30 minutes' };
+    return this.service.generateImpersonationToken(slug, this.adminUser(req));
   }
 
   // ── Platform Analytics ────────────────────────────────────
