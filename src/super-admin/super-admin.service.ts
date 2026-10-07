@@ -5,6 +5,7 @@
 
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { JwtService } from '@nestjs/jwt';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
 import {
@@ -79,6 +80,7 @@ export class SuperAdminService {
     @InjectModel(Grade.name) private gradeModel: Model<any>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<any>,
     private modulesService: ModulesService,
+    private jwtService: JwtService,
   ) {}
 
   // ============================================================
@@ -629,10 +631,12 @@ export class SuperAdminService {
 
     await this.institutionModel.findOneAndUpdate({ slug }, { $set: update });
 
+    const newPrice = SUBSCRIPTION_PLANS[data.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0;
+    const oldPrice = SUBSCRIPTION_PLANS[inst.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0;
     const event = inst.plan === 'free_trial' ? 'trial_converted'
-      : (SUBSCRIPTION_PLANS[data.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0) >
-        (SUBSCRIPTION_PLANS[inst.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0)
-        ? 'upgrade' : 'renewal';
+      : newPrice > oldPrice ? 'upgrade'
+      : newPrice < oldPrice ? 'downgrade'
+      : 'renewal';
 
     await new this.subHistoryModel({
       institutionSlug: slug, institutionName: inst.name,
@@ -697,11 +701,15 @@ export class SuperAdminService {
         { $sort: { count: -1 } },
       ]),
 
-      // Daily platform activity trend
+      // Daily platform activity trend - grouped by a formatted YYYY-MM-DD
+      // string, not the raw Date ($date serializes to a full ISO
+      // timestamp over HTTP/JSON, which the frontend's chart x-axis
+      // tickFormatter assumes is already YYYY-MM-DD and slices
+      // accordingly - a raw Date here produced garbled tick labels).
       this.usageLogModel.aggregate([
         { $match: { date: { $gte: thirtyDaysAgo } } },
         { $group: {
-          _id: '$date',
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$date' } },
           totalLogins: { $sum: '$dailyLogins' },
           activeInstitutions: { $sum: 1 },
           studentsAdded: { $sum: '$studentsAdded' },
@@ -842,12 +850,51 @@ export class SuperAdminService {
   // ============================================================
   // IMPERSONATION (Support Access)
   // ============================================================
-  async generateImpersonationToken(slug: string, superAdminId: string): Promise<string> {
-    // In production: generate a short-lived JWT with schoolSlug claim
-    // Log the impersonation for audit
-    const token = Buffer.from(JSON.stringify({
-      slug, superAdminId, exp: Date.now() + 30 * 60 * 1000, // 30 min
-    })).toString('base64');
-    return token;
+  // Mints a REAL, 30-minute JWT - the exact same payload shape
+  // AuthService.login() produces, so the institution's own app accepts it
+  // through the normal AuthGuard('jwt')/JwtStrategy exactly like any other
+  // login. The previous version returned a base64-encoded JSON blob that
+  // no endpoint anywhere could ever verify or log in with - the "Support
+  // Access" button was wired on the frontend to a backend action that
+  // looked complete but could never actually produce a usable session.
+  // Impersonates as the institution's own highest-privilege active user
+  // (never platform-wide super-admin privileges leaking into their
+  // tenant), so the super-admin sees exactly what that person sees.
+  async generateImpersonationToken(slug: string, superAdminId: string) {
+    const inst = await this.institutionModel.findOne({ slug });
+    if (!inst) throw new NotFoundException('Institution not found');
+    const tenant = await this.tenantModel.findOne({ slug });
+    if (!tenant) throw new NotFoundException('This institution has no tenant record yet - it may not have completed setup.');
+
+    const IMPERSONATABLE_ROLES = ['institution_owner', 'principal', 'admin'];
+    let user: any = null;
+    for (const role of IMPERSONATABLE_ROLES) {
+      user = await this.userModel.findOne({ tenantId: tenant._id, primaryRole: role, isActive: { $ne: false } }).lean();
+      if (user) break;
+    }
+    if (!user) throw new NotFoundException('No active owner/admin account found for this institution to impersonate as.');
+
+    const name = `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim() || user.email;
+    const payload = {
+      sub: String(user._id),
+      tenantId: String(tenant._id),
+      institutionId: String(user.institutionId || tenant._id),
+      role: user.primaryRole,
+      name,
+      schoolSlug: slug,
+      activeModules: tenant.activeModules || [],
+      // Marks this token as a support-impersonation session, distinct
+      // from a genuine login - available to any future audit/log review
+      // even though nothing currently branches on it at verification time.
+      impersonatedBy: superAdminId,
+    };
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '30m' });
+
+    return {
+      accessToken,
+      user: { id: String(user._id), name, email: user.email, role: user.primaryRole },
+      institution: { name: inst.name, slug: inst.slug, plan: inst.plan, activeModules: tenant.activeModules || [] },
+      message: 'Impersonation token valid for 30 minutes',
+    };
   }
 }

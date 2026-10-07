@@ -850,6 +850,19 @@ export class ResellersService {
       if (approved <= 0 || approved > claim.amountRequested) {
         throw new BadRequestException('amountApproved must be greater than 0 and cannot exceed the requested amount.');
       }
+      // getMdfSummary's "committed" total only counts already-approved/paid
+      // claims - submitMdfClaim's own remaining-budget check at submission
+      // time can't see OTHER claims still sitting pending_review, so two
+      // claims can each individually pass that check and still together
+      // exceed the budget once both are approved here. Re-checked against
+      // this specific claim's own resellerId/fiscalYear right before the
+      // approval that actually commits the amount.
+      const summary = await this.getMdfSummary(String(claim.resellerId));
+      if (approved > summary.remaining) {
+        throw new BadRequestException(
+          `Approving ${approved} would exceed the remaining MDF budget (${summary.remaining} of ${summary.allocated} for ${summary.fiscalYear}) - other claims have been approved since this one was submitted.`,
+        );
+      }
       claim.amountApproved = approved;
     }
     claim.status = decision;
