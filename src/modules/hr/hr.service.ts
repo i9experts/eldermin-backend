@@ -1727,9 +1727,6 @@ export class HrService {
     }
 
     const otherAllowances = (data.otherAllowances || 0) + reimbursement;
-    const totalDeductions = (data.incomeTax || 0) + (data.providentFund || 0) + (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0);
-    const grossSalary = (data.grossSalary || 0) + reimbursement;
-    const netSalary = grossSalary - totalDeductions;
 
     // Itemized component detail (see PAY-01/PAY-03) - the payroll grid
     // sends one line per configured SalaryComponent actually used on this
@@ -1745,6 +1742,22 @@ export class HrService {
     if (reimbursement > 0) {
       componentLines.push({ code: 'REIMBURSEMENT', name: 'Expense Reimbursement', type: 'earning', amount: reimbursement });
     }
+
+    // BLUNDER FIXED: this used to sum only the 5 canonical deduction
+    // fields, silently dropping any custom deduction component (e.g. a
+    // "Security Deposit" or loan-recovery line beyond Tax/PF) that only
+    // ever existed as a componentLines entry - the payslip's stored
+    // totalDeductions (and therefore netSalary) never reflected it even
+    // though the breakup view correctly showed the line itself, since
+    // that view reads componentLines directly. Same fix as
+    // updatePayslip below - canonical fields plus whatever
+    // componentLines carries beyond Tax/PF.
+    const extraDeductions = componentLines
+      .filter((l) => l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code))
+      .reduce((s, l) => s + (l.amount || 0), 0);
+    const totalDeductions = (data.incomeTax || 0) + (data.providentFund || 0) + (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0) + extraDeductions;
+    const grossSalary = (data.grossSalary || 0) + reimbursement;
+    const netSalary = grossSalary - totalDeductions;
 
     const payslip = await this.payslipModel.create({
       ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary, componentLines,
@@ -1778,6 +1791,70 @@ export class HrService {
   // custom "Hostel Fee" deduction) is the only thing counted on top.
   private static readonly CANONICAL_EARNING_CODES = ['BASIC', 'HRA', 'TRANSPORT', 'MEDICAL'];
   private static readonly CANONICAL_DEDUCTION_CODES = ['TAX', 'PF'];
+
+  /** One-time repair for payslips created BEFORE the createPayslip fix
+   * above - totalDeductions/netSalary were computed from only the 5
+   * canonical deduction fields, silently dropping any custom deduction
+   * component (e.g. "Security Deposit") that only ever lived in
+   * componentLines. A payslip generated under the old formula still has
+   * the wrong totalDeductions/netSalary stored today even though the
+   * breakup view already showed the missing line correctly (it reads
+   * componentLines directly, not the broken stored totals). Dry-run by
+   * default, same convention as Finance's arrears backfill - never
+   * touches a payslip already paid or already posted to Finance (the
+   * same rule updatePayslip/deletePayrollRun already apply). */
+  async recomputePayslipTotals(tenantId: string, dryRun = true) {
+    const payslips = await this.payslipModel.find({
+      tenantId: this.newTid(tenantId), status: { $ne: 'paid' }, postedToFinance: false,
+    }).lean();
+
+    const fixes: { payslipId: string; payrollRunId: string; staffName: string; oldTotalDeductions: number; newTotalDeductions: number; oldNetSalary: number; newNetSalary: number }[] = [];
+    for (const p of payslips as any[]) {
+      const lines = p.componentLines || [];
+      const extraDeductions = lines
+        .filter((l: any) => l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code))
+        .reduce((s: number, l: any) => s + (l.amount || 0), 0);
+      const correctTotalDeductions = (p.incomeTax || 0) + (p.providentFund || 0) + (p.loanDeduction || 0) + (p.leaveDeduction || 0) + (p.otherDeductions || 0) + extraDeductions;
+      const correctNetSalary = (p.grossSalary || 0) - correctTotalDeductions;
+      if (correctTotalDeductions !== (p.totalDeductions || 0) || correctNetSalary !== (p.netSalary || 0)) {
+        fixes.push({
+          payslipId: String(p._id), payrollRunId: String(p.payrollRunId), staffName: p.staffName,
+          oldTotalDeductions: p.totalDeductions || 0, newTotalDeductions: correctTotalDeductions,
+          oldNetSalary: p.netSalary || 0, newNetSalary: correctNetSalary,
+        });
+      }
+    }
+
+    if (!dryRun) {
+      for (const f of fixes) {
+        await this.payslipModel.updateOne(
+          { _id: f.payslipId },
+          { $set: { totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary } },
+        );
+      }
+      const affectedRunIds = [...new Set(fixes.map((f) => f.payrollRunId))];
+      for (const runId of affectedRunIds) {
+        const runTotals = await this.payslipModel.aggregate([
+          { $match: { payrollRunId: this.newTid(runId) } },
+          { $group: { _id: null, gross: { $sum: '$grossSalary' }, ded: { $sum: '$totalDeductions' }, net: { $sum: '$netSalary' } } },
+        ]);
+        if (runTotals[0]) {
+          await this.payrollRunModel.updateOne(
+            { _id: runId },
+            { $set: { totalGrossSalary: runTotals[0].gross, totalDeductions: runTotals[0].ded, totalNetSalary: runTotals[0].net } },
+          );
+        }
+      }
+    }
+
+    return {
+      dryRun,
+      willFix: fixes.length,
+      fixed: dryRun ? 0 : fixes.length,
+      affectedRuns: [...new Set(fixes.map((f) => f.payrollRunId))].length,
+      fixes,
+    };
+  }
 
   /** Admin correction for a payslip already generated - e.g. the school
    * reported from a complaint that a deduction or the logo was missing,
@@ -2290,8 +2367,15 @@ export class HrService {
     // 0/absent for a January payslip or a staff member's first month.
     const ytdPayslips = await this.payslipModel.find({
       tenantId: this.newTid(tenantId), staffId: payslip.staffId, year: payslip.year, month: { $lte: payslip.month },
-    }).select('basicSalary hra transportAllowance medicalAllowance otherAllowances incomeTax providentFund loanDeduction leaveDeduction otherDeductions').lean();
+    }).select('basicSalary hra transportAllowance medicalAllowance otherAllowances incomeTax providentFund loanDeduction leaveDeduction otherDeductions componentLines').lean();
     const ytdSum = (field: string) => ytdPayslips.reduce((s, p: any) => s + (p[field] || 0), 0);
+    // Same YTD treatment for a componentLines-only line (a custom
+    // component beyond the 5 canonical fields, e.g. "Security Deposit")
+    // - by code, since that's the only stable identifier across months.
+    const ytdComponentSum = (code: string) => ytdPayslips.reduce(
+      (s, p: any) => s + (p.componentLines || []).filter((l: any) => l.code === code).reduce((ss: number, l: any) => ss + (l.amount || 0), 0),
+      0,
+    );
 
     const pdfDoc = await PDFDocument.create();
     pdfDoc.registerFontkit(fontkit);
@@ -2427,6 +2511,18 @@ export class HrService {
       ['Leave Deduction', payslip.leaveDeduction, ytdSum('leaveDeduction')],
       ['Other Deductions', payslip.otherDeductions, ytdSum('otherDeductions')],
     ];
+    // Any component beyond the 5 canonical fields each side (e.g. a
+    // custom "Security Deposit" deduction) only ever lived in
+    // componentLines - without this, Total Deductions/Net Payable below
+    // would correctly include it (see createPayslip) while the itemized
+    // rows above it silently didn't add up to that total.
+    for (const l of (payslip.componentLines || []) as any[]) {
+      if (l.type === 'earning' && !HrService.CANONICAL_EARNING_CODES.includes(l.code)) {
+        earnings.push([l.name || l.code, l.amount || 0, ytdComponentSum(l.code)]);
+      } else if (l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code)) {
+        deductions.push([l.name || l.code, l.amount || 0, ytdComponentSum(l.code)]);
+      }
+    }
     const drawRows = (colX: number, rows: [string, number, number][]) => {
       let ry = y;
       for (const [label, amt, ytd] of rows) {
