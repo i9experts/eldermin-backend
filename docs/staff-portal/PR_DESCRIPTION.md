@@ -1,6 +1,6 @@
 # Staff portal: backend for the Eldermin Teacher app
 
-Branch `feat/staff-portal` -> `main`. Rebased onto `origin/main` e2486db (PR #130) on 2026-10-06. Everything is additive; no existing route, response field or schema was removed or changed for non-teacher roles. No production or staging database was touched at any point; all tests use fakes.
+Branch `feat/staff-portal` -> `main`. Rebased on origin/main fb9225d on 2026-10-07 (previously e2486db, PR #130, on 2026-10-06); the rebase of all 19 commits applied with zero conflicts, so there are no resolved-conflict hunks (main's payroll/payslip-edit/deductions fix and CR80 ID-card changes in hr.controller.ts, hr.service.ts and id-cards/* merged cleanly alongside our leave guards and StaffNotifier hooks; build and 772 tests pass). Everything is additive; no existing route, response field or schema was removed or changed for non-teacher roles. No production or staging database was touched at any point; all tests use fakes.
 
 ## What this PR contains
 
