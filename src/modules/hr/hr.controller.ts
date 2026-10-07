@@ -337,6 +337,11 @@ export class HrController {
   @Post('payslips')
   createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
 
+  @Patch('payslips/:id')
+  updatePayslip(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.hrService.updatePayslip(req.user.tenantId, id, body);
+  }
+
   // ── SALARY COMPONENTS (payroll configuration root system) ──────────────
 
   @Get('salary-components')

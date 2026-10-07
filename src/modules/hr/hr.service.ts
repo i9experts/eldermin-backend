@@ -1771,6 +1771,69 @@ export class HrService {
     return payslip;
   }
 
+  // A canonical field (basicSalary, incomeTax, ...) is duplicated as its
+  // own componentLines entry (PAY-01) - these codes are excluded when
+  // summing "extra" earnings/deductions from componentLines below, so a
+  // dynamic component genuinely not covered by a canonical field (e.g. a
+  // custom "Hostel Fee" deduction) is the only thing counted on top.
+  private static readonly CANONICAL_EARNING_CODES = ['BASIC', 'HRA', 'TRANSPORT', 'MEDICAL'];
+  private static readonly CANONICAL_DEDUCTION_CODES = ['TAX', 'PF'];
+
+  /** Admin correction for a payslip already generated - e.g. the school
+   * reported from a complaint that a deduction or the logo was missing,
+   * fixed since, but the already-generated payslip for a past month still
+   * needs the numbers corrected by hand rather than regenerating the
+   * whole run. Blocked once this specific payslip is already paid or
+   * already posted to the ledger (postPayslipToLedger) - editing
+   * retroactively would desync Finance's books from what was actually
+   * booked, same rule deletePayrollRun already applies per-payslip. */
+  async updatePayslip(tenantId: string, id: string, data: any) {
+    const payslip: any = await this.payslipModel.findOne({ _id: id, tenantId: this.newTid(tenantId) });
+    if (!payslip) throw new NotFoundException('Payslip not found');
+    if (payslip.status === 'paid' || payslip.postedToFinance) {
+      throw new BadRequestException('This payslip is already paid/posted to Finance and can no longer be edited.');
+    }
+
+    const EDITABLE_FIELDS = [
+      'basicSalary', 'hra', 'transportAllowance', 'medicalAllowance', 'otherAllowances',
+      'incomeTax', 'providentFund', 'loanDeduction', 'leaveDeduction', 'otherDeductions',
+      'presentDays', 'absentDays', 'leaveDays',
+    ];
+    const patch: any = {};
+    for (const f of EDITABLE_FIELDS) if (data[f] !== undefined) patch[f] = Number(data[f]) || 0;
+    if (Array.isArray(data.componentLines)) {
+      patch.componentLines = data.componentLines.map((l: any) => ({ code: l.code, name: l.name, type: l.type, amount: Number(l.amount) || 0 }));
+    }
+
+    const merged = { ...payslip.toObject(), ...patch };
+    const lines: any[] = merged.componentLines || [];
+    const extraEarnings = lines.filter((l) => l.type === 'earning' && !HrService.CANONICAL_EARNING_CODES.includes(l.code)).reduce((s, l) => s + (l.amount || 0), 0);
+    const extraDeductions = lines.filter((l) => l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code)).reduce((s, l) => s + (l.amount || 0), 0);
+
+    const grossSalary = (merged.basicSalary || 0) + (merged.hra || 0) + (merged.transportAllowance || 0) + (merged.medicalAllowance || 0) + (merged.otherAllowances || 0) + extraEarnings;
+    const totalDeductions = (merged.incomeTax || 0) + (merged.providentFund || 0) + (merged.loanDeduction || 0) + (merged.leaveDeduction || 0) + (merged.otherDeductions || 0) + extraDeductions;
+    patch.grossSalary = grossSalary;
+    patch.totalDeductions = totalDeductions;
+    patch.netSalary = grossSalary - totalDeductions;
+
+    const updated = await this.payslipModel.findOneAndUpdate({ _id: id }, { $set: patch }, { new: true }).lean();
+
+    // Keep the parent run's own aggregate totals (shown on the Payroll
+    // Runs table) in sync with the correction - otherwise the run's
+    // summary row would silently drift from the sum of its own payslips.
+    const runTotals = await this.payslipModel.aggregate([
+      { $match: { payrollRunId: payslip.payrollRunId } },
+      { $group: { _id: null, gross: { $sum: '$grossSalary' }, ded: { $sum: '$totalDeductions' }, net: { $sum: '$netSalary' } } },
+    ]);
+    if (runTotals[0]) {
+      await this.payrollRunModel.updateOne(
+        { _id: payslip.payrollRunId },
+        { $set: { totalGrossSalary: runTotals[0].gross, totalDeductions: runTotals[0].ded, totalNetSalary: runTotals[0].net } },
+      );
+    }
+    return updated;
+  }
+
   /** Resolves each of the given SalaryComponent codes to its currently
    * configured GL accountCode. Used both to validate a whole payroll run
    * before it's allowed to be approved (see validatePayrollRunAccountMappings)
@@ -2272,11 +2335,27 @@ export class HrService {
     const fmt = (n: number) => Number(n || 0).toLocaleString();
     const currency = payslip.currency || 'PKR';
 
-    // ── Letterhead ──────────────────────────────────────────────────────
-    drawText(schoolName, margin, y, { size: 15, f: bold, color: navy });
+    // ── Letterhead (logo best-effort - a missing/unreachable logo must
+    // never block the payslip itself from generating) ──────────────────
+    let logoImg: any = null;
+    if ((school as any)?.logo) {
+      try {
+        const res = await fetch((school as any).logo);
+        if (res.ok) {
+          const bytes = await res.arrayBuffer();
+          const isPng = (res.headers.get('content-type') || '').includes('png') || String((school as any).logo).toLowerCase().includes('.png');
+          logoImg = isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+        }
+      } catch { /* non-fatal - render without the logo */ }
+    }
+    const logoH = 32;
+    const logoW = logoImg ? (logoImg.width / logoImg.height) * logoH : 0;
+    const textX = margin + (logoImg ? logoW + 10 : 0);
+    if (logoImg) page.drawImage(logoImg, { x: margin, y: y - logoH + 11, width: logoW, height: logoH });
+    drawText(schoolName, textX, y, { size: 15, f: bold, color: navy });
     drawRight('Payslip For the Month', pageWidth - margin, y + 2, { size: 8.5, color: gray });
     y -= 14;
-    if (schoolLocation) drawText(schoolLocation, margin, y, { size: 8.5, color: gray });
+    if (schoolLocation) drawText(schoolLocation, textX, y, { size: 8.5, color: gray });
     drawRight(payslip.periodLabel || `${payslip.month}/${payslip.year}`, pageWidth - margin, y - 2, { size: 12, f: bold, color: navy });
     y -= 22;
     page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: gray });
