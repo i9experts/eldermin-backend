@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { TeachingService } from './teaching.service';
 import { PTMService } from './ptm.service';
 import { BehaviourController } from '../../behaviour/behaviour.controller';
+const A1 = 'a'.repeat(24); const P1 = 'b'.repeat(24); const M1 = 'c'.repeat(24); // well-formed ObjectId strings
 
 // Fakes only (no DB). Covers the "trusts body identity" fix for the TEACHER role.
 
@@ -95,14 +96,14 @@ describe('TeachingService updateAssignment / deleteAssignment: ownership', () =>
 
   it('403 when a teacher updates another teacher\'s assignment', async () => {
     const { service } = makeTeaching({ existingAssignment: mk(oid()) });
-    await expect(service.updateAssignment('t', 'a1', { title: 'x' }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.updateAssignment('t', A1, { title: 'x' }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('teacher may update own assignment (Staff id and legacy TeacherProfile id)', async () => {
     for (const owner of [me.staffId, me.profileId]) {
       const doc = mk(owner);
       const { service } = makeTeaching({ existingAssignment: doc });
-      await service.updateAssignment('t', 'a1', { title: 'x' }, teacherUser());
+      await service.updateAssignment('t', A1, { title: 'x' }, teacherUser());
       expect(doc.save).toHaveBeenCalled();
     }
   });
@@ -110,7 +111,7 @@ describe('TeachingService updateAssignment / deleteAssignment: ownership', () =>
   it('teacher cannot reassign teacherId to another teacher', async () => {
     const doc = mk(me.staffId);
     const { service } = makeTeaching({ existingAssignment: doc });
-    await expect(service.updateAssignment('t', 'a1', { teacherId: oid().toString() }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.updateAssignment('t', A1, { teacherId: oid().toString() }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
     expect(doc.save).not.toHaveBeenCalled();
   });
 
@@ -118,14 +119,14 @@ describe('TeachingService updateAssignment / deleteAssignment: ownership', () =>
     const doc: any = mk(oid());
     const { service, staffModel } = makeTeaching({ existingAssignment: doc });
     const other = oid().toString();
-    await service.updateAssignment('t', 'a1', { teacherId: other }, teacherUser({ role: 'principal' }));
+    await service.updateAssignment('t', A1, { teacherId: other }, teacherUser({ role: 'principal' }));
     expect(doc.teacherId).toBe(other);
     expect(staffModel.findOne).not.toHaveBeenCalled();
   });
 
   it('403 when a teacher deletes another teacher\'s assignment', async () => {
     const { service } = makeTeaching({ existingAssignment: { teacherId: oid() } });
-    await expect(service.deleteAssignment('t', 'a1', teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.deleteAssignment('t', A1, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 
@@ -148,9 +149,9 @@ describe('TeachingService lesson plans: teacher identity', () => {
 
   it('update: another teacher\'s plan -> 403; own plan ok and tenancy fields stripped', async () => {
     const a = makeTeaching({ existingPlan: { teacherId: oid() } });
-    await expect(a.service.updateLessonPlan('t', 'p1', { topic: 'x' }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(a.service.updateLessonPlan('t', P1, { topic: 'x' }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
     const b = makeTeaching({ existingPlan: { teacherId: me.profileId } });
-    await b.service.updateLessonPlan('t', 'p1', { topic: 'x', tenantId: 'evil', teacherId: me.staffId.toString() }, teacherUser());
+    await b.service.updateLessonPlan('t', P1, { topic: 'x', tenantId: 'evil', teacherId: me.staffId.toString() }, teacherUser());
     const set = b.lessonPlanModel.findOneAndUpdate.mock.calls[0][1].$set;
     expect(set.tenantId).toBeUndefined();
     expect(String(set.teacherId)).toBe(me.staffId.toString());
@@ -158,7 +159,7 @@ describe('TeachingService lesson plans: teacher identity', () => {
 
   it('update: principal unchanged (raw $set, no lookup)', async () => {
     const { service, lessonPlanModel, staffModel } = makeTeaching();
-    await service.updateLessonPlan('t', 'p1', { teacherId: 'x' }, teacherUser({ role: 'principal' }));
+    await service.updateLessonPlan('t', P1, { teacherId: 'x' }, teacherUser({ role: 'principal' }));
     expect(lessonPlanModel.findOneAndUpdate.mock.calls[0][1]).toEqual({ $set: { teacherId: 'x' } });
     expect(staffModel.findOne).not.toHaveBeenCalled();
   });
@@ -175,7 +176,7 @@ describe('TeachingService lesson plans: teacher cannot self-approve', () => {
 
   it.each(forbiddenStatuses)('update to status %s -> 403 and nothing is written', async (status) => {
     const { service, lessonPlanModel } = makeTeaching({ existingPlan: { teacherId: me.staffId } });
-    await expect(service.updateLessonPlan('t', 'p1', { status }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.updateLessonPlan('t', P1, { status }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
     expect(lessonPlanModel.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
@@ -184,7 +185,7 @@ describe('TeachingService lesson plans: teacher cannot self-approve', () => {
     await c.service.createLessonPlan('t', oid().toString(), { status }, teacherUser());
     expect(c.lessonPlanModel.create.mock.calls[0][0].status).toBe(status);
     const u = makeTeaching({ existingPlan: { teacherId: me.staffId } });
-    await u.service.updateLessonPlan('t', 'p1', { status }, teacherUser());
+    await u.service.updateLessonPlan('t', P1, { status }, teacherUser());
     expect(u.lessonPlanModel.findOneAndUpdate.mock.calls[0][1].$set.status).toBe(status);
   });
 
@@ -196,7 +197,7 @@ describe('TeachingService lesson plans: teacher cannot self-approve', () => {
     for (const k of ['approvedBy', 'approvedAt', 'approverNotes', 'rejectionReason']) expect(created[k]).toBeUndefined();
 
     const u = makeTeaching({ existingPlan: { teacherId: me.staffId } });
-    await u.service.updateLessonPlan('t', 'p1',
+    await u.service.updateLessonPlan('t', P1,
       { topic: 'x', approvedBy: oid().toString(), approvedAt: new Date(), approverNotes: 'ok', rejectionReason: 'x' }, teacherUser());
     const set = u.lessonPlanModel.findOneAndUpdate.mock.calls[0][1].$set;
     expect(set.topic).toBe('x');
@@ -205,7 +206,7 @@ describe('TeachingService lesson plans: teacher cannot self-approve', () => {
 
   it('principal can still set any status and approver fields (unchanged)', async () => {
     const { service, lessonPlanModel } = makeTeaching();
-    await service.updateLessonPlan('t', 'p1', { status: 'approved', approverNotes: 'good' }, teacherUser({ role: 'principal' }));
+    await service.updateLessonPlan('t', P1, { status: 'approved', approverNotes: 'good' }, teacherUser({ role: 'principal' }));
     expect(lessonPlanModel.findOneAndUpdate.mock.calls[0][1]).toEqual({ $set: { status: 'approved', approverNotes: 'good' } });
     await service.createLessonPlan('t', oid().toString(), { status: 'approved' }, teacherUser({ role: 'principal' }));
     expect(lessonPlanModel.create.mock.calls[0][0].status).toBe('approved');
@@ -238,8 +239,8 @@ describe('PTMService: teacher identity', () => {
 
   it('reschedule / outcome on another teacher\'s meeting -> 403', async () => {
     const { service } = makePtm({ teacherId: oid() });
-    await expect(service.reschedule('m1', 't', { scheduledDate: '2026-02-01' }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
-    await expect(service.recordOutcome('m1', 't', { parentAttended: true }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.reschedule(M1, 't', { scheduledDate: '2026-02-01' }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.recordOutcome(M1, 't', { parentAttended: true }, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 

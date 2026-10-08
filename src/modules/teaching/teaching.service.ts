@@ -1,4 +1,5 @@
 import { Optional, Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { assertValidObjectId } from '../../common/utils/object-id.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -205,6 +206,7 @@ export class TeachingService {
   }
 
   async updateLessonPlan(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'lesson plan');
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
       const existing: any = await this.lessonPlanModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).select('teacherId').lean();
@@ -396,6 +398,7 @@ Rules:
   }
 
   async approveLessonPlan(tenantId: string, id: string, userId: string, notes: string) {
+    assertValidObjectId(id, 'lesson plan');
     const result = await this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'approved', approvedBy: new Types.ObjectId(userId), approvedAt: new Date(), approverNotes: notes } },
@@ -409,6 +412,7 @@ Rules:
   }
 
   async rejectLessonPlan(tenantId: string, id: string, reason: string) {
+    assertValidObjectId(id, 'lesson plan');
     const result = await this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'rejected', rejectionReason: reason } },
@@ -951,6 +955,7 @@ Rules:
   // "Assign to Class" on an existing draft still materializes the
   // student roster + fires the notification, not just brand-new creates.
   async updateAssignment(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'assignment');
     const existing = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!existing) throw new NotFoundException('Assignment not found');
     if (isTeacherCaller(requestingUser)) {
@@ -973,6 +978,7 @@ Rules:
   }
 
   async deleteAssignment(tenantId: string, id: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'assignment');
     const assignment = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!assignment) throw new NotFoundException('Assignment not found');
     if (isTeacherCaller(requestingUser)) {
@@ -1045,6 +1051,7 @@ Rules:
   // ── ASSIGNMENT SUBMISSIONS (grading) ────────────────────────────────────────────
 
   async getSubmissionsForAssignment(tenantId: string, assignmentId: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(assignmentId, 'assignment');
     const assignment = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
     if (!assignment) throw new NotFoundException('Assignment not found');
     if (requestingUser) {
@@ -1059,6 +1066,8 @@ Rules:
   }
 
   async gradeSubmission(tenantId: string, assignmentId: string, submissionId: string, dto: GradeSubmissionDto, requestingUser?: ScopedUser) {
+    assertValidObjectId(assignmentId, 'assignment');
+    assertValidObjectId(submissionId, 'submission');
     const submission = await this.submissionModel.findOne({ _id: submissionId, tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) });
     if (!submission) throw new NotFoundException('Submission not found');
     if (dto.grade > submission.maxGrade) {
@@ -1165,6 +1174,7 @@ Rules:
   }
 
   async updateBehaviourNote(tenantId: string, id: string, data: any) {
+    assertValidObjectId(id, 'behaviour record');
     return this.behaviourModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: data },

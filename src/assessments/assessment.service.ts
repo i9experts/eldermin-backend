@@ -3,6 +3,7 @@
 // ============================================================
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
+import { assertValidObjectId } from '../common/utils/object-id.util';
 import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -1576,6 +1577,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async getQuizAttemptForReview(schoolSlug: string, attemptId: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(attemptId, 'quiz attempt');
     const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug }).lean();
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
     if (isTeacherCaller(requestingUser)) {
@@ -1598,6 +1600,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
    * the MarkEntry - same completion path submitQuizAttempt uses when an
    * attempt happens to need no manual grading at all. */
   async gradeQuizAttempt(schoolSlug: string, attemptId: string, grades: { questionId: string; marksAwarded: number }[], gradedBy: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(attemptId, 'quiz attempt');
     const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug });
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
     if (attempt.status === 'in_progress') throw new BadRequestException('This attempt has not been submitted yet.');
@@ -1886,6 +1889,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       if (!Object.keys($set).length) return this.reportCardModel.findOne({ _id: id, schoolSlug });
       return this.reportCardModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
     }
+    assertValidObjectId(id, 'report card');
     return this.reportCardModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: dto }, { new: true },
     );

@@ -44,6 +44,7 @@ import {
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
 import { normalizePhone } from '../common/utils/phone.util';
+import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHER_STUDENT_SELECT, stripTeacherSensitive } from './teacher-student-projection.util';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 
@@ -637,6 +638,7 @@ export class StudentsService {
   }
 
   async getStudentById(id: string, schoolSlug: string): Promise<Student> {
+    assertValidObjectId(id, 'student');
     const student = await this.studentModel.findOne({ _id: id, schoolSlug });
     if (!student) throw new NotFoundException('Student not found');
     return student;
@@ -1495,6 +1497,7 @@ export class StudentsService {
   // STUDENT 360 — Full Profile
   // ============================================================
   async getStudent360(id: string, schoolSlug: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'student');
     // B5: the teacher role never receives (and we never even read) fee data and
     // gets a DB-side exclusion projection of the student document.
     const teacher = isTeacherCaller(requestingUser);
@@ -1886,6 +1889,7 @@ export class StudentsService {
   }
 
   async getStudentAttendanceSummary(studentId: string, schoolSlug: string, month?: string) {
+    assertValidObjectId(studentId, 'student');
     const filter: any = { studentId: new Types.ObjectId(studentId), schoolSlug };
     if (month) {
       const [y, m] = month.split('-').map(Number);
