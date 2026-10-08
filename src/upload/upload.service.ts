@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import * as multer from 'multer';
@@ -16,6 +16,8 @@ export const ALLOWED_TYPES = {
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
 };
+
+export const STORAGE_NOT_CONFIGURED_MESSAGE = 'File uploads are not available on this server (storage is not configured).';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -35,11 +37,23 @@ export class UploadService {
     this.bucket = process.env.AWS_S3_BUCKET || 'eldermin-files';
   }
 
+  /** True only when S3 credentials and a bucket are present (checked on every call, never contacts AWS). */
+  isStorageConfigured(): boolean {
+    const set = (v?: string) => !!v && v.trim().length > 0;
+    return set(process.env.AWS_ACCESS_KEY_ID) && set(process.env.AWS_SECRET_ACCESS_KEY) && set(this.bucket);
+  }
+
+  /** Throws 503 BEFORE any SDK call when storage is not configured. */
+  private assertStorageConfigured(): void {
+    if (!this.isStorageConfigured()) throw new ServiceUnavailableException(STORAGE_NOT_CONFIGURED_MESSAGE);
+  }
+
   async uploadFile(
     file: Express.Multer.File,
     folder: string,
     schoolSlug: string,
   ): Promise<{ url: string; key: string; fileName: string; fileSize: number; fileType: string }> {
+    this.assertStorageConfigured();
     if (!file) throw new BadRequestException('No file provided');
     if (file.size > MAX_FILE_SIZE) throw new BadRequestException('File too large. Max 10MB allowed.');
 
@@ -77,10 +91,12 @@ export class UploadService {
     folder: string,
     schoolSlug: string,
   ) {
+    this.assertStorageConfigured();
     return Promise.all(files.map(f => this.uploadFile(f, folder, schoolSlug)));
   }
 
   async deleteFile(key: string): Promise<void> {
+    this.assertStorageConfigured();
     const command = new DeleteObjectCommand({ Bucket: this.bucket, Key: key });
     await this.s3.send(command);
   }
@@ -89,6 +105,7 @@ export class UploadService {
   // key - used where the backend itself needs to process an upload
   // (e.g. OMR image analysis), rather than just serving it to a browser.
   async getFileBuffer(key: string): Promise<Buffer> {
+    this.assertStorageConfigured();
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
     const response = await this.s3.send(command);
     const chunks: Buffer[] = [];
@@ -99,6 +116,7 @@ export class UploadService {
   }
 
   async getSignedUrl(key: string, expiresIn = 3600): Promise<string> {
+    this.assertStorageConfigured();
     const command = new GetObjectCommand({ Bucket: this.bucket, Key: key });
     return getSignedUrl(this.s3, command, { expiresIn });
   }
