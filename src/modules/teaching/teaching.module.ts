@@ -16,6 +16,7 @@ import { ElectiveGroup, ElectiveGroupSchema } from './schemas/elective-group.sch
 import { DutyRoster, DutyRosterSchema } from './schemas/duty-roster.schema';
 import { TimetableVariant, TimetableVariantSchema } from './schemas/timetable-variant.schema';
 import { ExamSession, ExamSessionSchema } from './schemas/exam-session.schema';
+import { ClassDiaryEntry, ClassDiaryEntrySchema } from './schemas/class-diary.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
@@ -49,6 +50,7 @@ import { ExamController } from './exam.controller';
       { name: DutyRoster.name, schema: DutyRosterSchema },
       { name: TimetableVariant.name, schema: TimetableVariantSchema },
       { name: ExamSession.name, schema: ExamSessionSchema },
+      { name: ClassDiaryEntry.name, schema: ClassDiaryEntrySchema },
       { name: Staff.name, schema: StaffSchema },
       { name: Student.name, schema: StudentSchema },
       { name: User.name, schema: UserSchema },

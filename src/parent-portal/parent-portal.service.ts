@@ -14,6 +14,7 @@ import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahA
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { AssignmentSubmission, AssignmentSubmissionDocument } from '../modules/teaching/schemas/assignment-submission.schema';
+import { ClassDiaryEntry, ClassDiaryEntryDocument } from '../modules/teaching/schemas/class-diary.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { Book, BookDocument } from '../modules/academics/schemas/book.schema';
 import { BookIssue, BookIssueDocument } from '../modules/academics/schemas/book-issue.schema';
@@ -35,6 +36,7 @@ import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema'
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
+import { PdfService } from '../pdf/pdf.service';
 
 @Injectable()
 export class ParentPortalService {
@@ -49,6 +51,7 @@ export class ParentPortalService {
     @InjectModel(Timetable.name) private timetableModel: Model<TimetableDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(AssignmentSubmission.name) private submissionModel: Model<AssignmentSubmissionDocument>,
+    @InjectModel(ClassDiaryEntry.name) private classDiaryModel: Model<ClassDiaryEntryDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(Book.name) private bookModel: Model<BookDocument>,
     @InjectModel(BookIssue.name) private bookIssueModel: Model<BookIssueDocument>,
@@ -67,6 +70,7 @@ export class ParentPortalService {
     private assessmentService: AssessmentService,
     private certificatesService: CertificatesService,
     private uploadService: UploadService,
+    private pdfService: PdfService,
   ) {}
 
   // ── Admin: link a guardian's login to their child/children ─────
@@ -251,6 +255,34 @@ export class ParentPortalService {
       }
     }
     return submission.toObject();
+  }
+
+  // ── Class Diary (shared daily classwork/homework log) ──────────
+  async getClassDiary(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    const filter: any = {
+      tenantId, gradeLevel: gradeMatcher((student as any).currentGrade), shared: true,
+      $and: [
+        { $or: [{ sectionName: sectionMatcher((student as any).currentSection) }, { sectionName: { $exists: false } }, { sectionName: null }] },
+      ],
+    };
+    if ((student as any).campusId) filter.$and.push({ $or: [{ campusId: new Types.ObjectId((student as any).campusId) }, { campusId: null }] });
+    return this.classDiaryModel.find(filter).sort({ diaryDate: -1 }).limit(100).lean();
+  }
+
+  async downloadClassDiaryPdf(studentId: string, diaryId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    const entry = await this.classDiaryModel.findOne({ _id: diaryId, tenantId, shared: true }).lean();
+    if (!entry) throw new NotFoundException('Class diary entry not found');
+    if (!sameGrade((student as any).currentGrade, entry.gradeLevel) ||
+        (entry.sectionName && !sameSection((student as any).currentSection, entry.sectionName))) {
+      throw new NotFoundException('Class diary entry not found');
+    }
+    return this.pdfService.generateClassDiaryPdf(schoolSlug, entry, requestingUser.userId || 'parent');
   }
 
   // ── Learning Resources (from delivered lesson plans covering this student's grade) ──

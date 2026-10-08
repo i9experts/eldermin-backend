@@ -10,6 +10,7 @@ import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAss
 import { Timetable, TimetableSchema } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
 import { AssignmentSubmission, AssignmentSubmissionSchema } from '../modules/teaching/schemas/assignment-submission.schema';
+import { ClassDiaryEntry, ClassDiaryEntrySchema } from '../modules/teaching/schemas/class-diary.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { Book, BookSchema } from '../modules/academics/schemas/book.schema';
 import { BookIssue, BookIssueSchema } from '../modules/academics/schemas/book-issue.schema';
@@ -36,6 +37,7 @@ import { AuthModule } from '../modules/auth/auth.module';
 import { AssessmentModule } from '../assessments/assessment.module';
 import { CertificatesModule } from '../modules/certificates/certificates.module';
 import { UploadModule } from '../upload/upload.module';
+import { PdfModule } from '../pdf/pdf.module';
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
@@ -53,6 +55,7 @@ import { ParentAuthController } from './parent-auth.controller';
       { name: Timetable.name, schema: TimetableSchema },
       { name: Assignment.name, schema: AssignmentSchema },
       { name: AssignmentSubmission.name, schema: AssignmentSubmissionSchema },
+      { name: ClassDiaryEntry.name, schema: ClassDiaryEntrySchema },
       { name: Staff.name, schema: StaffSchema },
       { name: Book.name, schema: BookSchema },
       { name: BookIssue.name, schema: BookIssueSchema },
@@ -76,6 +79,7 @@ import { ParentAuthController } from './parent-auth.controller';
     AssessmentModule,
     CertificatesModule,
     UploadModule,
+    PdfModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
   providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor],

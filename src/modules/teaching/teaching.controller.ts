@@ -184,6 +184,33 @@ export class TeachingController {
     return this.teachingService.gradeSubmission(req.user.tenantId, id, submissionId, body, req.user);
   }
 
+  // ── CLASS DIARY ───────────────────────────────────────────────────────────────
+
+  @Get('class-diary')
+  getClassDiaryEntries(@Request() req, @Query() q: any) { return this.teachingService.getClassDiaryEntries(req.user.tenantId, q, req.user); }
+
+  @Get('class-diary/:id')
+  getClassDiaryEntry(@Request() req, @Param('id') id: string) { return this.teachingService.getClassDiaryEntry(req.user.tenantId, id); }
+
+  @Post('class-diary')
+  createClassDiaryEntry(@Request() req, @Body() body: any) { return this.teachingService.createClassDiaryEntry(req.user.tenantId, req.user.institutionId, body, req.user); }
+
+  @Patch('class-diary/:id')
+  updateClassDiaryEntry(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateClassDiaryEntry(req.user.tenantId, id, body); }
+
+  @Delete('class-diary/:id')
+  deleteClassDiaryEntry(@Request() req, @Param('id') id: string) { return this.teachingService.deleteClassDiaryEntry(req.user.tenantId, id); }
+
+  @Post('class-diary/:id/share')
+  shareClassDiaryEntry(@Request() req, @Param('id') id: string) { return this.teachingService.shareClassDiaryEntry(req.user.tenantId, req.user.schoolSlug, id, req.user); }
+
+  @Get('class-diary/:id/pdf')
+  async downloadClassDiaryPdf(@Request() req, @Param('id') id: string, @Query('templateId') templateId: string, @Res() res: Response) {
+    const pdf = await this.teachingService.generateClassDiaryPdf(req.user.tenantId, req.user.schoolSlug, id, req.user.userId, templateId || undefined);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="class-diary-${id}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
   // ── BEHAVIOUR NOTES ───────────────────────────────────────────────────────────
 
   @Get('behaviour')

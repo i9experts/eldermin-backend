@@ -2226,6 +2226,84 @@ ${css}
     return pdf;
   }
 
+  /**
+   * Renders a teacher's daily Class Diary (period-by-period classwork +
+   * homework log) as a letterheaded PDF - the sections mirror schools'
+   * existing paper "Daily Reminder Contents" diary practice: one block per
+   * subject/period, each with a title, classwork summary and optional
+   * homework assignment (routine, non-academic periods like a snack break
+   * may have no homework at all).
+   */
+  async generateClassDiaryPdf(
+    schoolSlug: string,
+    diary: any,
+    userId: string,
+    templateId?: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const template = await this.getTemplateForType(schoolSlug, 'class_diary', templateId);
+    const letterheadHtml = this.buildLetterheadHtml(template, school as any);
+    const primaryColor = template.letterhead?.primaryColor || '#0C447C';
+    const accentColor = template.letterhead?.accentColor || '#EF9F27';
+
+    const diaryDate = diary.diaryDate ? new Date(diary.diaryDate) : new Date();
+    const dateStr = diaryDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+    const sections = (diary.periods || []).map((p: any) => `
+      <div class="section">
+        <div class="section-head">${(p.subject || '').toUpperCase()}${p.title ? ` — ${p.title}` : ''}</div>
+        <table class="fields">
+          ${p.description ? `<tr><td class="label">Description</td><td>${p.description}</td></tr>` : ''}
+          ${p.classworkDescription ? `<tr><td class="label">Classwork</td><td>${p.classworkDescription}</td></tr>` : ''}
+          ${p.homeworkDescription ? `<tr><td class="label">Homework</td><td>${p.homeworkDescription}</td></tr>` : ''}
+        </table>
+      </div>`).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; margin: 0; padding: 18mm 14mm; }
+  h1 { font-size: 18px; margin: 18px 0 2px; color: ${primaryColor}; }
+  .sub { font-size: 12px; color: #6B7A90; margin-bottom: 16px; }
+  .section { border: 1px solid #E2E8F0; border-radius: 6px; margin-bottom: 10px; overflow: hidden; page-break-inside: avoid; }
+  .section-head { background: ${primaryColor}; color: #fff; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 7px 10px; }
+  table.fields { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.fields td { padding: 7px 10px; vertical-align: top; border-top: 1px solid #F1F5F9; }
+  table.fields td.label { width: 110px; font-weight: 600; color: ${accentColor}; }
+  .foot { margin-top: 16px; font-size: 9.5px; color: #94A3B8; }
+</style>
+</head>
+<body>
+  ${letterheadHtml}
+  <h1>Class Diary — ${diary.gradeLevel}${diary.sectionName ? ` (${diary.sectionName})` : ''}</h1>
+  <p class="sub">Date: ${dateStr}${diary.teacherName ? ` &nbsp;|&nbsp; Teacher: ${diary.teacherName}` : ''}</p>
+  ${sections}
+  <p class="foot">Generated ${new Date().toLocaleDateString('en-GB')}</p>
+</body>
+</html>`;
+
+    const pdf = await this.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'class_diary',
+      referenceId: String(diary._id || ''),
+      referenceName: `${diary.gradeLevel} ${diary.sectionName || ''} — ${dateStr}`,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
   /** Loads a Payment (with invoice/student context) and renders a fee receipt. */
   /**
    * Generates the payment receipt as a real PDF using pdf-lib. Previously

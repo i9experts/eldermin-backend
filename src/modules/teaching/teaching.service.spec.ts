@@ -40,6 +40,7 @@ function makeService(existingPeriods: any[]) {
     noop, // behaviourModel
     noop, // electiveGroupModel
     dutyRosterModel,
+    noop, // classDiaryModel
     noop, // staffModel
     noop, // userModel
     noop, // notificationModel
