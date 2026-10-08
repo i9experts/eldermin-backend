@@ -146,6 +146,12 @@ export class Question {
   @Prop() correctAnswer: string;     // for short/long/fill_blank
   @Prop() answerExplanation: string;
   @Prop({ default: 1 }) marks: number;
+  // Number of ruled answer lines to print under this question on the exam
+  // paper PDF - null/unset falls back to a sensible default computed from
+  // type/marks (see AssessmentService.defaultAnswerLines) rather than the
+  // single hardcoded line every non-MCQ question used to get regardless
+  // of how much space an 80-100 word composition actually needs.
+  @Prop({ type: Number, default: null }) answerLines: number | null;
   @Prop({ type: [String], default: [] }) tags: string[];
 
   @Prop() addedBy: string;
