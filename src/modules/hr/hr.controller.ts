@@ -334,6 +334,11 @@ export class HrController {
     return this.hrService.recomputePayslipTotals(req.user.tenantId, req.user.schoolSlug, body.dryRun !== false);
   }
 
+  @Post('payroll/sync-payslip-statuses')
+  syncPayslipStatuses(@Request() req) {
+    return this.hrService.syncPayslipStatuses(req.user.tenantId);
+  }
+
   // ── PAYSLIPS ──────────────────────────────────────────────────────────
 
   @Get('payslips')
