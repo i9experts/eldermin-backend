@@ -47,6 +47,7 @@ import { AccountingIntegrationsModule } from './modules/accounting-integrations/
 import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
 
+import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-match.selftest';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -68,6 +69,8 @@ import { EventsModule } from './events/events.module';
         minPoolSize: 5,
         serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
+        // B0: widen id filters on Mixed-typed id paths to match string AND ObjectId storage (docs/staff-portal/B0_ID_TYPING.md)
+        connectionFactory: idMatchConnectionFactory,
       },
     ),
     ScheduleModule.forRoot(),
@@ -114,6 +117,7 @@ import { EventsModule } from './events/events.module';
   controllers: [AppController],
   providers: [
     AppService,
+    IdMatchSelfTest,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],

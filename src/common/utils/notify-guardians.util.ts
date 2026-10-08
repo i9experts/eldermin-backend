@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { idMatchIn } from './id-match.util';
 
 export interface GuardianNotice {
   schoolSlug: string;
@@ -23,7 +24,7 @@ export async function notifyGuardiansOfStudents(
     const ids = studentIds.filter((id) => Types.ObjectId.isValid(String(id))).map((id) => new Types.ObjectId(String(id)));
     if (!ids.length || !notice.schoolSlug) return 0;
     const parents = await db.collection('users')
-      .find({ primaryRole: 'parent', isActive: { $ne: false }, guardianOfStudentIds: { $in: ids } })
+      .find({ primaryRole: 'parent', isActive: { $ne: false }, guardianOfStudentIds: idMatchIn(ids) })
       .project({ _id: 1 }).toArray();
     if (!parents.length) return 0;
     const now = new Date();
