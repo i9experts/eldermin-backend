@@ -219,7 +219,9 @@ export class StaffPortalService {
     const filter: any = { staffId: staff._id, schoolSlug: this.slugOf(user) };
     if (query.status === 'open' || query.status === 'closed') filter.status = query.status;
     const items = await this.threadModel.find(filter).sort({ lastMessageAt: -1 }).limit(100).lean();
-    return { items, unreadCount: items.filter((t: any) => t.staffHasUnread).length };
+    // Count over ALL matching threads, not just the 100 returned rows (a cap here made the badge wrong for busy teachers).
+    const unreadCount = await this.threadModel.countDocuments({ ...filter, staffHasUnread: true });
+    return { items, unreadCount };
   }
 
   private async ownThread(user: PortalUser, threadId: string): Promise<MessageThreadDocument> {
@@ -230,10 +232,22 @@ export class StaffPortalService {
     return thread;
   }
 
-  async getThreadMessages(user: PortalUser, threadId: string) {
+  /**
+   * The NEWEST 500 messages, returned oldest -> newest (the previous version sorted ascending and cut at 500, so a long
+   * thread never showed its latest messages). `after` (ISO date) returns only messages created after it, oldest first, so
+   * a polling client does not re-download the whole thread; an invalid `after` is ignored.
+   */
+  async getThreadMessages(user: PortalUser, threadId: string, after?: string) {
     const thread = await this.ownThread(user, threadId);
-    const messages = await this.messageModel.find({ threadId: thread._id, schoolSlug: thread.schoolSlug }).sort({ createdAt: 1 }).limit(500).lean();
-    return { thread: thread.toObject(), messages };
+    const filter: any = { threadId: thread._id, schoolSlug: thread.schoolSlug };
+    const afterDate = after ? new Date(after) : null;
+    if (afterDate && !isNaN(afterDate.getTime())) {
+      filter.createdAt = { $gt: afterDate };
+      const messages = await this.messageModel.find(filter).sort({ createdAt: 1 }).limit(500).lean();
+      return { thread: thread.toObject(), messages };
+    }
+    const newest = await this.messageModel.find(filter).sort({ createdAt: -1 }).limit(500).lean();
+    return { thread: thread.toObject(), messages: newest.reverse() };
   }
 
   async sendMessage(user: PortalUser, threadId: string, dto: SendThreadMessageDto) {

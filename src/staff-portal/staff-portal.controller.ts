@@ -54,7 +54,7 @@ export class StaffPortalController {
   createThread(@Request() req: any, @Body() dto: CreateStaffThreadDto) { return this.service.createThread(req.user, dto); }
 
   @Get('threads/:id/messages')
-  threadMessages(@Request() req: any, @Param('id') id: string) { return this.service.getThreadMessages(req.user, id); }
+  threadMessages(@Request() req: any, @Param('id') id: string, @Query('after') after?: string) { return this.service.getThreadMessages(req.user, id, after); }
 
   @Post('threads/:id/messages')
   @HttpCode(HttpStatus.CREATED)
