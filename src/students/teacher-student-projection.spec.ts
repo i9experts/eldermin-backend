@@ -17,12 +17,20 @@ const guardian = () => ({
 const studentDoc = () => ({
   _id: sid, studentId: 'STU-1', firstName: 'Ali', lastName: 'Khan', preferredName: 'Ally', gender: 'male', photo: 'u',
   currentGrade: 'Grade 5', currentSection: 'A', currentRollNumber: '7', grNo: 'G1', status: 'active', currentAcademicYear: '2025-26',
-  dateOfBirth: new Date('2015-01-01'), address: 'House 1',
+  dateOfBirth: new Date('2015-01-01'), address: 'House 1', town: 'Gulberg', city: 'Lahore', province: 'Punjab', country: 'PK', postalCode: '54000',
+  personalEmail: 'ali@example.com', permanentAddress: 'Village', permanentCity: 'X', permanentProvince: 'P', permanentCountry: 'PK', permanentPostalCode: '1',
+  previousSchoolCity: 'Karachi', homeLocation: { geo: { lat: 1, lng: 2 }, street: 's' }, mailingAddress: 'm',
+  documents: [{ name: 'B-Form', type: 'bform', fileUrl: 'https://s3/x.pdf', status: 'verified' }],
+  hostelResident: true, hostelRoom: 'R1', transportRequired: true, transportRoute: 'Route 7', transportStop: 'Stop 3',
+  transport: { routeName: 'Route 7', stops: ['a'], driverName: 'D', vehicleNo: 'V', pickupAddress: 'p', dropoffAddress: 'd', transportFee: 5 },
   nationalId: '42101-0000000-0', bForm: '42101-7654321-0', passportNumber: 'AB123', visaNo: 'V1', cnic: 'x',
   personalPhone: '1', whatsApp: '2', altPhone: '3', emergencyContactPhone: '4', tutorPhone: '5',
   scholarshipHolder: true, scholarshipDetail: '50%', monthlyTuitionFee: 5000, feeStatus: 'overdue', monthlyFeeArrears: 9000,
   guardians: [guardian(), { ...guardian(), name: 'Mrs Khan', relation: 'mother', isPrimary: false }],
-  medical: { allergies: ['peanuts'], bloodGroup: 'A+', doctorPhone: '021-1' },
+  medical: {
+    allergies: ['peanuts'], emergencyAction: 'Use EpiPen', bloodGroup: 'A+', medications: ['m'], conditions: ['asthma'], doctorName: 'Dr', doctorPhone: '021-1',
+    doctorClinic: 'C', peRestrictions: 'p', dietaryRestrictions: 'd', insuranceProvider: 'i', insurancePolicyNumber: 'n', specialNeedsDetail: 's',
+  },
   customFields: { feeStructure: 'gold', invoices: [{ amount: 1 }], nested: { guardianPhone: '9', keep: 'yes' } },
 });
 const payload360 = () => ({
@@ -33,13 +41,19 @@ const payload360 = () => ({
   assessments: { recent: [{ assessmentTitle: 'Mid', percentage: 80 }] },
 });
 const list = () => ({ data: [studentDoc(), studentDoc()], meta: { total: 2, page: 1, limit: 20, pages: 1 } });
-const ptm = () => ([{ _id: sid, studentName: 'Ali Khan', guardianName: 'Mr Khan', guardianPhone: '0300', guardianEmail: 'khan@example.com', status: 'confirmed' }]);
+const ptm = () => ([{ _id: sid, studentName: 'Ali Khan', guardianName: 'Mr Khan', guardianPhone: '0300', guardianEmail: 'khan@example.com', guardianName2: 'x', status: 'confirmed' }]);
 
 const SENSITIVE_KEYS = [
   'nationalId', 'bForm', 'passportNumber', 'visaNo', 'cnic', 'personalPhone', 'whatsApp', 'whatsapp', 'altPhone', 'emergencyContactPhone',
   'tutorPhone', 'phone', 'mobile', 'landline', 'doctorPhone', 'guardianPhone', 'scholarshipHolder', 'scholarshipDetail',
   'monthlyTuitionFee', 'feeStatus', 'monthlyFeeArrears', 'feeStructure', 'invoices', 'monthlyIncome', 'income', 'employer', 'occupation',
   'fees', 'netAmount', 'discount', 'paidAmount', 'balance',
+  // round 2: email, address, documents, hostel, transport (all but route name), medical (all but allergies/emergencyAction)
+  'email', 'personalEmail', 'guardianEmail', 'address', 'town', 'city', 'province', 'country', 'postalCode', 'permanentAddress', 'permanentCity',
+  'permanentProvince', 'permanentCountry', 'permanentPostalCode', 'previousSchoolCity', 'mailingAddress', 'geo', 'street',
+  'documents', 'fileUrl', 'hostelResident', 'hostelRoom', 'transportRequired', 'transportStop', 'stops', 'driverName', 'vehicleNo',
+  'pickupAddress', 'dropoffAddress', 'transportFee', 'bloodGroup', 'medications', 'conditions', 'doctorName', 'doctorClinic', 'peRestrictions',
+  'dietaryRestrictions', 'insuranceProvider', 'insurancePolicyNumber', 'specialNeedsDetail',
 ];
 function keysDeep(v: any, acc = new Set<string>()): Set<string> {
   if (v === null || typeof v !== 'object' || v instanceof Date || (v as any)._bsontype) return acc;
@@ -67,8 +81,10 @@ const reqOf = (user: any) => ({ user, headers: {} });
 
 describe('B5 deny-list helper', () => {
   it('flags the documented keys and passes the teacher-needed ones', () => {
-    for (const k of SENSITIVE_KEYS) expect(isTeacherDeniedKey(k)).toBe(true);
-    for (const k of ['name', 'relation', 'isPrimary', 'email', 'firstName', 'currentGrade', 'allergies', 'percentage', 'feedback', 'status', 'points']) {
+    const contextual = ['bloodGroup', 'medications', 'conditions', 'doctorName', 'doctorClinic', 'peRestrictions', 'dietaryRestrictions',
+      'insuranceProvider', 'insurancePolicyNumber', 'specialNeedsDetail'];
+    for (const k of SENSITIVE_KEYS.filter(x => !contextual.includes(x))) expect(isTeacherDeniedKey(k)).toBe(true);
+    for (const k of ['name', 'relation', 'isPrimary', 'dateOfBirth', 'allergies', 'emergencyAction', 'transportRoute', 'guardianName', 'firstName', 'currentGrade', 'allergies', 'percentage', 'feedback', 'status', 'points']) {
       expect(isTeacherDeniedKey(k)).toBe(false);
     }
   });
@@ -127,7 +143,10 @@ describe('B5 StudentsController: teacher projection per endpoint', () => {
     expect(res.student.currentGrade).toBe('Grade 5');
     expect(res.student.currentRollNumber).toBe('7');
     expect(res.student.guardians.map((g: any) => [g.name, g.relation, g.isPrimary])).toEqual([['Mr Khan', 'father', true], ['Mrs Khan', 'mother', false]]);
-    expect(res.student.medical.allergies).toEqual(['peanuts']);
+    expect(res.student.medical).toEqual({ allergies: ['peanuts'], emergencyAction: 'Use EpiPen' });
+    expect(res.student.dateOfBirth).toBeInstanceOf(Date);
+    expect(res.student.transportRoute).toBe('Route 7');
+    expect(res.student.transport).toEqual({ routeName: 'Route 7' });
     expect(res.attendance.percentage).toBe(100);
     expect(res.attendance.recent[0].status).toBe('present');
     expect(res.behaviour.totalPoints).toBe(2);
@@ -157,16 +176,59 @@ describe('B5 StudentsController: teacher projection per endpoint', () => {
   });
 });
 
+describe('B5 round 2: kept keys survive on every student-bearing endpoint (deep scan)', () => {
+  const mkStudent = (res: any) => res?.student ?? res?.data?.[0] ?? res?.[0] ?? res;
+  const cases: Array<[string, (c: StudentsController, r: any) => Promise<any>, () => any]> = [
+    ['GET /students', (c, r) => c.getStudents(r, {} as any), list],
+    ['GET /students/:id', (c, r) => c.getStudent(sid.toString(), r), studentDoc],
+    ['GET /students/:id/360', (c, r) => c.getStudent360(sid.toString(), r), payload360],
+  ];
+  for (const [label, call, make] of cases) {
+    it(`${label}: DOB, guardian name/relation/isPrimary, allergies, route name kept; removed keys gone`, async () => {
+      const res = await call(makeController(make()).ctrl, reqOf(teacherU));
+      const st = mkStudent(res);
+      expect(st.dateOfBirth).toBeInstanceOf(Date);
+      expect(st.guardians.map((g: any) => [g.name, g.relation, g.isPrimary])).toEqual([['Mr Khan', 'father', true], ['Mrs Khan', 'mother', false]]);
+      expect(st.guardians[0].email).toBeUndefined();
+      expect(st.medical).toEqual({ allergies: ['peanuts'], emergencyAction: 'Use EpiPen' });
+      expect(st.transportRoute).toBe('Route 7');
+      expect(Object.keys(st).filter(k => /hostel|document|address|email/i.test(k))).toEqual([]);
+      expectClean(res);
+    });
+  }
+  it('guardians list: guardian email gone, name/relation kept', async () => {
+    const res: any = await makeController([guardian()]).ctrl.getGuardians(sid.toString(), 'x', reqOf(teacherU));
+    expect(res[0]).toMatchObject({ name: 'Mr Khan', relation: 'father', isPrimary: true });
+    expect(res[0].email).toBeUndefined();
+  });
+  it('DB-side select excludes the new fields', () => {
+    for (const f of ['guardians.email', 'personalEmail', 'address', 'documents', 'hostelRoom', 'transportStop', 'medical.bloodGroup', 'medical.insurancePolicyNumber']) {
+      expect(TEACHER_STUDENT_SELECT).toContain('-' + f);
+    }
+    expect(TEACHER_STUDENT_SELECT).not.toMatch(/-medical\.allergies|-medical\.emergencyAction|-dateOfBirth|-transportRoute\b/);
+  });
+  it('non-teacher roles keep email/address/documents/medical byte-for-byte', () => {
+    for (const role of OTHER_ROLES) {
+      const p = studentDoc();
+      const out = projectForTeacher({ role }, p);
+      expect(out).toBe(p);
+      expect(out.documents).toHaveLength(1);
+      expect(out.medical.bloodGroup).toBe('A+');
+    }
+  });
+});
+
 describe('B5 PTM controller embeds guardian contact', () => {
   const mk = (data: any) => new PTMController({
     getMeetings: jest.fn(async () => data), getUpcomingForTeacher: jest.fn(async () => data),
     getStudentHistory: jest.fn(async () => data), getMeetingById: jest.fn(async () => data[0]),
   } as any);
-  it('teacher: guardianPhone removed, guardianName/guardianEmail kept', async () => {
+  it('teacher: guardianPhone and guardianEmail removed, guardianName kept', async () => {
     const c = mk(ptm());
     const u = { ...teacherU, tenantId: new Types.ObjectId().toString() };
     for (const res of [await c.getMeetings({ user: u }, {}), await c.getMyUpcoming('t', { user: u }), await c.getStudentHistory('s', { user: u })] as any[]) {
       expect(res[0].guardianPhone).toBeUndefined();
+      expect(res[0].guardianEmail).toBeUndefined();
       expect(res[0].guardianName).toBe('Mr Khan');
       expect(res[0].status).toBe('confirmed');
     }
