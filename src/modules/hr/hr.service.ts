@@ -1606,6 +1606,15 @@ export class HrService {
           await this.postPayslipToLedger(schoolSlug, payslip);
         } catch { /* one payslip's posting failure must not block the rest - shows as a Trial Balance gap, same convention as safePostJournal */ }
       }
+      // Payslip.status was a stubbed field nothing ever set on approval -
+      // every payslip sat at 'draft' forever (looking identical to a run
+      // still awaiting review) right up until the whole run was paid.
+      // 'issued' means "finalized and posted, employee can be shown/given
+      // this payslip" - distinct from the run's own workflow status.
+      await this.payslipModel.updateMany(
+        { tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) },
+        { $set: { status: 'issued' } },
+      );
     }
 
     // Reverses whatever postPayslipToLedger already booked when an
@@ -1620,6 +1629,13 @@ export class HrService {
           await this.reversePayslipLedgerEntry(schoolSlug, payslip);
         } catch { /* same isolation as above */ }
       }
+      // Mirrors the postedToFinance reversal above - an approved run
+      // that gets cancelled instead of paid shouldn't leave its payslips
+      // stuck showing 'issued' when nothing was ever actually paid out.
+      await this.payslipModel.updateMany(
+        { tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) },
+        { $set: { status: 'draft' } },
+      );
     }
 
     // The actual payment action: settles Salaries Payable via a real bank
@@ -1695,7 +1711,38 @@ export class HrService {
     // case-insensitive partial match, same convention as other name search
     // filters in this codebase (e.g. staff search elsewhere in this file).
     if (query.staffName) filter.staffName = { $regex: String(query.staffName).trim(), $options: 'i' };
-    return this.payslipModel.find(filter).sort({ year: -1, month: -1 }).lean();
+    const payslips = await this.payslipModel.find(filter).sort({ year: -1, month: -1 }).lean();
+
+    // Denormalizes the parent run's own workflow status onto each payslip
+    // (as runStatus) - payslip.status is a separate draft/issued/paid
+    // lifecycle (see updatePayrollStatus), but the Payslips tab still
+    // needs to know whether its run is currently 'approved' to offer a
+    // Process Payment action, without a second round trip per row.
+    const runIds = [...new Set(payslips.map((p: any) => String(p.payrollRunId)).filter(Boolean))];
+    if (runIds.length) {
+      const runs = await this.payrollRunModel.find({ _id: { $in: runIds } }).select('status').lean();
+      const statusByRunId = new Map(runs.map((r: any) => [String(r._id), r.status]));
+      for (const p of payslips as any[]) p.runStatus = statusByRunId.get(String(p.payrollRunId)) || null;
+    }
+    return payslips;
+  }
+
+  /** One-time + repeatable sync for payslip.status against its parent
+   * run's actual status - needed for any run that was already approved
+   * before this fix shipped, since updatePayrollStatus only writes
+   * payslip.status going forward, on its own future transitions. Scoped
+   * to 'approved' runs only - a run already fully paid already carries
+   * the correct payslip.status, set at the moment payment was recorded. */
+  async syncPayslipStatuses(tenantId: string) {
+    const approvedRunIds = await this.payrollRunModel.find(
+      { tenantId: this.newTid(tenantId), status: 'approved' },
+    ).distinct('_id');
+    if (!approvedRunIds.length) return { updated: 0 };
+    const res = await this.payslipModel.updateMany(
+      { tenantId: this.newTid(tenantId), payrollRunId: { $in: approvedRunIds }, status: 'draft' },
+      { $set: { status: 'issued' } },
+    );
+    return { updated: res.modifiedCount || 0 };
   }
 
   async createPayslip(tenantId: string, institutionId: string, schoolSlug: string, data: any) {
