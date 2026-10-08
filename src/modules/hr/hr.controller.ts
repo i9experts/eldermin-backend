@@ -331,7 +331,7 @@ export class HrController {
 
   @Post('payroll/recompute-totals')
   recomputePayslipTotals(@Request() req, @Body() body: { dryRun?: boolean }) {
-    return this.hrService.recomputePayslipTotals(req.user.tenantId, body.dryRun !== false);
+    return this.hrService.recomputePayslipTotals(req.user.tenantId, req.user.schoolSlug, body.dryRun !== false);
   }
 
   // ── PAYSLIPS ──────────────────────────────────────────────────────────

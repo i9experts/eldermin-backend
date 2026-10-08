@@ -1800,15 +1800,26 @@ export class HrService {
    * the wrong totalDeductions/netSalary stored today even though the
    * breakup view already showed the missing line correctly (it reads
    * componentLines directly, not the broken stored totals). Dry-run by
-   * default, same convention as Finance's arrears backfill - never
-   * touches a payslip already paid or already posted to Finance (the
-   * same rule updatePayslip/deletePayrollRun already apply). */
-  async recomputePayslipTotals(tenantId: string, dryRun = true) {
+   * default, same convention as Finance's arrears backfill.
+   *
+   * Originally this also excluded any payslip already posted to Finance -
+   * but in the real approve-then-pay workflow, by the time a school
+   * notices a payslip's bottom-line totals are wrong, that run has almost
+   * always already been approved (postedToFinance: true), so the old
+   * filter meant this tool silently found nothing to fix on exactly the
+   * payslips that needed it, while reporting a falsely reassuring "nothing
+   * to fix". A payslip already posted is still detected and corrected here
+   * - its stale ledger entry is reversed and re-posted with the corrected
+   * net salary, mirroring the same reversal already used when an approved
+   * run is cancelled (reversePayslipLedgerEntry). Only a payslip already
+   * marked 'paid' is left untouched, since that's money that has actually
+   * left the building and can only be corrected by hand. */
+  async recomputePayslipTotals(tenantId: string, schoolSlug: string | undefined, dryRun = true) {
     const payslips = await this.payslipModel.find({
-      tenantId: this.newTid(tenantId), status: { $ne: 'paid' }, postedToFinance: false,
+      tenantId: this.newTid(tenantId), status: { $ne: 'paid' },
     }).lean();
 
-    const fixes: { payslipId: string; payrollRunId: string; staffName: string; oldTotalDeductions: number; newTotalDeductions: number; oldNetSalary: number; newNetSalary: number }[] = [];
+    const fixes: { payslipId: string; payrollRunId: string; staffName: string; oldTotalDeductions: number; newTotalDeductions: number; oldNetSalary: number; newNetSalary: number; postedToFinance: boolean }[] = [];
     for (const p of payslips as any[]) {
       const lines = p.componentLines || [];
       const extraDeductions = lines
@@ -1821,16 +1832,32 @@ export class HrService {
           payslipId: String(p._id), payrollRunId: String(p.payrollRunId), staffName: p.staffName,
           oldTotalDeductions: p.totalDeductions || 0, newTotalDeductions: correctTotalDeductions,
           oldNetSalary: p.netSalary || 0, newNetSalary: correctNetSalary,
+          postedToFinance: !!p.postedToFinance,
         });
       }
     }
 
     if (!dryRun) {
       for (const f of fixes) {
-        await this.payslipModel.updateOne(
-          { _id: f.payslipId },
-          { $set: { totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary } },
-        );
+        if (f.postedToFinance) {
+          const posted = await this.payslipModel.findById(f.payslipId).lean();
+          if (!posted) continue;
+          // Reverse the stale entry (booked against the OLD, wrong net
+          // salary - the exact figure that was actually posted), then
+          // re-post against the corrected figure. reversePayslipLedgerEntry
+          // itself flips postedToFinance back to false once done.
+          await this.reversePayslipLedgerEntry(schoolSlug, posted);
+          await this.payslipModel.updateOne(
+            { _id: f.payslipId },
+            { $set: { totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary } },
+          );
+          await this.postPayslipToLedger(schoolSlug, { ...posted, totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary, postedToFinance: false });
+        } else {
+          await this.payslipModel.updateOne(
+            { _id: f.payslipId },
+            { $set: { totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary } },
+          );
+        }
       }
       const affectedRunIds = [...new Set(fixes.map((f) => f.payrollRunId))];
       for (const runId of affectedRunIds) {
@@ -1851,6 +1878,7 @@ export class HrService {
       dryRun,
       willFix: fixes.length,
       fixed: dryRun ? 0 : fixes.length,
+      needsLedgerCorrection: fixes.filter((f) => f.postedToFinance).length,
       affectedRuns: [...new Set(fixes.map((f) => f.payrollRunId))].length,
       fixes,
     };
