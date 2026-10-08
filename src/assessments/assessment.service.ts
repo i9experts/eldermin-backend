@@ -59,6 +59,9 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
   return { grade: 'F', gpa: 0.0 };
 };
 
+export const TEACHER_MARKS_LOCKED_MESSAGE =
+  'Results for this assessment are published (or the assessment is cancelled): marks can no longer be changed. Contact an administrator.';
+
 @Injectable()
 export class AssessmentService {
   private readonly logger = new Logger(AssessmentService.name);
@@ -1284,6 +1287,19 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // ============================================================
   // MARK ENTRY
   // ============================================================
+  /**
+   * TEACHER role only: marks are frozen once the assessment's results are
+   * published ('result_published' status / resultPublished flag, see
+   * assessment.schema.ts status enum) or the assessment is 'cancelled'.
+   * 'draft' is NOT blocked server-side (unchanged behaviour; the app disables entry).
+   */
+  private assertTeacherMarksNotLocked(assessment: any) {
+    if (!assessment) return;
+    if (assessment.status === 'result_published' || assessment.status === 'cancelled' || assessment.resultPublished === true) {
+      throw new ForbiddenException(TEACHER_MARKS_LOCKED_MESSAGE);
+    }
+  }
+
   async bulkEnterMarks(dto: BulkMarkEntryDto, requestingUser?: ScopedUser) {
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
@@ -1296,6 +1312,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // row is out of bounds or already verified (locked).
     const teacher = isTeacherCaller(requestingUser);
     if (teacher) {
+      this.assertTeacherMarksNotLocked(assessment);
       const bad: string[] = [];
       for (const m of dto.marks) {
         if (m.isAbsent || m.isExempt) continue;
@@ -1593,6 +1610,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       if (!this.canTeacherAccessAttempt(t, resolved)) {
         throw new ForbiddenException('You can only grade quiz attempts of your own class or of the subjects you teach.');
       }
+      this.assertTeacherMarksNotLocked(await this.assessmentModel.findById((attempt as any).assessmentId));
       if (attempt.status === 'graded') throw new ConflictException('This attempt is already graded.');
       const questions: any[] = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
       const maxById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
