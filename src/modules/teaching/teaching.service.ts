@@ -19,6 +19,7 @@ import { AssignmentSubmission, AssignmentSubmissionDocument } from './schemas/as
 import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.schema';
 import { ElectiveGroup, ElectiveGroupDocument } from './schemas/elective-group.schema';
 import { DutyRoster, DutyRosterDocument } from './schemas/duty-roster.schema';
+import { ClassDiaryEntry, ClassDiaryEntryDocument } from './schemas/class-diary.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
@@ -39,6 +40,7 @@ export class TeachingService {
     @InjectModel(BehaviourNote.name) private behaviourModel: Model<BehaviourNoteDocument>,
     @InjectModel(ElectiveGroup.name) private electiveGroupModel: Model<ElectiveGroupDocument>,
     @InjectModel(DutyRoster.name) private dutyRosterModel: Model<DutyRosterDocument>,
+    @InjectModel(ClassDiaryEntry.name) private classDiaryModel: Model<ClassDiaryEntryDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
@@ -1084,5 +1086,99 @@ Rules:
       { $set: data },
       { new: true },
     ).lean();
+  }
+
+  // ── CLASS DIARY (daily classwork/homework log, shared to parents as a PDF) ─────
+  // Runs alongside the existing Assignment/Homework tab as a separate,
+  // optional tool - mirrors the paper "daily reminder" diary many schools
+  // already send home, where one day's entry covers several subjects/
+  // periods at once (unlike an Assignment, which is always one subject).
+
+  async getClassDiaryEntries(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
+    if (query.gradeLevel) filter.gradeLevel = query.gradeLevel;
+    if (query.sectionName) filter.sectionName = query.sectionName;
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
+    return this.classDiaryModel.find(filter).sort({ diaryDate: -1 }).lean();
+  }
+
+  async getClassDiaryEntry(tenantId: string, id: string) {
+    const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!entry) throw new NotFoundException('Class diary entry not found');
+    return entry;
+  }
+
+  async createClassDiaryEntry(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
+    const payload: any = {
+      ...data,
+      tenantId: this.tid(tenantId),
+      institutionId: new Types.ObjectId(institutionId),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
+    };
+    if (data.teacherId) {
+      try { payload.teacherId = new Types.ObjectId(data.teacherId); } catch { /* ignore */ }
+    }
+    try {
+      return await this.classDiaryModel.create(payload);
+    } catch (err: any) {
+      if (err.name === 'ValidationError') throw new BadRequestException(err.message);
+      throw err;
+    }
+  }
+
+  async updateClassDiaryEntry(tenantId: string, id: string, data: any) {
+    const existing = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (!existing) throw new NotFoundException('Class diary entry not found');
+    // A shared entry's parent-visible content shouldn't silently drift
+    // after the fact - require explicit re-share for a parent to see
+    // edits made once it's already gone out.
+    const { shared, sharedAt, sharedBy, notifiedGuardianCount, ...editable } = data;
+    Object.assign(existing, editable);
+    await existing.save();
+    return existing.toObject();
+  }
+
+  async deleteClassDiaryEntry(tenantId: string, id: string) {
+    const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (!entry) throw new NotFoundException('Class diary entry not found');
+    await entry.deleteOne();
+    return { deleted: true };
+  }
+
+  async generateClassDiaryPdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string) {
+    const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!entry) throw new NotFoundException('Class diary entry not found');
+    return this.pdfService.generateClassDiaryPdf(schoolSlug, entry, userId, templateId);
+  }
+
+  /** Marks the entry shared, notifies every guardian of a student currently
+   * in that grade/section, and records how many guardians were reached. */
+  async shareClassDiaryEntry(tenantId: string, schoolSlug: string, id: string, requestingUser?: ScopedUser) {
+    const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
+    if (!entry) throw new NotFoundException('Class diary entry not found');
+    const students = await this.getClassRoster(schoolSlug, entry.gradeLevel, entry.sectionName, entry.campusId);
+    let notifiedGuardianCount = 0;
+    if (students.length) {
+      const dateStr = new Date(entry.diaryDate).toLocaleDateString();
+      notifiedGuardianCount = await notifyGuardiansOfStudents(
+        this.classDiaryModel.db, students.map((s: any) => s._id),
+        {
+          schoolSlug, type: 'diary',
+          title: `Class Diary — ${entry.gradeLevel}${entry.sectionName ? ` (${entry.sectionName})` : ''}`,
+          body: `${dateStr}: today's classwork and homework are ready to view.`,
+          relatedEntityId: String(entry._id),
+        },
+      );
+    }
+    entry.shared = true;
+    entry.sharedAt = new Date();
+    entry.sharedBy = requestingUser?.userId ? new Types.ObjectId(requestingUser.userId) : null;
+    entry.notifiedGuardianCount = notifiedGuardianCount;
+    await entry.save();
+    return entry.toObject();
   }
 }

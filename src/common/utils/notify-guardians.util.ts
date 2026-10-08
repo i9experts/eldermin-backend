@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 
 export interface GuardianNotice {
   schoolSlug: string;
-  type: 'circular' | 'consent' | 'leave_decision' | 'fee_due' | 'homework' | 'result' | 'behaviour' | 'message' | 'ptm' | 'other';
+  type: 'circular' | 'consent' | 'leave_decision' | 'fee_due' | 'homework' | 'result' | 'behaviour' | 'message' | 'ptm' | 'diary' | 'other';
   title: string;
   body: string;
   relatedEntityId?: string;

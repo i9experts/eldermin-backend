@@ -1,6 +1,7 @@
 import {
-  Controller, Get, Post, Param, Body, Query, Request, HttpCode, HttpStatus, UseInterceptors,
+  Controller, Get, Post, Param, Body, Query, Request, Res, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 
@@ -127,6 +128,23 @@ export class ParentPortalController {
   ) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
     return this.service.submitHomework(studentId, assignmentId, requestingUser, tenantId, schoolSlug, dto);
+  }
+
+  @Get('students/:studentId/class-diary')
+  async getClassDiary(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getClassDiary(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
+  @Get('students/:studentId/class-diary/:diaryId/pdf')
+  async downloadClassDiaryPdf(
+    @Param('studentId') studentId: string, @Param('diaryId') diaryId: string,
+    @Request() req: any, @Res() res: Response,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    const pdf = await this.service.downloadClassDiaryPdf(studentId, diaryId, requestingUser, tenantId, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="class-diary-${diaryId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
   }
 
   @Get('students/:studentId/learning-resources')
