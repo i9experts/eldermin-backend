@@ -1,19 +1,19 @@
 import { ForbiddenException } from '@nestjs/common';
 import { makeAssessmentService, oid, teacherUser } from './assessment-test-fakes';
 
-const a = (grade: string, section: string) => ({ _id: oid(), grade, section, status: 'submitted', examPaperId: oid(), answers: [] });
+const a = (grade: string, section: string) => ({ _id: oid(), grade, section, subject: 'Math', status: 'submitted', examPaperId: oid(), answers: [] });
 const all = [a('Grade 5', 'A'), a('5', 'B'), a('Grade 6', 'A'), a('Grade 7', 'C')];
 const paper = { sections: [{ questionIds: [] }] };
 
 describe('quiz queue scoping: teacher', () => {
   it('assignment with a section: only that class (tolerant spelling)', async () => {
-    const profile = { isClassTeacher: false, currentAssignments: [{ gradeLevel: '5', sectionName: 'a' }] };
+    const profile = { isClassTeacher: false, currentAssignments: [{ gradeLevel: '5', sectionName: 'a', subjectName: 'math' }] };
     const { service } = makeAssessmentService({ attempts: all, profile });
     const r = await service.getQuizAttemptsPendingReview('s', undefined, undefined, teacherUser());
     expect(r).toEqual([all[0]]);
   });
   it('class teacher class + assignments are unioned; assignment without section covers all sections', async () => {
-    const profile = { isClassTeacher: true, classTeacherOfGradeName: 'Grade 7', classTeacherOfSectionName: 'C', currentAssignments: [{ gradeLevel: 'Grade 5' }] };
+    const profile = { isClassTeacher: true, classTeacherOfGradeName: 'Grade 7', classTeacherOfSectionName: 'C', currentAssignments: [{ gradeLevel: 'Grade 5', subjectName: 'Math' }] };
     const { service } = makeAssessmentService({ attempts: all, profile });
     const r = await service.getQuizAttemptsPendingReview('s', undefined, undefined, teacherUser());
     expect(r).toEqual([all[0], all[1], all[3]]);
@@ -25,7 +25,7 @@ describe('quiz queue scoping: teacher', () => {
     await expect(ns.service.getQuizAttemptsPendingReview('s', undefined, undefined, teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
   });
   it('GET :id outside my classes -> 403, inside -> ok', async () => {
-    const profile = { isClassTeacher: false, currentAssignments: [{ gradeLevel: 'Grade 5', sectionName: 'A' }] };
+    const profile = { isClassTeacher: false, currentAssignments: [{ gradeLevel: 'Grade 5', sectionName: 'A', subjectName: 'Math' }] };
     const out = makeAssessmentService({ attempt: all[2], profile, paper });
     await expect(out.service.getQuizAttemptForReview('s', String(all[2]._id), teacherUser())).rejects.toBeInstanceOf(ForbiddenException);
     const inn = makeAssessmentService({ attempt: all[0], profile, paper });

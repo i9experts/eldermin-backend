@@ -26,7 +26,7 @@ import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
-import { isTeacherCaller, resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
+import { isTeacherCaller, resolveTeacherIdentity, teacherClassesOf, teacherSubjectAssignmentsOf, sameSubject, TeacherClassRef, TeacherSubjectClassRef } from '../staff-portal/teacher-identity.util';
 import { sameGrade, sameSection } from '../common/utils/class-match.util';
 import { Campus } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
@@ -83,7 +83,7 @@ export class AssessmentService {
   ) {}
 
   /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
-  private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; isClassTeacher: boolean; classTeacherClass?: TeacherClassRef }> {
+  private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; subjectClasses: TeacherSubjectClassRef[]; isClassTeacher: boolean; classTeacherClass?: TeacherClassRef }> {
     const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user);
     const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
       .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName currentAssignments').lean();
@@ -91,10 +91,30 @@ export class AssessmentService {
     return {
       staffId: me.staffId,
       classes: teacherClassesOf(profile),
+      subjectClasses: teacherSubjectAssignmentsOf(profile),
       isClassTeacher,
       classTeacherClass: isClassTeacher
         ? { grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined } : undefined,
     };
+  }
+
+  /**
+   * Quiz-attempt scope for the TEACHER role (owner decision 2026-10-07, mirrors the app's isMyAttempt): a CLASS teacher sees/grades ALL
+   * subjects of their own class; a SUBJECT teacher only attempts whose class AND subject match one of their currentAssignments; both
+   * roles = the union. Grade/section tolerant (class-match.util), subject trim/case/space tolerant. No classes -> nothing.
+   */
+  private canTeacherAccessAttempt(t: { subjectClasses: TeacherSubjectClassRef[]; classTeacherClass?: TeacherClassRef }, a: { grade?: any; section?: any; subject?: any }): boolean {
+    if (t.classTeacherClass && this.classIncludes([t.classTeacherClass], a.grade, a.section)) return true;
+    return t.subjectClasses.some(c => this.classIncludes([c], a.grade, a.section) && sameSubject(c.subject, a.subject));
+  }
+
+  /** An attempt normally stores its section; when it is missing, resolve it from the student's current section (one batched read). */
+  private async fillMissingAttemptSections(rows: any[], schoolSlug: string): Promise<any[]> {
+    const missing = rows.filter(a => !a.section && a.studentId);
+    if (!missing.length || !this.studentModel?.find) return rows;
+    const students: any[] = await (this.studentModel as any).find({ _id: { $in: missing.map(a => a.studentId) }, schoolSlug }).select('currentSection').lean();
+    const byId = new Map(students.map((s: any) => [String(s._id), s.currentSection]));
+    return rows.map(a => (!a.section && byId.get(String(a.studentId)) ? { ...a, section: byId.get(String(a.studentId)) } : a));
   }
 
   private classIncludes(classes: TeacherClassRef[], grade: any, section: any): boolean {
@@ -1534,7 +1554,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // TEACHER role only: just the attempts of classes I teach (class teacher
     // class + currentAssignments), matched with the tolerant grade/section rules.
     const t = await this.teacherContext(requestingUser);
-    return rows.filter(a => this.classIncludes(t.classes, a.grade, a.section));
+    const resolved = await this.fillMissingAttemptSections(rows, schoolSlug);
+    return rows.filter((_, i) => this.canTeacherAccessAttempt(t, resolved[i]));
   }
 
   async getQuizAttemptForReview(schoolSlug: string, attemptId: string, requestingUser?: ScopedUser) {
@@ -1542,8 +1563,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
     if (isTeacherCaller(requestingUser)) {
       const t = await this.teacherContext(requestingUser);
-      if (!this.classIncludes(t.classes, (attempt as any).grade, (attempt as any).section)) {
-        throw new ForbiddenException('You can only review quiz attempts for classes you teach.');
+      const [resolved] = await this.fillMissingAttemptSections([attempt], schoolSlug);
+      if (!this.canTeacherAccessAttempt(t, resolved)) {
+        throw new ForbiddenException('You can only review quiz attempts of your own class or of the subjects you teach.');
       }
     }
     const questions = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
@@ -1567,8 +1589,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       // TEACHER role only. Must teach the attempt's class; no re-grade of an
       // already graded attempt; every mark within 0..that question's marks.
       const t = await this.teacherContext(requestingUser);
-      if (!this.classIncludes(t.classes, (attempt as any).grade, (attempt as any).section)) {
-        throw new ForbiddenException('You can only grade quiz attempts for classes you teach.');
+      const [resolved] = await this.fillMissingAttemptSections([(attempt as any).toObject ? (attempt as any).toObject() : attempt], schoolSlug);
+      if (!this.canTeacherAccessAttempt(t, resolved)) {
+        throw new ForbiddenException('You can only grade quiz attempts of your own class or of the subjects you teach.');
       }
       if (attempt.status === 'graded') throw new ConflictException('This attempt is already graded.');
       const questions: any[] = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);

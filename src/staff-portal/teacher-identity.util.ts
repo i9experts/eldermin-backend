@@ -103,3 +103,21 @@ export function teacherClassesOf(profile: any): TeacherClassRef[] {
   }
   return out;
 }
+
+export interface TeacherSubjectClassRef extends TeacherClassRef { subject: string }
+
+/** TeacherProfile.currentAssignments entries that carry a subject (the SUBJECT-teacher scope): {grade, section?, subject}. */
+export function teacherSubjectAssignmentsOf(profile: any): TeacherSubjectClassRef[] {
+  const out: TeacherSubjectClassRef[] = [];
+  for (const a of profile?.currentAssignments || []) {
+    if (a?.gradeLevel && a?.subjectName) out.push({ grade: a.gradeLevel, section: a.sectionName || undefined, subject: a.subjectName });
+  }
+  return out;
+}
+
+/** Tolerant subject comparison: trim, case-insensitive, internal whitespace collapsed ("Islamic  Studies" = "islamic studies"). */
+export function sameSubject(a: any, b: any): boolean {
+  const n = (v: any) => String(v ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const x = n(a);
+  return x !== '' && x === n(b);
+}
