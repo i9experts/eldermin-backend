@@ -101,3 +101,10 @@ New `src/common/utils/object-id.util.ts` (`assertValidObjectId`, 24-hex only). 4
 - `GET /assessments/quiz-attempts/:id`, `POST .../:id/grade` (`Invalid quiz attempt id`); `PATCH report-cards/:id/remarks`: admin roles 400 `Invalid report card id` (teacher keeps its documented 404).
 Tests: `src/common/utils/object-id.util.spec.ts`. Some older specs used fake ids like `'a1'`; they now use 24-hex ids.
 
+
+## Round 4 (2026-10-08): thread endpoint fixes found by the Phase 7a app work
+Both defects were in the Phase 1 staff-portal code (my own); found when the Teacher app's chat and inbox were built.
+- **`GET /staff-portal/threads/:id/messages` returned the OLDEST 500 messages** (`sort createdAt asc, limit 500`), so a thread with more than 500 messages never showed its newest ones. It now fetches the NEWEST 500 (`createdAt desc, limit 500`) and returns them oldest -> newest.
+- **New optional `?after=<ISO date>`**: returns only messages created after that instant (oldest first) so a polling client (the app polls an open chat every ~10 s) does not re-download the whole thread. Additive; an invalid value is ignored (falls back to the newest-500 behaviour). Same thread/school ownership checks as before.
+- **`GET /staff-portal/threads` `unreadCount` was computed over the returned rows only** (max 100). It is now `countDocuments({ ...filter, staffHasUnread: true })` over ALL matching threads (the status filter still applies); `items` stays capped at 100 rows.
+- Tests: `src/staff-portal/staff-portal-threads.spec.ts` (6 tests).
