@@ -15,6 +15,10 @@ export type PayrollPaymentDocument = PayrollPayment & Document;
 export class PayrollPayment {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
   @Prop({ required: true, type: Types.ObjectId, ref: 'PayrollRun' }) payrollRunId: Types.ObjectId;
+  // Null means this record settles the whole run at once (the original,
+  // still-default behaviour); set when a single employee's payslip was
+  // paid individually instead of as part of the run's batch payment.
+  @Prop({ type: Types.ObjectId, ref: 'Payslip', default: null }) payslipId: Types.ObjectId | null;
   @Prop() periodLabel: string;
   @Prop({ required: true }) amount: number;
   @Prop({ required: true }) paymentDate: Date;
