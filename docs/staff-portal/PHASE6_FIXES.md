@@ -30,3 +30,46 @@ New wiring: `AssessmentModule` registers the `Staff` and `TeacherProfile` models
 
 ## Tests
 `marks-bulk-teacher.spec.ts`, `report-card-remarks-teacher.spec.ts`, `quiz-grade-teacher.spec.ts`, `quiz-queue-teacher.spec.ts`: 64 tests (teacher cases, a non-teacher matrix of principal/admin/institution_owner/vice_principal/academic_coordinator/super_admin for each fix, MarkEntry provenance matrix). Full suite after this work: 42 suites / 772 tests.
+
+---
+
+# Phase 6 follow-up: B5 privacy, B4 guards, quiz subject scope, curriculum drafts
+
+Same rule as above: the restricted role is `teacher` (`isTeacherCaller`); principal, vice_principal, admin, institution_owner, academic_coordinator, super_admin (and any other role) behave exactly as before, proven per item by a role matrix. Fakes only, no DB. One commit per item.
+
+## Item 1. B5: server-side field projection for role teacher (privacy)
+Code: `src/students/teacher-student-projection.util.ts` (single shared helper), applied in `students.controller.ts`, `students.service.ts` (`getStudents`, `getStudent360`) and `modules/teaching/ptm.controller.ts`. Tests: `src/students/teacher-student-projection.spec.ts` (44).
+
+**Deny-list** (key names, case-insensitive, at ANY depth, so `guardians[]`, `medical`, `customFields`, arrays of students and PTM rows are covered; copy-based, input never mutated; ObjectId/Date leaves kept):
+1. Fees/finance (exact keys): `fees, fee, feeStatus, feeStructure, feePlan, feeDiscount, feeSummary, feeAssignment, recentFees, monthlyTuitionFee, tuitionFee, monthlyFeeArrears, feeArrears, arrears, invoices, invoice, payments, payment, paidAmount, netAmount, outstanding, balance, discount, concession, scholarship, scholarshipHolder, scholarshipDetail`. (Real fields found in code: `monthlyTuitionFee` injected by `getStudents` `dataWithFees`; the 360 `fees{summary,recent}` block from `StudentFee`: amount/discount/fine/netAmount/paidAmount/receiptNumber...; `Student.scholarshipHolder/scholarshipDetail`. `feeStatus`/`monthlyFeeArrears` do not exist in this code but are in the deny-list because the audit saw them on real documents.)
+2. Phone numbers (any key containing `phone|mobile|whatsapp|landline|telephone`): `guardians[].phone`, `whatsApp`, `altPhone`, `personalPhone`, `emergencyContactPhone`, `tutorPhone`, `medical.doctorPhone`, PTM `guardianPhone`.
+3. National/identity numbers (any key containing `cnic|nationalid|bform|passport|visa`): `nationalId`, `bForm`, `passportNumber`, `visaNo`, `guardians[].cnic`.
+4. Income/employment (exact): `monthlyIncome, income, householdIncome, familyIncome, employer, occupation`.
+
+**Also done for the teacher role:** `getStudents` uses a DB-side exclusion `select` (`TEACHER_STUDENT_SELECT`) and skips the three fee queries; the search `$or` drops `guardians.phone` (otherwise search is a phone-number oracle); `getStudent360` uses the same `select` and never reads `StudentFee` (the `fees` block is removed from the payload). `GET /students/fees/list` and `GET /students/:id/fees/statement` answer 403 for teachers (extra, beyond the endpoints the app calls; finance data). Endpoints covered (post-processing in the controller, defence in depth): `GET /students`, `/:id`, `/:id/360`, `/filters/grades-sections`, `/class-roster-diagnostic`, `/:id/learning`, `/:id/attendance/summary`, `/attendance/list`, `/guardians/list`, and all `/teaching/ptm` responses (the meeting row embeds `guardianPhone`/`guardianEmail`). Checked and NOT needing a change: assignment submissions, behaviour records/profile, report cards, marks/list, quiz attempts (they carry only `studentName`/ids, no embedded student document).
+
+**Teacher-app compatibility** (models in `eldermin-teacher-app/lib/core/models/classroom/`): the app parses `student.{_id,studentId,firstName,lastName,preferredName,gender,photo,currentGrade,currentSection,currentRollNumber,grNo,status,currentAcademicYear}`, `student.guardians[].{name,relation,isPrimary}`, `student.medical.allergies`, `attendance.*`, `behaviour.*`, `assessments.recent[]`, `grades/sections`; PTM `guardianName`. None is in the deny-list; tests assert they survive.
+
+**OWNER DECISION list (sensitive-looking, deliberately NOT stripped; say the word to add any of them to the deny-list):**
+- Guardian `email` (and PTM `guardianEmail`): the owner ordered phone numbers only. Needed? The app does not read it.
+- Student `dateOfBirth`, `dateOfBirthInWords`, `placeOfBirth` (age is useful to teachers).
+- Home address: `address, town, city, province, country, postalCode`, permanent address fields.
+- Medical beyond allergies: `bloodGroup, medications, conditions, doctorName, doctorClinic, emergencyAction, peRestrictions, dietaryRestrictions, insurance*, specialNeedsDetail` (only `doctorPhone` is removed, by the phone rule). Teachers may legitimately need most of these.
+- `documents[]` (names, status, `fileUrl`), `academicHistory[]`, previous school, transfer certificate, `rfid`.
+- `emergencyContactName/Relation`, `tutorName`, sibling fields, `familyCode/familyId`, transport route/stop, hostel, `customFields` (school-defined; only deny-listed keys inside are removed), `specialNeeds`, `isGifted`, `isESL`.
+- Not restricted at all (OPEN): class/campus scoping of the student list and detail (any campus student is still readable by id, backlog #6); `GET /students/:id/medical|notes|documents|academic-history`, `POST /students/:id/profile-pdf` (full profile PDF) and `GET /students/reports/*` are reachable by teacher tokens and unchanged.
+
+## Item 2. B4: result-publication guards
+`PATCH /assessments/marks/verify`, `POST /assessments/report-cards/generate`, `POST /assessments/report-cards/publish` now carry `@RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)` (level `manage`, `allowModuleWide` false): super_admin, institution_owner, principal, vice_principal, admin, academic_coordinator pass; a custom role passes only with an `assessments` SUB-module manage grant (the stock Teacher module-wide `assessments:manage` does not); teacher, parent, student get 403 `Access denied. Requires one of: ... or a custom role with manage access to assessments.`
+Decisions: `report-cards/publish` is the only result-publication route (`publishResults`); there is no separate `PATCH results publish`. Other ungated routes in the controller (`POST/PUT/DELETE /assessments`, `PATCH /:id/status`, `questions/*`, `papers`, `omr/*`) are untouched (still backlog; the teacher app/web may use some of them).
+**Web impact (intended per owner):** `assessments:manage` includes the teacher role in the web permission matrix, so the web may still show Verify/Generate/Publish buttons to teachers; those calls now return 403. Hide them for teachers in the web in a follow-up.
+Tests: `src/assessments/result-publication-guards.spec.ts` (39: metadata, each admin role passes, teacher 403 with message, parent/student 403, sub-module grant passes, module-wide and view-only grants denied) and three new rows in `src/auth/role-sets.spec.ts`.
+
+## Item 3. Quiz scope = class teacher OR class+subject (aligns with the app's `isMyAttempt`)
+`GET /assessments/quiz-attempts`, `GET /:attemptId`, `POST /:attemptId/grade` for role teacher (`assessment.service.ts` `canTeacherAccessAttempt`): a CLASS teacher (`isClassTeacher` + `classTeacherOfGradeName/SectionName`) sees/grades ALL subjects of their own class; a SUBJECT teacher only attempts whose class AND subject match one of `currentAssignments {gradeLevel, sectionName, subjectName}`; both = union. Grade/section via `class-match.util` (an assignment section is compared only when set), subject trim + case + internal-whitespace-insensitive (`sameSubject`; the app does trim + lowercase). An assignment without `subjectName` grants nothing (class-only access of 5b1244d/7795f1d is gone); a teacher with no classes sees nothing; detail/grade outside scope stay 403 (messages updated). When an attempt has no `section`, it is resolved from the student's `currentSection` (one batched read for the list). Other roles unchanged (no staff lookup). Existing specs updated to give assignments a `subjectName`. Tests: `src/assessments/quiz-scope-subject-teacher.spec.ts` (29).
+
+## Item 4. Curriculum drafts hidden from teachers
+`Curriculum.status` enum is `draft | active | archived` (`modules/academics/schemas/curriculum.schema.ts:38`, default `draft`). For role teacher `GET /academics/curriculum` forces `status: 'active'` (a `status=draft` query cannot widen it) and `GET /academics/curriculum/:id` answers 404 for non-active (no existence leak). Other roles tenant-wide incl. drafts as today. Code: `academics.service.ts` `getCurricula`/`getCurriculumById`, controller forwards `req.user`. Tests: `src/modules/academics/curriculum-teacher.spec.ts` (20).
+
+## Totals
+Full suite after these four commits: 48 suites / 945 tests, `npm run build` clean.

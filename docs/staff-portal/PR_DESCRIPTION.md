@@ -33,6 +33,14 @@ Details: `docs/staff-portal/PHASE6_FIXES.md`.
 - `GET /assessments/quiz-attempts` (+ `/:attemptId`): server-side scoped to the teacher's classes (detail outside them 403).
 - **All roles (data-integrity fix):** quiz completion no longer overwrites a `verified` MarkEntry or a manually entered one; only quiz-written entries are updated, tracked by a new additive field `MarkEntry.quizAttemptId` (plus the legacy `enteredBy: 'Online Quiz (auto)'` marker).
 
+### Phase 6 follow-up: B5 privacy, B4 guards, quiz subject scope, curriculum drafts
+Details: `docs/staff-portal/PHASE6_FIXES.md` (second half). Role `teacher` only unless stated; every other role proven unchanged by matrix tests.
+- **B5 privacy:** shared deny-list helper `src/students/teacher-student-projection.util.ts` strips fees/finance, guardian and student phone numbers, CNIC/national id/B-form/passport, guardian income/employer/occupation from `GET /students`, `/:id`, `/:id/360`, `/:id/learning`, grades-sections, class-roster-diagnostic, attendance list/summary, guardians/list and all `/teaching/ptm` responses; DB-side `select`, fee reads skipped, guardian-phone search removed for teachers; `students/fees/list` and `:id/fees/statement` 403 for teachers. Owner-decision list of fields intentionally still returned (guardian email, DOB, address, medical detail, documents) is in the docs.
+- **B4 guards:** `PATCH assessments/marks/verify`, `POST report-cards/generate|publish` are admin-set only (`TEACHING_ADMIN_ROLES`, sub-module custom grants only); teacher/parent/student get 403. The web may still show those buttons to teachers (they will 403).
+- **Quiz scope:** class teacher = all subjects of own class; subject teacher = assigned class+subject; union for both (list, detail, grade); tolerant grade/section/subject match.
+- **Curriculum:** teachers see only `status: active` (list forced, detail 404); other roles tenant-wide as today.
+- Tests: 4 new specs/rows (+132 tests); full suite 48 suites / 945 tests, `npm run build` clean.
+
 ### Docs
 `docs/staff-portal/`: `PHASE1_REPORT.md`, `guard-inventory.md`, `guards-added.md`, `hardening-backlog.md` (now with a FIXED/OPEN table for the Phase 6 candidates), `PHASE4_ADDITIONS.md`, `PHASE6_FIXES.md`, this file.
 
@@ -45,10 +53,10 @@ The branch was rebased onto the latest `origin/main` (11 commits ahead of the ol
 ## Security notes
 - Teacher-only enforcement uses the JWT base role `teacher` (`isTeacherCaller`). A teacher who also holds a custom role is still treated as a teacher by these fixes.
 - Teacher identity and classes are resolved from the DB per request; a stale token cannot act for a removed staff member. No Staff record -> 403.
-- Remaining known gaps (not fixed here, listed in `hardening-backlog.md`): `/roles` create/assign and most of `/hr/*` unguarded, `ModulesController` trusts `x-school-slug`, student/360 scoping and fee fields, attendance scope holes, marks/bulk has no assessment ownership scoping for teachers, `GET library/books/:id` writes on GET and returns borrower history (`academics.service.ts:531-545`), `GET curriculum` tenant-wide incl. drafts, `library/search` unscoped, `GET /assessments` campus-only with no max limit, published report cards still editable, admin roles can still re-grade quizzes and overwrite verified marks via marks/bulk.
+- Remaining known gaps (not fixed here, listed in `hardening-backlog.md`): `/roles` create/assign and most of `/hr/*` unguarded, `ModulesController` trusts `x-school-slug`, student class/campus scoping (fee/phone/id fields are now stripped for teachers), attendance scope holes, marks/bulk has no assessment ownership scoping for teachers, `GET library/books/:id` writes on GET and returns borrower history (`academics.service.ts:531-545`), `library/search` unscoped, `GET /assessments` campus-only with no max limit, published report cards still editable, admin roles can still re-grade quizzes and overwrite verified marks via marks/bulk.
 
 ## Testing
-`npm run build` clean; `npx jest`: 42 suites / 772 tests pass (Phase 6 added 64 tests across four specs; Phase 4 added 20; identity and notification hooks have their own specs). All with in-memory fakes, no DB. Non-teacher role matrices (principal, admin, institution_owner, vice_principal, academic_coordinator, super_admin) assert unchanged behaviour for each Phase 6 fix.
+`npm run build` clean; `npx jest`: 48 suites / 945 tests pass (latest; was 42 / 772 before the B0 and follow-up work) (Phase 6 added 64 tests across four specs; Phase 4 added 20; identity and notification hooks have their own specs). All with in-memory fakes, no DB. Non-teacher role matrices (principal, admin, institution_owner, vice_principal, academic_coordinator, super_admin) assert unchanged behaviour for each Phase 6 fix.
 
 ## Deploy notes
 1. **Before deploying, run the pre-flight Mongo query (read-only) against production** to find logins that could lose access to the newly guarded admin routes (custom-role trap; full reasoning in `docs/staff-portal/guard-inventory.md` section 4.2):

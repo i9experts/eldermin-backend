@@ -111,7 +111,7 @@ Total guards: 76
 - GET routes everywhere (reads intentionally open; parent/student tokens use them).
 - `leave/self*` routes (keep `@RequirePermission('leave:self')`, no `@Roles`). Verified by test.
 - HR leave reads: `GET leave`, `leave/stats`, `leave/balance(s)*`, `leave/policies`, `leave/applications`, `staff/:id/leave` left open (writes only per brief).
-- Assessments: `PATCH marks/verify`, `POST report-cards/generate`, `POST report-cards/publish`, assessment create/update/delete/status (`POST /`, `PUT :id`, `DELETE :id`, `PATCH :id/status`), `omr/*` writes: backlog.
+- Assessments: ~~`PATCH marks/verify`, `POST report-cards/generate`, `POST report-cards/publish`~~ (guarded later: TEACHING_ADMIN_ROLES, see PHASE6_FIXES.md Item 2), assessment create/update/delete/status (`POST /`, `PUT :id`, `DELETE :id`, `PATCH :id/status`), `omr/*` writes: backlog.
 - `POST/PATCH/DELETE ... teaching/exams` (exam.controller.ts), syllabus `slo-templates` writes, `generate-pacing-guide`, `PATCH :id/behind-schedule`, `POST/PUT /syllabus`: E11 flag only, not guarded.
 - `teaching/fixtures` `generate-for-absence`, `:id/assign`, `:id/cancel`: E11 candidates, not guarded (only `:id/complete` guarded).
 - `ece`: `PATCH portfolio/:id/respond` (family response, parents may call it), `PATCH students/:id/profile/tags`, experiences, environment areas, care-records, support-cases, montessori, framework/domain/skill/indicator/age-band/seed/mapping writes, ai/*: not in brief; framework/seed writes are admin-config candidates.
