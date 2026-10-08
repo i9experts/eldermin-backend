@@ -131,6 +131,7 @@ export class CreateQuestionDto {
   @IsOptional() @IsString() correctAnswer?: string;
   @IsOptional() @IsString() answerExplanation?: string;
   @IsOptional() @IsNumber() marks?: number;
+  @IsOptional() @IsNumber() answerLines?: number;
   @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
 
   schoolSlug?: string;

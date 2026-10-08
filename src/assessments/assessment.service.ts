@@ -328,21 +328,24 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const sectionsHtml = paper.sections.map((section: any) => `
       <div class="section">
         <h3 class="section-title">${this.escapeHtml(section.title)}</h3>
-        ${section.instructions ? `<p class="section-instructions">${this.escapeHtml(section.instructions)}</p>` : ''}
+        ${section.instructions ? `<p class="section-instructions">${this.escapeHtmlMultiline(section.instructions)}</p>` : ''}
         ${section.questions.map((q: any) => {
           questionNumber++;
           const optionsHtml = q.type === 'mcq' && q.options?.length
             ? `<div class="options">${q.options.map((o: any, i: number) => `
                 <div class="option"><span class="opt-marker">${cfg.dir === 'rtl' ? this.arabicIndicNumeral(i) : String.fromCharCode(65 + i)}</span> ${this.escapeHtml(o.text)}</div>
               `).join('')}</div>`
-            : `<div class="answer-space"></div>`;
+            : Array.from({ length: q.answerLines ?? this.defaultAnswerLines(q.type, q.marks) })
+                .map(() => `<div class="answer-space"></div>`).join('');
+          const imageHtml = q.questionImage ? `<div class="q-image"><img src="${q.questionImage}" /></div>` : '';
           return `
             <div class="question">
               <div class="question-row">
                 <span class="q-number">${questionNumber}.</span>
-                <span class="q-text">${this.escapeHtml(q.questionText)}</span>
+                <span class="q-text">${this.escapeHtmlMultiline(q.questionText)}</span>
                 <span class="q-marks">[${q.marks}]</span>
               </div>
+              ${imageHtml}
               ${optionsHtml}
             </div>
           `;
@@ -410,6 +413,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: ${format === 'compact' ? '1fr' : '1fr 1fr'}; gap: 4px; }
           .opt-marker { font-weight: bold; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 6px; }
           .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
+          .q-image { margin: 8px 0 8px ${cfg.dir === 'rtl' ? '0' : '24px'}; }
+          .q-image img { max-width: 320px; max-height: 220px; border: 1px solid #ddd; border-radius: 4px; }
           .cover-page { display: flex; flex-direction: column; align-items: center; height: 250mm; padding-top: 20mm; text-align: center; }
           .cover-header h1 { font-size: 22px; color: #0C447C; margin: 10px 0 4px; }
           .cover-paper-title { font-size: 15px; font-weight: bold; margin: 4px 0; }
@@ -443,7 +448,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           <div>${cfg.labels.name}: <span>&nbsp;</span></div>
           <div>${cfg.labels.roll}: <span>&nbsp;</span></div>
         </div>
-        ${paper.generalInstructions ? `<div class="instructions-box"><strong>${cfg.labels.instructions}:</strong> ${this.escapeHtml(paper.generalInstructions)}</div>` : ''}
+        ${paper.generalInstructions ? `<div class="instructions-box"><strong>${cfg.labels.instructions}:</strong> ${this.escapeHtmlMultiline(paper.generalInstructions)}</div>` : ''}
         ${sectionsHtml}
       </body>
       </html>
@@ -665,6 +670,27 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   private escapeHtml(text: string): string {
     if (!text) return '';
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // escapeHtml alone drops every line break an admin typed - a blank line
+  // meant to visually separate two "attempt one of two options" alternatives
+  // (e.g. "...write a letter... OR ...write a story...") collapses to a
+  // single space per standard HTML whitespace rules, merging both options
+  // together on the printed paper. Converting each newline to a real <br>
+  // after escaping preserves exactly the spacing the admin typed, including
+  // a blank line becoming a visible gap (two consecutive <br>s).
+  private escapeHtmlMultiline(text: string): string {
+    return this.escapeHtml(text).replace(/\n/g, '<br>');
+  }
+
+  // Printed answer space used to be a single hardcoded 22px line no matter
+  // the question type or marks - nowhere near enough for an 80-100 word
+  // composition. Falls back to this heuristic only when a question has no
+  // explicit answerLines set (see Question.answerLines).
+  private defaultAnswerLines(type: string, marks: number): number {
+    if (type === 'true_false' || type === 'fill_blank') return 1;
+    if (type === 'short') return Math.max(2, Math.min(4, Math.ceil((marks || 1) / 2)));
+    return Math.max(4, Math.min(15, (marks || 1) * 2)); // long / matching / composition-style
   }
 
   private arabicIndicNumeral(index: number): string {
