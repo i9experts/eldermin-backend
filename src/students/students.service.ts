@@ -44,6 +44,8 @@ import {
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
 import { normalizePhone } from '../common/utils/phone.util';
+import { TEACHER_STUDENT_SELECT, stripTeacherSensitive } from './teacher-student-projection.util';
+import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -517,6 +519,7 @@ export class StudentsService {
     const { page, limit, search, sortBy, sortOrder,
       grade, section, status, gender, academicYear, scholarshipHolder, specialNeeds, campusId } = query;
     const { skip } = paged(page, limit);
+    const teacher = isTeacherCaller(requestingUser);
 
     const filter: any = { schoolSlug };
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
@@ -547,13 +550,23 @@ export class StudentsService {
         // results rather than silently pointing at just one of them.
         { grNo: { $regex: safeSearch, $options: 'i' } },
         { admissionNumber: { $regex: safeSearch, $options: 'i' } },
-        { 'guardians.phone': { $regex: safeSearch, $options: 'i' } },
+        // B5: a teacher must not be able to probe guardian phone numbers through search.
+        ...(teacher ? [] : [{ 'guardians.phone': { $regex: safeSearch, $options: 'i' } }]),
         { 'guardians.email': { $regex: safeSearch, $options: 'i' } },
       ];
     }
 
     const sort: any = {};
     sort[sortBy || 'createdAt'] = sortOrder === 'asc' ? 1 : -1;
+
+    // B5: the teacher role gets a DB-side exclusion projection and no fee lookups at all.
+    if (teacher) {
+      const [tdata, ttotal] = await Promise.all([
+        this.studentModel.find(filter).select(TEACHER_STUDENT_SELECT).sort(sort).skip(skip).limit(limit!),
+        this.studentModel.countDocuments(filter),
+      ]);
+      return { data: stripTeacherSensitive(tdata.map((s: any) => (s.toObject ? s.toObject() : s))), meta: { total: ttotal, page, limit, pages: Math.ceil(ttotal / limit!) } };
+    }
 
     const [data, total] = await Promise.all([
       this.studentModel.find(filter).sort(sort).skip(skip).limit(limit!),
@@ -1481,8 +1494,13 @@ export class StudentsService {
   // ============================================================
   // STUDENT 360 — Full Profile
   // ============================================================
-  async getStudent360(id: string, schoolSlug: string) {
-    const student = await this.studentModel.findOne({ _id: id, schoolSlug });
+  async getStudent360(id: string, schoolSlug: string, requestingUser?: ScopedUser) {
+    // B5: the teacher role never receives (and we never even read) fee data and
+    // gets a DB-side exclusion projection of the student document.
+    const teacher = isTeacherCaller(requestingUser);
+    const student = teacher
+      ? await this.studentModel.findOne({ _id: id, schoolSlug }).select(TEACHER_STUDENT_SELECT)
+      : await this.studentModel.findOne({ _id: id, schoolSlug });
     if (!student) throw new NotFoundException('Student not found');
 
     const sid = new Types.ObjectId(id);
@@ -1503,7 +1521,7 @@ export class StudentsService {
       this.attendanceModel.find({ studentId: sid })
         .sort({ date: -1 }).limit(30).lean(),
       // Fee summary
-      this.feeModel.aggregate([
+      teacher ? Promise.resolve([] as any[]) : this.feeModel.aggregate([
         { $match: { studentId: sid, academicYear: currentYear } },
         { $group: {
           _id: '$status',
@@ -1512,7 +1530,7 @@ export class StudentsService {
         }},
       ]),
       // Last 6 fee records
-      this.feeModel.find({ studentId: sid })
+      teacher ? Promise.resolve([] as any[]) : this.feeModel.find({ studentId: sid })
         .sort({ month: -1 }).limit(6).lean(),
       // Behaviour summary
       this.behaviourModel.aggregate([

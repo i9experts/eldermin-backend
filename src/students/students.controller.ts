@@ -22,6 +22,9 @@ import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { projectForTeacher, TEACHER_NO_FINANCE_MESSAGE } from './teacher-student-projection.util';
+import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
+import { ForbiddenException } from '@nestjs/common';
 
 @Controller('students')
 export class StudentsController {
@@ -56,21 +59,21 @@ export class StudentsController {
   @Get()
   async getStudents(@Request() req: any, @Query() query: StudentQueryDto) {
     const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.studentsService.getStudents(schoolSlug, query, requestingUser);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudents(schoolSlug, query, requestingUser));
   }
 
   /** GET /api/v1/students/filters/grades-sections */
   @Get('filters/grades-sections')
   async getDistinctGradesSections(@Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getDistinctGradesSections(schoolSlug);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getDistinctGradesSections(schoolSlug));
   }
 
   /** GET /api/v1/students/class-roster-diagnostic?grade=&section= */
   @Get('class-roster-diagnostic')
   async getClassRosterDiagnostic(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.studentsService.getClassRosterDiagnostic(schoolSlug, grade, section, requestingUser);
+    return projectForTeacher(requestingUser, await this.studentsService.getClassRosterDiagnostic(schoolSlug, grade, section, requestingUser));
   }
 
   // ============================================================
@@ -148,22 +151,22 @@ export class StudentsController {
   /** GET /api/v1/students/:id */
   @Get(':id')
   async getStudent(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getStudentById(id, schoolSlug);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudentById(id, schoolSlug));
   }
 
   /** GET /api/v1/students/:id/360 */
   @Get(':id/360')
   async getStudent360(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getStudent360(id, schoolSlug);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudent360(id, schoolSlug, requestingUser));
   }
 
   /** GET /api/v1/students/:id/learning — LMS Phase 3 Student 360 tab */
   @Get(':id/learning')
   async getStudentLearning(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug, tenantId } = this.ctx(req);
-    return this.studentsService.getStudentLearning(id, schoolSlug, tenantId);
+    const { schoolSlug, tenantId, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudentLearning(id, schoolSlug, tenantId));
   }
 
   /**
@@ -288,7 +291,7 @@ export class StudentsController {
   @Get('guardians/list')
   async getGuardians(@Query('studentId') studentId: string, @Query('search') search: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.studentsService.getAllGuardians(schoolSlug, studentId, search, requestingUser);
+    return projectForTeacher(requestingUser, await this.studentsService.getAllGuardians(schoolSlug, studentId, search, requestingUser));
   }
 
   /** POST /api/v1/students/guardians - requires studentId (guardians are
@@ -455,7 +458,7 @@ export class StudentsController {
   async getAttendance(@Request() req: any, @Query() query: AttendanceQueryDto) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     const { grade, section } = resolveClassSectionScope(requestingUser, query.grade, query.section);
-    return this.studentsService.getAttendance(schoolSlug, { ...query, grade, section });
+    return projectForTeacher(requestingUser, await this.studentsService.getAttendance(schoolSlug, { ...query, grade, section }));
   }
 
   /** GET /api/v1/students/:id/attendance/summary */
@@ -465,8 +468,8 @@ export class StudentsController {
     @Request() req: any,
     @Query('month') month?: string,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.studentsService.getStudentAttendanceSummary(id, schoolSlug, month);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudentAttendanceSummary(id, schoolSlug, month));
   }
 
   /** POST /api/v1/students/attendance */
@@ -503,14 +506,16 @@ export class StudentsController {
   /** GET /api/v1/students/fees */
   @Get('fees/list')
   async getFees(@Request() req: any, @Query() query: FeeQueryDto) {
-    const { schoolSlug } = this.ctx(req);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    if (isTeacherCaller(requestingUser)) throw new ForbiddenException(TEACHER_NO_FINANCE_MESSAGE);
     return this.studentsService.getFees(schoolSlug, query);
   }
 
   /** GET /api/v1/students/:id/fees/statement */
   @Get(':id/fees/statement')
   async getFeeStatement(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    if (isTeacherCaller(requestingUser)) throw new ForbiddenException(TEACHER_NO_FINANCE_MESSAGE);
     return this.studentsService.getFeeStatement(id, schoolSlug);
   }
 

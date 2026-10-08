@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { PTMService } from './ptm.service';
 import { STAFF_WRITE_ROLES } from '../../auth/role-sets';
+import { projectForTeacher } from '../../students/teacher-student-projection.util';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('teaching/ptm')
@@ -17,7 +18,7 @@ export class PTMController {
 
   @Get()
   async getMeetings(@Request() req: any, @Query() query: any) {
-    return this.service.getMeetings(req.user.tenantId, query, req.user);
+    return projectForTeacher(req.user, await this.service.getMeetings(req.user.tenantId, query, req.user));
   }
 
   @Get('upcoming/mine')
@@ -25,41 +26,41 @@ export class PTMController {
     // Meetings are keyed by Staff._id - req.user's own staffId isn't
     // guaranteed to be on every JWT yet, so this accepts an explicit
     // teacherId query param for now rather than guessing.
-    return this.service.getUpcomingForTeacher(teacherId, req.user.tenantId);
+    return projectForTeacher(req.user, await this.service.getUpcomingForTeacher(teacherId, req.user.tenantId));
   }
 
   @Get('student/:studentId/history')
   async getStudentHistory(@Param('studentId') studentId: string, @Request() req: any) {
-    return this.service.getStudentHistory(studentId, req.user.tenantId);
+    return projectForTeacher(req.user, await this.service.getStudentHistory(studentId, req.user.tenantId));
   }
 
   @Get(':id')
   async getById(@Param('id') id: string, @Request() req: any) {
-    return this.service.getMeetingById(id, req.user.tenantId);
+    return projectForTeacher(req.user, await this.service.getMeetingById(id, req.user.tenantId));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post()
   async create(@Body() dto: any, @Request() req: any) {
-    return this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name, req.user.userId, req.user);
+    return projectForTeacher(req.user, await this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name, req.user.userId, req.user));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/confirm')
   async confirm(@Param('id') id: string, @Request() req: any) {
-    return this.service.confirmMeeting(id, req.user.tenantId);
+    return projectForTeacher(req.user, await this.service.confirmMeeting(id, req.user.tenantId));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/reschedule')
   async reschedule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    return this.service.reschedule(id, req.user.tenantId, dto, req.user);
+    return projectForTeacher(req.user, await this.service.reschedule(id, req.user.tenantId, dto, req.user));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/outcome')
   async recordOutcome(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    return this.service.recordOutcome(id, req.user.tenantId, dto, req.user);
+    return projectForTeacher(req.user, await this.service.recordOutcome(id, req.user.tenantId, dto, req.user));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
@@ -68,12 +69,12 @@ export class PTMController {
     @Param('id') id: string, @Param('actionItemId') actionItemId: string,
     @Body() dto: { status: 'pending' | 'done' }, @Request() req: any,
   ) {
-    return this.service.updateActionItem(id, actionItemId, req.user.tenantId, dto.status);
+    return projectForTeacher(req.user, await this.service.updateActionItem(id, actionItemId, req.user.tenantId, dto.status));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/cancel')
   async cancel(@Param('id') id: string, @Body() dto: { reason: string }, @Request() req: any) {
-    return this.service.cancelMeeting(id, req.user.tenantId, dto.reason, req.user.name);
+    return projectForTeacher(req.user, await this.service.cancelMeeting(id, req.user.tenantId, dto.reason, req.user.name));
   }
 }
