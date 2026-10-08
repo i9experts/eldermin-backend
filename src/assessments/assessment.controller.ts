@@ -22,7 +22,7 @@ import {
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
 } from './dto/assessment.dto';
-import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
@@ -109,6 +109,7 @@ export class AssessmentController {
     return this.service.getStudentReportCard(assessmentId, studentId, schoolSlug);
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
   @Post('report-cards/generate')
   async generateReportCards(@Body() dto: GenerateReportCardsDto, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -126,6 +127,7 @@ export class AssessmentController {
     return this.service.updateReportCardRemarks(id, schoolSlug, dto, requestingUser);
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
   @Post('report-cards/publish')
   async publishResults(@Body() dto: PublishResultDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
@@ -354,6 +356,7 @@ export class AssessmentController {
     return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName }, requestingUser);
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
   @Patch('marks/verify')
   async verifyMarks(@Body() dto: VerifyMarksDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
