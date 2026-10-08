@@ -41,6 +41,13 @@ Details: `docs/staff-portal/PHASE6_FIXES.md` (second half). Role `teacher` only 
 - **Curriculum:** teachers see only `status: active` (list forced, detail 404); other roles tenant-wide as today.
 - Tests: 4 new specs/rows (+132 tests); full suite 48 suites / 945 tests, `npm run build` clean.
 
+### Phase 6 round 3: B5 owner fields, marks lock, upload 503, malformed ids
+Details: `docs/staff-portal/PHASE6_FIXES.md` (last section). Messages the app should mirror:
+- **B5 round 2 (teacher, pending owner confirmation):** also hides guardian email (incl. PTM `guardianEmail`), address fields, `documents[]`/file urls, hostel, transport except route name, and all medical except `allergies` + `emergencyAction`. DOB kept. Blood group is hidden (open question).
+- **Marks lock (teacher):** `POST /assessments/marks/bulk` and `POST quiz-attempts/:id/grade` return 403 `Results for this assessment are published (or the assessment is cancelled): marks can no longer be changed. Contact an administrator.` for `result_published`/`cancelled`/`resultPublished`. `draft` is not blocked server-side. Admin roles unchanged.
+- **Upload (all roles, failure path):** 503 `File uploads are not available on this server (storage is not configured).` when S3 credentials are missing; no AWS call.
+- **Malformed ids (all roles, error path):** 400 `Invalid <lesson plan|assignment|submission|meeting|student|behaviour record|quiz attempt|report card> id` instead of 500.
+
 ### Docs
 `docs/staff-portal/`: `PHASE1_REPORT.md`, `guard-inventory.md`, `guards-added.md`, `hardening-backlog.md` (now with a FIXED/OPEN table for the Phase 6 candidates), `PHASE4_ADDITIONS.md`, `PHASE6_FIXES.md`, this file.
 
@@ -56,7 +63,7 @@ The branch was rebased onto the latest `origin/main` (11 commits ahead of the ol
 - Remaining known gaps (not fixed here, listed in `hardening-backlog.md`): `/roles` create/assign and most of `/hr/*` unguarded, `ModulesController` trusts `x-school-slug`, student class/campus scoping (fee/phone/id fields are now stripped for teachers), attendance scope holes, marks/bulk has no assessment ownership scoping for teachers, `GET library/books/:id` writes on GET and returns borrower history (`academics.service.ts:531-545`), `library/search` unscoped, `GET /assessments` campus-only with no max limit, published report cards still editable, admin roles can still re-grade quizzes and overwrite verified marks via marks/bulk.
 
 ## Testing
-`npm run build` clean; `npx jest`: 48 suites / 945 tests pass (latest; was 42 / 772 before the B0 and follow-up work) (Phase 6 added 64 tests across four specs; Phase 4 added 20; identity and notification hooks have their own specs). All with in-memory fakes, no DB. Non-teacher role matrices (principal, admin, institution_owner, vice_principal, academic_coordinator, super_admin) assert unchanged behaviour for each Phase 6 fix.
+`npm run build` clean; `npx jest`: 51 suites / 993 tests pass (latest; was 48 / 945 before round 3, 42 / 772 before the B0 and follow-up work) (Phase 6 added 64 tests across four specs; Phase 4 added 20; identity and notification hooks have their own specs). All with in-memory fakes, no DB. Non-teacher role matrices (principal, admin, institution_owner, vice_principal, academic_coordinator, super_admin) assert unchanged behaviour for each Phase 6 fix.
 
 ## Deploy notes
 1. **Before deploying, run the pre-flight Mongo query (read-only) against production** to find logins that could lose access to the newly guarded admin routes (custom-role trap; full reasoning in `docs/staff-portal/guard-inventory.md` section 4.2):

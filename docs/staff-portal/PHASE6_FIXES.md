@@ -73,3 +73,31 @@ Tests: `src/assessments/result-publication-guards.spec.ts` (39: metadata, each a
 
 ## Totals
 Full suite after these four commits: 48 suites / 945 tests, `npm run build` clean.
+
+# Phase 6 round 3: B5 owner fields, marks lock, upload 503, malformed ids (branch `feat/staff-portal`)
+
+All for role `teacher` only except the two error-path fixes (3, 4) which apply to every role and change only a failure response. Other roles are proven unchanged by matrix tests.
+
+## Item 1. B5 remaining fields (owner-stated 2026-10-08, PENDING OWNER CONFIRMATION)
+Code: `src/students/teacher-student-projection.util.ts` (same helper, same endpoints incl. all `/teaching/ptm` responses; `TEACHER_STUDENT_SELECT` extended for the DB-side exclusion). Tests: `src/students/teacher-student-projection.spec.ts` (68, deep scan per endpoint: removed keys gone, DOB / guardian name+relation+isPrimary / allergies / route name / attendance / behaviour / assessments / PTM guardianName survive; every other role gets the same object back).
+- Hidden, any depth: any key containing `email` (`guardians[].email`, `personalEmail`, PTM `guardianEmail`); address keys (`address, town, city, province, country, postalCode`, `permanent*`, `previousSchoolCity`, any key containing address/street/postal/zip/geo/latitude/longitude/mailing/pickup/dropoff); `documents[]` and any `fileUrl`/`documentUrl`; any key containing `hostel` (`hostelResident`, `hostelRoom`); transport: everything except the route name (`transportRequired`, `transportStop`, any other `transport*`, stops, driver, vehicle, fees; a nested `transport` object keeps only `routeName`/`route`/`name`).
+- Medical (schema `MedicalInfo`, `student.schema.ts:60-74`): the `medical` object keeps ONLY `allergies` and `emergencyAction` (the schema's medical emergency procedure, i.e. the critical alert). Dropped: `bloodGroup, medications, conditions, doctorName, doctorPhone, doctorClinic, peRestrictions, dietaryRestrictions, insuranceProvider, insurancePolicyNumber, specialNeedsDetail`. Decision for the owner: is `bloodGroup` a critical alert? It is NOT kept (listed as an open question in `B5_OWNER_DECISIONS.md`).
+- Kept: DOB (`dateOfBirth`, `dateOfBirthInWords`, `placeOfBirth`), guardian `name/relation/isPrimary`, `transportRoute`, everything the Teacher app parses.
+- Not done (open question, doc): `/students/:id/medical|notes|documents|academic-history`, `profile-pdf`, `reports/*` are still unprojected.
+
+## Item 2. Server-side marks lock (teacher)
+Code: `assessment.service.ts` `assertTeacherMarksNotLocked`, `TEACHER_MARKS_LOCKED_MESSAGE`. Status enum: `assessments/schemas/assessment.schema.ts:57` (`draft, scheduled, ongoing, completed, result_published, cancelled`) plus the flag `resultPublished` (`:62`). A teacher gets 403 `Results for this assessment are published (or the assessment is cancelled): marks can no longer be changed. Contact an administrator.` when `status` is `result_published` or `cancelled` OR `resultPublished === true`. Checked before any validation and write in `POST /assessments/marks/bulk`, and in `POST /assessments/quiz-attempts/:id/grade` (decision: the quiz grade writes a MarkEntry, so it follows the same lock; the attempt is not saved either). Draft: the server does NOT block `draft` (unchanged; the app disables entry; no new server rule). `scheduled/ongoing/completed` unchanged. Admin-set roles can still edit. Tests: `src/assessments/marks-lock-teacher.spec.ts` (nothing written on 403).
+
+## Item 3. Upload without storage configuration
+Code: `src/upload/upload.service.ts` (`isStorageConfigured`, `assertStorageConfigured`). When `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` (or the bucket) is missing/blank, `POST /upload/single/:folder`, `/multiple/:folder`, `GET /upload/signed-url`, `DELETE /upload` (and the internal `getFileBuffer`) answer 503 `File uploads are not available on this server (storage is not configured).` before the SDK is touched (AWS is never contacted). All roles; configured servers behave exactly as before. Tests: `src/upload/upload.service.spec.ts`.
+
+## Item 4. Malformed ObjectId -> 400
+New `src/common/utils/object-id.util.ts` (`assertValidObjectId`, 24-hex only). 400 `Invalid <x> id` replaces the CastError 500 (error path only, all roles; a well-formed unknown id behaves as before: lesson-plan teacher `null`, assignment 404, etc.):
+- `PATCH /teaching/lesson-plans/:id` (`Invalid lesson plan id`), `/:id/approve`, `/:id/reject`.
+- `PATCH/DELETE /teaching/assignments/:id`, `GET /assignments/:id/submissions`, `PATCH /assignments/:id/submissions/:sid` (`Invalid assignment id` / `Invalid submission id`), `PATCH /teaching/behaviour/:id` (`Invalid behaviour record id`).
+- `/teaching/ptm`: `:id`, `:id/confirm|reschedule|outcome|cancel|action-items/:aid` (`Invalid meeting id`), `student/:studentId/history` (`Invalid student id`).
+- `/behaviour/records/:id` (GET, PUT, `/resolve`) and `/behaviour/students/:studentId/profile`.
+- `GET /students/:id`, `/:id/360`, `/:id/attendance/summary` (`Invalid student id`).
+- `GET /assessments/quiz-attempts/:id`, `POST .../:id/grade` (`Invalid quiz attempt id`); `PATCH report-cards/:id/remarks`: admin roles 400 `Invalid report card id` (teacher keeps its documented 404).
+Tests: `src/common/utils/object-id.util.spec.ts`. Some older specs used fake ids like `'a1'`; they now use 24-hex ids.
+
