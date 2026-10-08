@@ -1,4 +1,5 @@
 import { Optional, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { assertValidObjectId } from '../../common/utils/object-id.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -136,6 +137,7 @@ export class PTMService {
   }
 
   async getMeetingById(id: string, tenantId: string) {
+    assertValidObjectId(id, 'meeting');
     const meeting = await this.ptmModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!meeting) throw new NotFoundException('Meeting not found');
     return meeting;
@@ -143,6 +145,7 @@ export class PTMService {
 
   /** "Historical Data" - every past PTM for a student, oldest problems and progress visible together. */
   async getStudentHistory(studentId: string, tenantId: string) {
+    assertValidObjectId(studentId, 'student');
     return this.ptmModel
       .find({ tenantId: this.tid(tenantId), studentId: new Types.ObjectId(studentId) })
       .sort({ scheduledDate: -1 })
@@ -150,6 +153,7 @@ export class PTMService {
   }
 
   async confirmMeeting(id: string, tenantId: string) {
+    assertValidObjectId(id, 'meeting');
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId), status: 'requested' },
       { $set: { status: 'confirmed' } }, { new: true },
@@ -160,6 +164,7 @@ export class PTMService {
   }
 
   async reschedule(id: string, tenantId: string, data: { scheduledDate: string; startTime?: string; endTime?: string }, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'meeting');
     await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId), status: { $in: ['requested', 'confirmed'] } },
@@ -174,6 +179,7 @@ export class PTMService {
 
   /** E-Management - record what actually happened once the meeting takes place. */
   async recordOutcome(id: string, tenantId: string, data: { meetingNotes?: string; actionItems?: any[]; parentAttended: boolean }, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'meeting');
     await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!meeting) throw new NotFoundException('Meeting not found');
@@ -192,6 +198,7 @@ export class PTMService {
   }
 
   async updateActionItem(meetingId: string, actionItemId: string, tenantId: string, status: 'pending' | 'done') {
+    assertValidObjectId(meetingId, 'meeting');
     const meeting = await this.ptmModel.findOne({ _id: meetingId, tenantId: this.tid(tenantId) });
     if (!meeting) throw new NotFoundException('Meeting not found');
     const item = meeting.actionItems.find((a: any) => String(a._id) === actionItemId);
@@ -202,6 +209,7 @@ export class PTMService {
   }
 
   async cancelMeeting(id: string, tenantId: string, reason: string, cancelledBy: string) {
+    assertValidObjectId(id, 'meeting');
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'cancelled', cancelledReason: reason, cancelledBy } }, { new: true },
