@@ -110,7 +110,7 @@ export class AcademicsController {
 
   @Get('curriculum')
   getCurricula(@Request() req, @Query() q: any) {
-    return this.academicsService.getCurricula(req.user.tenantId, q);
+    return this.academicsService.getCurricula(req.user.tenantId, q, req.user);
   }
 
   @Post('curriculum')
@@ -122,7 +122,7 @@ export class AcademicsController {
 
   @Get('curriculum/:id')
   getCurriculumById(@Request() req, @Param('id') id: string) {
-    return this.academicsService.getCurriculumById(req.user.tenantId, id);
+    return this.academicsService.getCurriculumById(req.user.tenantId, id, req.user);
   }
 
   @Patch('curriculum/:id')

@@ -21,6 +21,7 @@ import { buildSubjectCategoryInUseMessage } from './subject-category-reference.u
 import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
 import { mergeClassAssignment } from './subject-assign.util';
 import { computeLibraryFine } from './library-fine.util';
+import { isTeacherCaller } from '../../staff-portal/teacher-identity.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
@@ -384,18 +385,23 @@ export class AcademicsService {
 
   // ─── CURRICULUM ───────────────────────────────────────────────────────────────
 
-  async getCurricula(tenantId: string, query: any = {}) {
+  async getCurricula(tenantId: string, query: any = {}, requestingUser?: { role?: string; primaryRole?: string }) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.gradeLevel)        filter.gradeLevel = query.gradeLevel;
     if (query.status)            filter.status = query.status;
     if (query.framework)         filter.framework = query.framework;
     if (query.academicYearLabel) filter.academicYearLabel = query.academicYearLabel;
     if (query.subjectId)         filter.subjectId = this.oid(query.subjectId);
+    // Teacher role: only published ('active') curricula; drafts and archived are never returned, whatever `status` they ask for
+    // (Curriculum.status enum: draft | active | archived, schemas/curriculum.schema.ts:38). Other roles: tenant-wide as before.
+    if (isTeacherCaller(requestingUser)) filter.status = 'active';
     return this.curriculumModel.find(filter).sort({ gradeLevel: 1, subjectName: 1 }).lean();
   }
 
-  async getCurriculumById(tenantId: string, id: string) {
-    const doc = await this.curriculumModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+  async getCurriculumById(tenantId: string, id: string, requestingUser?: { role?: string; primaryRole?: string }) {
+    // Teacher role: a non-active curriculum answers 404, same as a missing one (no existence leak).
+    const scope: any = isTeacherCaller(requestingUser) ? { status: 'active' } : {};
+    const doc = await this.curriculumModel.findOne({ _id: id, tenantId: this.tid(tenantId), ...scope }).lean();
     if (!doc) throw new NotFoundException('Curriculum not found');
     return doc;
   }
