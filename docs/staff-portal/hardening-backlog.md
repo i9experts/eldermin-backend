@@ -104,10 +104,12 @@ Source: `PHASE6B_REPORT.md` (section 7 candidates) plus the Phase 6 fixes on `fe
 | 19 | JWT carries no `academicYear` (the app sends `x-academic-year`; the controller falls back to a hard-coded `'2025-26'`) | OPEN | `jwt.strategy.ts`; `assessment.controller.ts` `ctx()` |
 | 20 | Non-atomic `marks/bulk` (`bulkWrite` is ordered; a mid-batch failure leaves a written prefix) | OPEN (note) | `bulkEnterMarks` |
 | 21 | MarkEntry/quiz upsert read-then-write is not atomic (a manual entry created between the check and the upsert could be overwritten; unique index prevents duplicates) | OPEN (narrow race, noted) | `upsertMarkEntryFromAttempt` |
-| 22 | Assessment status gate (marks only while `ongoing`/`completed`) is app-side only | OPEN (product question 1 in PHASE6B_REPORT) | - |
+| 22 | Assessment status gate (marks only while `ongoing`/`completed`) is app-side only | PARTLY FIXED (teacher): server 403 on `result_published`/`cancelled`/`resultPublished` for marks/bulk and quiz grading; `draft` is still accepted by the server (app disables it) | `assessment.service.ts` `assertTeacherMarksNotLocked` |
 | 23 | B4: `PATCH marks/verify`, `POST report-cards/generate|publish` open to any token | FIXED (all non-admin roles incl. teacher get 403; admin set only, sub-module custom-role grants) | `assessment.controller.ts` |
-| 24 | B5: student list/detail/360/PTM fee, guardian phone, national id, income fields | FIXED (teacher): shared deny-list projection, no fee reads, fee list/statement 403 | `students/teacher-student-projection.util.ts` |
+| 24 | B5: student list/detail/360/PTM fee, guardian phone, national id, income fields; round 2: guardian email, address, documents, hostel, transport detail, non-critical medical | FIXED (teacher): shared deny-list projection, no fee reads, fee list/statement 403; round 2 PENDING OWNER CONFIRMATION (see B5_OWNER_DECISIONS.md) | `students/teacher-student-projection.util.ts` |
 | 25 | Student list/detail/360 are not class/campus scoped for teachers; `/students/:id/medical|notes|documents`, `profile-pdf`, `reports/*` unprojected | OPEN | `students.controller.ts` |
+| 27 | `POST /upload/*` returned a bare 500 and the AWS SDK sent a PUT to AWS with an empty key when credentials were missing | FIXED (all roles, failure path only): 503 before the SDK is called | `upload.service.ts` |
+| 28 | Malformed ObjectId in `:id` gave a CastError 500 (lesson plans, assignments, submissions, PTM, behaviour, student by id, quiz attempts, report-card remarks for admin) | FIXED (all roles, error path only): 400 `Invalid <x> id`; list in PHASE6_FIXES.md round 3 | `common/utils/object-id.util.ts` |
 | 26 | Web shows Verify/Generate/Publish to teachers (`assessments:manage` includes teacher) | OPEN (web follow-up; the calls now 403) | web |
 
 ### Remaining OPEN after this round (summary)
