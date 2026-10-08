@@ -4,7 +4,7 @@ import { makeAssessmentService, oid, teacherUser } from './assessment-test-fakes
 const q1 = oid(); const q2 = oid(); const qAuto = oid();
 const questions = [{ _id: q1, marks: 5 }, { _id: q2, marks: 10 }, { _id: qAuto, marks: 2 }];
 const paper = { sections: [{ questionIds: [q1, q2, qAuto] }] };
-const teaches = { isClassTeacher: false, currentAssignments: [{ gradeLevel: 'Grade 5', sectionName: 'A' }] };
+const teaches = { isClassTeacher: false, currentAssignments: [{ gradeLevel: 'Grade 5', sectionName: 'A', subjectName: 'Math' }] };
 
 function mkAttempt(over: any = {}) {
   const a: any = {

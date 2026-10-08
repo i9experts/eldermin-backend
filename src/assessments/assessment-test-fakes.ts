@@ -20,6 +20,7 @@ export interface FakeOpts {
   attempt?: any;         // quiz attempt doc (for findOne)
   attempts?: any[];      // quiz attempts for find()
   students?: any;
+  studentRows?: any[];   // studentModel.find() result (section fallback for attempts without one)
   existingMarkEntry?: any;
   questions?: any[];
   paper?: any;
@@ -52,11 +53,11 @@ export function makeAssessmentService(o: FakeOpts = {}) {
   };
   const examPaperModel: any = { findOne: jest.fn(() => chain(o.paper ?? null)) };
   const questionModel: any = { find: jest.fn(() => chain(o.questions ?? [])) };
-  const studentModel: any = { findOne: jest.fn(() => chain(o.students ?? null)), findById: jest.fn(() => chain(o.students ?? null)) };
+  const studentModel: any = { findOne: jest.fn(() => chain(o.students ?? null)), findById: jest.fn(() => chain(o.students ?? null)), find: jest.fn(() => chain(o.studentRows ?? [])) };
   const noop: any = {};
   const service = new AssessmentService(
     assessmentModel, questionModel, markModel, reportCardModel, examPaperModel, noop, quizAttemptModel,
     studentModel, noop, noop, noop, staffModel, teacherProfileModel, noop, noop, noop,
   );
-  return { service, assessmentModel, markModel, reportCardModel, quizAttemptModel, staffModel, teacherProfileModel, examPaperModel, questionModel };
+  return { service, studentModel, assessmentModel, markModel, reportCardModel, quizAttemptModel, staffModel, teacherProfileModel, examPaperModel, questionModel };
 }
