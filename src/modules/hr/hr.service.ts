@@ -1648,7 +1648,13 @@ export class HrService {
     // cleared here - tax and PF stay untouched, owed to a different party
     // and settled by a separate remittance, not by paying the employee.
     if (status === 'paid') {
-      const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) }).lean();
+      // Scoped to payslips not already individually settled via
+      // payIndividualPayslip below - otherwise a run with some employees
+      // already paid one at a time would get double-paid here (the
+      // Salaries Payable leg already cleared for them would be cleared
+      // again, and their paidAt would get overwritten by this batch's
+      // payment date).
+      const payslips = await this.payslipModel.find({ tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id), status: { $ne: 'paid' } }).lean();
       const totalPayable = payslips.reduce((sum, p: any) =>
         sum + (p.netSalary || 0) + (p.loanDeduction || 0) + (p.leaveDeduction || 0) + (p.otherDeductions || 0), 0);
 
@@ -1685,13 +1691,91 @@ export class HrService {
 
       // Payslip.status/paidAt were stubbed fields nothing ever set - a
       // payslip stayed 'draft' forever even after its run was fully paid.
+      // Only touches the payslips just paid above, not ones already
+      // individually settled earlier.
       await this.payslipModel.updateMany(
-        { tenantId: this.newTid(tenantId), payrollRunId: this.newTid(id) },
+        { _id: { $in: payslips.map((p: any) => p._id) } },
         { $set: { status: 'paid', paidAt: paymentDate } },
       );
     }
 
     return updated;
+  }
+
+  /** Settles a single employee's payslip instead of the whole run at
+   * once - the run-level 'paid' transition above always was, and still
+   * is, the only way to batch-pay everyone together, but a school may
+   * need to pay most of a run on one date and one or two stragglers
+   * later (an employee who was on leave, a correction being finalized).
+   * Mirrors the run-level payment exactly (same PayrollPayment audit
+   * trail shape, same Salaries Payable clearing journal entry) just
+   * scoped to one payslip's own payable amount. Once every payslip on
+   * the run has been settled this way, the run itself is flipped to
+   * 'paid' too, so it stops showing as outstanding - no further ledger
+   * posting happens at that point since each payslip's own settlement
+   * already covered it. */
+  async payIndividualPayslip(
+    tenantId: string, schoolSlug: string | undefined, payslipId: string, userId: string,
+    payment: { paymentMethod?: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string },
+  ) {
+    const payslip: any = await this.payslipModel.findOne({ _id: payslipId, tenantId: this.newTid(tenantId) });
+    if (!payslip) throw new NotFoundException('Payslip not found');
+    if (payslip.status === 'paid') throw new BadRequestException('This payslip has already been paid.');
+
+    const run = await this.payrollRunModel.findOne({ _id: payslip.payrollRunId, tenantId: this.newTid(tenantId) });
+    if (!run || run.status !== 'approved') {
+      throw new BadRequestException('This payslip can only be paid once its payroll run has been approved.');
+    }
+    if (!payment?.paymentMethod) throw new BadRequestException('paymentMethod is required to pay a payslip');
+    if (payment.paymentMethod !== 'cash' && !payment.bankAccountId) {
+      throw new BadRequestException('bankAccountId is required for a non-cash payment method');
+    }
+
+    const payable = (payslip.netSalary || 0) + (payslip.loanDeduction || 0) + (payslip.leaveDeduction || 0) + (payslip.otherDeductions || 0);
+    const paymentDate = payment.paymentDate ? new Date(payment.paymentDate) : new Date();
+    const paymentMethod = payment.paymentMethod;
+    let bankAccountName: string | undefined;
+    if (payment.bankAccountId) {
+      const bankAcc = await this.bankAccountModel.findOne({ _id: payment.bankAccountId, schoolSlug }).lean();
+      if (!bankAcc) throw new BadRequestException('Selected bank account was not found');
+      bankAccountName = `${bankAcc.bankName} — ${bankAcc.accountTitle}`;
+    }
+
+    const paymentRecord = await this.payrollPaymentModel.create({
+      tenantId: this.newTid(tenantId), payrollRunId: payslip.payrollRunId, payslipId: payslip._id,
+      periodLabel: payslip.periodLabel, amount: payable, paymentDate, paymentMethod,
+      referenceNumber: payment.referenceNumber,
+      bankAccountId: payment.bankAccountId, bankAccountName,
+      paidBy: this.newTid(userId),
+    });
+
+    if (payable > 0) {
+      await this.safePostJournal(schoolSlug, {
+        date: paymentDate, reference: payslip.periodLabel, narration: `Salary payment — ${payslip.staffName || ''} — ${payslip.periodLabel}`,
+        sourceType: 'payroll_payment', sourceId: String(paymentRecord._id),
+        lines: [
+          { accountCode: '2100', debit: payable },
+          {
+            accountCode: this.financeService.mapPaymentMethodToAccount(paymentMethod), credit: payable,
+            bankAccountId: payment.bankAccountId, bankAccountName,
+          },
+        ],
+      });
+    }
+
+    await this.payslipModel.updateOne({ _id: payslip._id }, { $set: { status: 'paid', paidAt: paymentDate } });
+
+    const remaining = await this.payslipModel.countDocuments({
+      tenantId: this.newTid(tenantId), payrollRunId: payslip.payrollRunId, status: { $ne: 'paid' },
+    });
+    if (remaining === 0) {
+      await this.payrollRunModel.updateOne(
+        { _id: payslip.payrollRunId },
+        { $set: { status: 'paid', paymentDate } },
+      );
+    }
+
+    return this.payslipModel.findById(payslip._id).lean();
   }
 
   async getPayrollPayments(tenantId: string, payrollRunId?: string) {
