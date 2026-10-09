@@ -23,7 +23,7 @@ import { ClassDiaryEntry, ClassDiaryEntryDocument } from './schemas/class-diary.
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
-import { resolveCampusScope, resolveDepartmentScope, ScopedUser } from '../../auth/scope.util';
+import { resolveCampusScope, resolveDepartmentScope, buildInclusiveCampusFilter, ScopedUser } from '../../auth/scope.util';
 import { PdfService } from '../../pdf/pdf.service';
 import { GradeSubmissionDto } from './dto/assignment.dto';
 
@@ -92,9 +92,19 @@ export class TeachingService {
   async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (requestingUser) {
-      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      // Inclusive, not a hard filter: syncTeacherProfilesFromHR (below)
+      // writes campusId: null for any Staff record without a campus set on
+      // it, which is the normal state for a school that hasn't gotten
+      // around to assigning campuses yet - a campus-scoped admin used to
+      // have those profiles silently excluded by resolveCampusScope's hard
+      // `filter.campusId = user.campusId` (a profile with no campus never
+      // equals their specific campusId), so "Sync from HR" could report
+      // "22 updated" while the Teacher Directory kept showing 0. Same
+      // inclusive-or-null convention already used for e.g. school-wide
+      // circulars (buildInclusiveCampusFilter).
+      const campusFilter = buildInclusiveCampusFilter(requestingUser, undefined);
+      if (campusFilter) Object.assign(filter, campusFilter);
       const effectiveDepartment = resolveDepartmentScope(requestingUser, undefined);
-      if (effectiveCampusId) filter.campusId = effectiveCampusId;
       if (effectiveDepartment) filter.department = effectiveDepartment;
     }
     return this.teacherProfileModel
@@ -112,12 +122,28 @@ export class TeachingService {
   }
 
   async createTeacherProfile(tenantId: string, institutionId: string, data: any) {
-    return this.teacherProfileModel.create({
-      ...data,
-      tenantId: this.tid(tenantId),
-      institutionId: new Types.ObjectId(institutionId),
-      campusId: data.campusId ? new Types.ObjectId(data.campusId) : null,
-    });
+    // staffId is a required ObjectId reference (teacher-profile.schema.ts)
+    // - a Teaching Profile always describes a real HR Staff record, never
+    // a free-standing one. The frontend now blocks submitting without a
+    // linked staff record, but this validates server-side too rather than
+    // trusting the client, same as `createLessonPlan` just below already
+    // does for its own required fields.
+    if (!data.staffId || !Types.ObjectId.isValid(data.staffId)) {
+      throw new BadRequestException('A valid HR staff record must be linked to create a Teaching Profile.');
+    }
+    try {
+      return await this.teacherProfileModel.create({
+        ...data,
+        tenantId: this.tid(tenantId),
+        staffId: new Types.ObjectId(data.staffId),
+        institutionId: new Types.ObjectId(institutionId),
+        campusId: data.campusId ? new Types.ObjectId(data.campusId) : null,
+      });
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError') throw new BadRequestException(err.message);
+      if (err.code === 11000) throw new ConflictException('A Teaching Profile already exists for this staff member.');
+      throw err;
+    }
   }
 
   async updateTeacherProfile(tenantId: string, id: string, data: any) {
