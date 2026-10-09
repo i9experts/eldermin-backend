@@ -266,7 +266,7 @@ export class AssessmentController {
   @Roles(...QUESTION_BANK_EDITOR_ROLES)
   async bulkImportQuestions(@Body() dto: { rows: any[] }, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
-    return this.service.bulkImportQuestions(schoolSlug, userName, dto?.rows || []);
+    return this.service.bulkImportQuestions(schoolSlug, userName, dto?.rows || [], req?.user?.tenantId);
   }
 
   @Post('questions/ai-classify-blooms') @HttpCode(HttpStatus.OK)
