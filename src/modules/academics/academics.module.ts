@@ -15,6 +15,7 @@ import { Timetable, TimetableSchema } from '../teaching/schemas/timetable.schema
 import { ElectiveGroup, ElectiveGroupSchema } from '../teaching/schemas/elective-group.schema';
 import { Student, StudentSchema } from '../../students/schemas/student.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../teaching/schemas/teacher-profile.schema';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
       // collections.
       { name: Student.name, schema: StudentSchema },
       { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
     ]),
   ],
   controllers: [AcademicsController],
