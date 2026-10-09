@@ -24,8 +24,9 @@ import { QuizAttempt, QuizAttemptDocument } from './schemas/quiz-attempt.schema'
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
-import { Campus } from '../organization/schemas/organization.schema';
+import { Campus, Grade, GradeDocument } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
+import { Subject, SubjectDocument } from '../modules/academics/schemas/subject.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 import {
@@ -69,6 +70,8 @@ export class AssessmentService {
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
+    @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
+    @InjectModel(Subject.name) private subjectModel: Model<SubjectDocument>,
     private configService: ConfigService,
     private pdfService: PdfService,
     private uploadService: UploadService,
@@ -1097,7 +1100,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
    * bulkImportCOA (finance) and bulkImportFeeAssignments (finance) - never
    * a raw insertMany, so one malformed row never sinks the whole file and
    * every outcome is visible to the uploader, not silently swallowed. */
-  async bulkImportQuestions(schoolSlug: string, addedBy: string, rows: any[]) {
+  async bulkImportQuestions(schoolSlug: string, addedBy: string, rows: any[], tenantId?: string) {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new BadRequestException('No rows to import.');
     }
@@ -1105,20 +1108,57 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const validBlooms = ['remember', 'understand', 'apply', 'analyze', 'evaluate', 'create'];
     const validDifficulty = ['easy', 'medium', 'hard'];
 
+    // Resolve each row's free-typed subject/grade against the school's own
+    // canonical Subjects/Grades lists instead of trusting the spreadsheet
+    // text verbatim. Previously a bulk-imported row like "Maths"/"Grade-5"
+    // was stored exactly as typed, while a manually-created question's
+    // subject/grade always came from these same canonical `name` values
+    // (AddQuestionModal's dropdowns) - so the exam-paper builder's
+    // subject/grade filter (an exact client-side string compare) matched
+    // manual questions but silently excluded every bulk-imported one whose
+    // spelling/spacing drifted even slightly, with no indication why.
+    // Matching here is normalized (lowercase, non-alphanumeric stripped) so
+    // "Grade 5" / "Grade-5" / "grade5" all resolve to the same canonical
+    // Grade, and the exact canonical `name` is stored - guaranteeing every
+    // bulk-imported question is reachable by the same filters a manually
+    // created one already is.
+    const normKey = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const [subjectDocs, gradeDocs] = await Promise.all([
+      tenantId ? this.subjectModel.find({ tenantId }).select('name').lean() : Promise.resolve([] as any[]),
+      this.gradeModel.find({ schoolSlug, isActive: true }).select('name').lean(),
+    ]);
+    const subjectByKey = new Map<string, string>(subjectDocs.map((s: any) => [normKey(s.name), s.name]));
+    const gradeByKey = new Map<string, string>(gradeDocs.map((g: any) => [normKey(g.name), g.name]));
+
     const results: Array<{ row: number; status: 'created' | 'skipped' | 'error'; message?: string }> = [];
 
     for (let i = 0; i < rows.length; i++) {
       const raw = rows[i] || {};
-      const subject = String(raw.subject || '').trim();
-      const grade = String(raw.grade || '').trim();
+      const rawSubject = String(raw.subject || '').trim();
+      const rawGrade = String(raw.grade || '').trim();
       const type = String(raw.type || '').trim().toLowerCase();
       const questionText = String(raw.questionText || '').trim();
 
       try {
-        if (!subject) throw new Error('"subject" is required.');
-        if (!grade) throw new Error('"grade" is required.');
+        if (!rawSubject) throw new Error('"subject" is required.');
+        if (!rawGrade) throw new Error('"grade" is required.');
         if (!questionText) throw new Error('"questionText" is required.');
         if (!validTypes.includes(type)) throw new Error(`"type" must be one of: ${validTypes.join(', ')}.`);
+
+        // Fall back to the raw (trimmed) value when the canonical list
+        // couldn't be resolved at all (e.g. tenantId missing) rather than
+        // blocking every row - but when the list IS available, an
+        // unresolvable name is almost always a typo the uploader would
+        // want to know about before it silently vanishes from paper
+        // generation later.
+        const subject = subjectDocs.length === 0 ? rawSubject : subjectByKey.get(normKey(rawSubject));
+        if (!subject) {
+          throw new Error(`"subject" "${rawSubject}" doesn't match any subject configured for this school. Valid subjects: ${subjectDocs.map((s: any) => s.name).join(', ')}.`);
+        }
+        const grade = gradeDocs.length === 0 ? rawGrade : gradeByKey.get(normKey(rawGrade));
+        if (!grade) {
+          throw new Error(`"grade" "${rawGrade}" doesn't match any grade configured for this school. Valid grades: ${gradeDocs.map((g: any) => g.name).join(', ')}.`);
+        }
 
         const difficulty = raw.difficulty ? String(raw.difficulty).trim().toLowerCase() : 'medium';
         if (!validDifficulty.includes(difficulty)) throw new Error(`"difficulty" must be one of: ${validDifficulty.join(', ')}.`);
