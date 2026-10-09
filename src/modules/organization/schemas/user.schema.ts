@@ -55,6 +55,14 @@ export class User {
   @Prop({ type: Types.ObjectId, ref: 'Role', default: null })
   customRoleId: Types.ObjectId | null;
 
+  // Platform-level mirror of customRoleId, for the Super Admin "Team &
+  // Access" system (PlatformRole) - scopes a super_admin account down to
+  // specific Super Admin tabs instead of the full, unrestricted access
+  // every super_admin has by default. Left unset, a super_admin keeps
+  // working exactly as before (fully unrestricted).
+  @Prop({ type: Types.ObjectId, ref: 'PlatformRole', default: null })
+  customPlatformRoleId: Types.ObjectId | null;
+
   @Prop({ default: true })
   isActive: boolean;
 
