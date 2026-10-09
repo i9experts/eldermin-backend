@@ -18,7 +18,7 @@ import {
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
-import { resolveCampusScope, resolveTeacherGradeScope, ScopedUser } from '../auth/scope.util';
+import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { UploadService } from '../upload/upload.service';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
@@ -309,14 +309,33 @@ export class OrganizationService {
     // Opt-in only (Question Bank, Syllabus) - every other caller of this
     // same endpoint (Institution Setup, Finance, Timetable, …) keeps
     // seeing the full school-wide grade list exactly as before.
+    //
+    // Resolved fresh from the DB rather than from requestingUser (the JWT
+    // payload baked in at login) - an admin assigning a teacher's grades
+    // AFTER that teacher's last login previously had no visible effect
+    // until they logged out and back in, which looked identical to "still
+    // broken" from the admin's side even after fixing the assignment.
     if (assignedOnly && requestingUser) {
-      const assignedGrades = resolveTeacherGradeScope(requestingUser);
+      const assignedGrades = await this.resolveTeacherGradeScopeFresh(requestingUser);
       if (assignedGrades) {
         const escaped = (s: string) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         filter.name = { $in: assignedGrades.map((g) => new RegExp(`^${escaped(g)}$`, 'i')) };
       }
     }
     return this.gradeModel.find(filter).sort({ displayOrder: 1, name: 1 });
+  }
+
+  /** Same contract as resolveTeacherGradeScope (auth/scope.util.ts) -
+   * undefined for a non-teacher or a teacher with nothing assigned yet
+   * (fail open) - but re-queries the teacher's own TeacherProfile live
+   * instead of trusting whatever was baked into the JWT at login time. */
+  private async resolveTeacherGradeScopeFresh(user: ScopedUser): Promise<string[] | undefined> {
+    const role = user.role || user.primaryRole;
+    if (role !== 'teacher' || !user.userId) return undefined;
+    const staff = await this.staffModel.findOne({ userId: user.userId }).select('_id').lean();
+    if (!staff) return undefined;
+    const profile = await this.teacherProfileModel.findOne({ staffId: (staff as any)._id }).select('gradeLevelsCanTeach').lean();
+    return profile?.gradeLevelsCanTeach?.length ? profile.gradeLevelsCanTeach : undefined;
   }
 
   async createGrade(dto: CreateGradeDto) {

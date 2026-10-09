@@ -15,7 +15,8 @@ import { Timetable, TimetableDocument } from '../teaching/schemas/timetable.sche
 import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/elective-group.schema';
 import { Student, StudentDocument } from '../../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
-import { resolveCampusScope, resolveTeacherSubjectScope, ScopedUser } from '../../auth/scope.util';
+import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
+import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
 import { buildSubjectCategoryInUseMessage } from './subject-category-reference.util';
 import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
@@ -42,6 +43,7 @@ export class AcademicsService {
     @InjectModel(SubjectCategory.name) private subjectCategoryModel: Model<SubjectCategoryDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
   ) {}
 
   private tid(t: string) { return t; }
@@ -98,14 +100,33 @@ export class AcademicsService {
     // be scoped to the teacher's own assignment keep seeing the full
     // school-wide list exactly as before, e.g. admins building the master
     // Subjects list itself, or Timetable's own subject pickers.
+    //
+    // Resolved fresh from the DB rather than from requestingUser (the JWT
+    // payload baked in at login) - an admin assigning a teacher's subjects
+    // AFTER that teacher's last login previously had no visible effect
+    // until they logged out and back in, which looked identical to "still
+    // broken" from the admin's side even after fixing the assignment.
     if (query.assignedOnly === 'true' && requestingUser) {
-      const assignedSubjects = resolveTeacherSubjectScope(requestingUser);
+      const assignedSubjects = await this.resolveTeacherSubjectScopeFresh(requestingUser);
       if (assignedSubjects) {
         const escaped = (s: string) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         filter.name = { $in: assignedSubjects.map((s) => new RegExp(`^${escaped(s)}$`, 'i')) };
       }
     }
     return this.subjectModel.find(filter).sort({ name: 1 }).lean();
+  }
+
+  /** Same contract as resolveTeacherSubjectScope (auth/scope.util.ts) -
+   * undefined for a non-teacher or a teacher with nothing assigned yet
+   * (fail open) - but re-queries the teacher's own TeacherProfile live
+   * instead of trusting whatever was baked into the JWT at login time. */
+  private async resolveTeacherSubjectScopeFresh(user: ScopedUser): Promise<string[] | undefined> {
+    const role = user.role || user.primaryRole;
+    if (role !== 'teacher' || !user.userId) return undefined;
+    const staff = await this.staffModel.findOne({ userId: user.userId }).select('_id').lean();
+    if (!staff) return undefined;
+    const profile = await this.teacherProfileModel.findOne({ staffId: (staff as any)._id }).select('subjectsCanTeach').lean();
+    return profile?.subjectsCanTeach?.length ? profile.subjectsCanTeach : undefined;
   }
 
   async createSubject(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {

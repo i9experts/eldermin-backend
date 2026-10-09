@@ -134,9 +134,65 @@ export class TeachingService {
     return { deleted: true };
   }
 
+  /** Was a complete no-op (just counted existing profiles and claimed
+   * "Sync initiated") - a school that only ever filled in a teacher's
+   * subjects/grades through HR's own "Teacher Profile" section (on the
+   * Staff record) and clicked this button saw it report success while
+   * nothing was actually written to the Teaching module's TeacherProfile
+   * collection - the one Question Bank/Syllabus's "assignedOnly" filter
+   * actually reads. Now genuinely upserts a TeacherProfile per teacher
+   * Staff record, merging in whatever subjects/grades HR has on file.
+   * Deliberately additive/non-destructive: HR's own Teacher Profile
+   * section is frequently left blank even for real teachers (subjects are
+   * more often assigned directly via Teaching -> Teachers instead), so
+   * this only ever adds to an existing profile's subjects/grades, never
+   * clears them back to empty just because HR's copy is blank. */
   async syncTeacherProfilesFromHR(tenantId: string, institutionId: string) {
-    const existing = await this.teacherProfileModel.countDocuments({ tenantId: this.tid(tenantId) });
-    return { message: 'Sync initiated', existing };
+    const tid = this.tid(tenantId);
+    const teacherStaff = await this.staffModel.find({ tenantId: tid }).lean();
+
+    let created = 0;
+    let updated = 0;
+    for (const staff of teacherStaff as any[]) {
+      const erpRole = (staff.erpRole || '').toLowerCase().trim();
+      // Mirrors HrService.resolvePrimaryRole's own default: an erpRole
+      // that isn't one of the other recognized roles defaults to teacher.
+      const OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
+        'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
+      const isTeacher = !OTHER_ROLES.includes(erpRole);
+      if (!isTeacher) continue;
+
+      const existing = await this.teacherProfileModel.findOne({ tenantId: tid, staffId: staff._id });
+      const tp = staff.teacherProfile || {};
+      const fields: any = {
+        tenantId: tid,
+        institutionId: staff.institutionId || new Types.ObjectId(institutionId),
+        employeeId: staff.employeeId,
+        firstName: staff.firstName,
+        lastName: staff.lastName,
+        designation: staff.designation,
+        department: staff.department,
+        campusId: staff.campusId || null,
+      };
+      if (tp.subjectsCanTeach?.length) {
+        fields.subjectsCanTeach = [...new Set([...(existing?.subjectsCanTeach || []), ...tp.subjectsCanTeach])];
+      }
+      if (tp.gradeLevelsCanTeach?.length) {
+        fields.gradeLevelsCanTeach = [...new Set([...(existing?.gradeLevelsCanTeach || []), ...tp.gradeLevelsCanTeach])];
+      }
+      if (tp.maxPeriodsPerDay) fields.maxPeriodsPerDay = tp.maxPeriodsPerDay;
+      if (tp.maxPeriodsPerWeek) fields.maxPeriodsPerWeek = tp.maxPeriodsPerWeek;
+      if (typeof tp.isClassTeacher === 'boolean' && !existing) fields.isClassTeacher = tp.isClassTeacher;
+
+      if (existing) {
+        await this.teacherProfileModel.updateOne({ _id: existing._id }, { $set: fields });
+        updated++;
+      } else {
+        await this.teacherProfileModel.create({ ...fields, staffId: staff._id });
+        created++;
+      }
+    }
+    return { scanned: teacherStaff.length, created, updated };
   }
 
   // ── LESSON PLANS ──────────────────────────────────────────────────────────────
