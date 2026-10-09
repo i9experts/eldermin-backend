@@ -90,7 +90,21 @@ export class TeachingService {
   // ── TEACHER PROFILES ──────────────────────────────────────────────────────────
 
   async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
-    const filter: any = { tenantId: this.tid(tenantId) };
+    const tid = this.tid(tenantId);
+    // Self-healing: updateTeacherProfile used to $set whatever the Edit
+    // Teaching Profile form sent for campusId with no sanitization at all
+    // (unlike createTeacherProfile's ternary below) - clearing the Campus
+    // dropdown there wrote the literal string "" into this ObjectId field
+    // instead of null. .populate('campusId', ...) below then throws
+    // CastError: Cast to ObjectId failed for value "" trying to look that
+    // reference up, which took down this entire list (every teacher, not
+    // just the malformed one) with a 500 - while the Dashboard's plain
+    // countDocuments() never populates anything, so it kept reporting the
+    // correct total and masked how badly broken the list actually was.
+    // Cheap, idempotent, and scoped to this tenant only - a no-op once no
+    // document matches.
+    await this.teacherProfileModel.updateMany({ tenantId: tid, campusId: '' }, { $set: { campusId: null } });
+    const filter: any = { tenantId: tid };
     if (requestingUser) {
       // Inclusive, not a hard filter: syncTeacherProfilesFromHR (below)
       // writes campusId: null for any Staff record without a campus set on
@@ -147,9 +161,19 @@ export class TeachingService {
   }
 
   async updateTeacherProfile(tenantId: string, id: string, data: any) {
+    // Same sanitization as createTeacherProfile - campusId is an ObjectId
+    // reference, and the Edit Teaching Profile form sends '' when the
+    // Campus dropdown is cleared. $set-ing that raw string (previously
+    // unsanitized here, unlike create) wrote a literal "" into the field,
+    // which later crashed the whole Teacher Directory list with a 500 the
+    // moment .populate('campusId') tried to cast it.
+    const payload = { ...data };
+    if ('campusId' in payload) {
+      payload.campusId = payload.campusId ? new Types.ObjectId(payload.campusId) : null;
+    }
     return this.teacherProfileModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
-      { $set: data },
+      { $set: payload },
       { new: true },
     ).lean();
   }
