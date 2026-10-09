@@ -12,6 +12,7 @@ import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Campus, CampusSchema } from '../../organization/schemas/organization.schema';
 import { TeacherProfile, TeacherProfileSchema } from '../teaching/schemas/teacher-profile.schema';
 import { Reseller, ResellerSchema } from '../../resellers/schemas/reseller.schema';
+import { PlatformRole, PlatformRoleSchema } from '../../super-admin/schemas/platform-role.schema';
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
 import { EmailModule } from '../../email/email.module';
@@ -37,6 +38,7 @@ import { EmailModule } from '../../email/email.module';
       { name: Campus.name, schema: CampusSchema },
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: Reseller.name, schema: ResellerSchema },
+      { name: PlatformRole.name, schema: PlatformRoleSchema },
     ]),
   ],
   controllers: [AuthController],

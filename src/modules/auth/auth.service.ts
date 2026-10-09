@@ -10,6 +10,7 @@ import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { Campus, CampusDocument } from '../../organization/schemas/organization.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
 import { Reseller, ResellerDocument } from '../../resellers/schemas/reseller.schema';
+import { PlatformRole, PlatformRoleDocument } from '../../super-admin/schemas/platform-role.schema';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
@@ -24,11 +25,33 @@ export class AuthService {
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(Reseller.name) private resellerModel: Model<ResellerDocument>,
+    @InjectModel(PlatformRole.name) private platformRoleModel: Model<PlatformRoleDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
     private emailService: EmailService,
   ) {}
+
+  /** Platform-level mirror of RolesService.getPermissionsForUser, kept as
+   * a tiny local method rather than importing PlatformStaffService/
+   * SuperAdminModule here to avoid coupling AuthModule to the much larger
+   * Super Admin module just for this one lookup. Null for a super_admin
+   * with no customPlatformRoleId (today's single account, and anyone
+   * created without a restricted role) - fully unrestricted, exactly as
+   * before this feature existed. */
+  private async getPlatformPermissionsForUser(userId: any): Promise<string[] | undefined> {
+    const user = await this.userModel.findById(userId).select('customPlatformRoleId').lean();
+    if (!user?.customPlatformRoleId) return undefined;
+    const role = await this.platformRoleModel.findById(user.customPlatformRoleId).select('moduleAccess').lean();
+    if (!role) return undefined;
+    const perms: string[] = [];
+    for (const m of role.moduleAccess || []) {
+      const prefix = m.subTabKey ? `${m.tabKey}:${m.subTabKey}` : m.tabKey;
+      perms.push(`${prefix}:view`);
+      if (m.level === 'manage') perms.push(`${prefix}:manage`);
+    }
+    return perms;
+  }
 
   /** Looks up everything needed for campus/department/class-teacher
    * scoping - shared by login (embeds it into the JWT payload) and
@@ -163,6 +186,12 @@ export class AuthService {
 
     const schoolSlug = tenant?.slug || slugToUse || null;
     const permissions = await this.rolesService.getPermissionsForUser(user._id.toString());
+    // Only ever computed for super_admin - every other role has no
+    // customPlatformRoleId and this resolves to undefined for them,
+    // same "absent means unaffected" convention as permissions above.
+    const platformPermissions = role === UserRole.SUPER_ADMIN
+      ? await this.getPlatformPermissionsForUser(user._id)
+      : undefined;
 
     // Cluster/region scoping (large multi-campus networks only) - most
     // users have no Staff record with this set, in which case both
@@ -223,6 +252,11 @@ export class AuthService {
         // this is absent, so every account without one keeps working
         // exactly as it always has.
         permissions: permissions || undefined,
+        // Present only for a super_admin with a restricted PlatformRole
+        // assigned (Super Admin's own "Team & Access" system) - absent
+        // for every other role, and absent for an unrestricted
+        // super_admin, which the frontend treats as "full access".
+        platformPermissions: platformPermissions || undefined,
         // Same scope fields as the JWT payload above - the frontend's
         // standard login flow reads this response's user object
         // directly and never calls getMe, so without these being here

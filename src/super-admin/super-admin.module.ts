@@ -2,8 +2,13 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { SuperAdminController } from './super-admin.controller';
 import { SuperAdminService } from './super-admin.service';
+import { PlatformStaffController } from './platform-staff.controller';
+import { PlatformStaffService } from './platform-staff.service';
+import { PlatformRoleGuard } from './guards/platform-role.guard';
+import { PlatformRole, PlatformRoleSchema } from './schemas/platform-role.schema';
 import {
   Institution, InstitutionSchema,
   SubscriptionHistory, SubscriptionHistorySchema,
@@ -50,10 +55,20 @@ import { ModulesModule } from '../modules/modules.module';
       { name: AcademicYear.name, schema: AcademicYearSchema },
       { name: Student.name, schema: StudentSchema },
       { name: Staff.name, schema: StaffSchema },
+      { name: PlatformRole.name, schema: PlatformRoleSchema },
     ]),
   ],
-  controllers: [SuperAdminController],
-  providers: [SuperAdminService],
-  exports: [SuperAdminService],
+  controllers: [SuperAdminController, PlatformStaffController],
+  providers: [
+    SuperAdminService,
+    PlatformStaffService,
+    PlatformRoleGuard,
+    // Registered as a global guard here (same convention as
+    // RolesModule/CustomRoleGuard) - safe to run globally since it's a
+    // no-op for every route without @RequirePlatformAccess() and every
+    // user without a customPlatformRoleId.
+    { provide: APP_GUARD, useExisting: PlatformRoleGuard },
+  ],
+  exports: [SuperAdminService, PlatformStaffService],
 })
 export class SuperAdminModule {}
