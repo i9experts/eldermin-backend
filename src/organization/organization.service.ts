@@ -18,7 +18,7 @@ import {
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
-import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
 import { UploadService } from '../upload/upload.service';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
@@ -304,8 +304,20 @@ export class OrganizationService {
   // ── Grades ────────────────────────────────────────────────
   async getGrades(schoolSlug: string, campusId?: string, requestingUser?: ScopedUser, assignedOnly?: boolean) {
     const filter: any = { schoolSlug, isActive: true };
-    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
-    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // Inclusive, not resolveCampusScope's exclusive exact-match - same
+    // "campusId: null/missing means applies to every campus" convention
+    // already handled correctly below for Department (getDepartments),
+    // but never applied here. A Grade created without an explicit campusId
+    // (the normal case for most seeding/setup flows in a single-campus
+    // school) was invisible to any campus-scoped caller - every role
+    // except institution_owner/super_admin - even though the school only
+    // has one campus to begin with.
+    if (requestingUser) {
+      const campusFilter = buildInclusiveCampusFilter(requestingUser, campusId);
+      if (campusFilter) Object.assign(filter, campusFilter);
+    } else if (campusId) {
+      filter.campusId = campusId;
+    }
     // Opt-in only (Question Bank, Syllabus) - every other caller of this
     // same endpoint (Institution Setup, Finance, Timetable, …) keeps
     // seeing the full school-wide grade list exactly as before.
