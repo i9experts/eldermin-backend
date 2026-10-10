@@ -72,6 +72,22 @@ export class Timetable {
   @Prop({ enum: ['draft', 'active', 'archived'], default: 'draft' }) status: string;
   @Prop({ default: 8 }) periodsPerDay: number;
   @Prop({ type: [Number], default: [1, 2, 3, 4, 5] }) workingDays: number[];
+  // The admin's actual declared timing settings - day start time, uniform
+  // period length, and where the break sits. Previously these only ever
+  // existed as transient frontend form state used once to compute each
+  // period's literal startTime/endTime, then discarded; every later attempt
+  // to show or edit "the current duration" had to reverse-engineer it from
+  // stored periods, which silently fell back to hardcoded 40/20 the instant
+  // a timetable had any gap, irregular period, or manually-added break -
+  // the root cause of duration/break length appearing "stuck". These are
+  // only set when the timetable uses a single uniform period length (the
+  // Create wizard's "Uniform" mode); a "Custom (irregular periods)" setup
+  // has no single value and leaves these null, same as before this field
+  // existed.
+  @Prop({ type: Number, default: null }) periodDuration: number;
+  @Prop({ type: Number, default: null }) breakAfterPeriod: number;
+  @Prop({ type: Number, default: null }) breakDuration: number;
+  @Prop({ type: String, default: null }) startTime: string;
   // Whether this timetable alternates on a 2-week A/B cycle. When true,
   // periods with weekCycle 'A' or 'B' only run on their matching week;
   // cycleAnchor is the first day of a "Week A" so parity for any date can
