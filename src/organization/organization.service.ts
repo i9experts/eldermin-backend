@@ -318,8 +318,15 @@ export class OrganizationService {
     if (assignedOnly && requestingUser) {
       const assignedGrades = await this.resolveTeacherGradeScopeFresh(requestingUser);
       if (assignedGrades) {
+        // Unanchored, same reasoning as the Subject equivalent in
+        // AcademicsService.getSubjects: a teacher's gradeLevelsCanTeach may
+        // still hold a generic name ("Grade 1") saved before the admin
+        // pickers were fixed to show the school's real Grade.name values -
+        // matching "contains" self-heals that common case without a
+        // migration or requiring every affected teacher's profile to be
+        // manually re-saved.
         const escaped = (s: string) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        filter.name = { $in: assignedGrades.map((g) => new RegExp(`^${escaped(g)}$`, 'i')) };
+        filter.name = { $in: assignedGrades.map((g) => new RegExp(escaped(g), 'i')) };
       }
     }
     return this.gradeModel.find(filter).sort({ displayOrder: 1, name: 1 });

@@ -109,8 +109,20 @@ export class AcademicsService {
     if (query.assignedOnly === 'true' && requestingUser) {
       const assignedSubjects = await this.resolveTeacherSubjectScopeFresh(requestingUser);
       if (assignedSubjects) {
+        // Unanchored (not `^...$`) deliberately: a teacher's subjectsCanTeach
+        // was, until recently, picked from a generic hardcoded list
+        // ("English", "Science") in several admin UIs, completely
+        // disconnected from the school's actual Subject.name values (e.g.
+        // this app's own seeded defaults, "English Language"/"General
+        // Science"). Those admin UIs are now fixed to show real subject
+        // names, but a teacher assigned BEFORE that fix shipped still has
+        // the old generic string saved - an anchored exact match leaves
+        // them permanently stuck with an empty list until someone notices
+        // and re-saves their profile. Matching "contains" instead self-heals
+        // the common case (the saved string is a shorter/generic form of
+        // the real name) without requiring a data migration or a re-save.
         const escaped = (s: string) => s.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        filter.name = { $in: assignedSubjects.map((s) => new RegExp(`^${escaped(s)}$`, 'i')) };
+        filter.name = { $in: assignedSubjects.map((s) => new RegExp(escaped(s), 'i')) };
       }
     }
     return this.subjectModel.find(filter).sort({ name: 1 }).lean();
