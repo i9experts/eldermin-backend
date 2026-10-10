@@ -16,7 +16,7 @@ import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/electi
 import { Student, StudentDocument } from '../../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
-import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
+import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../../auth/scope.util';
 import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
 import { buildSubjectCategoryInUseMessage } from './subject-category-reference.util';
 import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
@@ -94,8 +94,34 @@ export class AcademicsService {
         { code: { $regex: query.search, $options: 'i' } },
       ];
     }
-    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
-    if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // Inclusive, not resolveCampusScope's exclusive exact-match: Subject's
+    // own schema comment documents campusId: null as "applies to every
+    // campus in the school" (same convention as Syllabus/ElectiveGroup),
+    // but a plain `filter.campusId = <id>` never matches a null field. Every
+    // subject created via seedDefaultSubjects (no campusId set at all) was
+    // therefore invisible to any campus-scoped caller (every role except
+    // institution_owner/super_admin) despite being created correctly - the
+    // dashboard's unscoped countDocuments() kept reporting the real total
+    // while this list silently returned nothing for the exact same tenant.
+    // buildInclusiveCampusFilter is the same $or pattern already used
+    // correctly elsewhere for this exact convention (documents.service.ts,
+    // fee-defaulter.service.ts, teaching.service.ts, compliance.service.ts).
+    if (requestingUser) {
+      const campusFilter = buildInclusiveCampusFilter(requestingUser, query.campusId);
+      if (campusFilter) {
+        // Mongo allows only one top-level $or - combine with the search
+        // $or above via $and when both apply, rather than one silently
+        // overwriting the other.
+        if (filter.$or) {
+          filter.$and = [{ $or: filter.$or }, campusFilter];
+          delete filter.$or;
+        } else {
+          Object.assign(filter, campusFilter);
+        }
+      }
+    } else if (query.campusId) {
+      filter.campusId = query.campusId;
+    }
     // Opt-in only (Question Bank, Syllabus) - callers that didn't ask to
     // be scoped to the teacher's own assignment keep seeing the full
     // school-wide list exactly as before, e.g. admins building the master
