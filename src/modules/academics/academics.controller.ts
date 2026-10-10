@@ -48,7 +48,7 @@ export class AcademicsController {
   @Post('subjects/assign-to-class')
   assignSubjectsToClass(@Request() req, @Body() body: any) {
     return this.academicsService.assignSubjectsToClass(
-      req.user.tenantId, body.subjectIds || [], body.gradeLevel, body.sectionName, req.user,
+      req.user.tenantId, body.subjectIds || [], body, req.user,
     );
   }
 
