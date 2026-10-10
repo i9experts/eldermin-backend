@@ -20,7 +20,7 @@ import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../.
 import { describeSubjectBlockers, buildSubjectInUseMessage } from './subject-reference.util';
 import { buildSubjectCategoryInUseMessage } from './subject-category-reference.util';
 import { SubjectCategory, SubjectCategoryDocument } from './schemas/subject-category.schema';
-import { mergeClassAssignment } from './subject-assign.util';
+import { mergeClassAssignment, SubjectClassScope } from './subject-assign.util';
 import { computeLibraryFine } from './library-fine.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
@@ -413,9 +413,21 @@ export class AcademicsService {
   async assignSubjectGroupToClass(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
     const group = await this.subjectGroupModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!group) throw new NotFoundException('Subject group not found');
-    if (!data.gradeLevel) throw new BadRequestException('gradeLevel is required');
 
-    return this.assignSubjectsToClass(tenantId, (group.subjectIds || []).map(String), data.gradeLevel, data.sectionName, requestingUser);
+    const targets = this.normalizeAssignTargets(data);
+    return this.assignSubjectsToClass(tenantId, (group.subjectIds || []).map(String), targets, requestingUser);
+  }
+
+  /** Accepts either the current `{ targets: [{gradeLevel, sectionName?}, ...] }`
+   * shape or the older single `{ gradeLevel, sectionName? }` shape, so
+   * existing callers (and anyone with a stale frontend bundle mid-deploy)
+   * keep working unchanged. */
+  private normalizeAssignTargets(data: any): { gradeLevel: string; sectionName?: string }[] {
+    const targets = Array.isArray(data?.targets) && data.targets.length > 0
+      ? data.targets
+      : (data?.gradeLevel ? [{ gradeLevel: data.gradeLevel, sectionName: data.sectionName }] : []);
+    if (targets.length === 0) throw new BadRequestException('At least one grade (or grade+section) must be selected.');
+    return targets;
   }
 
   /**
@@ -423,19 +435,29 @@ export class AcademicsService {
    * explicitly-picked list of subject ids - backs the Subjects table's
    * bulk "Assign Selected to Class" action, for subjects an admin doesn't
    * want to formally group.
+   *
+   * Accepts MULTIPLE grade/section targets in one call - previously this
+   * only took a single gradeLevel+sectionName, so assigning one subject to
+   * several classes and their sections meant reopening this action and
+   * resubmitting once per grade/section combination. A school with many
+   * sections reported this as "very irritating and time taking" for
+   * something as ordinary as putting a subject on a few classes. Every
+   * target is folded onto each subject's existing scope in one pass and
+   * persisted with a single update per subject, not one per target.
    */
-  async assignSubjectsToClass(tenantId: string, subjectIds: string[], gradeLevel: string, sectionName: string | undefined, requestingUser?: ScopedUser) {
-    if (!gradeLevel) throw new BadRequestException('gradeLevel is required');
+  async assignSubjectsToClass(tenantId: string, subjectIds: string[], targetsInput: any, requestingUser?: ScopedUser) {
+    const targets = Array.isArray(targetsInput) ? targetsInput : this.normalizeAssignTargets(targetsInput);
+    if (targets.length === 0) throw new BadRequestException('At least one grade (or grade+section) must be selected.');
     const tid = this.tid(tenantId);
     const subjects = await this.subjectModel.find({ tenantId: tid, _id: { $in: subjectIds } }).lean();
 
     const updated = await Promise.all(subjects.map(s => {
-      const merged = mergeClassAssignment(
-        { gradeLevels: s.gradeLevels || [], sections: s.sections || [] },
-        gradeLevel,
-        sectionName,
-      );
-      return this.updateSubject(tenantId, String(s._id), merged, requestingUser);
+      let scope: SubjectClassScope = { gradeLevels: s.gradeLevels || [], sections: s.sections || [] };
+      for (const t of targets) {
+        if (!t?.gradeLevel) continue;
+        scope = mergeClassAssignment(scope, t.gradeLevel, t.sectionName);
+      }
+      return this.updateSubject(tenantId, String(s._id), scope, requestingUser);
     }));
 
     return { updated: updated.length, subjects: updated };
