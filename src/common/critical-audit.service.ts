@@ -37,6 +37,10 @@ export interface AuditMeta {
  *   4. on success mark 'applied' and store the real "after" (best effort,
  *      error logged; the pending record with before + requested change
  *      already exists).
+ * TODO(replica set): if production is confirmed to be a MongoDB replica set,
+ * move steps 2-4 (audit entry + change) into ONE session.withTransaction so
+ * the guarantee becomes atomic (no 'pending' limbo). Until the deployment is
+ * known, keep this pending-entry design.
  * Residual risk: a crash between 2 and 4 leaves a 'pending' entry for a change
  * that may or may not have applied; reviewers should treat 'pending' as
  * "unknown, check the record".
