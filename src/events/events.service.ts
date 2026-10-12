@@ -13,6 +13,7 @@ import { MerchItem, MerchItemDocument } from './schemas/merch-item.schema';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
+import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 
 const ACTIVE_TICKET_STATUSES = ['reserved', 'valid', 'checked_in'];
 
@@ -144,16 +145,37 @@ export class EventsService {
     return updated;
   }
 
-  async getEvents(schoolSlug: string, query: { status?: string; category?: string } = {}) {
+  /**
+   * Teacher visibility (owner decision): only published / cancelled / completed events (never drafts), events for
+   * the teacher's own campus or all campuses (campusId null), internal (staff) events included. Never any
+   * ticket / price data. Other roles see exactly what they saw before.
+   */
+  private teacherEventFilter(user: { campusId?: any }): any[] {
+    const campus = user?.campusId ? String(user.campusId) : null;
+    return [
+      { status: { $in: ['published', 'cancelled', 'completed'] } },
+      { $or: [{ campusId: null }, { campusId: { $exists: false } }, ...(campus ? [{ campusId: campus }] : [])] },
+    ];
+  }
+
+  async getEvents(schoolSlug: string, query: { status?: string; category?: string } = {}, requestingUser?: { role?: string; primaryRole?: string; campusId?: any }) {
     const filter: any = { schoolSlug };
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
+    if (isTeacherCaller(requestingUser)) {
+      filter.$and = this.teacherEventFilter(requestingUser as any);
+    }
     return this.eventModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
-  async getEventById(schoolSlug: string, id: string) {
-    const event = await this.eventModel.findOne({ _id: id, schoolSlug }).lean();
+  async getEventById(schoolSlug: string, id: string, requestingUser?: { role?: string; primaryRole?: string; campusId?: any }) {
+    const teacher = isTeacherCaller(requestingUser);
+    const filter: any = { _id: id, schoolSlug };
+    if (teacher) filter.$and = this.teacherEventFilter(requestingUser as any);
+    const event = await this.eventModel.findOne(filter).lean();
     if (!event) throw new NotFoundException('Event not found');
+    // Ticket prices / promo codes are box-office data: never sent to a teacher.
+    if (teacher) return event;
     const [ticketTypes, promoCodes] = await Promise.all([
       this.ticketTypeModel.find({ schoolSlug, eventId: id }).sort({ sortOrder: 1 }).lean(),
       this.promoCodeModel.find({ schoolSlug, eventId: id }).lean(),
