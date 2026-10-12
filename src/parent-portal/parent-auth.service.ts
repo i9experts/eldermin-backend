@@ -19,6 +19,8 @@ const RESEND_COOLDOWN_SECONDS = 45;
 const REVIEWER_TEST_PHONE = '+923172573105';
 const REVIEWER_TEST_OTP = '123456';
 
+const NO_STUDENT_RECORD_MESSAGE = "No student record found with this WhatsApp number. Please contact your school to have it registered against your child's profile first.";
+
 @Injectable()
 export class ParentAuthService {
   private logger = new Logger('ParentAuthService');
@@ -34,6 +36,8 @@ export class ParentAuthService {
 
   private async resolveSchoolForPhone(phone: string): Promise<{ schoolSlug: string; existingUser: UserDocument | null }> {
     const existingUser = await this.userModel.findOne({ phone });
+    // A deactivated account answers exactly like an unknown number (never reveals status).
+    if (existingUser && existingUser.isActive === false) throw new NotFoundException(NO_STUDENT_RECORD_MESSAGE);
     if (existingUser) {
       const tenant = await this.tenantModel.findById(existingUser.tenantId).lean();
       return { schoolSlug: (tenant as any)?.slug, existingUser };
@@ -50,7 +54,7 @@ export class ParentAuthService {
       .select('schoolSlug')
       .lean();
     if (!student) {
-      throw new NotFoundException("No student record found with this WhatsApp number. Please contact your school to have it registered against your child's profile first.");
+      throw new NotFoundException(NO_STUDENT_RECORD_MESSAGE);
     }
     return { schoolSlug: (student as any).schoolSlug, existingUser: null };
   }
@@ -123,6 +127,8 @@ export class ParentAuthService {
 
     const studentIds = matchingStudents.map((s: any) => s._id);
     let user = await this.userModel.findOne({ phone });
+    // Deactivated login: no session, same generic answer as an unknown number (S1).
+    if (user && user.isActive === false) throw new NotFoundException(NO_STUDENT_RECORD_MESSAGE);
 
     if (!user) {
       const primaryGuardian = (matchingStudents[0] as any).guardians?.find((g: any) => matchRegex?.test(g.phone || ''));

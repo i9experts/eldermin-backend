@@ -15,6 +15,11 @@ import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
 import { UserRole } from '../../auth/roles.enum';
+import { idForms } from '../../common/utils/id-forms.util';
+
+// Compared against when no active account matches the e-mail, so an unknown or
+// deactivated account costs the same as a wrong password (no timing oracle).
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password-for-timing-only', 10);
 
 @Injectable()
 export class AuthService {
@@ -60,7 +65,10 @@ export class AuthService {
    * the JWT and getMe never surfaced them, leaving the frontend with no
    * way to know its own scope at all despite the backend enforcing it). */
   private async resolveScopeFieldsForUser(userId: any, schoolSlug?: string | null) {
-    const staffRecord = await this.staffModel.findOne({ userId }).select('supervisedClusterIds isBoardLevel campusId department').lean();
+    // A removed / deactivated Staff row (isActive=false) no longer contributes campus,
+    // department, class-teacher or cluster scope: this is what strips staff scope from a
+    // demoted shared account. (Matches both string and ObjectId userId storage.)
+    const staffRecord = await this.staffModel.findOne({ userId: idForms(userId), isActive: { $ne: false } }).select('supervisedClusterIds isBoardLevel campusId department').lean();
     const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
     const isBoardLevel = staffRecord?.isBoardLevel || undefined;
     let campusId = staffRecord?.campusId?.toString() || undefined;
@@ -116,7 +124,12 @@ export class AuthService {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const user: any = await this.userModel.findOne(query).lean();
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    if (!user) {
+      // Unknown OR deactivated account (the query requires isActive:true): do the same
+      // bcrypt work as a wrong password so neither the message nor the timing tells them apart.
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     // Support both passwordHash (new schema) and password (legacy)
     const hash = user.passwordHash || user.password;
@@ -337,7 +350,9 @@ export class AuthService {
       resetPasswordTokenHash: tokenHash,
       resetPasswordExpires: { $gt: new Date() },
     });
-    if (!user) throw new UnauthorizedException('This reset link is invalid or has expired');
+    // A deactivated account cannot use a reset link issued before it was deactivated;
+    // same generic answer as an invalid/expired token (account status is not revealed).
+    if (!user || user.isActive === false) throw new UnauthorizedException('This reset link is invalid or has expired');
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await this.userModel.findByIdAndUpdate(user._id, {
