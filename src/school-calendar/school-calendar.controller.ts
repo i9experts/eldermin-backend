@@ -30,7 +30,7 @@ export class SchoolCalendarController {
   @Get('events')
   getEvents(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getEvents(schoolSlug, query);
+    return this.service.getEvents(schoolSlug, query, req.user);
   }
 
   @Roles(...CALENDAR_ADMIN_ROLES)

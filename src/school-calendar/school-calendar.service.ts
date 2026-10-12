@@ -18,6 +18,7 @@ import { Assessment, AssessmentDocument } from '../assessments/schemas/assessmen
 // actually carries Term dates.
 import { AcademicYear as SchoolAcademicYear, AcademicYearDocument as SchoolAcademicYearDocument } from '../organization/schemas/organization.schema';
 import { EmailService } from '../email/email.service';
+import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 
 interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string }
 
@@ -71,7 +72,9 @@ export class SchoolCalendarService {
   // this can't go stale against the real invoice records. Exam/term dates
   // from Academics are not wired yet (Phase 2, documented in the module's
   // README rather than silently missing).
-  async getEvents(schoolSlug: string, query: { from?: string; to?: string; campusId?: string }) {
+  async getEvents(schoolSlug: string, query: { from?: string; to?: string; campusId?: string }, requestingUser?: { role?: string; primaryRole?: string }) {
+    // Owner decision: finance data (fee-due totals) is never part of a teacher's calendar.
+    const teacher = isTeacherCaller(requestingUser);
     const from = query.from ? new Date(query.from) : new Date(new Date().getFullYear(), 0, 1);
     const to = query.to ? new Date(query.to) : new Date(new Date().getFullYear(), 11, 31);
 
@@ -79,7 +82,7 @@ export class SchoolCalendarService {
     const manual = await this.eventModel.find(filter).sort({ startDate: 1 }).lean();
 
     const invoiceFilter: any = { schoolSlug, dueDate: { $gte: from, $lte: to }, status: { $nin: ['paid', 'cancelled'] } };
-    const invoices = await this.invoiceModel.find(invoiceFilter).select('dueDate totalAmount balanceDue').lean();
+    const invoices = teacher ? [] : await this.invoiceModel.find(invoiceFilter).select('dueDate totalAmount balanceDue').lean();
     const byDueDate = new Map<string, { count: number; total: number }>();
     for (const inv of invoices) {
       const key = new Date((inv as any).dueDate).toISOString().slice(0, 10);
@@ -117,7 +120,8 @@ export class SchoolCalendarService {
     const examEvents = assessments.map((a: any) => ({
       _id: `exam-${a._id}`,
       title: a.title,
-      description: `${a.type.replace(/_/g, ' ')} — Grade ${a.grade}${a.section ? ` ${a.section}` : ''}`,
+      // The stored grade is usually already "Grade 5": do not prefix it a second time ("Grade Grade 5").
+      description: `${a.type.replace(/_/g, ' ')} — ${/^\s*grade\b/i.test(String(a.grade ?? '')) ? '' : 'Grade '}${a.grade}${a.section ? ` ${a.section}` : ''}`,
       type: 'exam',
       color: CALENDAR_EVENT_COLORS.exam,
       startDate: a.startDate,
@@ -153,7 +157,9 @@ export class SchoolCalendarService {
     }
 
     return [
-      ...manual.map((e) => ({ ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' })),
+      ...manual
+        .filter((e: any) => !teacher || e.type !== 'fee_due')
+        .map((e) => ({ ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' })),
       ...feeDueEvents,
       ...examEvents,
       ...termEvents,
