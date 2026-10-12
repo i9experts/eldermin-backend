@@ -139,7 +139,21 @@ export class HrService {
 
   // ── Staff ────────────────────────────────────────────────────────────
 
-  async getStaff(tenantId: string, campusId?: string, department?: string, requestingUser?: ScopedUser) {
+  /**
+   * Fields every staff-type login may see in a dropdown (owner decision 14).
+   * Beyond name/id/designation/department/campus/photo, the web's pickers
+   * also read employeeId (finance employee picker, ID cards, teaching),
+   * userId (Institution > Grades class-teacher picker), status and
+   * supervisedClusterIds (Institution > Campuses) - all non-sensitive.
+   * NEVER add salary, bank, identity, personal, address, documents here.
+   */
+  static readonly STAFF_PROJECTION = [
+    '_id', 'firstName', 'lastName', 'employeeId', 'designation', 'designationId',
+    'department', 'campusId', 'avatarUrl', 'status', 'isActive', 'userId', 'supervisedClusterIds',
+  ].join(' ');
+
+  /** `full` = caller is on the HR/admin allow-list; default false (projection) so a forgotten flag fails safe. */
+  async getStaff(tenantId: string, campusId?: string, department?: string, requestingUser?: ScopedUser, full = false) {
     const filter: any = { tenantId: this.newTid(tenantId), isActive: true };
     if (requestingUser) {
       // Hard-blocks (403) if the caller asked for a campus/department
@@ -157,8 +171,9 @@ export class HrService {
       if (campusId) filter.campusId = this.newTid(campusId);
       if (department) filter.department = department;
     }
-    return this.staffModel
-      .find(filter)
+    const q = this.staffModel.find(filter);
+    if (!full) q.select(HrService.STAFF_PROJECTION);
+    return q
       .populate('designationId', 'name code department')
       .populate('campusId', 'name code')
       .sort({ firstName: 1 })
@@ -217,7 +232,9 @@ export class HrService {
       extra = { salaryStructure, salary: grossSalary };
     }
 
-    return this.staffModel.create({ ...rest, ...extra, employeeId, tenantId: this.newTid(tenantId) });
+    // A new HR record never arrives already linked to a login or another tenant.
+    const { userId: _u, _id: _d, ...safeRest } = rest;
+    return this.staffModel.create({ ...safeRest, ...extra, employeeId, tenantId: this.newTid(tenantId) });
   }
 
   private generateTempPassword(): string {
@@ -368,9 +385,17 @@ export class HrService {
     return staff;
   }
 
+  // Fields a caller may never set through the raw $set: the login link, tenant
+  // scope and identity. (userId is only ever written by createLoginForStaff.)
+  static readonly STAFF_PROTECTED_FIELDS = ['_id', 'id', 'userId', 'tenantId', 'institutionId', 'createdAt', 'updatedAt', '__v'];
+
   async updateStaff(tenantId: string, staffId: string, data: any) {
+    const safe: any = { ...(data || {}) };
+    for (const f of HrService.STAFF_PROTECTED_FIELDS) delete safe[f];
+    // Dotted paths into protected fields (e.g. 'userId.x') are equally unsafe.
+    for (const k of Object.keys(safe)) if (HrService.STAFF_PROTECTED_FIELDS.includes(k.split('.')[0])) delete safe[k];
     const staff = await this.staffModel
-      .findOneAndUpdate({ _id: staffId, tenantId: this.newTid(tenantId) }, { $set: data }, { new: true })
+      .findOneAndUpdate({ _id: staffId, tenantId: this.newTid(tenantId) }, { $set: safe }, { new: true })
       .lean();
     if (!staff) throw new NotFoundException('Staff member not found');
     return staff;

@@ -25,7 +25,7 @@ export class HrController {
   @HrStaffDirectory()
   @Get('staff')
   getStaff(@Request() req, @Query('campusId') campusId?: string, @Query('department') department?: string) {
-    return this.hrService.getStaff(req.user.tenantId, campusId, department, req.user);
+    return this.hrService.getStaff(req.user.tenantId, campusId, department, req.user, req.hrFullAccess === true);
   }
 
   @HrWrite()
