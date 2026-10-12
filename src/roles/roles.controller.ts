@@ -1,12 +1,11 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Request, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Request, ForbiddenException, UseGuards } from '@nestjs/common';
 import { RolesService, RoleActor } from './roles.service';
-import { RolesOrModuleManage } from './decorators/roles-or-module-manage.decorator';
-import { ROLES_ADMIN_ROLES } from '../auth/admin-role-sets';
+import { RolesAdminGuard } from './guards/roles-admin.guard';
 import { CreateRoleDto, UpdateRoleDto, AssignRoleDto } from './dto/role.dto';
 
-// Every /roles route: owner/admin (web gate institution:manage) or a custom
-// role with institution manage (checked live). Parent/student/staff -> 403.
-@RolesOrModuleManage('institution', ROLES_ADMIN_ROLES, { level: 'manage', allowModuleWide: true })
+// Every /roles route: owner/admin/super_admin or a custom role with FULL
+// institution manage (RolesAdminGuard). Parent/student/staff -> 403.
+@UseGuards(RolesAdminGuard)
 @Controller('roles')
 export class RolesController {
   constructor(private readonly service: RolesService) {}
