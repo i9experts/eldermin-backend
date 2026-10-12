@@ -54,6 +54,19 @@ describe('SchoolCalendarService.getEvents (fee rows)', () => {
     expect(rows.map((r) => r.title)).toEqual(['Holiday']);
   });
 
+  it('teacher: manual rows carry no createdBy / schoolSlug; other roles keep them', async () => {
+    const manual = [{ title: 'Holiday', type: 'holiday', createdBy: 'Admin Name', schoolSlug: 's', startDate: new Date('2026-10-10'), endDate: new Date('2026-10-10') }];
+    const t: any[] = await makeCalendar({ manual }).service.getEvents('s', range, { role: 'teacher' });
+    expect(t[0]).toMatchObject({ title: 'Holiday', source: 'manual' });
+    expect('createdBy' in t[0]).toBe(false);
+    expect('schoolSlug' in t[0]).toBe(false);
+    for (const role of ['admin', 'principal', 'parent']) {
+      const r: any[] = (await makeCalendar({ manual }).service.getEvents('s', range, { role })).filter((x: any) => x.source === 'manual');
+      expect(r[0]).toMatchObject({ createdBy: 'Admin Name', schoolSlug: 's' });
+    }
+    expect(manual[0].createdBy).toBe('Admin Name'); // source row not mutated
+  });
+
   it('teacher: a manual row typed fee_due is also dropped', async () => {
     const { service } = makeCalendar({ manual: [{ title: 'X', type: 'fee_due', startDate: new Date('2026-10-10'), endDate: new Date('2026-10-10') }] });
     expect(await service.getEvents('s', range, { role: 'teacher' })).toHaveLength(0);

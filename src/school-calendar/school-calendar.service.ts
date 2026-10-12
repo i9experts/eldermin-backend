@@ -161,7 +161,12 @@ export class SchoolCalendarService {
     return [
       ...manual
         .filter((e: any) => !teacher || e.type !== 'fee_due')
-        .map((e) => ({ ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' })),
+        .map((e: any) => {
+          const row = { ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' };
+          // Teacher role: no internal authorship / tenant fields on the row.
+          if (teacher) { delete row.createdBy; delete row.schoolSlug; }
+          return row;
+        }),
       ...feeDueEvents,
       ...examEvents,
       ...termEvents,
