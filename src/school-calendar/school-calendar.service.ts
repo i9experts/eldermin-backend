@@ -19,6 +19,7 @@ import { Assessment, AssessmentDocument } from '../assessments/schemas/assessmen
 import { AcademicYear as SchoolAcademicYear, AcademicYearDocument as SchoolAcademicYearDocument } from '../organization/schemas/organization.schema';
 import { EmailService } from '../email/email.service';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
+import { assertValidObjectId } from '../common/utils/object-id.util';
 import { isCircularForStaffViewer, CircularViewer } from './circular-visibility.util';
 
 interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string }
@@ -177,6 +178,7 @@ export class SchoolCalendarService {
   }
 
   async updateCircular(schoolSlug: string, id: string, data: any) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug });
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Cannot edit a circular that has already been published');
@@ -187,6 +189,7 @@ export class SchoolCalendarService {
   }
 
   async deleteCircular(schoolSlug: string, id: string) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug });
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Cannot delete a published circular - it has already reached recipients');
@@ -225,6 +228,7 @@ export class SchoolCalendarService {
   }
 
   async getCircularById(schoolSlug: string, id: string, requestingUser?: any) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
     if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer(requestingUser))) {
@@ -234,6 +238,7 @@ export class SchoolCalendarService {
   }
 
   async publishCircular(schoolSlug: string, id: string) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug });
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Already published');
@@ -314,6 +319,7 @@ export class SchoolCalendarService {
   }
 
   async acknowledgeCircular(schoolSlug: string, circularId: string, userId: string, userName: string, requestingUser?: any) {
+    assertValidObjectId(circularId, 'circular');
     const circular = await this.circularModel.findOne({ _id: circularId, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
     // Teacher role: only a recipient of a published circular may acknowledge (always for themselves: userId is the token's).
@@ -328,6 +334,7 @@ export class SchoolCalendarService {
   }
 
   async getAcknowledgmentStatus(schoolSlug: string, circularId: string, requestingUser?: any) {
+    assertValidObjectId(circularId, 'circular');
     const circular = await this.circularModel.findOne({ _id: circularId, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
     if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer(requestingUser))) {

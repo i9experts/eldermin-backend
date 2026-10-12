@@ -1,4 +1,4 @@
-import { NotFoundException, ForbiddenException } from '@nestjs/common';
+import { NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { SchoolCalendarService } from './school-calendar.service';
 
@@ -146,10 +146,10 @@ describe('SchoolCalendarService circulars: teacher', () => {
   it('by id: draft / parent-only / other-campus / someone else\'s individual -> 404 for the teacher; staff one is readable', async () => {
     for (const id of ['draft', 'scheduled', 'parents-only', 'other-campus', 'indiv-other']) {
       const { service } = makeCalendar({ staff: staffDoc, circular: ALL.find((c) => c._id === id) });
-      await expect(service.getCircularById('s', id, teacherUser)).rejects.toThrow(NotFoundException);
+      await expect(service.getCircularById('s', CID, teacherUser)).rejects.toThrow(NotFoundException);
     }
     const { service } = makeCalendar({ staff: staffDoc, circular: ALL[0] });
-    expect((await service.getCircularById('s', 'staff-school', teacherUser) as any)._id).toBe('staff-school');
+    expect((await service.getCircularById('s', CID, teacherUser) as any)._id).toBe('staff-school');
   });
 
   it('fee-category circular: hidden from the teacher on list, by id, acknowledge and acknowledgment-status; admin/parent/hr_manager unchanged', async () => {
@@ -172,7 +172,7 @@ describe('SchoolCalendarService circulars: teacher', () => {
 
   it('by id: admin still reads a draft', async () => {
     const { service } = makeCalendar({ circular: ALL.find((c) => c._id === 'draft') });
-    expect((await service.getCircularById('s', 'draft', { role: 'admin' }) as any)._id).toBe('draft');
+    expect((await service.getCircularById('s', CID, { role: 'admin' }) as any)._id).toBe('draft');
   });
 
   describe('acknowledgment-status', () => {
@@ -225,5 +225,30 @@ describe('SchoolCalendarService circulars: teacher', () => {
     const req = { user: { ...teacherUser, schoolSlug: 's', name: 'Me' } };
     expect((await ctl.getCirculars(req, {})).some((c: any) => c._id === 'draft')).toBe(false);
     await expect(ctl.acknowledgeCircular({ user: { ...req.user } }, CID)).resolves.toBeDefined();
+  });
+});
+
+describe('SchoolCalendarService circulars: malformed id -> 400 (every role, nothing queried)', () => {
+  const BAD = ['not-an-id', '123', 'zzzzzzzzzzzzzzzzzzzzzzzz', '', 'a'.repeat(25)];
+  it.each(['teacher', 'admin', 'principal', 'parent', 'hr_manager'])('%s: every :id circular route throws 400 and never touches the DB', async (role) => {
+    const user = { role, userId: ME, campusId: C1 };
+    for (const bad of BAD) {
+      const m = makeCalendar({ staff: staffDoc });
+      for (const call of [
+        () => m.service.getCircularById('s', bad, user),
+        () => m.service.updateCircular('s', bad, {}),
+        () => m.service.deleteCircular('s', bad),
+        () => m.service.publishCircular('s', bad),
+        () => m.service.acknowledgeCircular('s', bad, ME, 'Me', user),
+        () => m.service.getAcknowledgmentStatus('s', bad, user),
+      ]) {
+        await expect(call()).rejects.toThrow(BadRequestException);
+      }
+      expect(m.circularModel.findOne).not.toHaveBeenCalled();
+    }
+  });
+  it('a well-formed but unknown id is still 404', async () => {
+    const m = makeCalendar();
+    await expect(m.service.getCircularById('s', CID, { role: 'admin' })).rejects.toThrow(NotFoundException);
   });
 });
