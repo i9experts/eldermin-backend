@@ -57,7 +57,7 @@ export function makeAssessmentService(o: FakeOpts = {}) {
   const noop: any = {};
   const service = new AssessmentService(
     assessmentModel, questionModel, markModel, reportCardModel, examPaperModel, noop, quizAttemptModel,
-    studentModel, noop, noop, noop, staffModel, teacherProfileModel, noop, noop, noop,
+    studentModel, noop, noop, noop, noop /*grade*/, noop /*subject*/, staffModel, teacherProfileModel, noop, noop, noop,
   );
   return { service, studentModel, assessmentModel, markModel, reportCardModel, quizAttemptModel, staffModel, teacherProfileModel, examPaperModel, questionModel };
 }

@@ -31,7 +31,7 @@ function makeTeaching(opts: { staff?: any; existingAssignment?: any; existingPla
   const noop: any = {};
   const service = new TeachingService(
     teacherProfileModel, lessonPlanModel, noop, noop, noop, assignmentModel, noop, noop, noop, noop,
-    staffModel, noop, noop, noop, noop,
+    noop /*classDiary*/, staffModel, noop, noop, noop, noop,
   );
   return { service, assignmentModel, lessonPlanModel, staffModel };
 }
