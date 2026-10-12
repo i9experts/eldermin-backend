@@ -350,7 +350,8 @@ export class AuthService {
   async getMe(userId: string, tenantId: string) {
     const user: any = await this.userModel
       .findOne({ _id: userId, tenantId, isActive: true })
-      .select('-passwordHash').lean();
+      // Internal secrets never leave the server (reset-token hash/expiry too).
+      .select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires').lean();
     if (!user) throw new UnauthorizedException('User not found');
     const permissions = await this.rolesService.getPermissionsForUser(userId);
     // Self-healing single-campus fallback isn't critical here (unlike
