@@ -34,16 +34,17 @@ const EVENTS: any[] = [
 const TT = [{ name: 'VIP', priceTiers: [{ price: 5000 }] }];
 const PC = [{ code: 'P20', discountValue: 20 }];
 
-function make() {
+function make(staff: any = null) {
   const eventModel: any = {
     find: jest.fn((f: any) => { const r = EVENTS.filter((d) => matches(d, f)); const c: any = { sort: () => c, lean: async () => r }; return c; }),
     findOne: jest.fn((f: any) => ({ lean: async () => EVENTS.find((d) => matches(d, f)) || null })),
   };
   const ttModel: any = { find: jest.fn(() => { const c: any = { sort: () => c, lean: async () => TT }; return c; }) };
   const pcModel: any = { find: jest.fn(() => ({ lean: async () => PC })) };
+  const staffModel: any = { findOne: jest.fn(() => { const c: any = { select: () => c, lean: async () => staff }; return c; }) };
   const noop: any = {};
-  const service = new EventsService(eventModel, ttModel, pcModel, noop, noop, noop, noop, noop, noop, noop);
-  return { service, ttModel, pcModel, eventModel };
+  const service = new EventsService(eventModel, ttModel, pcModel, noop, noop, noop, noop, noop, noop, noop, staffModel);
+  return { service, ttModel, pcModel, eventModel, staffModel };
 }
 const teacher = { role: 'teacher', campusId: 'c1' };
 
@@ -67,6 +68,43 @@ describe('EventsService teacher visibility', () => {
     await expect(service.getEventById('s', 'pub', u)).rejects.toThrow(ForbiddenException);
     expect(eventModel.find).not.toHaveBeenCalled();
     expect(eventModel.findOne).not.toHaveBeenCalled();
+  });
+
+  const UID = '64b000000000000000000001';
+
+  it('token campus wins; the Staff record is not read', async () => {
+    const { service, staffModel } = make({ campusId: 'c2' });
+    const ids = (await service.getEvents('s', {}, { role: 'teacher', campusId: 'c1', userId: UID })).map((e: any) => e._id);
+    expect(ids).toContain('mine');
+    expect(ids).not.toContain('other');
+    expect(staffModel.findOne).not.toHaveBeenCalled();
+  });
+
+  it('token without campus falls back to the Staff record campus (list and by id)', async () => {
+    const { service, staffModel } = make({ campusId: 'c2' });
+    const u: any = { role: 'teacher', userId: UID };
+    const ids = (await service.getEvents('s', {}, u)).map((e: any) => e._id);
+    expect(ids).toContain('other');
+    expect(ids).not.toContain('mine');
+    expect((await service.getEventById('s', 'other', u) as any)._id).toBe('other');
+    await expect(service.getEventById('s', 'mine', u)).rejects.toThrow(NotFoundException);
+    expect(staffModel.findOne).toHaveBeenCalled();
+  });
+
+  it('neither token nor Staff record has a campus -> 403 with the exact message', async () => {
+    for (const staff of [null, {}, { campusId: null }]) {
+      const { service, eventModel } = make(staff);
+      const u: any = { role: 'teacher', userId: UID };
+      await expect(service.getEvents('s', {}, u)).rejects.toThrow('No campus assigned \u2014 contact your administrator');
+      await expect(service.getEventById('s', 'pub', u)).rejects.toThrow(ForbiddenException);
+      expect(eventModel.find).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['admin', 'principal', 'parent', 'hr_manager', 'institution_owner'])('%s: Staff record is never consulted and nothing changes', async (role) => {
+    const { service, staffModel } = make({ campusId: 'c2' });
+    expect((await service.getEvents('s', {}, { role, userId: UID })).length).toBe(EVENTS.length);
+    expect(staffModel.findOne).not.toHaveBeenCalled();
   });
 
   it.each(['admin', 'principal', 'parent', 'hr_manager', 'institution_owner'])('%s without a campus is unchanged (no 403)', async (role) => {

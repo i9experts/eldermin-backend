@@ -14,6 +14,7 @@ import { SeatMap, SeatMapSchema } from './schemas/seat-map.schema';
 import { Campaign, CampaignSchema } from './schemas/campaign.schema';
 import { CampaignSend, CampaignSendSchema } from './schemas/campaign-send.schema';
 import { MerchItem, MerchItemSchema } from './schemas/merch-item.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { MerchItem, MerchItemSchema } from './schemas/merch-item.schema';
       { name: Campaign.name, schema: CampaignSchema },
       { name: CampaignSend.name, schema: CampaignSendSchema },
       { name: MerchItem.name, schema: MerchItemSchema },
+      { name: Staff.name, schema: StaffSchema },
     ]),
   ],
   controllers: [EventsController],
