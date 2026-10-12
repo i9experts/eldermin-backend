@@ -2,7 +2,7 @@ import { ForbiddenException, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { HrController } from './hr.controller';
 import { HrAccessGuard, hrReadGuardMode } from './guards/hr-access.guard';
-import { HR_READ_KEY } from './guards/hr-access.decorator';
+import { HR_READ_KEY, HrReadPolicy } from './guards/hr-access.decorator';
 import { RolesOrModuleManageGuard } from '../../roles/guards/roles-or-module-manage.guard';
 import { ROLES_OR_MODULE_KEY } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { PERMISSION_KEY } from '../../auth/decorators';
@@ -95,7 +95,10 @@ describe('parent / student / reseller blocked from ALL /hr routes', () => {
 });
 
 describe('HR reads: log-only vs enforce', () => {
-  const reads = handlers.filter(h => methodOf(h) === 'GET' && Reflect.getMetadata(HR_READ_KEY, proto[h]) && !Reflect.getMetadata(HR_READ_KEY, proto[h]).directory);
+  const pol = (h: string): HrReadPolicy | undefined => Reflect.getMetadata(HR_READ_KEY, proto[h]);
+  const reads = handlers.filter(h => methodOf(h) === 'GET' && pol(h) && !pol(h)!.directory);
+  const sensitive = reads.filter(h => pol(h)!.enforce);
+  const logOnly = reads.filter(h => !pol(h)!.enforce);
   let warn: jest.SpyInstance;
   const saved = process.env.HR_READ_GUARD_MODE;
   beforeEach(() => { warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined); });
@@ -103,13 +106,31 @@ describe('HR reads: log-only vs enforce', () => {
 
   it('default mode is log', () => { delete process.env.HR_READ_GUARD_MODE; expect(hrReadGuardMode()).toBe('log'); });
 
-  it('log mode: teacher reading payslips is ALLOWED and a structured PII-free line is emitted', async () => {
+  it('log mode: teacher on a NON-sensitive read (holidays) is ALLOWED and a structured PII-free line is emitted', async () => {
     delete process.env.HR_READ_GUARD_MODE;
-    const c = ctx('getPayslips', { userId: 'u1', tenantId: 't1', role: UserRole.TEACHER });
+    const c = ctx('getHolidays', { userId: 'u1', tenantId: 't1', role: UserRole.TEACHER });
     await expect(readGuard().canActivate(c)).resolves.toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     const line = JSON.parse(warn.mock.calls[0][0]);
-    expect(line).toEqual({ event: 'hr_read_guard', mode: 'log', decision: 'would_deny', role: 'teacher', method: 'GET', route: '/api/v1/hr/payslips', userId: 'u1', tenantId: 't1' });
+    expect(line).toEqual({ event: 'hr_read_guard', mode: 'log', bucket: 'non_sensitive', decision: 'would_deny', role: 'teacher', method: 'GET', route: '/api/v1/hr/holidays', userId: 'u1', tenantId: 't1' });
+  });
+
+  it('sensitive reads are 403 for non-HR staff roles even in LOG mode (no flag needed)', async () => {
+    delete process.env.HR_READ_GUARD_MODE;
+    expect(sensitive.length).toBe(24);
+    for (const r of NON_HR) for (const h of sensitive)
+      await expect(readGuard().canActivate(ctx(h, { userId: 'u', tenantId: 't', role: r }))).rejects.toThrow(ForbiddenException);
+    expect(JSON.parse(warn.mock.calls[0][0])).toMatchObject({ bucket: 'sensitive', decision: 'denied' });
+  });
+
+  it('sensitive set contains the owner-listed data classes', () => {
+    for (const h of ['getPayslips', 'downloadPayslipPdf', 'getPayrollStats', 'getPayrollRuns', 'getPayrollPayments', 'getSalaryComponents', 'getSalaryTemplates', 'getAdvances', 'getStaffById', 'getStaffDocuments'])
+      expect(sensitive).toContain(h);
+  });
+
+  it('log-only reads never 403 in default mode', async () => {
+    delete process.env.HR_READ_GUARD_MODE;
+    for (const h of logOnly) await expect(readGuard().canActivate(ctx(h, { userId: 'u', tenantId: 't', role: UserRole.TEACHER }))).resolves.toBe(true);
   });
 
   it('enforce mode: teacher -> 403 on every HR read and the denial is logged', async () => {

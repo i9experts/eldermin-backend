@@ -8,7 +8,7 @@ import { HR_LEAVE_ADMIN_ROLES } from '../../auth/role-sets';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { CreateSelfLeaveDto } from './dto/self-leave.dto';
 import { HrAccessGuard } from './guards/hr-access.guard';
-import { HrWrite, HrRead, HrStaffDirectory } from './guards/hr-access.decorator';
+import { HrWrite, HrRead, HrReadSensitive, HrStaffDirectory } from './guards/hr-access.decorator';
 import { PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
 import { CriticalAuditService, AuditMeta } from '../../common/critical-audit.service';
 
@@ -63,7 +63,7 @@ export class HrController {
     return this.hrService.bulkCreateLogins(req.user.tenantId, this.iid(req), body?.staffIds);
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('staff/:id')
   getStaffById(@Request() req, @Param('id') id: string) { return this.hrService.getStaffById(req.user.tenantId, id); }
 
@@ -95,7 +95,7 @@ export class HrController {
     return this.hrService.getLeaveApplications(req.user.tenantId, { staffId: id });
   }
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('staff/:id/payslips')
   getStaffPayslips(@Request() req, @Param('id') id: string) {
     return this.hrService.getPayslips(req.user.tenantId, { staffId: id });
@@ -108,7 +108,7 @@ export class HrController {
     return this.hrService.uploadStaffPhoto(req.user.tenantId, id, photo, req.user.schoolSlug);
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('staff/:id/documents')
   getStaffDocuments(@Request() req, @Param('id') id: string) { return this.hrService.getStaffDocuments(req.user.tenantId, id); }
 
@@ -384,11 +384,11 @@ export class HrController {
 
   // ── PAYROLL ───────────────────────────────────────────────────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('payroll/stats')
   getPayrollStats(@Request() req) { return this.hrService.getPayrollStats(req.user.tenantId); }
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('payroll/runs')
   getPayrollRuns(@Request() req) { return this.hrService.getPayrollRuns(req.user.tenantId); }
 
@@ -405,7 +405,7 @@ export class HrController {
     return this.audited(req, { module: 'HR: Payroll', action: 'Change payroll run status', type: 'update', resourceType: 'PayrollRun', resourceId: id, requested: body }, this.before(req, 'payrollRun', id), () => this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId, req.user.schoolSlug, body));
   }
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('payroll/payments')
   getPayrollPayments(@Request() req, @Query('payrollRunId') payrollRunId?: string) {
     return this.hrService.getPayrollPayments(req.user.tenantId, payrollRunId);
@@ -437,7 +437,7 @@ export class HrController {
 
   // ── PAYSLIPS ──────────────────────────────────────────────────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('payslips')
   getPayslips(@Request() req, @Query() q: any) { return this.hrService.getPayslips(req.user.tenantId, q); }
 
@@ -459,7 +459,7 @@ export class HrController {
 
   // ── SALARY COMPONENTS (payroll configuration root system) ──────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('salary-components')
   getSalaryComponents(@Request() req) {
     return this.hrService.getSalaryComponents(req.user.tenantId, req.user.schoolSlug);
@@ -484,7 +484,7 @@ export class HrController {
   }
 
   // ── SALARY TEMPLATES (addresses "everything is manual") ─────────────
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('salary-templates')
   getSalaryTemplates(@Request() req) {
     return this.hrService.getSalaryTemplates(req.user.schoolSlug);
@@ -514,7 +514,7 @@ export class HrController {
     return this.audited(req, { module: 'HR: Payroll', action: 'Set staff salary structure', type: 'update', resourceType: 'Staff', resourceId: id, requested: body }, this.before(req, 'staffSalary', id), () => this.hrService.setStaffSalaryStructure(id, req.user.tenantId, req.user.schoolSlug, body.lines));
   }
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('payslips/:id/pdf')
   async downloadPayslipPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
     const pdf = await this.hrService.generatePayslipPdf(id, req.user.tenantId, req.user.schoolSlug);
@@ -582,11 +582,11 @@ export class HrController {
 
   // ── CONTRACTS ─────────────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('contracts/stats')
   getContractStats(@Request() req) { return this.hrService.getContractStats(req.user.tenantId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('contracts')
   getContracts(@Request() req, @Query() q: any) { return this.hrService.getContracts(req.user.tenantId, q); }
 
@@ -598,7 +598,7 @@ export class HrController {
   @Patch('contracts/:id')
   updateContract(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateContract(req.user.tenantId, id, body); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('contracts/:id/pdf')
   async downloadContractPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
     const pdf = await this.hrService.generateContractPdf(id, req.user.tenantId, req.user.schoolSlug, req.user.userId);
@@ -627,7 +627,7 @@ export class HrController {
 
   // ── OFFER LETTERS ────────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('offer-letters')
   getOfferLetters(@Request() req, @Query() q: any) { return this.hrService.getOfferLetters(req.user.schoolSlug, q); }
 
@@ -643,7 +643,7 @@ export class HrController {
     return this.hrService.updateOfferLetterStatus(id, req.user.schoolSlug, body.status, body.declineReason ? { declineReason: body.declineReason } : {});
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('offer-letters/:id/pdf')
   async downloadOfferLetterPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
     const pdf = await this.hrService.generateOfferLetterPdf(id, req.user.schoolSlug, req.user.userId);
@@ -653,7 +653,7 @@ export class HrController {
 
   // ── APPOINTMENT LETTERS ──────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('appointment-letters')
   getAppointmentLetters(@Request() req, @Query() q: any) { return this.hrService.getAppointmentLetters(req.user.schoolSlug, q); }
 
@@ -669,7 +669,7 @@ export class HrController {
     return this.hrService.updateAppointmentLetterStatus(id, req.user.schoolSlug, body.status);
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('appointment-letters/:id/pdf')
   async downloadAppointmentLetterPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
     const pdf = await this.hrService.generateAppointmentLetterPdf(id, req.user.schoolSlug);
@@ -827,7 +827,7 @@ export class HrController {
 
   // ── EXPENSE CLAIMS ─────────────────────────────────────────────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('expense-claims')
   getExpenseClaims(@Request() req, @Query() query: any) { return this.hrService.getExpenseClaims(req.user.tenantId, query); }
 
@@ -850,7 +850,7 @@ export class HrController {
 
   // ── ADVANCES ───────────────────────────────────────────────────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('advances')
   getAdvances(@Request() req, @Query() query: any) { return this.hrService.getAdvances(req.user.tenantId, query); }
 
@@ -866,7 +866,7 @@ export class HrController {
 
   // ── STAFF INCREMENTS ───────────────────────────────────────────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('increments')
   getIncrements(@Request() req, @Query() query: any) { return this.hrService.getIncrements(req.user.tenantId, query); }
 
@@ -878,7 +878,7 @@ export class HrController {
 
   // ── SECURITY DEPOSITS ──────────────────────────────────────────────────
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('security-deposits')
   getSecurityDeposits(@Request() req, @Query() query: any) { return this.hrService.getSecurityDeposits(req.user.tenantId, query); }
 
@@ -906,7 +906,7 @@ export class HrController {
   @Get('reports/org-chart')
   getOrgChart(@Request() req) { return this.hrService.getOrgChart(req.user.tenantId, req.user); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('reports/staff-list')
   getStaffListReport(@Request() req, @Query() query: any) { return this.hrService.getStaffListReport(req.user.tenantId, query, req.user); }
 
@@ -914,7 +914,7 @@ export class HrController {
   @Get('reports/staff-allocation')
   getStaffAllocationReport(@Request() req, @Query() query: any) { return this.hrService.getStaffAllocationReport(req.user.tenantId, query, req.user); }
 
-  @HrRead(PAYROLL_READ_ROLES)
+  @HrReadSensitive(PAYROLL_READ_ROLES)
   @Get('reports/staff-salary')
   getStaffSalaryReport(@Request() req, @Query() query: any) { return this.hrService.getStaffSalaryReport(req.user.tenantId, query, req.user); }
 
@@ -930,7 +930,7 @@ export class HrController {
     return this.hrService.getStaffLeftReport(req.user.tenantId, from, to, staffId);
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('staff/:id/file-cover')
   async getStaffFileCoverPdf(@Request() req, @Param('id') id: string, @Res() res: Response) {
     const buffer = await this.hrService.generateStaffFileCoverPdf(req.user.tenantId, req.user.schoolSlug, id);

@@ -27,7 +27,8 @@ export function hrReadGuardMode(): HrReadGuardMode {
  *  4. @HrRead / @HrStaffDirectory GETs: HR roles (or custom role with hr
  *     view) pass; directory GETs pass for every staff role (req.hrFullAccess
  *     tells the controller whether to return full documents); other staff
- *     roles are LOGGED (mode=log, default) or 403 (mode=enforce).
+ *     roles are LOGGED (mode=log, default) or 403 (mode=enforce). Sensitive
+ *     reads (@HrReadSensitive) are ALWAYS 403 for them.
  */
 @Injectable()
 export class HrAccessGuard implements CanActivate {
@@ -77,10 +78,12 @@ export class HrAccessGuard implements CanActivate {
     req.hrFullAccess = hrAllowed;
     if (hrAllowed || policy.directory) return true;
 
-    const mode = hrReadGuardMode();
+    // Sensitive reads are always enforced; the flag only governs the non-sensitive rest.
+    const mode: HrReadGuardMode = policy.enforce ? 'enforce' : hrReadGuardMode();
     // Structured, PII-free: role, route pattern, method, ids only.
     this.logger.warn(JSON.stringify({
       event: 'hr_read_guard',
+      bucket: policy.enforce ? 'sensitive' : 'non_sensitive',
       mode,
       decision: mode === 'enforce' ? 'denied' : 'would_deny',
       role,
