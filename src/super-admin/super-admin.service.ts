@@ -605,6 +605,17 @@ export class SuperAdminService {
 
     await this.institutionModel.findOneAndUpdate({ slug }, { $set: update });
 
+    // Wire the suspend action to Tenant.status (S0 finding 4): login already refuses a
+    // suspended Tenant (auth.service.ts login), but nothing ever wrote it. ONLY this
+    // existing action does it: 'suspended' -> Tenant 'suspended'; 'active' lifts a
+    // suspension (never touches a trial/onboarding tenant). Existing tokens stay valid
+    // until S3. FLAGGED for owner confirmation (S1_REPORT.md).
+    if (status === 'suspended') {
+      await this.tenantModel.updateOne({ slug }, { $set: { status: 'suspended' } });
+    } else if (status === 'active') {
+      await this.tenantModel.updateOne({ slug, status: 'suspended' }, { $set: { status: 'active' } });
+    }
+
     // Log event
     await new this.subHistoryModel({
       institutionSlug: slug, institutionName: inst.name,

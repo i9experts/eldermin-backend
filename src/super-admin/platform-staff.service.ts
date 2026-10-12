@@ -218,12 +218,17 @@ export class PlatformStaffService {
     };
   }
 
-  async setStaffActive(userId: string, isActive: boolean) {
+  async setStaffActive(userId: string, isActive: boolean, actorId?: string) {
+    // Deactivation records when/by whom (S1); reactivation clears the markers. Existing
+    // tokens stay valid until S3.
+    const update: any = isActive
+      ? { $set: { isActive: true }, $unset: { deactivatedAt: '', deactivatedBy: '', deactivationReason: '' } }
+      : { $set: { isActive: false, deactivatedAt: new Date(), deactivationReason: 'platform_staff_deactivated', ...(actorId ? { deactivatedBy: actorId } : {}) } };
     const user = await this.userModel.findOneAndUpdate(
       { _id: userId, primaryRole: 'super_admin' },
-      { $set: { isActive } },
+      update,
       { new: true },
-    ).select('-passwordHash');
+    ).select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires');
     if (!user) throw new NotFoundException('Platform staff account not found');
     return user;
   }
