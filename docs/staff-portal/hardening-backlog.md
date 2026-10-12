@@ -114,3 +114,19 @@ Source: `PHASE6B_REPORT.md` (section 7 candidates) plus the Phase 6 fixes on `fe
 
 ### Remaining OPEN after this round (summary)
 Critical #1 `/roles`, #2 `/hr/*`, #3 ModulesController slug header, #4 custom roles server-side, #7-#9; B3 marks/bulk class/subject scope (#4 above), B6 `?teacherId=` on PTMs/assignments/plans, B7 behaviour campusId visibility, B8 attendance multi-class scope; student class scoping (#25); items #5, #8, #14-#16, #18-#22 above; assessment create/update/delete/status unguarded; the OWNER DECISION field list in `PHASE6_FIXES.md`.
+
+
+## Phase 8 backend fixes (owner decisions, role teacher unless stated) and one deliberate non-fix
+
+FIXED on `feat/staff-portal` (details and tests: `eldermin-teacher-app-docs/phase8/BACKEND_FIXES_REPORT.md`):
+- `POST /compliance/safeguarding`: role teacher may only set the reporter fields (title, description, type, severity, reportedDate, actionsTaken, studentId/Name/Grade); any other key -> 400; `reportedBy`/`reportedById` come from the token; malformed body -> 400 for every role (was a Mongoose 500). Other roles keep today's behaviour (supersedes #9 for the teacher role only; the mass-assignment gap remains for non-teacher roles that lack `safeguarding:write`, e.g. admin, hr_manager, support_staff).
+- `GET /school-calendar/events`: no fee-due rows for teacher; exam description no longer "Grade Grade 5" (all roles).
+- `GET /events`, `GET /events/:id`: teacher gets no drafts, no other-campus events, no ticketTypes/promoCodes; internal events stay visible.
+- Circulars: teacher sees only published circulars addressed to them; `acknowledgment-status` returns counts without names; acknowledge only as a recipient.
+- `POST /hr/leave/self`: DTO validation (400); `PATCH /hr/leave/:id/status` sets `approverName`.
+- PTM confirm/cancel/action-items and fixture complete: teacher ownership checks.
+- Malformed ids/dates -> 400: notification read, PTM list/upcoming/create/reschedule, fixture complete id.
+
+NOT FIXED on purpose (owner decision, 2026-10): **API-written leave applications store `staffId`, `tenantId` and `institutionId` as strings** (`createLeaveApplication` spreads the string `staffId` and `this.newTid(...)` results; seed rows use ObjectIds; see `B0_ID_TYPING.md`, LOCAL_VERIFICATION E-B4). Everything the Teacher app calls matches through the id-match plugin, but raw Mongo queries by ObjectId (reports, scripts) miss these rows. Left as is; fix together with the B0 data-typing migration.
+
+Still OPEN from this area: other roles without `safeguarding:write` can still mass-assign safeguarding fields; teacher still sees `private`/`unlisted` events (the app filters them); circular `category: fee` is not hidden from teachers; malformed circular id in `/school-calendar/circulars/:id*` still 500; `GET /school-calendar/events` manual rows still carry `createdBy`/`schoolSlug`.
