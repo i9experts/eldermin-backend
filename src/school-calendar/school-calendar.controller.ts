@@ -59,13 +59,13 @@ export class SchoolCalendarController {
   @Get('circulars')
   getCirculars(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getCirculars(schoolSlug, query);
+    return this.service.getCirculars(schoolSlug, query, req.user);
   }
 
   @Get('circulars/:id')
   getCircularById(@Request() req: any, @Param('id') id: string) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getCircularById(schoolSlug, id);
+    return this.service.getCircularById(schoolSlug, id, req.user);
   }
 
   @Roles(...CALENDAR_ADMIN_ROLES)
@@ -99,12 +99,12 @@ export class SchoolCalendarController {
   @Get('circulars/:id/acknowledgment-status')
   getAcknowledgmentStatus(@Request() req: any, @Param('id') id: string) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getAcknowledgmentStatus(schoolSlug, id);
+    return this.service.getAcknowledgmentStatus(schoolSlug, id, req.user);
   }
 
   @Post('circulars/:id/acknowledge')
   acknowledgeCircular(@Request() req: any, @Param('id') id: string) {
     const { schoolSlug, userId, userName } = this.ctx(req);
-    return this.service.acknowledgeCircular(schoolSlug, id, userId, userName);
+    return this.service.acknowledgeCircular(schoolSlug, id, userId, userName, req.user);
   }
 }

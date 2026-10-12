@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -19,6 +19,7 @@ import { Assessment, AssessmentDocument } from '../assessments/schemas/assessmen
 import { AcademicYear as SchoolAcademicYear, AcademicYearDocument as SchoolAcademicYearDocument } from '../organization/schemas/organization.schema';
 import { EmailService } from '../email/email.service';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
+import { isCircularForStaffViewer, CircularViewer } from './circular-visibility.util';
 
 interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string }
 
@@ -193,16 +194,42 @@ export class SchoolCalendarService {
     return { message: 'Deleted' };
   }
 
-  async getCirculars(schoolSlug: string, query: { status?: string; category?: string; limit?: number }) {
+  /** Who the teacher is for circular targeting: userId from the token, Staff._id + campus from the DB (claims are not trusted). */
+  private async circularViewer(user: { userId?: string; campusId?: any }): Promise<CircularViewer> {
+    let staff: any = null;
+    try {
+      if (user?.userId && Types.ObjectId.isValid(user.userId)) {
+        staff = await this.staffModel.findOne({ userId: new Types.ObjectId(user.userId) }).select('_id campusId').lean();
+      }
+    } catch { staff = null; }
+    const campus = user?.campusId || staff?.campusId || null;
+    return { userId: user?.userId ? String(user.userId) : undefined, staffId: staff?._id ? String(staff._id) : undefined, campusId: campus ? String(campus) : null };
+  }
+
+  /**
+   * Teacher role: only PUBLISHED circulars addressed to the caller (audience + campus), never drafts, scheduled
+   * or parent/student-only ones. Other roles: unchanged (every status and audience).
+   */
+  async getCirculars(schoolSlug: string, query: { status?: string; category?: string; limit?: number }, requestingUser?: any) {
     const filter: any = { schoolSlug };
+    if (isTeacherCaller(requestingUser)) {
+      filter.status = 'published';
+      if (query.category) filter.category = query.category;
+      const viewer = await this.circularViewer(requestingUser);
+      const rows: any[] = await this.circularModel.find(filter).sort({ createdAt: -1 }).lean();
+      return rows.filter((c) => isCircularForStaffViewer(c, viewer)).slice(0, query.limit || 100);
+    }
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
     return this.circularModel.find(filter).sort({ createdAt: -1 }).limit(query.limit || 100).lean();
   }
 
-  async getCircularById(schoolSlug: string, id: string) {
+  async getCircularById(schoolSlug: string, id: string, requestingUser?: any) {
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
+    if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer(requestingUser))) {
+      throw new NotFoundException('Circular not found');
+    }
     return circular;
   }
 
@@ -286,9 +313,13 @@ export class SchoolCalendarService {
     }
   }
 
-  async acknowledgeCircular(schoolSlug: string, circularId: string, userId: string, userName: string) {
+  async acknowledgeCircular(schoolSlug: string, circularId: string, userId: string, userName: string, requestingUser?: any) {
     const circular = await this.circularModel.findOne({ _id: circularId, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
+    // Teacher role: only a recipient of a published circular may acknowledge (always for themselves: userId is the token's).
+    if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer({ ...requestingUser, userId }))) {
+      throw new ForbiddenException('This circular was not sent to you');
+    }
     return this.ackModel.findOneAndUpdate(
       { circularId: new Types.ObjectId(circularId), userId: new Types.ObjectId(userId) },
       { $set: { userName, acknowledgedAt: new Date(), schoolSlug } },
@@ -296,9 +327,12 @@ export class SchoolCalendarService {
     );
   }
 
-  async getAcknowledgmentStatus(schoolSlug: string, circularId: string) {
+  async getAcknowledgmentStatus(schoolSlug: string, circularId: string, requestingUser?: any) {
     const circular = await this.circularModel.findOne({ _id: circularId, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
+    if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer(requestingUser))) {
+      throw new NotFoundException('Circular not found');
+    }
     if (!circular.requiresAcknowledgment) {
       return { requiresAcknowledgment: false, total: 0, acknowledged: 0, pending: [] };
     }
@@ -306,6 +340,10 @@ export class SchoolCalendarService {
     const acks = await this.ackModel.find({ circularId: new Types.ObjectId(circularId) }).lean();
     const ackedIds = new Set(acks.map((a) => String(a.userId)));
     const pending = recipients.filter((r) => !ackedIds.has(r.userId));
+    // Teacher role: counts only, never the names of the colleagues / parents who have not acknowledged.
+    if (isTeacherCaller(requestingUser)) {
+      return { requiresAcknowledgment: true, total: recipients.length, acknowledged: recipients.length - pending.length, pending: [] };
+    }
     return {
       requiresAcknowledgment: true,
       total: recipients.length,

@@ -1,3 +1,5 @@
+import { NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Types } from 'mongoose';
 import { SchoolCalendarService } from './school-calendar.service';
 
 // Fakes only (no DB).
@@ -68,5 +70,141 @@ describe('SchoolCalendarService.getEvents (exam label)', () => {
     const { service } = makeCalendar({ assessments: [a(grade, section)] });
     const rows: any[] = await service.getEvents('s', range, { role: 'admin' });
     expect(rows.find((r) => r.type === 'exam').description).toBe(expected);
+  });
+});
+
+// ─── Circulars (teacher role) ───────────────────────────────────────────────
+const ME = 'a'.repeat(24);           // my user id
+const MY_STAFF = 'b'.repeat(24);     // my Staff._id
+const OTHER = 'c'.repeat(24);
+const C1 = 'd'.repeat(24);           // my campus
+const C2 = 'e'.repeat(24);
+const CID = 'f'.repeat(24);           // another campus
+const circ = (id: string, over: any = {}) => ({
+  _id: id, title: id, body: 'b', status: 'published', requiresAcknowledgment: true, createdAt: new Date(),
+  audience: { roles: ['staff'], scope: 'school', campusId: null, individualStaffIds: [], userIds: [] }, ...over,
+});
+const aud = (over: any) => ({ audience: { roles: ['staff'], scope: 'school', campusId: null, individualStaffIds: [], userIds: [], ...over } });
+const ALL = [
+  circ('staff-school'),
+  circ('draft', { status: 'draft' }),
+  circ('scheduled', { status: 'scheduled' }),
+  circ('parents-only', aud({ roles: ['parent'] })),
+  circ('students-only', aud({ roles: ['student'] })),
+  circ('staff-and-parents', aud({ roles: ['parent', 'staff'] })),
+  circ('my-campus', aud({ scope: 'campus', campusId: C1 })),
+  circ('other-campus', aud({ scope: 'campus', campusId: C2 })),
+  circ('grade-staff', aud({ scope: 'grade' })),
+  circ('indiv-me', aud({ scope: 'individual', roles: [], individualStaffIds: [MY_STAFF] })),
+  circ('indiv-me-user', aud({ scope: 'individual', roles: [], userIds: [ME] })),
+  circ('indiv-other', aud({ scope: 'individual', roles: [], individualStaffIds: [OTHER], userIds: [OTHER] })),
+];
+const teacherUser = { userId: ME, role: 'teacher', campusId: C1 };
+const staffDoc = { _id: MY_STAFF, campusId: C1 };
+
+// find() honours the status/category filter like Mongo would
+function circFind(rows: any[]) {
+  return jest.fn((f: any) => {
+    const r = rows.filter((c) => (!f.status || c.status === f.status) && (!f.category || c.category === f.category));
+    const c: any = { sort: () => c, limit: () => c, lean: () => Promise.resolve(r) };
+    return c;
+  });
+}
+
+describe('SchoolCalendarService circulars: teacher', () => {
+  it('list: only published circulars addressed to the teacher (audience + campus)', async () => {
+    const { service, circularModel } = makeCalendar({ staff: staffDoc });
+    circularModel.find = circFind(ALL);
+    const ids = (await service.getCirculars('s', {}, teacherUser)).map((c: any) => c._id).sort();
+    expect(ids).toEqual(['grade-staff', 'indiv-me', 'indiv-me-user', 'my-campus', 'staff-and-parents', 'staff-school'].sort());
+  });
+
+  it('list: a ?status=draft query cannot widen the teacher list', async () => {
+    const { service, circularModel } = makeCalendar({ staff: staffDoc });
+    circularModel.find = circFind(ALL);
+    const rows = await service.getCirculars('s', { status: 'draft' }, teacherUser);
+    expect(rows.some((c: any) => c.status !== 'published')).toBe(false);
+  });
+
+  it('list: unknown campus on the teacher -> campus-scoped circulars are not shown', async () => {
+    const { service, circularModel } = makeCalendar({ staff: { _id: MY_STAFF } });
+    circularModel.find = circFind(ALL);
+    const ids = (await service.getCirculars('s', {}, { userId: ME, role: 'teacher' })).map((c: any) => c._id);
+    expect(ids).not.toContain('my-campus');
+    expect(ids).not.toContain('other-campus');
+    expect(ids).toContain('staff-school');
+  });
+
+  it.each(['admin', 'principal', 'hr_manager', 'parent', 'institution_owner'])('%s: list unchanged (every status and audience)', async (role) => {
+    const { service, circularModel } = makeCalendar();
+    circularModel.find = circFind(ALL);
+    expect((await service.getCirculars('s', {}, { userId: ME, role })).length).toBe(ALL.length);
+    expect((await service.getCirculars('s', { status: 'draft' }, { userId: ME, role })).map((c: any) => c._id)).toEqual(['draft']);
+  });
+
+  it('by id: draft / parent-only / other-campus / someone else\'s individual -> 404 for the teacher; staff one is readable', async () => {
+    for (const id of ['draft', 'scheduled', 'parents-only', 'other-campus', 'indiv-other']) {
+      const { service } = makeCalendar({ staff: staffDoc, circular: ALL.find((c) => c._id === id) });
+      await expect(service.getCircularById('s', id, teacherUser)).rejects.toThrow(NotFoundException);
+    }
+    const { service } = makeCalendar({ staff: staffDoc, circular: ALL[0] });
+    expect((await service.getCircularById('s', 'staff-school', teacherUser) as any)._id).toBe('staff-school');
+  });
+
+  it('by id: admin still reads a draft', async () => {
+    const { service } = makeCalendar({ circular: ALL[1] });
+    expect((await service.getCircularById('s', 'draft', { role: 'admin' }) as any)._id).toBe('draft');
+  });
+
+  describe('acknowledgment-status', () => {
+    const run = async (user: any) => {
+      const m = makeCalendar({ staff: staffDoc, circular: ALL[0], acks: [{ userId: new Types.ObjectId(ME) }] });
+      jest.spyOn(m.service as any, 'resolveAudience').mockResolvedValue([
+        { userId: ME, name: 'Me' }, { userId: OTHER, name: 'Colleague Name' },
+      ]);
+      return m.service.getAcknowledgmentStatus('s', CID, user);
+    };
+    it('teacher: counts only, no names', async () => {
+      const r: any = await run(teacherUser);
+      expect(r).toMatchObject({ requiresAcknowledgment: true, total: 2, acknowledged: 1, pending: [] });
+      expect(JSON.stringify(r)).not.toContain('Colleague Name');
+    });
+    it.each(['admin', 'principal', 'hr_manager'])('%s: still gets the pending names', async (role) => {
+      const r: any = await run({ userId: OTHER, role });
+      expect(r.pending).toEqual([{ userId: OTHER, name: 'Colleague Name' }]);
+    });
+    it('teacher who is not a recipient -> 404', async () => {
+      const m = makeCalendar({ staff: staffDoc, circular: ALL.find((c) => c._id === 'parents-only') });
+      await expect(m.service.getAcknowledgmentStatus('s', CID, teacherUser)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('acknowledge', () => {
+    it('teacher recipient: stored for the token user only', async () => {
+      const m = makeCalendar({ staff: staffDoc, circular: ALL[0] });
+      await m.service.acknowledgeCircular('s', CID, ME, 'Me', teacherUser);
+      const [filter] = m.ackModel.findOneAndUpdate.mock.calls[0];
+      expect(String(filter.userId)).toBe(ME);
+    });
+    it.each(['draft', 'scheduled', 'parents-only', 'other-campus', 'indiv-other'])('teacher non-recipient (%s) -> 403, nothing written', async (id) => {
+      const m = makeCalendar({ staff: staffDoc, circular: ALL.find((c) => c._id === id) });
+      await expect(m.service.acknowledgeCircular('s', CID, ME, 'Me', teacherUser)).rejects.toThrow(ForbiddenException);
+      expect(m.ackModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+    it.each(['admin', 'parent', 'hr_manager'])('%s: acknowledge unchanged (no audience check)', async (role) => {
+      const m = makeCalendar({ circular: ALL.find((c) => c._id === 'parents-only') });
+      await m.service.acknowledgeCircular('s', CID, ME, 'Me', { role, userId: ME });
+      expect(m.ackModel.findOneAndUpdate).toHaveBeenCalled();
+    });
+  });
+
+  it('controller passes req.user to every circular route', async () => {
+    const m = makeCalendar({ staff: staffDoc, circular: ALL[0] });
+    m.circularModel.find = circFind(ALL);
+    const { SchoolCalendarController } = require('./school-calendar.controller');
+    const ctl = new SchoolCalendarController(m.service);
+    const req = { user: { ...teacherUser, schoolSlug: 's', name: 'Me' } };
+    expect((await ctl.getCirculars(req, {})).some((c: any) => c._id === 'draft')).toBe(false);
+    await expect(ctl.acknowledgeCircular({ user: { ...req.user } }, CID)).resolves.toBeDefined();
   });
 });
