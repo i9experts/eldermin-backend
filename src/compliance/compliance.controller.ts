@@ -13,6 +13,10 @@ import { GovernanceRollupService } from './governance-rollup.service';
 // module uses) by the dedicated safeguarding:read/write permission, granted
 // only to designated-safeguarding-lead roles (see permissions.matrix.ts).
 import { RequirePermission } from '../auth/decorators';
+import { hasPermission } from '../auth/permissions.matrix';
+import { UserRole } from '../auth/roles.enum';
+import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
+import { buildSafeguardingCreateData } from './safeguarding-create.util';
 
 @Controller('compliance')
 export class ComplianceController {
@@ -114,7 +118,13 @@ export class ComplianceController {
   @HttpCode(HttpStatus.CREATED)
   async createSafeguarding(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, userName, requestingUser } = this.ctx(req);
-    return this.service.createSafeguardingCase({ ...dto, schoolSlug, reportedBy: dto.reportedBy || userName }, requestingUser);
+    // Owner decision: the role TEACHER (which has safeguarding:report but not safeguarding:write) may only
+    // set the reporter fields; identity comes from the token. Every other role keeps today's behaviour
+    // (the web sends lead fields such as confidential / reportedBy from the admin role, which has report only).
+    const role = (requestingUser?.role || requestingUser?.primaryRole) as UserRole;
+    const canManage = !isTeacherCaller(requestingUser) || hasPermission(role, 'safeguarding:write');
+    const data = buildSafeguardingCreateData(dto, requestingUser, schoolSlug, userName, canManage);
+    return this.service.createSafeguardingCase(data, requestingUser);
   }
 
   @RequirePermission('safeguarding:write')

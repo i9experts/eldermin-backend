@@ -252,6 +252,8 @@ export class ComplianceService {
     const sc = new this.safeguardingModel({
       ...data,
       reportedDate: new Date(data.reportedDate || Date.now()),
+      // reportedById comes from the token (set by the controller); stored as an ObjectId like the schema says.
+      ...(data.reportedById && Types.ObjectId.isValid(data.reportedById) ? { reportedById: new Types.ObjectId(String(data.reportedById)) } : {}),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     return sc.save();
