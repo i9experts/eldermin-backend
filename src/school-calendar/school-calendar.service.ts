@@ -395,19 +395,19 @@ export class SchoolCalendarService {
         const parents = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
         }).lean();
-        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || p.role });
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || (p as any).role });
       }
       if (spec.individualStaffIds?.length) {
         const staffDocs = await this.staffModel.find({ _id: { $in: spec.individualStaffIds }, tenantId: (tenant as any)._id }).select('userId').lean();
         const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
         if (staffUserIds.length) {
           const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
-          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || u.role });
+          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || (u as any).role });
         }
       }
       if (spec.userIds?.length) {
         const users = await this.userModel.find({ _id: { $in: spec.userIds.map((id) => new Types.ObjectId(id)) }, tenantId: (tenant as any)._id }).lean();
-        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || u.role });
+        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || (u as any).role });
       }
       return Array.from(recipients.values());
     }
@@ -426,13 +426,13 @@ export class SchoolCalendarService {
         const parents = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
         }).lean();
-        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || p.role });
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || (p as any).role });
       }
       if (roles.includes('student') && studentIds.length) {
         const studentUsers = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'student', linkedStudentId: { $in: studentIds },
         }).lean();
-        for (const s of studentUsers) recipients.set(String(s._id), { userId: String(s._id), name: nameOf(s), email: s.email, phone: s.phone, primaryRole: s.primaryRole || s.role });
+        for (const s of studentUsers) recipients.set(String(s._id), { userId: String(s._id), name: nameOf(s), email: s.email, phone: s.phone, primaryRole: s.primaryRole || (s as any).role });
       }
     }
 
@@ -443,7 +443,7 @@ export class SchoolCalendarService {
       const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
       if (staffUserIds.length) {
         const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
-        for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || u.role });
+        for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || (u as any).role });
       }
     }
 
