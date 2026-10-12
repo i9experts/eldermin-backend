@@ -1,4 +1,4 @@
-import { Optional, BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Optional, BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Substitution, SubstitutionDocument } from './schemas/substitution.schema';
@@ -9,6 +9,8 @@ import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
 import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { EmailService } from '../../email/email.service';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
+import { assertValidObjectId } from '../../common/utils/object-id.util';
+import { isTeacherCaller, resolveTeacherIdentity, isOwnTeacherRef } from '../../staff-portal/teacher-identity.util';
 
 @Injectable()
 export class SubstitutionService {
@@ -220,7 +222,15 @@ export class SubstitutionService {
     return fixture;
   }
 
-  async completeFixture(fixtureId: string, tenantId: string) {
+  async completeFixture(fixtureId: string, tenantId: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(fixtureId, 'fixture');
+    // TEACHER callers: only the fixture's assigned substitute may complete it (admin roles unchanged).
+    if (isTeacherCaller(requestingUser)) {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
+      const f: any = await this.substitutionModel.findOne({ _id: fixtureId, tenantId: this.tid(tenantId) }).select('substituteTeacherId').lean();
+      if (!f) throw new NotFoundException('Fixture not found or not in an assigned state');
+      if (!isOwnTeacherRef(me, f.substituteTeacherId)) throw new ForbiddenException('Only the assigned substitute can complete this fixture');
+    }
     const fixture = await this.substitutionModel.findOneAndUpdate(
       { _id: fixtureId, tenantId: this.tid(tenantId), status: 'assigned' },
       { $set: { status: 'completed' } }, { new: true },

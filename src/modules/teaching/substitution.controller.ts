@@ -36,7 +36,7 @@ export class SubstitutionController {
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/complete')
   async complete(@Param('id') id: string, @Request() req: any) {
-    return this.service.completeFixture(id, req.user.tenantId);
+    return this.service.completeFixture(id, req.user.tenantId, req.user);
   }
 
   @Get()

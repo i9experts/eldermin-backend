@@ -152,8 +152,9 @@ export class PTMService {
       .lean();
   }
 
-  async confirmMeeting(id: string, tenantId: string) {
+  async confirmMeeting(id: string, tenantId: string, requestingUser?: ScopedUser) {
     assertValidObjectId(id, 'meeting');
+    await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId), status: 'requested' },
       { $set: { status: 'confirmed' } }, { new: true },
@@ -197,8 +198,9 @@ export class PTMService {
     return meeting;
   }
 
-  async updateActionItem(meetingId: string, actionItemId: string, tenantId: string, status: 'pending' | 'done') {
+  async updateActionItem(meetingId: string, actionItemId: string, tenantId: string, status: 'pending' | 'done', requestingUser?: ScopedUser) {
     assertValidObjectId(meetingId, 'meeting');
+    await this.assertTeacherOwnsMeeting(meetingId, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOne({ _id: meetingId, tenantId: this.tid(tenantId) });
     if (!meeting) throw new NotFoundException('Meeting not found');
     const item = meeting.actionItems.find((a: any) => String(a._id) === actionItemId);
@@ -208,8 +210,9 @@ export class PTMService {
     return meeting;
   }
 
-  async cancelMeeting(id: string, tenantId: string, reason: string, cancelledBy: string) {
+  async cancelMeeting(id: string, tenantId: string, reason: string, cancelledBy: string, requestingUser?: ScopedUser) {
     assertValidObjectId(id, 'meeting');
+    await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'cancelled', cancelledReason: reason, cancelledBy } }, { new: true },

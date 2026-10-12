@@ -48,7 +48,7 @@ export class PTMController {
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/confirm')
   async confirm(@Param('id') id: string, @Request() req: any) {
-    return projectForTeacher(req.user, await this.service.confirmMeeting(id, req.user.tenantId));
+    return projectForTeacher(req.user, await this.service.confirmMeeting(id, req.user.tenantId, req.user));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
@@ -69,12 +69,12 @@ export class PTMController {
     @Param('id') id: string, @Param('actionItemId') actionItemId: string,
     @Body() dto: { status: 'pending' | 'done' }, @Request() req: any,
   ) {
-    return projectForTeacher(req.user, await this.service.updateActionItem(id, actionItemId, req.user.tenantId, dto.status));
+    return projectForTeacher(req.user, await this.service.updateActionItem(id, actionItemId, req.user.tenantId, dto.status, req.user));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/cancel')
   async cancel(@Param('id') id: string, @Body() dto: { reason: string }, @Request() req: any) {
-    return projectForTeacher(req.user, await this.service.cancelMeeting(id, req.user.tenantId, dto.reason, req.user.name));
+    return projectForTeacher(req.user, await this.service.cancelMeeting(id, req.user.tenantId, dto?.reason, req.user.name, req.user));
   }
 }
