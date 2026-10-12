@@ -201,6 +201,23 @@ describe('StaffTeachingService.timetable', () => {
     expect(f.$or).toHaveLength(2);
   });
 
+  it('Staff with NO campus: the campus filter is skipped but the result is still only the caller\'s own slots (own-staffId restriction in the query AND per period), tenant-scoped', async () => {
+    const staff = { _id: oid(), tenantId: oid(), campusId: null };
+    const campusA = oid(), campusB = oid();
+    const other = oid();
+    const tA = tt([per({ periodNo: 1, teacherId: staff._id }), per({ periodNo: 2, teacherId: other })], { campusId: campusA });
+    const tB = tt([per({ periodNo: 1, teacherId: other }), per({ periodNo: 3, teacherId: staff._id, splitGroups: [] })], { campusId: campusB });
+    const tC = tt([per({ periodNo: 5, teacherId: other, splitGroups: [{ label: 'x', teacherId: other }] })], { campusId: null });
+    const s = setup({ staff, timetables: [tA, tB, tC] });
+    const r = await s.service.timetable(s.user as any, { date: '2026-10-05' });
+    // own slots from both campuses, nobody else's
+    expect(r.days[0].slots.map((x: any) => [x.periodNo])).toEqual([[1], [3]]);
+    const f = s.timetableModel.find.mock.calls[0][0];
+    expect('campusId' in f).toBe(false); // fail-open on campus ...
+    expect(String(f.tenantId)).toBe(String(staff.tenantId)); // ... but never across schools
+    expect(f.$or).toEqual([{ 'periods.teacherId': staff._id }, { 'periods.splitGroups.teacherId': staff._id }]); // ... and only own staffId
+  });
+
   it('finds a teacher who appears ONLY in splitGroups', async () => {
     const staff = { _id: oid(), tenantId: oid() };
     const t = tt([per({ subject: 'Lang', roomNo: '', splitGroups: [
