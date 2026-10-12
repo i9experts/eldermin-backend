@@ -87,6 +87,7 @@ const circ = (id: string, over: any = {}) => ({
 const aud = (over: any) => ({ audience: { roles: ['staff'], scope: 'school', campusId: null, individualStaffIds: [], userIds: [], ...over } });
 const ALL = [
   circ('staff-school'),
+  circ('fee-staff', { category: 'fee' }),
   circ('draft', { status: 'draft' }),
   circ('scheduled', { status: 'scheduled' }),
   circ('parents-only', aud({ roles: ['parent'] })),
@@ -151,8 +152,26 @@ describe('SchoolCalendarService circulars: teacher', () => {
     expect((await service.getCircularById('s', 'staff-school', teacherUser) as any)._id).toBe('staff-school');
   });
 
+  it('fee-category circular: hidden from the teacher on list, by id, acknowledge and acknowledgment-status; admin/parent/hr_manager unchanged', async () => {
+    const { service, circularModel } = makeCalendar({ staff: staffDoc });
+    circularModel.find = circFind(ALL);
+    expect((await service.getCirculars('s', {}, teacherUser)).map((c: any) => c._id)).not.toContain('fee-staff');
+    expect((await service.getCirculars('s', { category: 'fee' }, teacherUser))).toEqual([]);
+    const fee = ALL.find((c) => c._id === 'fee-staff');
+    const m = makeCalendar({ staff: staffDoc, circular: fee });
+    await expect(m.service.getCircularById('s', CID, teacherUser)).rejects.toThrow(NotFoundException);
+    await expect(m.service.getAcknowledgmentStatus('s', CID, teacherUser)).rejects.toThrow(NotFoundException);
+    await expect(m.service.acknowledgeCircular('s', CID, ME, 'Me', teacherUser)).rejects.toThrow(ForbiddenException);
+    expect(m.ackModel.findOneAndUpdate).not.toHaveBeenCalled();
+    for (const role of ['admin', 'hr_manager', 'parent']) {
+      expect((await m.service.getCircularById('s', CID, { role, userId: ME }) as any)._id).toBe('fee-staff');
+      await m.service.acknowledgeCircular('s', CID, ME, 'Me', { role, userId: ME });
+    }
+    expect(m.ackModel.findOneAndUpdate).toHaveBeenCalledTimes(3);
+  });
+
   it('by id: admin still reads a draft', async () => {
-    const { service } = makeCalendar({ circular: ALL[1] });
+    const { service } = makeCalendar({ circular: ALL.find((c) => c._id === 'draft') });
     expect((await service.getCircularById('s', 'draft', { role: 'admin' }) as any)._id).toBe('draft');
   });
 

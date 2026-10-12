@@ -10,6 +10,8 @@ export interface CircularViewer { userId?: string; staffId?: string; campusId?: 
 
 export function isCircularForStaffViewer(circular: any, viewer: CircularViewer): boolean {
   if (!circular || circular.status !== 'published') return false;
+  // Owner decision: fee-category circulars (fee reminders / amounts) are never shown to the teacher role.
+  if (circular.category === 'fee') return false;
   const aud = circular.audience || {};
   const eq = (a: any, b: any) => a !== undefined && a !== null && b !== undefined && b !== null && String(a) === String(b);
   if (aud.scope === 'individual') {
