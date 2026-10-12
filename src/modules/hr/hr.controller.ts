@@ -8,7 +8,7 @@ import { HR_LEAVE_ADMIN_ROLES } from '../../auth/role-sets';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { CreateSelfLeaveDto } from './dto/self-leave.dto';
 import { HrAccessGuard } from './guards/hr-access.guard';
-import { HrWrite, HrRead, HrReadSensitive, HrStaffDirectory } from './guards/hr-access.decorator';
+import { HrStaffUpdate, HrWrite, HrRead, HrReadSensitive, HrStaffDirectory } from './guards/hr-access.decorator';
 import { PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
 import { CriticalAuditService, AuditMeta } from '../../common/critical-audit.service';
 
@@ -67,7 +67,7 @@ export class HrController {
   @Get('staff/:id')
   getStaffById(@Request() req, @Param('id') id: string) { return this.hrService.getStaffById(req.user.tenantId, id); }
 
-  @HrWrite()
+  @HrStaffUpdate()
   @Patch('staff/:id')
   updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
 

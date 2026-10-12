@@ -2,7 +2,7 @@ import { ForbiddenException, Logger } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { HrController } from './hr.controller';
 import { HrAccessGuard, hrReadGuardMode } from './guards/hr-access.guard';
-import { HR_READ_KEY, HrReadPolicy } from './guards/hr-access.decorator';
+import { HR_READ_KEY, HR_STAFF_UPDATE_KEY, HrReadPolicy } from './guards/hr-access.decorator';
 import { RolesOrModuleManageGuard } from '../../roles/guards/roles-or-module-manage.guard';
 import { ROLES_OR_MODULE_KEY } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { PERMISSION_KEY } from '../../auth/decorators';
@@ -40,7 +40,8 @@ describe('HrController route matrix', () => {
     const w = Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]);
     const r = Reflect.getMetadata(HR_READ_KEY, proto[h]);
     const p = Reflect.getMetadata(PERMISSION_KEY, proto[h]);
-    expect([w, r, p].filter(Boolean)).toHaveLength(1);
+    const su = Reflect.getMetadata(HR_STAFF_UPDATE_KEY, proto[h]);
+    expect([w, r, p, su].filter(Boolean)).toHaveLength(1);
     if (methodOf(h) !== 'GET') expect(r).toBeUndefined();
     if (w) expect(w.roles).toEqual(expect.arrayContaining(HR_ADMIN_ROLES));
   });
@@ -56,7 +57,7 @@ describe('HrController route matrix', () => {
 });
 
 const NON_HR = [UserRole.TEACHER, UserRole.LIBRARIAN, UserRole.SUPPORT_STAFF, UserRole.VICE_PRINCIPAL, UserRole.ACADEMIC_COORDINATOR];
-const writes = handlers.filter(h => methodOf(h) !== 'GET' && !Reflect.getMetadata(PERMISSION_KEY, proto[h]));
+const writes = handlers.filter(h => methodOf(h) !== 'GET' && !Reflect.getMetadata(PERMISSION_KEY, proto[h]) && !Reflect.getMetadata(HR_STAFF_UPDATE_KEY, proto[h]));
 
 describe('HR writes (enforced immediately)', () => {
   describe.each(writes)('%s', (h) => {
@@ -176,5 +177,42 @@ describe('HR reads: log-only vs enforce', () => {
     class X { w() {} }
     const c: any = { getHandler: () => X.prototype.w, getClass: () => X, switchToHttp: () => ({ getRequest: () => ({ user: { userId: 'u', role: 'admin' }, method: 'POST' }) }) };
     await expect(readGuard().canActivate(c)).rejects.toThrow(ForbiddenException);
+  });
+});
+
+
+describe('PATCH /hr/staff/:id (Campuses supervisors path)', () => {
+  const upd = (user: any, body: any, m = models()) => {
+    const c = ctx('updateStaff', user); c.switchToHttp().getRequest().body = body;
+    return readGuard(m).canActivate(c);
+  };
+  it('is the only handler with the staff-update policy', () => {
+    expect(handlers.filter(h => Reflect.getMetadata(HR_STAFF_UPDATE_KEY, proto[h]))).toEqual(['updateStaff']);
+  });
+  it.each(HR_ADMIN_ROLES)('%s may change any field', async (r) => {
+    await expect(upd({ userId: 'u', role: r }, { salary: 1, supervisedClusterIds: [] })).resolves.toBe(true);
+  });
+  it('web regression: Institution > Campuses sends {supervisedClusterIds} as owner/admin -> allowed', async () => {
+    for (const r of [UserRole.INSTITUTION_OWNER, UserRole.ADMIN, UserRole.SUPER_ADMIN])
+      await expect(upd({ userId: 'u', role: r }, { supervisedClusterIds: ['c1'] })).resolves.toBe(true);
+  });
+  const fullInst = () => models('r', { moduleAccess: [{ moduleKey: 'institution', level: 'manage' }] });
+  it('custom role with FULL institution manage: supervisors only', async () => {
+    const t = { userId: 'u', role: UserRole.TEACHER };
+    await expect(upd(t, { supervisedClusterIds: ['c1'] }, fullInst())).resolves.toBe(true);
+    await expect(upd(t, { supervisedClusterIds: ['c1'], salary: 9 }, fullInst())).rejects.toThrow(ForbiddenException);
+    await expect(upd(t, { status: 'active' }, fullInst())).rejects.toThrow(ForbiddenException);
+    await expect(upd(t, { supervisedClusterIds: 'x' }, fullInst())).rejects.toThrow(ForbiddenException);
+    await expect(upd(t, {}, fullInst())).rejects.toThrow(ForbiddenException);
+  });
+  it('sub-module-only institution grant, view-only, none, teacher -> 403 even for supervisors', async () => {
+    const t = { userId: 'u', role: UserRole.TEACHER };
+    await expect(upd(t, { supervisedClusterIds: [] }, models('r', { moduleAccess: [{ moduleKey: 'institution', subModuleKey: 'campuses', level: 'manage' }] }))).rejects.toThrow(ForbiddenException);
+    await expect(upd(t, { supervisedClusterIds: [] }, models('r', { moduleAccess: [{ moduleKey: 'institution', level: 'view' }] }))).rejects.toThrow(ForbiddenException);
+    await expect(upd(t, { supervisedClusterIds: [] })).rejects.toThrow(ForbiddenException);
+  });
+  it('custom role with hr manage may change any field; parent/student never', async () => {
+    await expect(upd({ userId: 'u', role: UserRole.TEACHER }, { salary: 1 }, models('r', { moduleAccess: [{ moduleKey: 'hr', level: 'manage' }] }))).resolves.toBe(true);
+    for (const r of [UserRole.PARENT, UserRole.STUDENT]) await expect(upd({ userId: 'u', role: r }, { supervisedClusterIds: [] }, fullInst())).rejects.toThrow(ForbiddenException);
   });
 });

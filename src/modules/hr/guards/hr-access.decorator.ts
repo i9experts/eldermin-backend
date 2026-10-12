@@ -33,3 +33,14 @@ export const HrReadSensitive = (roles: UserRole[] = HR_ADMIN_ROLES) =>
 /** Read used as a dropdown by non-HR pages: every staff-type role allowed, non-HR roles get a projection. */
 export const HrStaffDirectory = () =>
   SetMetadata(HR_READ_KEY, { roles: HR_ADMIN_ROLES, directory: true, enforce: false } as HrReadPolicy);
+
+export const HR_STAFF_UPDATE_KEY = 'hrStaffUpdatePolicy';
+
+/**
+ * PATCH /hr/staff/:id only. HR roles (and custom role with hr manage) may
+ * change any field. Institution managers (owner/admin/super_admin or a custom
+ * role with FULL institution manage) may change ONLY supervisedClusterIds
+ * (Institution > Campuses); a body with any other field is rejected (403) as a
+ * whole, never partially applied.
+ */
+export const HrStaffUpdate = () => SetMetadata(HR_STAFF_UPDATE_KEY, true);

@@ -6,10 +6,11 @@ import { Role, RoleDocument } from '../../../roles/schemas/role.schema';
 import { User, UserDocument } from '../../organization/schemas/user.schema';
 import { PERMISSION_KEY } from '../../../auth/decorators';
 import { UserRole } from '../../../auth/roles.enum';
-import { NON_STAFF_ROLES } from '../../../auth/admin-role-sets';
+import { HR_ADMIN_ROLES, NON_STAFF_ROLES, ROLES_ADMIN_ROLES } from '../../../auth/admin-role-sets';
+import { hasFullModuleManage } from '../../../roles/full-module-access.util';
 import { ROLES_OR_MODULE_KEY } from '../../../roles/decorators/roles-or-module-manage.decorator';
 import { customRoleGrants } from '../../../roles/module-access.util';
-import { HR_READ_KEY, HrReadPolicy } from './hr-access.decorator';
+import { HR_READ_KEY, HR_STAFF_UPDATE_KEY, HrReadPolicy } from './hr-access.decorator';
 
 export type HrReadGuardMode = 'log' | 'enforce';
 
@@ -40,17 +41,33 @@ export class HrAccessGuard implements CanActivate {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) {}
 
-  private async customRoleHasHrView(userId?: string): Promise<boolean> {
-    if (!userId) return false;
+  /** Live custom-role moduleAccess, or null (no custom role / lookup failure -> fail closed). */
+  private async customRoleAccess(userId?: string): Promise<any[] | null> {
+    if (!userId) return null;
     try {
       const u: any = await this.userModel.findById(userId).select('customRoleId').lean();
-      if (!u?.customRoleId) return false;
+      if (!u?.customRoleId) return null;
       const r: any = await this.roleModel.findById(u.customRoleId).select('moduleAccess').lean();
-      return !!r && customRoleGrants(r.moduleAccess, 'hr', 'view', true);
+      return Array.isArray(r?.moduleAccess) ? r.moduleAccess : null;
     } catch (err) {
       this.logger.error(`Custom role lookup failed: ${(err as Error)?.message}`);
-      return false; // fail closed
+      return null;
     }
+  }
+
+  private async customRoleHasHrView(userId?: string): Promise<boolean> {
+    return customRoleGrants(await this.customRoleAccess(userId), 'hr', 'view', true);
+  }
+
+  private async canUpdateStaff(req: any, role: string, userId?: string): Promise<boolean> {
+    if (HR_ADMIN_ROLES.includes(role as UserRole)) return true;
+    const access = await this.customRoleAccess(userId);
+    if (customRoleGrants(access, 'hr', 'manage', true)) return true;
+    const body = req.body;
+    const keys = body && typeof body === 'object' ? Object.keys(body) : [];
+    const onlySupervisors = keys.length === 1 && keys[0] === 'supervisedClusterIds' && Array.isArray(body.supervisedClusterIds);
+    const institutionManager = ROLES_ADMIN_ROLES.includes(role as UserRole) || hasFullModuleManage(access, 'institution');
+    return onlySupervisors && institutionManager;
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -64,6 +81,10 @@ export class HrAccessGuard implements CanActivate {
     }
 
     const targets = [context.getHandler(), context.getClass()];
+    if (this.reflector.getAllAndOverride(HR_STAFF_UPDATE_KEY, targets)) {
+      if (await this.canUpdateStaff(req, role, user.userId)) return true;
+      throw new ForbiddenException('Access denied. Staff records can be edited by HR roles; Institution managers may only change campus supervisors (supervisedClusterIds) on their own.');
+    }
     if (this.reflector.getAllAndOverride(ROLES_OR_MODULE_KEY, targets)) return true;
     if (this.reflector.getAllAndOverride(PERMISSION_KEY, targets)) return true;
 
