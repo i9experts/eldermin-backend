@@ -6,6 +6,7 @@ import { HrService } from './hr.service';
 import { RequirePermission } from '../../auth/decorators';
 import { HR_LEAVE_ADMIN_ROLES } from '../../auth/role-sets';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
+import { CreateSelfLeaveDto } from './dto/self-leave.dto';
 
 @Controller('hr')
 @UseGuards(AuthGuard('jwt'))
@@ -248,7 +249,7 @@ export class HrController {
 
   @RequirePermission('leave:self')
   @Post('leave/self')
-  createMyLeave(@Request() req, @Body() body: any) {
+  createMyLeave(@Request() req, @Body() body: CreateSelfLeaveDto) {
     return this.hrService.createMyLeaveApplication(req.user.tenantId, this.iid(req), req.user.userId, body);
   }
 
@@ -304,7 +305,7 @@ export class HrController {
 
   @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES, { level: 'view' }) // web gates leave approval at hr:view
   @Patch('leave/:id/status')
-  updateLeaveStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string }) { return this.hrService.updateLeaveStatus(req.user.tenantId, id, body.status, req.user.userId, body.note, req.user.role); }
+  updateLeaveStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string; note: string }) { return this.hrService.updateLeaveStatus(req.user.tenantId, id, body.status, req.user.userId, body.note, req.user.role, req.user.name); }
 
   // ── PAYROLL ───────────────────────────────────────────────────────────
 

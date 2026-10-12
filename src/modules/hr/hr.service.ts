@@ -1272,7 +1272,7 @@ export class HrService {
     hajj: 'hajjUsed', unpaid: 'unpaidUsed',
   };
 
-  async updateLeaveStatus(tenantId: string, id: string, status: string, approverId: string, note: string, approverRole?: string) {
+  async updateLeaveStatus(tenantId: string, id: string, status: string, approverId: string, note: string, approverRole?: string, approverName?: string) {
     if (!['approved', 'rejected', 'cancelled', 'pending'].includes(status)) {
       throw new BadRequestException('Invalid status');
     }
@@ -1291,7 +1291,7 @@ export class HrService {
 
     const updated = await this.leaveApplicationModel.findOneAndUpdate(
       { _id: id, tenantId: tid },
-      { $set: { status, approvedBy: this.newTid(approverId), approvedAt: new Date(), approverNote: note } },
+      { $set: { status, approvedBy: this.newTid(approverId), approvedAt: new Date(), approverNote: note, ...(approverName ? { approverName } : {}) } },
       { new: true },
     ).lean();
 
