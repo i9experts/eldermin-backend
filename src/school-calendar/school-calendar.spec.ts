@@ -140,13 +140,29 @@ describe('SchoolCalendarService circulars: teacher', () => {
     expect(rows.some((c: any) => c.status !== 'published')).toBe(false);
   });
 
-  it('list: unknown campus on the teacher -> campus-scoped circulars are not shown', async () => {
-    const { service, circularModel } = makeCalendar({ staff: { _id: MY_STAFF } });
+  it('teacher with no campus anywhere (token and Staff record): every circular route -> 403 with the exact message', async () => {
+    const msg = 'No campus assigned \u2014 contact your administrator';
+    const u = { userId: ME, role: 'teacher' };
+    const m = makeCalendar({ staff: { _id: MY_STAFF }, circular: ALL[0] });
+    m.circularModel.find = circFind(ALL);
+    await expect(m.service.getCirculars('s', {}, u)).rejects.toThrow(msg);
+    await expect(m.service.getCircularById('s', CID, u)).rejects.toThrow(ForbiddenException);
+    await expect(m.service.acknowledgeCircular('s', CID, ME, 'Me', u)).rejects.toThrow(msg);
+    await expect(m.service.getAcknowledgmentStatus('s', CID, u)).rejects.toThrow(ForbiddenException);
+    expect(m.ackModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('teacher whose token has no campus but whose Staff record has one still works (DB fallback)', async () => {
+    const { service, circularModel } = makeCalendar({ staff: staffDoc });
     circularModel.find = circFind(ALL);
     const ids = (await service.getCirculars('s', {}, { userId: ME, role: 'teacher' })).map((c: any) => c._id);
-    expect(ids).not.toContain('my-campus');
-    expect(ids).not.toContain('other-campus');
-    expect(ids).toContain('staff-school');
+    expect(ids).toContain('my-campus');
+  });
+
+  it.each(['admin', 'principal', 'hr_manager', 'parent'])('%s without a campus is unchanged (no 403)', async (role) => {
+    const { service, circularModel } = makeCalendar({ staff: { _id: MY_STAFF } });
+    circularModel.find = circFind(ALL);
+    expect((await service.getCirculars('s', {}, { userId: ME, role })).length).toBe(ALL.length);
   });
 
   it.each(['admin', 'principal', 'hr_manager', 'parent', 'institution_owner'])('%s: list unchanged (every status and audience)', async (role) => {

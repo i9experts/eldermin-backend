@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ForbiddenException } from '@nestjs/common';
 import { EventsService } from './events.service';
 import { EventsController } from './events.controller';
 
@@ -59,10 +59,20 @@ describe('EventsService teacher visibility', () => {
     expect(await service.getEvents('s', { status: 'draft' }, teacher)).toEqual([]);
   });
 
-  it('teacher without a campus claim sees only all-campus events', async () => {
+  it.each([undefined, null, ''])('teacher without a campus (%p): list and by id -> 403 with the exact message, nothing read', async (campusId) => {
+    const { service, eventModel } = make();
+    const u: any = { role: 'teacher', campusId };
+    await expect(service.getEvents('s', {}, u)).rejects.toThrow(ForbiddenException);
+    await expect(service.getEvents('s', {}, u)).rejects.toThrow('No campus assigned \u2014 contact your administrator');
+    await expect(service.getEventById('s', 'pub', u)).rejects.toThrow(ForbiddenException);
+    expect(eventModel.find).not.toHaveBeenCalled();
+    expect(eventModel.findOne).not.toHaveBeenCalled();
+  });
+
+  it.each(['admin', 'principal', 'parent', 'hr_manager', 'institution_owner'])('%s without a campus is unchanged (no 403)', async (role) => {
     const { service } = make();
-    const ids = (await service.getEvents('s', {}, { role: 'teacher' })).map((e: any) => e._id).sort();
-    expect(ids).toEqual(['cancel', 'done', 'internal', 'novis', 'pub']);
+    expect((await service.getEvents('s', {}, { role })).length).toBe(EVENTS.length);
+    expect((await service.getEventById('s', 'draft', { role }) as any)._id).toBe('draft');
   });
 
   it('teacher detail: no ticketTypes / promoCodes keys and the ticket collections are not read', async () => {

@@ -22,6 +22,15 @@ export function isTeacherCaller(user: { role?: string; primaryRole?: string } | 
   return (user?.role || user?.primaryRole) === 'teacher';
 }
 
+/** 403 text (exact, shown to the teacher by the app) when a campus-scoped endpoint is called by a teacher with no campus. */
+export const NO_CAMPUS_MESSAGE = 'No campus assigned \u2014 contact your administrator';
+
+/** Teacher role + campus-scoped endpoint: a missing campus is a clear 403, never a silently empty / widened list. */
+export function assertTeacherHasCampus(campusId: any): string {
+  if (!campusId) throw new ForbiddenException(NO_CAMPUS_MESSAGE);
+  return String(campusId);
+}
+
 /**
  * Resolves {staffId, teacherProfileId, name} for the authenticated user from
  * the DB. 403 when the account has no (active) Staff record.

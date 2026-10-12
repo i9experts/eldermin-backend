@@ -18,7 +18,7 @@ import { Assessment, AssessmentDocument } from '../assessments/schemas/assessmen
 // actually carries Term dates.
 import { AcademicYear as SchoolAcademicYear, AcademicYearDocument as SchoolAcademicYearDocument } from '../organization/schemas/organization.schema';
 import { EmailService } from '../email/email.service';
-import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
+import { isTeacherCaller, assertTeacherHasCampus } from '../staff-portal/teacher-identity.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { isCircularForStaffViewer, CircularViewer } from './circular-visibility.util';
 
@@ -211,6 +211,8 @@ export class SchoolCalendarService {
       }
     } catch { staff = null; }
     const campus = user?.campusId || staff?.campusId || null;
+    // Campus-targeted circulars cannot be evaluated without a campus: 403 instead of a silently shorter list.
+    assertTeacherHasCampus(campus);
     return { userId: user?.userId ? String(user.userId) : undefined, staffId: staff?._id ? String(staff._id) : undefined, campusId: campus ? String(campus) : null };
   }
 

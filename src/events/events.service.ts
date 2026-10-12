@@ -13,7 +13,7 @@ import { MerchItem, MerchItemDocument } from './schemas/merch-item.schema';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
-import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
+import { isTeacherCaller, assertTeacherHasCampus } from '../staff-portal/teacher-identity.util';
 
 const ACTIVE_TICKET_STATUSES = ['reserved', 'valid', 'checked_in'];
 
@@ -151,12 +151,12 @@ export class EventsService {
    * ticket / price data. Other roles see exactly what they saw before.
    */
   private teacherEventFilter(user: { campusId?: any }): any[] {
-    const campus = user?.campusId ? String(user.campusId) : null;
+    const campus = assertTeacherHasCampus(user?.campusId);
     return [
       { status: { $in: ['published', 'cancelled', 'completed'] } },
       // private / unlisted are not for staff lists either ($nin also matches rows without a visibility field).
       { visibility: { $nin: ['private', 'unlisted'] } },
-      { $or: [{ campusId: null }, { campusId: { $exists: false } }, ...(campus ? [{ campusId: campus }] : [])] },
+      { $or: [{ campusId: null }, { campusId: { $exists: false } }, { campusId: campus }] },
     ];
   }
 
