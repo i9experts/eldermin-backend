@@ -130,3 +130,8 @@ FIXED on `feat/staff-portal` (details and tests: `eldermin-teacher-app-docs/phas
 NOT FIXED on purpose (owner decision, 2026-10): **API-written leave applications store `staffId`, `tenantId` and `institutionId` as strings** (`createLeaveApplication` spreads the string `staffId` and `this.newTid(...)` results; seed rows use ObjectIds; see `B0_ID_TYPING.md`, LOCAL_VERIFICATION E-B4). Everything the Teacher app calls matches through the id-match plugin, but raw Mongo queries by ObjectId (reports, scripts) miss these rows. Left as is; fix together with the B0 data-typing migration.
 
 Still OPEN from this area: other roles without `safeguarding:write` can still mass-assign safeguarding fields; teacher still sees `private`/`unlisted` events (the app filters them); circular `category: fee` is not hidden from teachers; malformed circular id in `/school-calendar/circulars/:id*` still 500; `GET /school-calendar/events` manual rows still carry `createdBy`/`schoolSlug`.
+
+
+## Phase 8 batch 2 (safeguarding lead fields: deliberately left)
+
+**Safeguarding create for admin / hr_manager / support_staff can still mass-assign lead fields** (`status`, `assignedTo`, `confidential`, `caseNumber`, `policeInvolved`). These roles have the `safeguarding` report permission but not `safeguarding:write` (only super_admin, institution_owner, principal, vice_principal have it), and the web admin form (Eldermin-Frontend SafeguardingTab.tsx:92-102) sends those fields. Left as is ON PURPOSE: the server cannot restrict them until the web form is changed in a coordinated release (stop sending, or send only for roles with write). Only role `teacher` has the strict whitelist (`POST /compliance/safeguarding`, compliance.controller.ts / safeguarding-create.util.ts).
