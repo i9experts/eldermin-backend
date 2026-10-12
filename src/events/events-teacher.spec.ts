@@ -10,6 +10,7 @@ function matches(doc: any, f: any): boolean {
     const val = doc[k];
     if (v && typeof v === 'object' && !(v instanceof Date)) {
       if ('$in' in v) return v.$in.includes(val);
+      if ('$nin' in v) return !v.$nin.includes(val);
       if ('$exists' in v) return (val !== undefined) === v.$exists;
       if ('$ne' in v) return val !== v.$ne;
     }
@@ -24,6 +25,9 @@ const EVENTS: any[] = [
   { _id: 'internal', title: 'Staff only', status: 'published', visibility: 'internal', campusId: null, schoolSlug: 's' },
   { _id: 'mine', title: 'Mine', status: 'published', visibility: 'public', campusId: 'c1', schoolSlug: 's' },
   { _id: 'other', title: 'Other campus', status: 'published', visibility: 'public', campusId: 'c2', schoolSlug: 's' },
+  { _id: 'priv', title: 'Private', status: 'published', visibility: 'private', campusId: null, schoolSlug: 's' },
+  { _id: 'unl', title: 'Unlisted', status: 'published', visibility: 'unlisted', campusId: null, schoolSlug: 's' },
+  { _id: 'novis', title: 'Legacy no visibility', status: 'published', campusId: null, schoolSlug: 's' },
   { _id: 'done', title: 'Done', status: 'completed', visibility: 'public', campusId: null, schoolSlug: 's' },
   { _id: 'cancel', title: 'Cancelled', status: 'cancelled', visibility: 'public', campusId: null, schoolSlug: 's' },
 ];
@@ -47,7 +51,7 @@ describe('EventsService teacher visibility', () => {
   it('teacher list: no drafts, no other-campus events; internal and own-campus events stay', async () => {
     const { service } = make();
     const ids = (await service.getEvents('s', {}, teacher)).map((e: any) => e._id).sort();
-    expect(ids).toEqual(['cancel', 'done', 'internal', 'mine', 'pub']);
+    expect(ids).toEqual(['cancel', 'done', 'internal', 'mine', 'novis', 'pub']);
   });
 
   it('teacher list with ?status=draft stays empty (cannot widen the filter)', async () => {
@@ -58,7 +62,7 @@ describe('EventsService teacher visibility', () => {
   it('teacher without a campus claim sees only all-campus events', async () => {
     const { service } = make();
     const ids = (await service.getEvents('s', {}, { role: 'teacher' })).map((e: any) => e._id).sort();
-    expect(ids).toEqual(['cancel', 'done', 'internal', 'pub']);
+    expect(ids).toEqual(['cancel', 'done', 'internal', 'novis', 'pub']);
   });
 
   it('teacher detail: no ticketTypes / promoCodes keys and the ticket collections are not read', async () => {
@@ -76,6 +80,15 @@ describe('EventsService teacher visibility', () => {
     await expect(service.getEventById('s', 'draft', teacher)).rejects.toThrow(NotFoundException);
     await expect(service.getEventById('s', 'other', teacher)).rejects.toThrow(NotFoundException);
     expect((await service.getEventById('s', 'internal', teacher) as any)._id).toBe('internal');
+  });
+
+  it('teacher: private and unlisted events are not listed and by id -> 404', async () => {
+    const { service } = make();
+    const ids = (await service.getEvents('s', {}, teacher)).map((e: any) => e._id);
+    expect(ids).not.toContain('priv');
+    expect(ids).not.toContain('unl');
+    await expect(service.getEventById('s', 'priv', teacher)).rejects.toThrow(NotFoundException);
+    await expect(service.getEventById('s', 'unl', teacher)).rejects.toThrow(NotFoundException);
   });
 
   it.each(['admin', 'principal', 'institution_owner', 'parent', 'hr_manager'])('%s: unchanged (drafts, other campuses, tickets and promos included)', async (role) => {

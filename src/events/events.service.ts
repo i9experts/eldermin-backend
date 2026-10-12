@@ -154,6 +154,8 @@ export class EventsService {
     const campus = user?.campusId ? String(user.campusId) : null;
     return [
       { status: { $in: ['published', 'cancelled', 'completed'] } },
+      // private / unlisted are not for staff lists either ($nin also matches rows without a visibility field).
+      { visibility: { $nin: ['private', 'unlisted'] } },
       { $or: [{ campusId: null }, { campusId: { $exists: false } }, ...(campus ? [{ campusId: campus }] : [])] },
     ];
   }
