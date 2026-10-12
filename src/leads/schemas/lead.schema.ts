@@ -54,6 +54,17 @@ export class MarketingLead extends Document {
   @Prop({ type: [LeadNoteSchema], default: [] }) notes: LeadNote[];
   @Prop({ type: Types.ObjectId, default: null }) convertedInstitutionId?: Types.ObjectId | null;
   @Prop({ type: Date, default: null }) lastContactedAt?: Date | null;
+
+  // Campaign attribution - captured once at creation from whatever query
+  // params were on the page the lead submitted from (marketing site's
+  // contact/demo form, or the wizard's public registration page). Never
+  // backfilled or required - a lead with none of these just means it came
+  // from a link with no tracking params, same as before this existed.
+  @Prop({ trim: true }) utmSource?: string;
+  @Prop({ trim: true }) utmMedium?: string;
+  @Prop({ trim: true }) utmCampaign?: string;
+  @Prop({ trim: true }) utmContent?: string;
+  @Prop({ trim: true }) utmTerm?: string;
 }
 
 export const LeadSchema = SchemaFactory.createForClass(MarketingLead);

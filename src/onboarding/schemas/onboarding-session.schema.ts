@@ -11,6 +11,13 @@ export class OnboardingSession {
   @Prop({ default: 1 }) currentStep: number;
   @Prop({ default: false }) isComplete: boolean;
 
+  // Links this session to the MarketingLead created alongside it at
+  // register() time, so Super Admin's CRM Leads Pipeline can see this
+  // self-service signup and later steps can enrich that same lead record
+  // instead of creating a new one. Optional/unset for sessions created
+  // before this existed - nothing reads it as required.
+  @Prop() leadId?: string;
+
   @Prop({ type: Object, default: {} }) step1: Record<string, any>;
   @Prop({ type: Object, default: {} }) step2: Record<string, any>;
   @Prop({ type: Object, default: {} }) step3: Record<string, any>;

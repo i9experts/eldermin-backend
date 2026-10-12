@@ -12,6 +12,7 @@ import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema, AcademicYear, A
 import { BankAccount, BankAccountSchema } from '../finance/schemas/finance.schema';
 import { ModulesModule } from '../modules/modules.module';
 import { ReportTemplate, ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
+import { MarketingLead, LeadSchema } from '../leads/schemas/lead.schema';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { ReportTemplate, ReportTemplateSchema } from '../modules/report-template
       { name: Grade.name, schema: GradeSchema },
       { name: AcademicYear.name, schema: AcademicYearSchema },
       { name: ReportTemplate.name, schema: ReportTemplateSchema },
+      { name: MarketingLead.name, schema: LeadSchema },
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

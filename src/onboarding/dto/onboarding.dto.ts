@@ -9,6 +9,16 @@ export class RegisterDto {
   @IsString() @MinLength(8) password: string;
   @IsString() schoolName: string;
   @IsOptional() @IsString() role?: string;
+
+  // Campaign attribution, forwarded from whatever query params were on the
+  // public registration page when this form was submitted (see
+  // CRM Leads Pipeline). Optional and additive - the marketing site doesn't
+  // have to send these for registration to keep working exactly as before.
+  @IsOptional() @IsString() utmSource?: string;
+  @IsOptional() @IsString() utmMedium?: string;
+  @IsOptional() @IsString() utmCampaign?: string;
+  @IsOptional() @IsString() utmContent?: string;
+  @IsOptional() @IsString() utmTerm?: string;
 }
 
 export class OnboardingStep1Dto {
