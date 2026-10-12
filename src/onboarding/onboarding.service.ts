@@ -13,6 +13,7 @@ import { Campus, CampusDocument, Grade, GradeDocument, AcademicYear, AcademicYea
 import { ModulesService } from '../modules/modules.service';
 import { ReportTemplate, ReportTemplateDocument } from '../modules/report-templates/schemas/report-template.schema';
 import { defaultReportTemplates } from '../modules/report-templates/default-templates';
+import { MarketingLead } from '../leads/schemas/lead.schema';
 
 @Injectable()
 export class OnboardingService {
@@ -27,6 +28,7 @@ export class OnboardingService {
     @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
     @InjectModel(ReportTemplate.name) private reportTemplateModel: Model<ReportTemplateDocument>,
+    @InjectModel(MarketingLead.name) private leadModel: Model<MarketingLead>,
     private jwtService: JwtService,
     private modulesService: ModulesService,
   ) {}
@@ -117,12 +119,50 @@ export class OnboardingService {
       isActive: true,
     });
 
+    // The account is real from this moment (a trial Tenant, matching
+    // stage: 'trial' below) - but until now Super Admin had no visibility
+    // into self-service signups at all, anywhere. Every signup becomes a
+    // CRM lead immediately, linked to the real institution it already has
+    // (convertedInstitutionId), so "Activate Institution" correctly shows
+    // "already activated" instead of offering to redo work that's already
+    // done - this lead just needs a human to decide whether/when to reach
+    // out, not whether to provision an account.
+    //
+    // Same dedup principle as LeadsService.create(): this email may already
+    // have an open lead (e.g. a sales inquiry logged before they self-signed
+    // up) - reuse that record rather than creating a second one sales would
+    // have to notice are the same person.
+    const email = dto.email.toLowerCase().trim();
+    const existingLead = await this.leadModel.findOne({ adminEmail: email, stage: { $nin: ['converted', 'lost'] } });
+    const leadFields = {
+      source: 'onboarding_wizard' as const,
+      stage: 'trial' as const,
+      schoolName: dto.schoolName,
+      adminName: `${dto.firstName} ${dto.lastName}`,
+      adminEmail: email,
+      convertedInstitutionId: institution._id,
+      utmSource: dto.utmSource,
+      utmMedium: dto.utmMedium,
+      utmCampaign: dto.utmCampaign,
+      utmContent: dto.utmContent,
+      utmTerm: dto.utmTerm,
+    };
+    let lead;
+    if (existingLead) {
+      Object.assign(existingLead, leadFields);
+      existingLead.notes.push({ text: 'Completed self-service signup - a real trial account now exists.', authorName: 'System', createdAt: new Date() });
+      lead = await existingLead.save();
+    } else {
+      lead = await this.leadModel.create(leadFields);
+    }
+
     const session = await this.sessionModel.create({
       userId: user._id.toString(),
       schoolSlug: slug,
       schoolName: dto.schoolName,
       currentStep: 1,
       isComplete: false,
+      leadId: lead._id.toString(),
     });
 
     const token = this.jwtService.sign({
@@ -166,8 +206,30 @@ export class OnboardingService {
     );
 
     await this.applyStepToSchool(schoolSlug, dto.step, dto.data);
+    if (session.leadId) await this.enrichLeadFromStep(session.leadId, dto.step, dto.data);
 
     return { success: true, step: dto.step, nextStep: dto.step + 1, message: `Step ${dto.step} saved successfully` };
+  }
+
+  // Lets Super Admin see more than just "someone signed up" while a
+  // self-service wizard is still in progress (or abandoned partway) -
+  // the same detail a manually-created lead already carries (location,
+  // modules/plan of interest), filled in as the real signup provides it
+  // instead of staying blank forever for every self-service lead.
+  private async enrichLeadFromStep(leadId: string, step: number, data: any) {
+    const update: any = {};
+    if (step === 1) {
+      if (data.institutionType) update.schoolType = data.institutionType;
+      if (data.country) update.country = data.country;
+      if (data.city) update.city = data.city;
+    }
+    if (step === 5) {
+      if (Array.isArray(data.selectedModules) && data.selectedModules.length) update.modulesRequested = data.selectedModules;
+      if (data.selectedBundle) update.planRequested = data.selectedBundle;
+    }
+    if (Object.keys(update).length > 0) {
+      await this.leadModel.updateOne({ _id: leadId }, { $set: update });
+    }
   }
 
   private async applyStepToSchool(slug: string, step: number, data: any) {
@@ -323,6 +385,19 @@ export class OnboardingService {
       { schoolSlug, userId },
       { $set: { isComplete: true } },
     );
+
+    // Full self-service setup finished - a reasonable default "won" signal
+    // for the CRM pipeline. Guarded against 'lost' only, so an admin who
+    // already flagged this signup for cause (e.g. spam) doesn't get it
+    // silently revived just because the wizard happened to finish; any
+    // other stage (including an admin's own manual override) is fine to
+    // move to 'converted' here.
+    if (session.leadId) {
+      await this.leadModel.updateOne(
+        { _id: session.leadId, stage: { $ne: 'lost' } },
+        { $set: { stage: 'converted' } },
+      );
+    }
 
     // Every school should land on an active account with a working Fee
     // Receipt and Payment Voucher already in "Report Templates" under

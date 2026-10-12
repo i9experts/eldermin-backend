@@ -9,7 +9,28 @@ import { UpdateLeadDto } from './dto/update-lead.dto';
 export class LeadsService {
   constructor(@InjectModel(MarketingLead.name) private leadModel: Model<MarketingLead>) {}
 
+  // A prospect resubmitting the same form (double-click, browser back button,
+  // retrying after a validation error) previously created a second, separate
+  // lead row for the same email - annoying noise in the pipeline and no way
+  // to tell it's the same person. If an open (not yet converted/lost) lead
+  // already exists for this email, fold the resubmission into it as a note
+  // instead of creating a duplicate; a converted or lost lead is left alone
+  // so a genuinely new inquiry from someone who already has history isn't
+  // silently merged into a closed record.
   async create(dto: CreateLeadDto) {
+    const email = dto.adminEmail.toLowerCase().trim();
+    const existing = await this.leadModel.findOne({ adminEmail: email, stage: { $nin: ['converted', 'lost'] } });
+    if (existing) {
+      const { stage: _ignoredStage, ...rest } = dto as any;
+      Object.assign(existing, rest);
+      existing.notes.push({
+        text: `Submitted the ${dto.source === 'contact_form' ? 'contact' : dto.source} form again - details above refreshed from this submission.`,
+        authorName: 'System',
+        createdAt: new Date(),
+      });
+      await existing.save();
+      return existing;
+    }
     return this.leadModel.create({ ...dto, stage: 'new' });
   }
 

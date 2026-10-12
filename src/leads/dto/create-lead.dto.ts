@@ -36,4 +36,10 @@ export class CreateLeadDto {
 
   @IsOptional() @IsString() inquiryType?: string;
   @IsOptional() @IsString() @MaxLength(3000) message?: string;
+
+  @IsOptional() @IsString() utmSource?: string;
+  @IsOptional() @IsString() utmMedium?: string;
+  @IsOptional() @IsString() utmCampaign?: string;
+  @IsOptional() @IsString() utmContent?: string;
+  @IsOptional() @IsString() utmTerm?: string;
 }
