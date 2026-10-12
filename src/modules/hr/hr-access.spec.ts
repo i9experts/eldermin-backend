@@ -7,6 +7,7 @@ import { RolesOrModuleManageGuard } from '../../roles/guards/roles-or-module-man
 import { ROLES_OR_MODULE_KEY } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { PERMISSION_KEY } from '../../auth/decorators';
 import { UserRole } from '../../auth/roles.enum';
+import { hasPermission } from '../../auth/permissions.matrix';
 import { HR_ADMIN_ROLES, PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
 
 const proto: any = HrController.prototype;
@@ -118,7 +119,7 @@ describe('HR reads: log-only vs enforce', () => {
 
   it('sensitive reads are 403 for non-HR staff roles even in LOG mode (no flag needed)', async () => {
     delete process.env.HR_READ_GUARD_MODE;
-    expect(sensitive.length).toBe(24);
+    expect(sensitive.length).toBe(46);
     for (const r of NON_HR) for (const h of sensitive)
       await expect(readGuard().canActivate(ctx(h, { userId: 'u', tenantId: 't', role: r }))).rejects.toThrow(ForbiddenException);
     expect(JSON.parse(warn.mock.calls[0][0])).toMatchObject({ bucket: 'sensitive', decision: 'denied' });
@@ -127,6 +128,22 @@ describe('HR reads: log-only vs enforce', () => {
   it('sensitive set contains the owner-listed data classes', () => {
     for (const h of ['getPayslips', 'downloadPayslipPdf', 'getPayrollStats', 'getPayrollRuns', 'getPayrollPayments', 'getSalaryComponents', 'getSalaryTemplates', 'getAdvances', 'getStaffById', 'getStaffDocuments'])
       expect(sensitive).toContain(h);
+  });
+
+  it('grievances, performance, exit, leave admin views and recruitment reads are in the ENFORCED bucket', () => {
+    const paths = sensitive.map(h => '/' + pathOf(h));
+    for (const x of ['/grievances', '/grievances/:id', '/performance', '/exit', '/exit-settings', '/leave/balances', '/leave/balances/:staffId', '/leave/balance/:staffId', '/leave/stats', '/leave', '/leave/applications', '/staff/:id/leave', '/recruitment/stats', '/recruitment/jobs', '/recruitment/jobs/:id', '/recruitment/applications', '/recruitment/applications/:id', '/recruitment/interviews', '/hiring-settings', '/lifecycle', '/lifecycle/stats', '/lifecycle/:id'])
+      expect(paths).toContain(x);
+  });
+
+  it('teacher still reaches My Leave (leave/self/*) in enforce mode: HrAccessGuard passes and the leave:self permission is held', async () => {
+    process.env.HR_READ_GUARD_MODE = 'enforce';
+    expect(hasPermission(UserRole.TEACHER, 'leave:self')).toBe(true);
+    for (const h of ['getMyLeaveBalance', 'getMyLeaveHistory', 'createMyLeave'])
+      await expect(readGuard().canActivate(ctx(h, { userId: 'u', tenantId: 't', role: UserRole.TEACHER }))).resolves.toBe(true);
+    // while the admin views of leave are closed to the same teacher
+    for (const h of ['getLeaveStats', 'getAllLeaveBalances', 'getLeaveBalance'])
+      if (proto[h]) await expect(readGuard().canActivate(ctx(h, { userId: 'u', tenantId: 't', role: UserRole.TEACHER }))).rejects.toThrow(ForbiddenException);
   });
 
   it('log-only reads never 403 in default mode', async () => {

@@ -89,7 +89,7 @@ export class HrController {
     return this.hrService.getStaffAttendance(req.user.tenantId, { staffId: id });
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('staff/:id/leave')
   getStaffLeave(@Request() req, @Param('id') id: string) {
     return this.hrService.getLeaveApplications(req.user.tenantId, { staffId: id });
@@ -135,7 +135,7 @@ export class HrController {
 
   // ── Leave Applications (legacy) ───────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('leave/applications')
   getLeaveApplications(@Request() req) { return this.hrService.getLeaveApplications(req.user.tenantId); }
 
@@ -145,15 +145,15 @@ export class HrController {
 
   // ── Staff Lifecycle ───────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('lifecycle')
   getLifecycle(@Request() req) { return this.hrService.getLifecycleCandidates(req.user.tenantId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('lifecycle/stats')
   getLifecycleStats(@Request() req) { return this.hrService.getLifecycleStats(req.user.tenantId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('lifecycle/:id')
   getLifecycleById(@Request() req, @Param('id') id: string) { return this.hrService.getLifecycleById(req.user.tenantId, id); }
 
@@ -191,11 +191,11 @@ export class HrController {
 
   // ── Recruitment: Job Openings ─────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('recruitment/stats')
   getRecruitmentStats(@Request() req) { return this.hrService.getRecruitmentStats(req.user.tenantId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('recruitment/jobs')
   getJobs(@Request() req, @Query() query: any) { return this.hrService.getJobOpenings(req.user.tenantId, query); }
 
@@ -203,7 +203,7 @@ export class HrController {
   @Post('recruitment/jobs')
   createJob(@Request() req, @Body() body: any) { return this.hrService.createJobOpening(req.user.tenantId, this.iid(req), body, req.user.userId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('recruitment/jobs/:id')
   getJob(@Request() req, @Param('id') id: string) { return this.hrService.getJobOpeningById(req.user.tenantId, id); }
 
@@ -213,7 +213,7 @@ export class HrController {
 
   // ── Recruitment: Applications ─────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('recruitment/applications')
   getApplications(@Request() req, @Query() query: any) { return this.hrService.getApplications(req.user.tenantId, query); }
 
@@ -221,7 +221,7 @@ export class HrController {
   @Post('recruitment/applications')
   createApplication(@Request() req, @Body() body: any) { return this.hrService.createApplication(req.user.tenantId, this.iid(req), body.jobId, body); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('recruitment/applications/:id')
   getApplication(@Request() req, @Param('id') id: string) { return this.hrService.getApplicationById(req.user.tenantId, id); }
 
@@ -231,7 +231,7 @@ export class HrController {
 
   // ── Recruitment: Interview Schedule ───────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('recruitment/interviews')
   getInterviews(@Request() req, @Query() query: any) { return this.hrService.getInterviewSchedule(req.user.tenantId, query); }
 
@@ -322,21 +322,21 @@ export class HrController {
     return this.hrService.createMyLeaveApplication(req.user.tenantId, this.iid(req), req.user.userId, body);
   }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('leave/stats')
   getLeaveStats(@Request() req) { return this.hrService.getLeaveStats(req.user.tenantId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('leave/balance/:staffId')
   getLeaveBalance(@Request() req, @Param('staffId') sid: string) { return this.hrService.getLeaveBalance(req.user.tenantId, sid); }
 
   // ── Leave Balances (bulk views, must be before generic leave/: routes) ─
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('leave/balances')
   getAllLeaveBalances(@Request() req) { return this.hrService.getAllLeaveBalances(req.user.tenantId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('leave/balances/:staffId')
   getLeaveBalanceAlt(@Request() req, @Param('staffId') sid: string) { return this.hrService.getLeaveBalance(req.user.tenantId, sid); }
 
@@ -370,7 +370,7 @@ export class HrController {
   @Post('leave/policies/:id/bulk-assign')
   bulkAssignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { academicYearId: string }) { return this.hrService.bulkAssignLeavePolicy(req.user.tenantId, id, body.academicYearId); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('leave')
   getLeave(@Request() req, @Query() q: any) { return this.hrService.getLeaveApplications(req.user.tenantId, q); }
 
@@ -528,7 +528,7 @@ export class HrController {
 
   // ── PERFORMANCE ───────────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('performance')
   getPerformance(@Request() req, @Query() q: any) { return this.hrService.getPerformanceReviews(req.user.tenantId, q); }
 
@@ -679,7 +679,7 @@ export class HrController {
 
   // ── EXIT ──────────────────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('exit')
   getExitRecords(@Request() req) { return this.hrService.getExitRecords(req.user.tenantId); }
 
@@ -695,7 +695,7 @@ export class HrController {
   @Patch('exit/:id/clearance/:index')
   updateClearance(@Request() req, @Param('id') id: string, @Param('index') idx: string, @Body() body: { isDone: boolean; clearedBy: string }) { return this.hrService.updateClearanceItem(req.user.tenantId, id, parseInt(idx), body.isDone, body.clearedBy); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('exit-settings')
   getExitSettings(@Request() req) { return this.hrService.getExitSettings(req.user.tenantId, req.user.schoolSlug); }
 
@@ -705,7 +705,7 @@ export class HrController {
 
   // ── HIRING SETTINGS ──────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('hiring-settings')
   getHiringSettings(@Request() req) { return this.hrService.getHiringSettings(req.user.tenantId, req.user.schoolSlug); }
 
@@ -779,11 +779,11 @@ export class HrController {
 
   // ── GRIEVANCE ──────────────────────────────────────────────────────────
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('grievances')
   getGrievances(@Request() req, @Query() query: any) { return this.hrService.getGrievances(req.user.tenantId, query); }
 
-  @HrRead()
+  @HrReadSensitive()
   @Get('grievances/:id')
   getGrievanceById(@Request() req, @Param('id') id: string) { return this.hrService.getGrievanceById(req.user.tenantId, id); }
 
