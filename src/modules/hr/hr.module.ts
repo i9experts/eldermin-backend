@@ -45,6 +45,8 @@ import { Advance, AdvanceSchema } from './schemas/advance.schema';
 import { StaffIncrement, StaffIncrementSchema } from './schemas/staff-increment.schema';
 import { SecurityDeposit, SecurityDepositSchema } from './schemas/security-deposit.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
+import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
+import { ExitAccessService } from './exit-access.service';
 import { Role, RoleSchema } from '../../roles/schemas/role.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
@@ -98,11 +100,12 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
       { name: SecurityDeposit.name, schema: SecurityDepositSchema },
       { name: User.name, schema: UserSchema },
       { name: Role.name, schema: RoleSchema },
+      { name: Tenant.name, schema: TenantSchema },
       { name: School.name, schema: SchoolSchema },
     ]),
   ],
   controllers: [HrController],
-  providers: [HrService],
+  providers: [HrService, ExitAccessService],
   exports: [HrService],
 })
 export class HrModule {}

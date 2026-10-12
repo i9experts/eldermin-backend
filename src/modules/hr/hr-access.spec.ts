@@ -36,7 +36,7 @@ async function run(h: string, user: any, m = models()) {
 }
 
 describe('HrController route matrix', () => {
-  it('covers all 173 routes', () => expect(handlers.length).toBe(173));
+  it('covers all 174 routes', () => expect(handlers.length).toBe(174));
   it.each(handlers)('%s has exactly one access policy (or is leave:self)', (h) => {
     const w = Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]);
     const r = Reflect.getMetadata(HR_READ_KEY, proto[h]);

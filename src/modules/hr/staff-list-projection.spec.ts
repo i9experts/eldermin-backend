@@ -47,7 +47,7 @@ describe('GET /hr/staff projection', () => {
 
   it('controller passes full only when the guard marked the request as HR-allowed', async () => {
     const calls: any[] = [];
-    const ctrl = new HrController({ getStaff: (...a: any[]) => calls.push(a) } as any, {} as any);
+    const ctrl = new HrController({ getStaff: (...a: any[]) => calls.push(a) } as any, {} as any, {} as any);
     ctrl.getStaff({ user: { tenantId: 't' }, hrFullAccess: true } as any);
     ctrl.getStaff({ user: { tenantId: 't' }, hrFullAccess: false } as any);
     ctrl.getStaff({ user: { tenantId: 't' } } as any);

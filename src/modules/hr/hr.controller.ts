@@ -11,11 +11,12 @@ import { HrAccessGuard } from './guards/hr-access.guard';
 import { HrStaffUpdate, HrWrite, HrRead, HrReadSensitive, HrStaffDirectory } from './guards/hr-access.decorator';
 import { PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
 import { CriticalAuditService, AuditMeta } from '../../common/critical-audit.service';
+import { ExitAccessService } from './exit-access.service';
 
 @Controller('hr')
 @UseGuards(AuthGuard('jwt'), HrAccessGuard)
 export class HrController {
-  constructor(private readonly hrService: HrService, private readonly audit: CriticalAuditService) {}
+  constructor(private readonly hrService: HrService, private readonly audit: CriticalAuditService, private readonly exitAccess: ExitAccessService) {}
 
   // Payroll / salary writes are FAIL-CLOSED audited (before/after, masked):
   // if the audit entry cannot be written the change is not applied.
@@ -693,6 +694,12 @@ export class HrController {
   @HrWrite()
   @Post('exit')
   createExitRecord(@Request() req, @Body() body: any) { return this.hrService.createExitRecord(req.user.tenantId, this.iid(req), body, req.user.userId, req.user.schoolSlug); }
+
+  @HrWrite()
+  @Post('exit/:id/complete')
+  completeExit(@Request() req, @Param('id') id: string) {
+    return this.exitAccess.completeExit(req.user.tenantId, id, this.actor(req));
+  }
 
   @HrWrite()
   @Patch('exit/:id')

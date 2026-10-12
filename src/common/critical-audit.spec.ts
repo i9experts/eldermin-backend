@@ -62,7 +62,7 @@ describe('CriticalAuditService (fail-closed)', () => {
 describe('payroll + roles routes use it', () => {
   it('PATCH /hr/payslips/:id with audit down -> hrService.updatePayslip never called', async () => {
     const hr: any = { updatePayslip: jest.fn(), loadForAudit: jest.fn(async () => ({ net: 1 })) };
-    const ctrl = new HrController(hr, new CriticalAuditService(auditModel({ createFails: true })));
+    const ctrl = new HrController(hr, new CriticalAuditService(auditModel({ createFails: true })), {} as any);
     await expect((ctrl as any).updatePayslip({ user: { tenantId: 't', schoolSlug: 's', userId: 'u' }, headers: {} }, 'p1', { net: 9 })).rejects.toThrow(ServiceUnavailableException);
     expect(hr.updatePayslip).not.toHaveBeenCalled();
   });
@@ -74,7 +74,7 @@ describe('payroll + roles routes use it', () => {
   ])('%s: audit down -> not applied', async (fn, args) => {
     const calls: string[] = [];
     const hr: any = new Proxy({}, { get: (_t, k) => (k === 'loadForAudit' ? async () => ({}) : (..._a: any[]) => { calls.push(String(k)); return {}; }) });
-    const ctrl: any = new HrController(hr, new CriticalAuditService(auditModel({ createFails: true })));
+    const ctrl: any = new HrController(hr, new CriticalAuditService(auditModel({ createFails: true })), {} as any);
     const req = { user: { tenantId: 't', schoolSlug: 's', userId: 'u' }, headers: {} };
     const a = fn === 'syncPayslipStatuses' ? [req] : fn === 'recomputePayslipTotals' || fn === 'createPayrollRun' || fn === 'createPayslip' || fn === 'createSalaryComponent' || fn === 'createSalaryTemplate' ? [req, args[0]] : [req, ...args];
     await expect(ctrl[fn](...a)).rejects.toThrow(ServiceUnavailableException);
