@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AuditLogModule } from '../../common/audit-log.module';
+import { AccountAccessModule } from '../auth/account-access.module';
 import { UploadModule } from '../../upload/upload.module';
 import { FinanceModule } from '../../finance/finance.module';
 import { EmailModule } from '../../email/email.module';
@@ -54,6 +55,7 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
     UploadModule,
     StaffPortalModule,
     AuditLogModule,
+    AccountAccessModule,
     FinanceModule,
     EmailModule,
     PdfModule,

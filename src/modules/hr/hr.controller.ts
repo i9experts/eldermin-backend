@@ -27,6 +27,7 @@ export class HrController {
       meta, loadBefore, mutate,
     );
   }
+  private actor(req: any) { return { userId: req.user?.userId, name: req.user?.name, schoolSlug: req.user?.schoolSlug }; }
   private before(req: any, kind: string, id?: string) { return () => this.hrService.loadForAudit(kind as any, req.user.tenantId, req.user.schoolSlug, id); }
 
   // Falls back to tenantId when institutionId is missing from an already-issued JWT
@@ -69,7 +70,7 @@ export class HrController {
 
   @HrStaffUpdate()
   @Patch('staff/:id')
-  updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body); }
+  updateStaff(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateStaff(req.user.tenantId, id, body, this.actor(req)); }
 
   @HrWrite()
   @Patch('staff/:id/reporting-manager')
@@ -78,9 +79,15 @@ export class HrController {
   }
 
   @HrWrite()
+  @Post('staff/:id/reactivate')
+  reactivateStaff(@Request() req, @Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.hrService.reactivateStaff(req.user.tenantId, id, body?.reason as string, this.actor(req) as any);
+  }
+
+  @HrWrite()
   @Delete('staff/:id')
   deleteStaff(@Request() req, @Param('id') id: string, @Query('hardDelete') hardDelete?: string) {
-    return this.hrService.deleteStaff(req.user.tenantId, id, hardDelete === 'true');
+    return this.hrService.deleteStaff(req.user.tenantId, id, hardDelete === 'true', this.actor(req));
   }
 
   @HrRead()

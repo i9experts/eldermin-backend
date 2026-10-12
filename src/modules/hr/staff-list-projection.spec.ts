@@ -12,7 +12,7 @@ function svc(captured: { select?: string; update?: any; created?: any }) {
     find: jest.fn(() => q),
     findOneAndUpdate: jest.fn((_f: any, u: any) => { captured.update = u; return { lean: () => Promise.resolve({ _id: 'a' }) }; }),
     create: jest.fn((d: any) => { captured.created = d; return Promise.resolve(d); }),
-    findOne: jest.fn(() => ({ sort: () => ({ lean: () => Promise.resolve(null) }) })),
+    findOne: jest.fn(() => Object.assign(Promise.resolve({ _id: 'a', status: 'active', isActive: true, userId: null }), { sort: () => ({ lean: () => Promise.resolve(null) }), lean: () => Promise.resolve({ _id: 'a', status: 'active', isActive: true, userId: null }) })),
   };
   return s as HrService;
 }

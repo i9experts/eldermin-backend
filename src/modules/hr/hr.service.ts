@@ -57,6 +57,8 @@ import { Advance, AdvanceDocument } from './schemas/advance.schema';
 import { StaffIncrement, StaffIncrementDocument } from './schemas/staff-increment.schema';
 import { SecurityDeposit, SecurityDepositDocument } from './schemas/security-deposit.schema';
 import { FinanceService } from '../../finance/finance.service';
+import { AccountAccessService, staffRevokesAccess } from '../auth/account-access.service';
+import { idForms, sameId } from '../../common/utils/id-forms.util';
 
 @Injectable()
 export class HrService {
@@ -103,6 +105,7 @@ export class HrService {
     private readonly emailService: EmailService,
     private readonly financeService: FinanceService,
     private readonly pdfService: PdfService,
+    private readonly accountAccess: AccountAccessService,
     @Optional() private readonly staffNotifier?: StaffNotifier,
   ) {}
 
@@ -272,7 +275,13 @@ export class HrService {
   async createLoginForStaff(tenantId: string, institutionId: string, staffId: string) {
     const staff = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) });
     if (!staff) throw new NotFoundException('Staff member not found');
-    if (staff.userId) throw new BadRequestException('This staff member already has a login account');
+    if (staff.userId) {
+      const login: any = await this.userModel.findOne({ _id: staff.userId }).select('isActive staffAccessRevokedAt').lean();
+      if (login && (login.isActive === false || login.staffAccessRevokedAt)) {
+        throw new BadRequestException('This staff member\'s login was deactivated. Use Reactivate to restore it (do not create a new login).');
+      }
+      throw new BadRequestException('This staff member already has a login account');
+    }
     if (!staff.email) throw new BadRequestException('This staff member has no email on file — add one first');
 
     const existing = await this.userModel.findOne({ email: staff.email.toLowerCase() });
@@ -347,6 +356,10 @@ export class HrService {
     const staff = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) });
     if (!staff) throw new NotFoundException('Staff member not found');
     if (!staff.userId) throw new BadRequestException('This staff member has no login account yet - use Create Login instead');
+    const login: any = await this.userModel.findOne({ _id: staff.userId }).select('isActive staffAccessRevokedAt').lean();
+    if (login && (login.isActive === false || login.staffAccessRevokedAt)) {
+      throw new BadRequestException('This login is deactivated. Reactivate the staff member first, then reset the password.');
+    }
 
     const tempPassword = this.generateTempPassword();
     const passwordHash = await bcrypt.hash(tempPassword, 12);
@@ -401,11 +414,31 @@ export class HrService {
   // scope and identity. (userId is only ever written by createLoginForStaff.)
   static readonly STAFF_PROTECTED_FIELDS = ['_id', 'id', 'userId', 'tenantId', 'institutionId', 'createdAt', 'updatedAt', '__v'];
 
-  async updateStaff(tenantId: string, staffId: string, data: any) {
+  async updateStaff(tenantId: string, staffId: string, data: any, actor?: { userId?: string; name?: string; schoolSlug?: string }) {
     const safe: any = { ...(data || {}) };
     for (const f of HrService.STAFF_PROTECTED_FIELDS) delete safe[f];
     // Dotted paths into protected fields (e.g. 'userId.x') are equally unsafe.
     for (const k of Object.keys(safe)) if (HrService.STAFF_PROTECTED_FIELDS.includes(k.split('.')[0])) delete safe[k];
+
+    // Status changes drive the login (S1): the web profile status dropdown and
+    // Campuses/other edits all arrive here as a raw $set.
+    if ('status' in safe || 'isActive' in safe) {
+      const existing: any = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) }).lean();
+      if (!existing) throw new NotFoundException('Staff member not found');
+      const wasRevoked = staffRevokesAccess(existing.status, existing.isActive);
+      const nextStatus = 'status' in safe ? safe.status : existing.status;
+      const nextActive = 'isActive' in safe ? safe.isActive : existing.isActive;
+      const willRevoke = staffRevokesAccess(nextStatus, nextActive);
+      if (existing.userId) {
+        if (willRevoke && !wasRevoked) {
+          if (sameId(existing.userId, actor?.userId)) throw new BadRequestException('You cannot deactivate your own account.');
+          await this.revokeLogin(existing, `staff_status_${nextStatus ?? 'inactive'}`, actor);
+        } else if (!willRevoke && wasRevoked && actor?.userId) {
+          await this.accountAccess.reactivateStaffLogin(existing.userId, 'staff_status_restored', actor.userId, actor);
+        }
+      }
+    }
+
     const staff = await this.staffModel
       .findOneAndUpdate({ _id: staffId, tenantId: this.newTid(tenantId) }, { $set: safe }, { new: true })
       .lean();
@@ -480,11 +513,15 @@ export class HrService {
    * lists, leave balance allocation, etc) already excludes it with no
    * further changes needed. A genuinely-unused, never-touched record (e.g.
    * created by mistake) can still be hard-deleted via `hardDelete: true`. */
-  async deleteStaff(tenantId: string, staffId: string, hardDelete = false) {
+  async deleteStaff(tenantId: string, staffId: string, hardDelete = false, actor?: { userId?: string; name?: string; schoolSlug?: string }) {
     const tid = this.newTid(tenantId);
     const sid = this.newTid(staffId);
     const staff = await this.staffModel.findOne({ _id: sid, tenantId: tid }).lean();
     if (!staff) throw new NotFoundException('Staff member not found');
+    // Nobody removes their own login (would lock the only admin out of the school).
+    if (staff.userId && sameId(staff.userId, actor?.userId)) {
+      throw new BadRequestException('You cannot deactivate or delete your own account.');
+    }
 
     if (hardDelete) {
       const [payslipCount, attendanceCount, leaveCount] = await Promise.all([
@@ -497,15 +534,41 @@ export class HrService {
           'This staff member has payroll, attendance, or leave history and cannot be permanently deleted - use a regular (soft) delete instead.',
         );
       }
+      // Revoke the login BEFORE the Staff row (and with it the only pointer to the User) is gone.
+      await this.revokeLogin(staff, 'staff_deleted_permanently', actor);
       await this.staffModel.deleteOne({ _id: sid, tenantId: tid });
       return { deleted: true, hardDeleted: true };
     }
 
+    await this.revokeLogin(staff, 'staff_deleted', actor);
     await this.staffModel.updateOne(
       { _id: sid, tenantId: tid },
       { $set: { status: 'terminated', isActive: false } },
     );
     return { deleted: true, hardDeleted: false, status: 'terminated' };
+  }
+
+  /** The single hook every staff removal path uses (S1). No-op for staff without a login. */
+  private async revokeLogin(staff: any, reason: string, actor?: { userId?: string; name?: string; schoolSlug?: string }) {
+    if (!staff?.userId) return { outcome: 'no_user' as const };
+    return this.accountAccess.deactivateStaffLogin(staff.userId, reason, actor?.userId, actor);
+  }
+
+  /**
+   * Restore a staff member and their login (rehire / mistaken removal). Staff.status ->
+   * 'active', Staff.isActive -> true; the User is restored through
+   * AccountAccessService (isActive, deactivation fields cleared, a demoted account gets
+   * its previous role and custom role back). Fail-closed audited. The login is restored
+   * FIRST so a refused audit leaves the Staff row untouched.
+   */
+  async reactivateStaff(tenantId: string, staffId: string, reason: string, actor: { userId: string; name?: string; schoolSlug?: string }) {
+    const staff: any = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) }).lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    if (!reason || !String(reason).trim()) throw new BadRequestException('A reason is required to reactivate a staff member.');
+    let login: any = { outcome: 'no_user' };
+    if (staff.userId) login = await this.accountAccess.reactivateStaffLogin(staff.userId, String(reason).trim(), actor.userId, actor);
+    await this.staffModel.updateOne({ _id: staff._id, tenantId: this.newTid(tenantId) }, { $set: { status: 'active', isActive: true } });
+    return { staffId: String(staff._id), status: 'active', login: login.outcome };
   }
 
   async uploadStaffPhoto(tenantId: string, staffId: string, file: Express.Multer.File, schoolSlug: string) {
