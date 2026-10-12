@@ -41,3 +41,25 @@ export const STUDENTS_WRITE_ROLES: UserRole[] = [
   UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
   UserRole.VICE_PRINCIPAL, UserRole.ADMIN,
 ];
+
+/**
+ * HR page + HR/payroll writes. Web today: super_admin, institution_owner,
+ * admin, principal (hr:view; the page shows principal every write button, so
+ * writes keep EXACT web parity - owner decision 3, flagged as a product
+ * decision) + hr_manager (owner decision 4).
+ */
+export const HR_ADMIN_ROLES: UserRole[] = [
+  UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.ADMIN,
+  UserRole.PRINCIPAL, UserRole.HR_MANAGER,
+];
+
+/** Payroll/salary reads: HR admins + finance_manager (owner decision 4). */
+export const PAYROLL_READ_ROLES: UserRole[] = [...HR_ADMIN_ROLES, UserRole.FINANCE_MANAGER];
+
+/** Money-moving payroll writes (status/paid, process-batch, pay payslip). */
+export const PAYROLL_PAY_ROLES: UserRole[] = [...HR_ADMIN_ROLES, UserRole.FINANCE_MANAGER];
+
+/** Principals that must never reach /hr at all (not staff). */
+export const NON_STAFF_ROLES: UserRole[] = [
+  UserRole.PARENT, UserRole.STUDENT, UserRole.RESELLER_ADMIN, UserRole.RESELLER_SUPPORT,
+];

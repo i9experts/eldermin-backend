@@ -43,6 +43,7 @@ import { Advance, AdvanceSchema } from './schemas/advance.schema';
 import { StaffIncrement, StaffIncrementSchema } from './schemas/staff-increment.schema';
 import { SecurityDeposit, SecurityDepositSchema } from './schemas/security-deposit.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
+import { Role, RoleSchema } from '../../roles/schemas/role.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
 import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
@@ -92,6 +93,7 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
       { name: StaffIncrement.name, schema: StaffIncrementSchema },
       { name: SecurityDeposit.name, schema: SecurityDepositSchema },
       { name: User.name, schema: UserSchema },
+      { name: Role.name, schema: RoleSchema },
       { name: School.name, schema: SchoolSchema },
     ]),
   ],
