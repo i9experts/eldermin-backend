@@ -1,25 +1,14 @@
 import {
-  Controller, Get, Post, Body, Param, Request, UseGuards, ForbiddenException,
+  Controller, Get, Post, Body, Param, Request, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ModulesService } from './modules.service';
 import { BulkActivateDto } from './dto/modules.dto';
 import { MODULES_ADMIN_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { schoolSlugOf } from '../common/utils/school-slug.util';
 
-/**
- * The school comes from the signed login token, never from the
- * x-school-slug header (any logged-in user could name another school and
- * toggle ITS modules). Only a platform super_admin, whose token carries no
- * school, may select a school by header.
- */
-export function schoolSlugOf(req: any): string {
-  const fromToken = req?.user?.schoolSlug;
-  if (fromToken) return fromToken;
-  const header = req?.headers?.['x-school-slug'];
-  if (req?.user?.role === 'super_admin' && header) return header;
-  throw new ForbiddenException('No school context on this account.');
-}
+export { schoolSlugOf };
 
 @Controller('modules')
 @UseGuards(JwtAuthGuard)
