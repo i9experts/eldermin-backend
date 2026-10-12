@@ -11,3 +11,14 @@ export function isWellFormedObjectId(id: any): boolean {
 export function assertValidObjectId(id: any, label: string): void {
   if (!isWellFormedObjectId(id)) throw new BadRequestException(`Invalid ${label} id`);
 }
+
+/** Throws 400 `<label> must be a valid date` for an unparsable date (instead of a Mongoose CastError / Invalid Date -> bare 500). `required` also rejects absent/empty. */
+export function assertValidDate(value: any, label: string, required = false): void {
+  if (value === undefined || value === null || value === '') {
+    if (required) throw new BadRequestException(`${label} is required`);
+    return;
+  }
+  const d = value instanceof Date ? value : new Date(value);
+  if (typeof value === 'object' && !(value instanceof Date)) throw new BadRequestException(`${label} must be a valid date`);
+  if (Number.isNaN(d.getTime())) throw new BadRequestException(`${label} must be a valid date`);
+}

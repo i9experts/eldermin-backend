@@ -1,5 +1,5 @@
 import { Optional, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { assertValidObjectId } from '../../common/utils/object-id.util';
+import { assertValidObjectId, assertValidDate } from '../../common/utils/object-id.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -71,6 +71,9 @@ export class PTMService {
       const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
       data = { ...data, teacherId: normaliseTeacherIdForWrite(me, data?.teacherId, 'You can only create meetings for yourself') };
     }
+    assertValidObjectId(data?.studentId, 'student');
+    assertValidObjectId(data?.teacherId, 'teacher');
+    assertValidDate(data?.scheduledDate, 'scheduledDate', true);
     const [student, teacher] = await Promise.all([
       this.studentModel.findById(data.studentId).lean(),
       this.staffModel.findById(data.teacherId).lean(),
@@ -122,6 +125,10 @@ export class PTMService {
   }
 
   async getMeetings(tenantId: string, query: any, requestingUser?: ScopedUser) {
+    if (query.studentId) assertValidObjectId(query.studentId, 'student');
+    if (query.teacherId) assertValidObjectId(query.teacherId, 'teacher');
+    if (query.from) assertValidDate(query.from, 'from');
+    if (query.to) assertValidDate(query.to, 'to');
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.status) filter.status = query.status;
     if (query.studentId) filter.studentId = new Types.ObjectId(query.studentId);
@@ -167,6 +174,7 @@ export class PTMService {
   async reschedule(id: string, tenantId: string, data: { scheduledDate: string; startTime?: string; endTime?: string }, requestingUser?: ScopedUser) {
     assertValidObjectId(id, 'meeting');
     await this.assertTeacherOwnsMeeting(id, tenantId, requestingUser);
+    assertValidDate(data?.scheduledDate, 'scheduledDate', true);
     const meeting = await this.ptmModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId), status: { $in: ['requested', 'confirmed'] } },
       { $set: { scheduledDate: new Date(data.scheduledDate), startTime: data.startTime, endTime: data.endTime, status: 'requested' } },
@@ -224,6 +232,7 @@ export class PTMService {
 
   /** A teacher's own upcoming meetings - the personalized-scheduling view. */
   async getUpcomingForTeacher(teacherId: string, tenantId: string) {
+    assertValidObjectId(teacherId, 'teacher');
     return this.ptmModel.find({
       tenantId: this.tid(tenantId), teacherId: new Types.ObjectId(teacherId),
       status: { $in: ['requested', 'confirmed'] }, scheduledDate: { $gte: new Date() },

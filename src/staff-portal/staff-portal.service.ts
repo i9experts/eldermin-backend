@@ -16,6 +16,7 @@ import {
   Message, MessageDocument,
 } from '../parent-portal/schemas/notification-and-message.schema';
 import { sameGrade, sameSection } from '../common/utils/class-match.util';
+import { assertValidObjectId } from '../common/utils/object-id.util';
 import { RolesService } from '../roles/roles.service';
 import {
   StaffDeviceToken, StaffDeviceTokenDocument,
@@ -195,6 +196,7 @@ export class StaffPortalService {
   }
 
   async markNotificationRead(user: PortalUser, id: string) {
+    assertValidObjectId(id, 'notification');
     const n = await this.notificationModel.findOneAndUpdate(
       { _id: id, recipientUserId: new Types.ObjectId(user.userId), schoolSlug: this.slugOf(user) },
       { $set: { isRead: true, readAt: new Date() } },
