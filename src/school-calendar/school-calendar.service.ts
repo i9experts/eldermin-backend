@@ -22,7 +22,7 @@ import { isTeacherCaller, assertTeacherHasCampus } from '../staff-portal/teacher
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { isCircularForStaffViewer, CircularViewer } from './circular-visibility.util';
 
-interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string }
+interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string; primaryRole?: string }
 
 @Injectable()
 export class SchoolCalendarService {
@@ -250,7 +250,7 @@ export class SchoolCalendarService {
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Already published');
 
-    const recipients = await this.resolveAudience(schoolSlug, circular.audience as any);
+    const recipients = await this.resolveCircularAudience(schoolSlug, circular);
     if (recipients.length === 0) {
       throw new BadRequestException('No recipients matched this circular\'s audience - check the targeting before publishing');
     }
@@ -350,7 +350,7 @@ export class SchoolCalendarService {
     if (!circular.requiresAcknowledgment) {
       return { requiresAcknowledgment: false, total: 0, acknowledged: 0, pending: [] };
     }
-    const recipients = await this.resolveAudience(schoolSlug, circular.audience as any);
+    const recipients = await this.resolveCircularAudience(schoolSlug, circular);
     const acks = await this.ackModel.find({ circularId: new Types.ObjectId(circularId) }).lean();
     const ackedIds = new Set(acks.map((a) => String(a.userId)));
     const pending = recipients.filter((r) => !ackedIds.has(r.userId));
@@ -367,6 +367,16 @@ export class SchoolCalendarService {
   }
 
   // ─── Audience resolution ────────────────────────────────────────────────
+
+  /**
+   * Recipients of a circular. Owner decision: fee-category circulars are never sent to the teacher role, so teacher
+   * users are removed here, the single point behind the notification rows, the urgent e-mails, recipientCount and
+   * the acknowledgment-status totals. Every other role / category is unchanged.
+   */
+  private async resolveCircularAudience(schoolSlug: string, circular: { category?: string; audience?: any }): Promise<AudienceRecipient[]> {
+    const recipients = await this.resolveAudience(schoolSlug, circular.audience as any);
+    return circular.category === 'fee' ? recipients.filter((r) => r.primaryRole !== 'teacher') : recipients;
+  }
 
   private async resolveAudience(schoolSlug: string, spec: {
     roles: string[]; scope: string; campusId?: string | null; gradeLevels?: string[];
@@ -385,19 +395,19 @@ export class SchoolCalendarService {
         const parents = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
         }).lean();
-        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone });
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || p.role });
       }
       if (spec.individualStaffIds?.length) {
         const staffDocs = await this.staffModel.find({ _id: { $in: spec.individualStaffIds }, tenantId: (tenant as any)._id }).select('userId').lean();
         const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
         if (staffUserIds.length) {
           const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
-          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || u.role });
         }
       }
       if (spec.userIds?.length) {
         const users = await this.userModel.find({ _id: { $in: spec.userIds.map((id) => new Types.ObjectId(id)) }, tenantId: (tenant as any)._id }).lean();
-        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || u.role });
       }
       return Array.from(recipients.values());
     }
@@ -416,13 +426,13 @@ export class SchoolCalendarService {
         const parents = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
         }).lean();
-        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone });
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || p.role });
       }
       if (roles.includes('student') && studentIds.length) {
         const studentUsers = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'student', linkedStudentId: { $in: studentIds },
         }).lean();
-        for (const s of studentUsers) recipients.set(String(s._id), { userId: String(s._id), name: nameOf(s), email: s.email, phone: s.phone });
+        for (const s of studentUsers) recipients.set(String(s._id), { userId: String(s._id), name: nameOf(s), email: s.email, phone: s.phone, primaryRole: s.primaryRole || s.role });
       }
     }
 
@@ -433,7 +443,7 @@ export class SchoolCalendarService {
       const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
       if (staffUserIds.length) {
         const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
-        for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+        for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || u.role });
       }
     }
 

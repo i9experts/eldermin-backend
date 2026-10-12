@@ -18,12 +18,14 @@ export function makeCalendar(opts: any = {}) {
     findOne: jest.fn(() => chain(opts.circular ?? null)),
   };
   const ackModel: any = { findOneAndUpdate: jest.fn(async () => ({})), find: jest.fn(() => chain(opts.acks ?? [])) };
-  const staffModel: any = { findOne: jest.fn(() => chain(opts.staff ?? null)), find: jest.fn(() => chain([])) };
-  const userModel: any = { find: jest.fn(() => chain([])), findOne: jest.fn(() => chain(opts.userDoc ?? null)) };
+  const staffModel: any = { findOne: jest.fn(() => chain(opts.staff ?? null)), find: jest.fn(() => chain(opts.staffList ?? [])) };
+  const userModel: any = { find: jest.fn(() => chain(opts.users ?? [])), findOne: jest.fn(() => chain(opts.userDoc ?? null)) };
   const tenantModel: any = { findOne: jest.fn(() => chain({ _id: 't1' })) };
   const noop: any = {};
+  const notificationModel: any = opts.notificationModel ?? noop;
+  const emailService: any = opts.emailService ?? noop;
   const service = new SchoolCalendarService(
-    eventModel, circularModel, ackModel, invoiceModel, noop, staffModel, userModel, tenantModel, noop, assessmentModel, academicYearModel, noop,
+    eventModel, circularModel, ackModel, invoiceModel, noop, staffModel, userModel, tenantModel, notificationModel, assessmentModel, academicYearModel, emailService,
   );
   return { service, eventModel, invoiceModel, assessmentModel, circularModel, ackModel, staffModel, userModel };
 }
@@ -279,5 +281,69 @@ describe('SchoolCalendarService circulars: malformed id -> 400 (every role, noth
   it('a well-formed but unknown id is still 404', async () => {
     const m = makeCalendar();
     await expect(m.service.getCircularById('s', CID, { role: 'admin' })).rejects.toThrow(NotFoundException);
+  });
+});
+
+describe('SchoolCalendarService.publishCircular: fee circulars are not sent to teachers', () => {
+  const U = (id: string, primaryRole: string) => ({ _id: new Types.ObjectId(id), email: `${primaryRole}-${id}@x.test`, primaryRole, profile: { firstName: primaryRole, lastName: id } });
+  const users = [
+    U('64b000000000000000000011', 'teacher'),
+    U('64b000000000000000000012', 'teacher'),
+    U('64b000000000000000000013', 'finance_manager'),
+    U('64b000000000000000000014', 'admin'),
+    U('64b000000000000000000015', 'hr_manager'),
+  ];
+  const staffList = users.map((u) => ({ userId: u._id }));
+  const mk = (category: string, priority = 'normal') => {
+    const doc: any = {
+      _id: new Types.ObjectId(CID), schoolSlug: 's', title: 'Fee notice', body: '<p>Pay now</p>', category, priority, status: 'scheduled',
+      audience: { roles: ['staff'], scope: 'school' }, save: jest.fn(async () => undefined),
+    };
+    const notificationModel: any = { insertMany: jest.fn(async () => []) };
+    const emailService: any = { sendEmail: jest.fn(async () => undefined) };
+    const m = makeCalendar({ circular: doc, staffList, users, notificationModel, emailService });
+    return { ...m, doc, notificationModel, emailService };
+  };
+  const notified = (nm: any) => nm.insertMany.mock.calls[0][0].map((r: any) => String(r.recipientUserId));
+
+  it('fee circular: notifications go to every staff recipient except teachers', async () => {
+    const { service, notificationModel, doc } = mk('fee');
+    const res = await service.publishCircular('s', CID);
+    expect(notified(notificationModel).sort()).toEqual(['64b000000000000000000013', '64b000000000000000000014', '64b000000000000000000015']);
+    expect(res.recipientCount).toBe(3);
+    expect(doc.recipientCount).toBe(3);
+    expect(doc.status).toBe('published');
+  });
+
+  it('fee circular marked urgent: the e-mail copy skips teachers too', async () => {
+    const { service, emailService } = mk('fee', 'urgent');
+    await service.publishCircular('s', CID);
+    const to = emailService.sendEmail.mock.calls.map((c: any) => c[0].to).sort();
+    expect(to).toEqual(['admin-64b000000000000000000014@x.test', 'finance_manager-64b000000000000000000013@x.test', 'hr_manager-64b000000000000000000015@x.test']);
+  });
+
+  it.each(['academic', 'administrative', 'emergency', 'other'])('non-fee category (%s): teachers are still notified (unchanged)', async (category) => {
+    const { service, notificationModel } = mk(category);
+    const res = await service.publishCircular('s', CID);
+    expect(notified(notificationModel)).toHaveLength(5);
+    expect(notified(notificationModel)).toEqual(expect.arrayContaining(['64b000000000000000000011', '64b000000000000000000012']));
+    expect(res.recipientCount).toBe(5);
+  });
+
+  it('fee circular addressed only to teachers: nothing is sent (400, no notification rows)', async () => {
+    const m = mk('fee');
+    m.doc.audience = { roles: [], scope: 'individual', userIds: ['64b000000000000000000011'] };
+    m.userModel.find = jest.fn(() => chain([users[0]]));
+    await expect(m.service.publishCircular('s', CID)).rejects.toThrow(BadRequestException);
+    expect(m.notificationModel.insertMany).not.toHaveBeenCalled();
+  });
+
+  it('acknowledgment-status for a fee circular does not count teachers as pending recipients (admin view)', async () => {
+    const m = mk('fee');
+    m.doc.requiresAcknowledgment = true;
+    m.circularModel.findOne = jest.fn(() => chain({ ...m.doc }));
+    const r: any = await m.service.getAcknowledgmentStatus('s', CID, { role: 'admin' });
+    expect(r.total).toBe(3);
+    expect(r.pending.map((p: any) => p.userId).sort()).toEqual(['64b000000000000000000013', '64b000000000000000000014', '64b000000000000000000015']);
   });
 });
