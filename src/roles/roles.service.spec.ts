@@ -7,14 +7,17 @@ const T1 = new Types.ObjectId().toHexString();
 const T2 = new Types.ObjectId().toHexString();
 const uid = () => new Types.ObjectId().toHexString();
 
+// a query tenant filter is either a raw value or { $in: [...] }; stored tenantId may be string or ObjectId
+const matchT = (q: any, stored: any) => (q && q.$in ? q.$in.some((x: any) => String(x) === String(stored)) : String(q) === String(stored));
+
 function setup(opts: { users?: any[]; roles?: any[] } = {}) {
   const users = opts.users || [];
   const roles = opts.roles || [];
   const chain = (v: any) => ({ select: () => ({ lean: () => Promise.resolve(v) }), lean: () => Promise.resolve(v), then: (r: any) => Promise.resolve(v).then(r) });
   const userModel: any = {
     findById: jest.fn((id: string) => chain(users.find(u => String(u._id) === String(id)) || null)),
-    findOne: jest.fn((q: any) => chain(users.find(u => String(u._id) === String(q._id) && String(u.tenantId) === String(q.tenantId)) || null)),
-    findOneAndUpdate: jest.fn((q: any, upd: any) => ({ select: () => Promise.resolve(users.find(u => String(u._id) === String(q._id) && String(u.tenantId) === String(q.tenantId)) ? { _id: q._id, ...upd.$set } : null) })),
+    findOne: jest.fn((q: any) => chain(users.find(u => String(u._id) === String(q._id) && matchT(q.tenantId, u.tenantId)) || null)),
+    findOneAndUpdate: jest.fn((q: any, upd: any) => ({ select: () => Promise.resolve(users.find(u => String(u._id) === String(q._id) && matchT(q.tenantId, u.tenantId)) ? { _id: q._id, ...upd.$set } : null) })),
     countDocuments: jest.fn(() => Promise.resolve(0)),
   };
   const saved: any[] = [];
@@ -36,6 +39,17 @@ describe('RolesService hardening', () => {
     const { svc, userModel } = setup({ users: [target] });
     await expect(svc.assignRole(actor(), target._id, null)).rejects.toThrow(NotFoundException);
     expect(userModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('assign: works whether the stored tenantId is a string or an ObjectId (boot-test regression)', async () => {
+    const role = { _id: uid(), schoolSlug: 's1', moduleAccess: [] };
+    const asString = { _id: uid(), tenantId: T1, primaryRole: 'teacher' };
+    const asOid = { _id: uid(), tenantId: new Types.ObjectId(T1), primaryRole: 'teacher' };
+    const { svc } = setup({ users: [asString, asOid], roles: [role] });
+    await expect(svc.assignRole(actor(), asString._id, role._id)).resolves.toBeDefined();
+    await expect(svc.assignRole(actor(), asOid._id, role._id)).resolves.toBeDefined();
+    const other = { _id: uid(), tenantId: T2, primaryRole: 'teacher' };
+    await expect(setup({ users: [other], roles: [role] }).svc.assignRole(actor(), other._id, role._id)).rejects.toThrow(NotFoundException);
   });
 
   it('assign: self assignment / unassignment rejected', async () => {
@@ -72,7 +86,7 @@ describe('RolesService hardening', () => {
     const { svc, userModel } = setup({ users: [target], roles: [role] });
     await svc.assignRole(actor(), target._id, role._id);
     expect(userModel.findOneAndUpdate).toHaveBeenCalled();
-    expect(String(userModel.findOneAndUpdate.mock.calls[0][0].tenantId)).toBe(T1);
+    expect(userModel.findOneAndUpdate.mock.calls[0][0].tenantId.$in.map(String)).toEqual([T1, T1]);
   });
 
   it('assign: role of another school is not found', async () => {

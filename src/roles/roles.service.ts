@@ -101,7 +101,7 @@ export class RolesService {
     const counts = await this.userModel.aggregate([
       // Scoped to the caller's own school: counting across every tenant
       // leaked how many users of other schools hold a role id.
-      { $match: { customRoleId: { $ne: null }, ...(tenantId ? { tenantId: new Types.ObjectId(tenantId) } : {}) } },
+      { $match: { customRoleId: { $ne: null }, ...(tenantId ? { tenantId: RolesService.tenantMatch(tenantId) } : {}) } },
       { $group: { _id: '$customRoleId', count: { $sum: 1 } } },
     ]);
     const countMap = new Map(counts.map((c: any) => [String(c._id), c.count]));
@@ -192,7 +192,7 @@ export class RolesService {
     const role = await this.roleModel.findOne({ _id: id, schoolSlug });
     if (!role) throw new NotFoundException('Role not found');
     if (role.isSystemDefault) throw new BadRequestException('Built-in roles cannot be deleted');
-    const assignedCount = await this.userModel.countDocuments({ customRoleId: role._id, tenantId: this.tenantObjectId(actor.tenantId) });
+    const assignedCount = await this.userModel.countDocuments({ customRoleId: role._id, tenantId: this.tenantMatchFor(actor.tenantId) });
     if (assignedCount > 0) {
       throw new BadRequestException(`${assignedCount} staff member(s) currently have this role — reassign them first`);
     }
@@ -204,14 +204,25 @@ export class RolesService {
     );
   }
 
-  private tenantObjectId(tenantId: string) {
+  /**
+   * tenantId is stored as a STRING on users created by this codebase (the
+   * paths are untyped and newTid() returns the raw string) and as an ObjectId
+   * on others (onboarding / seeds). Match either form so tenant scoping
+   * neither leaks nor 404s. Found by the real boot test: an ObjectId-only
+   * filter made every assign 404 for string-tenant users.
+   */
+  static tenantMatch(tenantId: string) {
+    return { $in: [String(tenantId), new Types.ObjectId(String(tenantId))] };
+  }
+
+  private tenantMatchFor(tenantId: string) {
     if (!tenantId || !Types.ObjectId.isValid(tenantId)) throw new ForbiddenException('No school context on this account.');
-    return new Types.ObjectId(tenantId);
+    return RolesService.tenantMatch(tenantId);
   }
 
   async assignRole(actor: RoleActor, userId: string, roleId: string | null) {
     const { schoolSlug } = actor;
-    const tenantId = this.tenantObjectId(actor.tenantId);
+    const tenantId = this.tenantMatchFor(actor.tenantId);
     if (!Types.ObjectId.isValid(userId)) throw new BadRequestException('Invalid user id');
     // Nobody changes their own role: that is the self-escalation path.
     if (String(userId) === String(actor.userId)) {
@@ -282,7 +293,7 @@ export class RolesService {
   // corresponding account able to log in at all. Role assignment only
   // makes sense against something that can actually authenticate.
   async getUsersForSchool(tenantId: string) {
-    const users = await this.userModel.find({ tenantId, isActive: true })
+    const users = await this.userModel.find({ tenantId: tenantId && Types.ObjectId.isValid(tenantId) ? RolesService.tenantMatch(tenantId) : tenantId, isActive: true })
       .select('email profile primaryRole customRoleId').lean();
     return users.map((u: any) => ({
       id: u._id,
