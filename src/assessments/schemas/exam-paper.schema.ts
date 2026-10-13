@@ -47,11 +47,13 @@ export const OMRLayoutSchema = SchemaFactory.createForClass(OMRLayout);
 export type ExamPaperDocument = ExamPaper & Document;
 
 // A real exam paper compiled from the real Question Bank. Language
-// drives both the rendering direction (RTL for Urdu/Arabic, LTR for
-// English) and the fonts used - handled entirely at generation time in
-// the service, not stored as a rendering choice here. Bilingual
-// side-by-side papers (a real, common Pakistani-school pattern) are a
-// deliberate V2 - this is a real, single-primary-language paper first.
+// drives the rendering direction (RTL for Urdu/Arabic, LTR for English)
+// and the base font choice, with fontSize/urduFontStyle below as the
+// paper-level overrides a school can actually pick at creation time -
+// resolved into the real HTML/CSS at generation time in the service.
+// Bilingual side-by-side papers (a real, common Pakistani-school
+// pattern) are a deliberate V2 - this is a real, single-primary-language
+// paper first.
 @Schema({ timestamps: true, collection: 'exam_papers' })
 export class ExamPaper {
   @Prop({ required: true, index: true }) schoolSlug: string;
@@ -74,6 +76,19 @@ export class ExamPaper {
   // declaration) ahead of the question content.
   @Prop({ required: true, enum: ['standard', 'compact', 'formal'], default: 'standard' })
   paperFormat: string;
+  // Base body text size for the generated PDF - a school printing for
+  // younger grades or low-vision candidates needs this larger than the
+  // long-standing 13px default; 'small'/'large' are relative to it.
+  @Prop({ enum: ['small', 'medium', 'large'], default: 'medium' })
+  fontSize: string;
+  // Urdu-only: which Perso-Arabic rendering style to use. 'nastaliq' (the
+  // calligraphic style Urdu readers traditionally expect, via the real
+  // Noto Nastaliq Urdu font, embedded at generation time - see
+  // assessment.service.ts) is the default; 'naskh' keeps the previous
+  // Noto Sans/Naskh Arabic rendering for schools that prefer its more
+  // compact, upright letterforms. Ignored for english/arabic papers.
+  @Prop({ enum: ['nastaliq', 'naskh'], default: 'nastaliq' })
+  urduFontStyle: string;
   @Prop({ type: [PaperSectionSchema], default: [] }) sections: PaperSection[];
   // Unique, human-readable identifier printed with the QR code - lets a
   // physical paper be traced back to this record even without scanning

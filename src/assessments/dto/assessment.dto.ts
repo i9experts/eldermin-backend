@@ -244,6 +244,8 @@ export class CreateExamPaperDto {
   @IsNumber() duration: number;
   @IsOptional() @IsString() generalInstructions?: string;
   @IsOptional() @IsEnum(['standard', 'compact', 'formal']) paperFormat?: string;
+  @IsOptional() @IsEnum(['small', 'medium', 'large']) fontSize?: string;
+  @IsOptional() @IsEnum(['nastaliq', 'naskh']) urduFontStyle?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => PaperSectionDto) sections: PaperSectionDto[];
 }
 export class UpdateExamPaperDto extends PartialType(CreateExamPaperDto) {}

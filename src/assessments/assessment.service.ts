@@ -9,8 +9,20 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as QRCode from 'qrcode';
 import * as bwipjs from 'bwip-js';
+import * as fs from 'fs';
 import { randomBytes } from 'crypto';
 import { PdfService } from '../pdf/pdf.service';
+
+// Base64-encoded once at module load, not per-request - the file is read
+// and re-encoded on every PDF generation otherwise, for a font that never
+// changes. Embedding it as a data: URI inside the generated HTML is what
+// makes real Nastaliq rendering work regardless of what fonts (if any)
+// are installed on the Puppeteer/Chromium host - unlike the Noto Sans/
+// Naskh Arabic fallback below, which relies on the production image's
+// `font-noto-arabic` apk package (see Dockerfile) and isn't embedded.
+const NOTO_NASTALIQ_URDU_BASE64 = fs.readFileSync(
+  require.resolve('@fontsource/noto-nastaliq-urdu/files/noto-nastaliq-urdu-arabic-400-normal.woff2'),
+).toString('base64');
 
 import {
   Assessment, AssessmentDocument,
@@ -269,11 +281,11 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       },
     },
     urdu: {
-      // Noto Sans Arabic renders Urdu's Perso-Arabic script correctly and
-      // legibly, though in a Naskh style rather than the traditional
-      // Nastaliq calligraphic style Urdu readers often expect - a real,
-      // honest limitation of what's readily available as a redistributable
-      // font in this environment, not a rendering bug.
+      // Default/fallback only - generateExamPaperPdf below overrides this
+      // per-paper via urduFontStyle: 'nastaliq' (the default) embeds the
+      // real Noto Nastaliq Urdu font so it renders in the traditional
+      // calligraphic style Urdu readers expect, regardless of host fonts;
+      // 'naskh' keeps this upright Noto Sans/Naskh Arabic style instead.
       dir: 'rtl', lang: 'ur', font: "'Noto Sans Arabic', 'Noto Naskh Arabic', sans-serif",
       labels: {
         instructions: 'ہدایات', duration: 'وقت', marks: 'کل نمبر', name: 'نام', roll: 'رول نمبر', section: 'سیکشن',
@@ -299,10 +311,33 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // in that moment.
   private readonly PAPER_FORMATS = ['standard', 'compact', 'formal'];
 
+  // Relative to the long-standing 13px body default - scales every
+  // font-size in the generated stylesheet proportionally (headers,
+  // section titles, options, instructions, not just body text) so the
+  // whole printed paper gets larger/smaller together instead of the
+  // body text alone outgrowing its surrounding labels.
+  private readonly FONT_SCALE: Record<string, number> = { small: 0.85, medium: 1, large: 1.2 };
+
   async generateExamPaperPdf(id: string, schoolSlug: string): Promise<Buffer> {
     const paper: any = await this.getExamPaperById(id, schoolSlug);
     const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
     const format = this.PAPER_FORMATS.includes(paper.paperFormat) ? paper.paperFormat : 'standard';
+    const scale = this.FONT_SCALE[paper.fontSize] || 1;
+    const px = (basePx: number) => Math.round(basePx * scale);
+
+    // Urdu defaults to real Nastaliq (embedded below as a @font-face data:
+    // URI, not a system font) unless the paper explicitly asked for the
+    // Naskh style; Arabic always stays Naskh - Nastaliq is specifically an
+    // Urdu calligraphic tradition, not conventionally used for Arabic text.
+    const useNastaliq = paper.language === 'urdu' && paper.urduFontStyle !== 'naskh';
+    const bodyFont = useNastaliq ? "'Noto Nastaliq Urdu', 'Noto Sans Arabic', sans-serif" : cfg.font;
+    const nastaliqFontFace = useNastaliq ? `
+          @font-face {
+            font-family: 'Noto Nastaliq Urdu';
+            src: url(data:font/woff2;base64,${NOTO_NASTALIQ_URDU_BASE64}) format('woff2');
+            font-weight: 400;
+            font-style: normal;
+          }` : '';
 
     const totalMarks = paper.sections.reduce((sum: number, s: any) => sum + s.questions.reduce((s2: number, q: any) => s2 + (q.marks || 0), 0), 0);
     const qrDataUrl = await QRCode.toDataURL(paper.paperCode, { width: 90, margin: 0 });
@@ -393,22 +428,22 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       <html dir="${cfg.dir}" lang="${cfg.lang}">
       <head>
         <meta charset="UTF-8" />
-        <style>
+        <style>${nastaliqFontFace}
           @page { margin: 15mm 12mm; }
-          body { font-family: ${cfg.font}; color: #111; font-size: 13px; line-height: 1.6; }
+          body { font-family: ${bodyFont}; color: #111; font-size: ${px(13)}px; line-height: 1.6; }
           .page-break { page-break-after: always; }
           .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0C447C; padding-bottom: 10px; margin-bottom: 14px; }
-          .header-main h1 { font-size: 18px; color: #0C447C; margin: 0 0 4px; }
-          .header-main p { margin: 2px 0; font-size: 12px; }
-          .header-meta { text-align: center; font-size: 10px; }
+          .header-main h1 { font-size: ${px(18)}px; color: #0C447C; margin: 0 0 4px; }
+          .header-main p { margin: 2px 0; font-size: ${px(12)}px; }
+          .header-meta { text-align: center; font-size: ${px(10)}px; }
           .header-meta img { display: block; margin: 0 auto 4px; }
-          .top-fields { display: flex; gap: 24px; margin-bottom: 14px; font-size: 12px; }
+          .top-fields { display: flex; gap: 24px; margin-bottom: 14px; font-size: ${px(12)}px; }
           .top-fields span { border-bottom: 1px solid #999; padding-bottom: 2px; min-width: 120px; display: inline-block; }
-          .instructions-box { border: 1px solid #ccc; border-radius: 4px; padding: 8px 12px; margin-bottom: 16px; font-size: 12px; background: #f9f9f9; }
+          .instructions-box { border: 1px solid #ccc; border-radius: 4px; padding: 8px 12px; margin-bottom: 16px; font-size: ${px(12)}px; background: #f9f9f9; }
           .section { margin-bottom: 18px; ${format === 'compact' ? 'column-count: 2; column-gap: 24px;' : ''} }
-          .section-title { font-size: 14px; background: #0C447C; color: white; padding: 5px 10px; border-radius: 3px; margin-bottom: 8px; ${format === 'compact' ? 'column-span: all;' : ''} }
-          .section-instructions { font-size: 11px; color: #555; margin: 0 0 8px; font-style: italic; ${format === 'compact' ? 'column-span: all;' : ''} }
-          .question { margin-bottom: ${format === 'compact' ? '8px' : '12px'}; ${format === 'compact' ? 'break-inside: avoid; font-size: 12px;' : ''} }
+          .section-title { font-size: ${px(14)}px; background: #0C447C; color: white; padding: 5px 10px; border-radius: 3px; margin-bottom: 8px; ${format === 'compact' ? 'column-span: all;' : ''} }
+          .section-instructions { font-size: ${px(11)}px; color: #555; margin: 0 0 8px; font-style: italic; ${format === 'compact' ? 'column-span: all;' : ''} }
+          .question { margin-bottom: ${format === 'compact' ? '8px' : '12px'}; ${format === 'compact' ? `break-inside: avoid; font-size: ${px(12)}px;` : ''} }
           .question-row { display: flex; align-items: baseline; gap: 8px; }
           .q-number { font-weight: bold; flex-shrink: 0; }
           .q-text { flex: 1; }
@@ -419,18 +454,18 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .q-image { margin: 8px 0 8px ${cfg.dir === 'rtl' ? '0' : '24px'}; }
           .q-image img { max-width: 320px; max-height: 220px; border: 1px solid #ddd; border-radius: 4px; }
           .cover-page { display: flex; flex-direction: column; align-items: center; height: 250mm; padding-top: 20mm; text-align: center; }
-          .cover-header h1 { font-size: 22px; color: #0C447C; margin: 10px 0 4px; }
-          .cover-paper-title { font-size: 15px; font-weight: bold; margin: 4px 0; }
-          .cover-code { font-size: 11px; color: #666; margin: 0; }
+          .cover-header h1 { font-size: ${px(22)}px; color: #0C447C; margin: 10px 0 4px; }
+          .cover-paper-title { font-size: ${px(15)}px; font-weight: bold; margin: 4px 0; }
+          .cover-code { font-size: ${px(11)}px; color: #666; margin: 0; }
           .cover-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 40px; width: 100%; max-width: 420px; margin: 28px 0; text-align: ${cfg.dir === 'rtl' ? 'right' : 'left'}; }
-          .cover-field label { display: block; font-size: 10px; color: #666; margin-bottom: 3px; }
+          .cover-field label { display: block; font-size: ${px(10)}px; color: #666; margin-bottom: 3px; }
           .cover-field span { display: block; border-bottom: 1px solid #999; height: 18px; }
-          .cover-meta { font-size: 12px; margin-bottom: 20px; }
-          .cover-declaration { max-width: 420px; font-size: 11px; color: #444; border: 1px solid #ccc; border-radius: 4px; padding: 10px 14px; margin-bottom: 30px; background: #f9f9f9; }
+          .cover-meta { font-size: ${px(12)}px; margin-bottom: 20px; }
+          .cover-declaration { max-width: 420px; font-size: ${px(11)}px; color: #444; border: 1px solid #ccc; border-radius: 4px; padding: 10px 14px; margin-bottom: 30px; background: #f9f9f9; }
           .cover-signoff { display: flex; align-items: flex-end; gap: 40px; margin-top: auto; }
-          .cover-seal { width: 90px; height: 90px; border: 2px dashed #999; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #999; }
+          .cover-seal { width: 90px; height: 90px; border: 2px dashed #999; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: ${px(10)}px; color: #999; }
           .cover-invigilator span { display: block; border-bottom: 1px solid #999; width: 180px; height: 24px; margin-bottom: 4px; }
-          .cover-invigilator label { font-size: 10px; color: #666; }
+          .cover-invigilator label { font-size: ${px(10)}px; color: #666; }
         </style>
       </head>
       <body>
