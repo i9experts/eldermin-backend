@@ -97,3 +97,65 @@ describe('parent OTP for a deactivated user', () => {
     await expect(svc.issueSessionForPhone('0300')).resolves.toMatchObject({ accessToken: 'tok' });
   });
 });
+
+import { ForbiddenException } from '@nestjs/common';
+import { SCHOOL_SUSPENDED_MESSAGE } from '../../common/constants/school-suspended';
+
+describe('suspended school (pending owner confirmation): clear message, only for the school case', () => {
+  const MSG = "This school's account is suspended — please contact your school";
+  it('the message is exactly as specified (em dash)', () => expect(SCHOOL_SUSPENDED_MESSAGE).toBe(MSG));
+
+  function authWith(user: any, tenant: any) {
+    const svc: any = Object.create(AuthService.prototype);
+    svc.userModel = { findOne: jest.fn((f: any) => { const r = f.isActive === true && user.isActive === false ? null : user; return Object.assign(Promise.resolve(r), { lean: () => Promise.resolve(r), select: () => ({ lean: () => Promise.resolve(r) }) }); }), findByIdAndUpdate: jest.fn() };
+    svc.tenantModel = { findById: () => ({ lean: () => Promise.resolve(tenant) }), findOne: () => ({ select: () => ({ lean: () => Promise.resolve(tenant) }) }) };
+    svc.rolesService = { getPermissionsForUser: async () => null };
+    svc.resolveScopeFieldsForUser = async () => ({});
+    svc.jwtService = { sign: () => 't' };
+    return svc;
+  }
+  const u = { _id: 'u1', email: 'a@x.test', isActive: true, passwordHash: GOOD, primaryRole: 'teacher', tenantId: 't1' };
+
+  it('login: valid credentials at a suspended school -> 403 with the clear message', async () => {
+    await expect(authWith(u, { _id: 't1', slug: 's', status: 'suspended' }).login('a@x.test', 'Correct#1')).rejects.toThrow(MSG);
+  });
+  it('login: WRONG password at a suspended school is still the generic 401 (no status leak)', async () => {
+    await expect(authWith(u, { _id: 't1', slug: 's', status: 'suspended' }).login('a@x.test', 'wrong')).rejects.toThrow('Invalid credentials');
+  });
+  it('login: inactive user at a suspended school stays generic', async () => {
+    await expect(authWith({ ...u, isActive: false }, { _id: 't1', slug: 's', status: 'suspended' }).login('a@x.test', 'Correct#1')).rejects.toThrow('Invalid credentials');
+  });
+  it('token+slug login (/auth/me): suspended school -> 403 clear message; active school works', async () => {
+    const mk = (status: string) => { const s = authWith(u, { status }); s.userModel.findOne = () => ({ select: () => ({ lean: () => Promise.resolve({ ...u }) }) }); return s; };
+    await expect(mk('suspended').getMe('u1', '507f1f77bcf86cd799439011')).rejects.toThrow(MSG);
+    await expect(mk('active').getMe('u1', '507f1f77bcf86cd799439011')).resolves.toMatchObject({ _id: 'u1' });
+  });
+
+  describe('parent OTP request and verify', () => {
+    function parent(status: string) {
+      const svc: any = Object.create(ParentAuthService.prototype);
+      svc.userModel = { findOne: jest.fn(() => Promise.resolve(null)) };
+      svc.studentModel = { find: () => ({ lean: () => Promise.resolve([{ _id: new Types.ObjectId(), schoolSlug: 's', guardians: [{ phone: '0300' }] }]) }), findOne: () => ({ select: () => ({ lean: () => Promise.resolve({ schoolSlug: 's' }) }) }) };
+      svc.tenantModel = { findOne: () => Object.assign({ lean: () => Promise.resolve({ _id: 't', slug: 's', status }) }, { select: () => ({ lean: () => Promise.resolve({ status }) }) }) };
+      svc.otpModel = { findOne: () => ({ sort: () => ({ lean: () => Promise.resolve(null) }) }), create: jest.fn() };
+      svc.whatsAppService = { sendTemplateMessage: jest.fn(async () => ({ sent: true })) };
+      svc.jwtService = { sign: jest.fn(() => 'tok') };
+      return svc;
+    }
+    it('request-OTP: suspended school -> 403 clear message, NO OTP created or sent', async () => {
+      const s = parent('suspended');
+      await expect(s.requestOtp('+923001234567')).rejects.toThrow(MSG);
+      expect(s.otpModel.create).not.toHaveBeenCalled(); expect(s.whatsAppService.sendTemplateMessage).not.toHaveBeenCalled();
+    });
+    it('verify path: suspended school -> 403, no session', async () => {
+      const s = parent('suspended');
+      await expect(s.issueSessionForPhone('0300')).rejects.toThrow(ForbiddenException);
+      expect(s.jwtService.sign).not.toHaveBeenCalled();
+    });
+    it('active school still works', async () => {
+      const s = parent('active');
+      s.userModel.create = jest.fn(async (d: any) => ({ _id: 'p1', profile: {}, guardianOfStudentIds: [], ...d }));
+      await expect(s.issueSessionForPhone('0300')).resolves.toMatchObject({ accessToken: 'tok' });
+    });
+  });
+});

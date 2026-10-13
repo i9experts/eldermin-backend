@@ -19,6 +19,9 @@ import { idForms } from '../../common/utils/id-forms.util';
 
 // Compared against when no active account matches the e-mail, so an unknown or
 // deactivated account costs the same as a wrong password (no timing oracle).
+import { SCHOOL_SUSPENDED_MESSAGE } from '../../common/constants/school-suspended';
+export { SCHOOL_SUSPENDED_MESSAGE };
+
 const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password-for-timing-only', 10);
 
 @Injectable()
@@ -194,7 +197,7 @@ export class AuthService {
     } else if (slugToUse) {
       tenant = await this.tenantModel.findOne({ slug: slugToUse }).lean();
     }
-    if (tenant?.status === 'suspended') throw new ForbiddenException('Account suspended');
+    if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
 
     const tenantId = tenant?._id?.toString() || user.tenantId?.toString() || slugToUse || user._id.toString();
 
@@ -368,6 +371,11 @@ export class AuthService {
       // Internal secrets never leave the server (reset-token hash/expiry too).
       .select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires').lean();
     if (!user) throw new UnauthorizedException('User not found');
+    // token+slug login (the web stores the token and calls /auth/me): a suspended school is refused here too
+    if (tenantId) {
+      const tenant: any = await this.tenantModel.findOne({ _id: idForms(tenantId) }).select('status').lean();
+      if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+    }
     const permissions = await this.rolesService.getPermissionsForUser(userId);
     // Self-healing single-campus fallback isn't critical here (unlike
     // login) - getMe only runs after a successful login, by which point

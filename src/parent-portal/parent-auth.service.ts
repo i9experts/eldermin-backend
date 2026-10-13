@@ -1,3 +1,4 @@
+import { SCHOOL_SUSPENDED_MESSAGE } from '../common/constants/school-suspended';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -59,9 +60,17 @@ export class ParentAuthService {
     return { schoolSlug: (student as any).schoolSlug, existingUser: null };
   }
 
+  /** Suspended school: no OTP is sent and no session is issued (message intentionally reveals school status only). */
+  private async assertSchoolNotSuspended(schoolSlug?: string) {
+    if (!schoolSlug) return;
+    const tenant: any = await this.tenantModel.findOne({ slug: schoolSlug }).select('status').lean();
+    if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+  }
+
   async requestOtp(rawPhone: string) {
     const phone = normalizePhone(rawPhone);
     const { schoolSlug } = await this.resolveSchoolForPhone(phone);
+    await this.assertSchoolNotSuspended(schoolSlug);
 
     const recent = await this.otpModel.findOne({ phone }).sort({ createdAt: -1 }).lean();
     if (recent && Date.now() - new Date((recent as any).createdAt).getTime() < RESEND_COOLDOWN_SECONDS * 1000) {
@@ -124,6 +133,7 @@ export class ParentAuthService {
     const schoolSlug = (matchingStudents[0] as any).schoolSlug;
     const tenant = await this.tenantModel.findOne({ slug: schoolSlug }).lean();
     if (!tenant) throw new NotFoundException('School configuration not found for this number.');
+    if ((tenant as any).status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
 
     const studentIds = matchingStudents.map((s: any) => s._id);
     let user = await this.userModel.findOne({ phone });
