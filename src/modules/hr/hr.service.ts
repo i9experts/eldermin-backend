@@ -365,10 +365,12 @@ export class HrService {
     const passwordHash = await bcrypt.hash(tempPassword, 12);
     const user = await this.userModel.findByIdAndUpdate(
       staff.userId,
-      { passwordHash, $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' } },
+      { passwordHash, $inc: { tokenVersion: 1 }, $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' } },
       { new: true },
     );
     if (!user) throw new NotFoundException('Login account not found for this staff member');
+    // S3: the old password's sessions end (local cache cleared; other instances within 30 s)
+    await this.accountAccess.signOutLocalCache(user._id);
 
     return { email: user.email, tempPassword };
   }
@@ -552,6 +554,15 @@ export class HrService {
       { $set: { status: 'terminated', isActive: false } },
     );
     return { deleted: true, hardDeleted: false, status: 'terminated' };
+  }
+
+  /** Admin 'sign out everywhere' for a staff member's login (S3). Tenant-scoped through the Staff row. */
+  async signOutStaff(tenantId: string, staffId: string, actor: { userId?: string; name?: string; schoolSlug?: string }) {
+    const staff: any = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) }).lean();
+    if (!staff) throw new NotFoundException('Staff member not found');
+    if (!staff.userId) throw new BadRequestException('This staff member has no login account.');
+    const r = await this.accountAccess.signOutEverywhere(staff.userId, 'admin_sign_out_everywhere', actor);
+    return { staffId: String(staff._id), outcome: r.outcome };
   }
 
   /** The single hook every staff removal path uses (S1). No-op for staff without a login. */

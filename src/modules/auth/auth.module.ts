@@ -16,12 +16,14 @@ import { PlatformRole, PlatformRoleSchema } from '../../super-admin/schemas/plat
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
 import { EmailModule } from '../../email/email.module';
+import { AuthStateModule } from './auth-state.module';
 
 @Module({
   imports: [
     UploadModule,
     RolesModule,
     EmailModule,
+    AuthStateModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

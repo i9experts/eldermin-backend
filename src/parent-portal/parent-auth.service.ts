@@ -167,6 +167,7 @@ export class ParentAuthService {
 
     const payload = {
       sub: (user._id as any).toString(),
+      tv: Number.isInteger((user as any).tokenVersion) ? (user as any).tokenVersion : 0, // S3
       tenantId: (tenant as any)._id.toString(),
       institutionId: ((user.institutionId as any) || (tenant as any)._id).toString(),
       role: 'parent',

@@ -19,7 +19,7 @@ function build(user: any, opts: { modified?: number[]; auditFails?: boolean; ten
     create: jest.fn(async (d: any) => { if (opts.auditFails) throw new Error('audit down'); rows.push(d); return { _id: 'a' + rows.length, ...d }; }),
     updateOne: jest.fn(async () => ({})),
   };
-  const svc = new AccountAccessService(userModel, tenantModel, auditModel, new CriticalAuditService(auditModel));
+  const svc = new AccountAccessService(userModel, tenantModel, auditModel, new CriticalAuditService(auditModel), { invalidate: jest.fn() } as any);
   return { svc, userModel, updates, rows, auditModel };
 }
 const staffUser = (over: any = {}) => ({ _id: UID, primaryRole: 'teacher', isActive: true, tenantId: 't1', guardianOfStudentIds: [], linkedStudentId: null, customRoleId: null, ...over });

@@ -80,6 +80,12 @@ export class HrController {
   }
 
   @HrWrite()
+  @Post('staff/:id/sign-out')
+  signOutStaff(@Request() req, @Param('id') id: string) {
+    return this.hrService.signOutStaff(req.user.tenantId, id, this.actor(req));
+  }
+
+  @HrWrite()
   @Post('staff/:id/reactivate')
   reactivateStaff(@Request() req, @Param('id') id: string, @Body() body: { reason?: string }) {
     return this.hrService.reactivateStaff(req.user.tenantId, id, body?.reason as string, this.actor(req) as any);

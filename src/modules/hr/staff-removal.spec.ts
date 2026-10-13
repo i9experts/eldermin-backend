@@ -146,7 +146,7 @@ describe('status -> active auto-reactivation is audited fail-closed (real Accoun
       updateOne: jest.fn(async () => { calls.push('user.update'); return { modifiedCount: 1 }; }),
     };
     const tenantModel: any = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve({ slug: 'sch' }) }) }) };
-    svc.accountAccess = new AccountAccessService(userModel, tenantModel, auditModel, new CriticalAuditService(auditModel));
+    svc.accountAccess = new AccountAccessService(userModel, tenantModel, auditModel, new CriticalAuditService(auditModel), { invalidate: jest.fn() } as any);
     return { svc, calls, rows, userModel };
   }
   it('writes the audit entry (actor, reason, before/after) and then restores', async () => {
@@ -185,5 +185,27 @@ describe('POST /hr/exit duplicate (unique tenant+staff index)', () => {
   });
   it('other errors are not masked', async () => {
     await expect(mk(new Error('boom')).createExitRecord(T, T, { staffId: SID }, ACTOR.userId)).rejects.toThrow('boom');
+  });
+});
+
+describe('S3: sign out everywhere / reset bump the session version', () => {
+  it('signOutStaff resolves the login through the tenant-scoped Staff row and calls the service', async () => {
+    const { svc } = build(staff());
+    svc.accountAccess.signOutEverywhere = jest.fn(async () => ({ outcome: 'signed_out' }));
+    await expect(svc.signOutStaff(T, SID, ACTOR)).resolves.toMatchObject({ outcome: 'signed_out' });
+    expect(svc.accountAccess.signOutEverywhere).toHaveBeenCalledWith(UID, 'admin_sign_out_everywhere', ACTOR);
+    expect(svc.staffModel.findOne.mock.calls[0][0]).toMatchObject({ _id: SID, tenantId: T });
+  });
+  it('staff without a login -> 400; unknown / other-tenant staff -> 404', async () => {
+    await expect(build(staff({ userId: null })).svc.signOutStaff(T, SID, ACTOR)).rejects.toThrow(BadRequestException);
+    await expect(build(null).svc.signOutStaff(T, SID, ACTOR)).rejects.toThrow('not found');
+  });
+  it('HR reset-password bumps tokenVersion and clears the cache', async () => {
+    const { svc } = build(staff());
+    svc.userModel.findByIdAndUpdate = jest.fn(async () => ({ _id: UID, email: 'e@x.test' }));
+    svc.accountAccess.signOutLocalCache = jest.fn();
+    await svc.resetPasswordForStaff(T, SID);
+    expect(svc.userModel.findByIdAndUpdate.mock.calls[0][1].$inc).toEqual({ tokenVersion: 1 });
+    expect(svc.accountAccess.signOutLocalCache).toHaveBeenCalledWith(UID);
   });
 });

@@ -15,6 +15,7 @@ function auth(users: any[]) {
     findByIdAndUpdate: jest.fn(),
   };
   svc.emailService = { sendEmail: jest.fn() };
+  svc.authState = { invalidate: jest.fn() };
   return svc;
 }
 const active = { _id: 'u1', email: 'a@x.test', isActive: true, passwordHash: GOOD, primaryRole: 'teacher' };

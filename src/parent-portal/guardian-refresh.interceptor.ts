@@ -1,6 +1,7 @@
 import { CallHandler, ExecutionContext, Injectable, NestInterceptor, UnauthorizedException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { authStateCheckEnabled } from '../modules/auth/auth-state.service';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 
 /**
@@ -19,8 +20,15 @@ export class GuardianRefreshInterceptor implements NestInterceptor {
     const req = context.switchToHttp().getRequest();
     const user = req?.user;
     if (user && (user.role || user.primaryRole) === 'parent' && user.userId) {
-      const fresh: any = await this.userModel.findById(user.userId).select('guardianOfStudentIds isActive').lean();
+      const fresh: any = await this.userModel.findById(user.userId).select('guardianOfStudentIds isActive tokenVersion').lean();
       if (!fresh || fresh.isActive === false) throw new UnauthorizedException('This account is no longer active.');
+      // S3: same version rule as the JWT strategy, but evaluated on this request's own fresh read
+      // (no extra query, no cache lag on parent-portal routes). Kill switch applies here too.
+      if (authStateCheckEnabled()) {
+        const tokenTv = Number.isInteger(user.tv) ? user.tv : 0;
+        const userTv = Number.isInteger(fresh.tokenVersion) ? fresh.tokenVersion : 0;
+        if (tokenTv !== userTv) throw new UnauthorizedException('Your session has ended. Please sign in again.');
+      }
       user.guardianOfStudentIds = (fresh.guardianOfStudentIds || []).map((id: any) => String(id));
     }
     return next.handle();

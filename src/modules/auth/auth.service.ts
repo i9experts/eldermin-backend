@@ -16,6 +16,7 @@ import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
 import { UserRole } from '../../auth/roles.enum';
 import { idForms } from '../../common/utils/id-forms.util';
+import { AuthStateService } from './auth-state.service';
 
 // Compared against when no active account matches the e-mail, so an unknown or
 // deactivated account costs the same as a wrong password (no timing oracle).
@@ -38,6 +39,7 @@ export class AuthService {
     private uploadService: UploadService,
     private rolesService: RolesService,
     private emailService: EmailService,
+    private authState: AuthStateService,
   ) {}
 
   /** Platform-level mirror of RolesService.getPermissionsForUser, kept as
@@ -165,6 +167,7 @@ export class AuthService {
         role,
         name,
         resellerId: String(reseller._id),
+        tv: Number.isInteger(user.tokenVersion) ? user.tokenVersion : 0,
       };
 
       return {
@@ -234,6 +237,7 @@ export class AuthService {
 
     const payload = {
       sub: user._id.toString(),
+      tv: Number.isInteger(user.tokenVersion) ? user.tokenVersion : 0, // S3 session version
       tenantId,
       institutionId: (user.institutionId || tenant?._id || user.tenantId)?.toString(),
       role,
@@ -360,9 +364,18 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await this.userModel.findByIdAndUpdate(user._id, {
       $set: { passwordHash },
+      $inc: { tokenVersion: 1 }, // S3: a password reset ends every existing session of the account
       $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' },
     });
+    this.authState.invalidate(user._id);
     return { message: 'Password updated - you can now sign in with your new password.' };
+  }
+
+  /** 'Sign out everywhere' for the caller: bumps tokenVersion so every token issued so far is rejected. */
+  async logoutAll(userId: string) {
+    await this.userModel.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } });
+    this.authState.invalidate(userId);
+    return { message: 'Signed out of all sessions.' };
   }
 
   async getMe(userId: string, tenantId: string) {

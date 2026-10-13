@@ -17,6 +17,7 @@ import {
   SupportTicket, SupportTicketSchema,
 } from './schemas/super-admin.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
+import { AuthStateModule } from '../modules/auth/auth-state.module';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema as OrgInstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema, AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
@@ -27,6 +28,7 @@ import { ModulesModule } from '../modules/modules.module';
 
 @Module({
   imports: [
+    AuthStateModule,
     ModulesModule,
     // Same secret/expiry source as AuthModule's own JwtModule - a real,
     // normally-verifiable JWT for impersonation (see

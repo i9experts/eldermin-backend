@@ -33,12 +33,14 @@ describe('platform staff deactivation records who/when', () => {
     const svc: any = Object.create(PlatformStaffService.prototype);
     let upd: any;
     svc.userModel = { findOneAndUpdate: jest.fn((_f: any, u: any) => { upd = u; return { select: () => Promise.resolve({ _id: 'x' }) }; }) };
+    svc.authState = { invalidate: jest.fn() };
     return { svc, get: () => upd };
   }
   it('deactivate sets markers; reactivate clears them', async () => {
     const a = ps(); await a.svc.setStaffActive('x', false, 'actor');
     expect(a.get().$set).toMatchObject({ isActive: false, deactivatedBy: 'actor', deactivationReason: 'platform_staff_deactivated' });
     const b = ps(); await b.svc.setStaffActive('x', true, 'actor');
+    expect(a.get().$inc).toEqual({ tokenVersion: 1 }); expect(b.get().$inc).toEqual({ tokenVersion: 1 });
     expect(b.get().$set).toEqual({ isActive: true }); expect(Object.keys(b.get().$unset)).toEqual(['deactivatedAt', 'deactivatedBy', 'deactivationReason']);
   });
 });

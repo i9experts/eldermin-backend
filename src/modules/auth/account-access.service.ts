@@ -7,6 +7,7 @@ import { AuditLog, AuditLogDocument } from '../../compliance/schemas/compliance.
 import { CriticalAuditService } from '../../common/critical-audit.service';
 import { idForms } from '../../common/utils/id-forms.util';
 import { UserRole } from '../../auth/roles.enum';
+import { AuthStateService } from './auth-state.service';
 
 export type DeactivationOutcome = 'deactivated' | 'demoted' | 'already' | 'no_user' | 'protected' | 'not_staff';
 export type ReactivationOutcome = 'reactivated' | 'noop' | 'no_user';
@@ -47,6 +48,8 @@ const NOT_STAFF_ROLES = new Set<string>([UserRole.PARENT, UserRole.STUDENT, User
  *    ignores Staff rows with isActive=false (auth.service resolveScopeFieldsForUser).
  *  - owner / super_admin accounts are never touched ('protected').
  * Audit: best-effort (a removal must never be blocked by the audit store).
+ * S3: every successful change also bumps User.tokenVersion (all existing tokens of the
+ * account stop working; the person must sign in again) and clears the local auth-state cache.
  *
  * reactivateStaffLogin restores access and is FAIL-CLOSED audited
  * (CriticalAuditService): isActive=true, deactivation fields cleared and, for a
@@ -61,6 +64,7 @@ export class AccountAccessService {
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel(AuditLog.name) private auditModel: Model<AuditLogDocument>,
     private criticalAudit: CriticalAuditService,
+    private authState: AuthStateService,
   ) {}
 
   private async schoolSlugFor(user: any, actor?: AccessActor): Promise<string | undefined> {
@@ -87,6 +91,24 @@ export class AccountAccessService {
     }
   }
 
+  /** S3: void every token issued so far for this account (they must sign in again). */
+  async bumpTokenVersion(userId: any): Promise<void> {
+    await this.userModel.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } });
+    this.authState.invalidate(userId);
+  }
+
+  /** Clear this instance's cached state after a bump done elsewhere with a plain $inc (S3). */
+  async signOutLocalCache(userId: any): Promise<void> { this.authState.invalidate(userId); }
+
+  /** Admin 'sign out everywhere' (S3). Audit is best-effort (it only reduces access). */
+  async signOutEverywhere(userId: any, reason: string, actor?: AccessActor): Promise<{ outcome: 'signed_out' | 'no_user' }> {
+    const user: any = await this.userModel.findOne({ _id: userId }).select('tenantId primaryRole tokenVersion').lean();
+    if (!user) return { outcome: 'no_user' };
+    await this.bumpTokenVersion(user._id);
+    await this.auditBestEffort(user, actor, { action: 'Sign out everywhere', reason, before: { tokenVersion: user.tokenVersion ?? 0 }, after: { tokenVersion: (user.tokenVersion ?? 0) + 1 } });
+    return { outcome: 'signed_out' };
+  }
+
   async deactivateStaffLogin(userId: any, reason: string, actorId?: string, actor?: AccessActor): Promise<{ outcome: DeactivationOutcome }> {
     if (!userId) return { outcome: 'no_user' };
     const user: any = await this.userModel.findOne({ _id: userId }).select('primaryRole isActive tenantId guardianOfStudentIds linkedStudentId staffAccessRevokedAt customRoleId').lean();
@@ -104,22 +126,24 @@ export class AccountAccessService {
       const r = await this.userModel.updateOne(
         { _id: user._id, staffAccessRevokedAt: { $exists: false }, primaryRole: { $nin: ['parent', 'student'] } },
         [
-          { $set: { previousPrimaryRole: '$primaryRole', previousCustomRoleId: { $ifNull: ['$customRoleId', null] }, primaryRole: 'parent', customRoleId: null, staffAccessRevokedAt: now, deactivationReason: { $literal: reason }, ...byFields } },
+          { $set: { previousPrimaryRole: '$primaryRole', previousCustomRoleId: { $ifNull: ['$customRoleId', null] }, primaryRole: 'parent', customRoleId: null, staffAccessRevokedAt: now, deactivationReason: { $literal: reason }, tokenVersion: { $add: [{ $ifNull: ['$tokenVersion', 0] }, 1] }, ...byFields } },
           unsetReset as any,
         ],
         PIPELINE_UPDATE,
       );
       if (!r.modifiedCount) return { outcome: 'already' };
+      this.authState.invalidate(user._id); // S3: all existing tokens of this account are now void
       await this.auditBestEffort(user, act, { action: 'Demote shared login to parent', reason, before: { primaryRole: user.primaryRole, customRoleId: user.customRoleId ?? null }, after: { primaryRole: 'parent', customRoleId: null, isActive: true } });
       return { outcome: 'demoted' };
     }
 
     const r = await this.userModel.updateOne(
       { _id: user._id, isActive: { $ne: false } },
-      [{ $set: { isActive: false, deactivatedAt: now, deactivationReason: { $literal: reason }, ...byFields } }, unsetReset as any],
+      [{ $set: { isActive: false, deactivatedAt: now, deactivationReason: { $literal: reason }, tokenVersion: { $add: [{ $ifNull: ['$tokenVersion', 0] }, 1] }, ...byFields } }, unsetReset as any],
       PIPELINE_UPDATE,
     );
     if (!r.modifiedCount) return { outcome: 'already' };
+    this.authState.invalidate(user._id); // S3: tokenVersion bumped -> existing tokens rejected
     await this.auditBestEffort(user, act, { action: 'Deactivate login', reason, before: { isActive: true }, after: { isActive: false } });
     return { outcome: 'deactivated' };
   }
@@ -144,6 +168,7 @@ export class AccountAccessService {
           [
             { $set: {
               isActive: true,
+              tokenVersion: { $add: [{ $ifNull: ['$tokenVersion', 0] }, 1] },
               ...(demoted ? { primaryRole: { $ifNull: ['$previousPrimaryRole', '$primaryRole'] }, customRoleId: { $ifNull: ['$previousCustomRoleId', null] } } : {}),
             } },
             { $unset: ['deactivatedAt', 'deactivatedBy', 'deactivationReason', 'staffAccessRevokedAt', 'previousPrimaryRole', 'previousCustomRoleId'] } as any,
@@ -151,6 +176,7 @@ export class AccountAccessService {
           PIPELINE_UPDATE,
         );
         outcome = r.modifiedCount ? 'reactivated' : 'noop';
+        if (r.modifiedCount) this.authState.invalidate(user._id);
         return { outcome, reason };
       },
     );

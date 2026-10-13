@@ -931,6 +931,7 @@ export class SuperAdminService {
     const name = `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim() || user.email;
     const payload = {
       sub: String(user._id),
+      tv: Number.isInteger((user as any).tokenVersion) ? (user as any).tokenVersion : 0, // S3: the impersonated user's CURRENT version
       tenantId: String(tenant._id),
       institutionId: String(user.institutionId || tenant._id),
       role: user.primaryRole,
