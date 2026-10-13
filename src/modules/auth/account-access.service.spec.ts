@@ -11,7 +11,7 @@ function build(user: any, opts: { modified?: number[]; auditFails?: boolean; ten
   const mods = [...(opts.modified || [1])];
   const userModel: any = {
     findOne: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve(user) }) })),
-    updateOne: jest.fn(async (f: any, u: any) => { updates.push({ f, u }); return { modifiedCount: mods.length ? mods.shift() : 0 }; }),
+    updateOne: jest.fn(async (f: any, u: any, o: any) => { if (Array.isArray(u) && !(o && o.updatePipeline === true)) throw new Error('Cannot pass an array to query updates unless the `updatePipeline` option is set.'); updates.push({ f, u }); return { modifiedCount: mods.length ? mods.shift() : 0 }; }),
   };
   const tenantModel: any = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve({ slug: opts.tenantSlug ?? 'sch' }) }) }) };
   const rows: any[] = [];

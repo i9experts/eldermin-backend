@@ -13,6 +13,9 @@ export type ReactivationOutcome = 'reactivated' | 'noop' | 'no_user';
 
 export interface AccessActor { userId?: string; name?: string; schoolSlug?: string }
 
+/** Mongoose refuses an aggregation-pipeline update unless told explicitly (found by the real boot test; fakes cannot see this). */
+const PIPELINE_UPDATE = { updatePipeline: true } as any;
+
 /** Staff statuses that revoke a login (S1 decision 5). on_leave / probation do not. */
 export const REVOKING_STAFF_STATUSES = ['resigned', 'terminated', 'suspended'];
 export function staffRevokesAccess(status?: string | null, isActive?: boolean | null): boolean {
@@ -104,6 +107,7 @@ export class AccountAccessService {
           { $set: { previousPrimaryRole: '$primaryRole', previousCustomRoleId: { $ifNull: ['$customRoleId', null] }, primaryRole: 'parent', customRoleId: null, staffAccessRevokedAt: now, deactivationReason: { $literal: reason }, ...byFields } },
           unsetReset as any,
         ],
+        PIPELINE_UPDATE,
       );
       if (!r.modifiedCount) return { outcome: 'already' };
       await this.auditBestEffort(user, act, { action: 'Demote shared login to parent', reason, before: { primaryRole: user.primaryRole, customRoleId: user.customRoleId ?? null }, after: { primaryRole: 'parent', customRoleId: null, isActive: true } });
@@ -113,6 +117,7 @@ export class AccountAccessService {
     const r = await this.userModel.updateOne(
       { _id: user._id, isActive: { $ne: false } },
       [{ $set: { isActive: false, deactivatedAt: now, deactivationReason: { $literal: reason }, ...byFields } }, unsetReset as any],
+      PIPELINE_UPDATE,
     );
     if (!r.modifiedCount) return { outcome: 'already' };
     await this.auditBestEffort(user, act, { action: 'Deactivate login', reason, before: { isActive: true }, after: { isActive: false } });
@@ -143,6 +148,7 @@ export class AccountAccessService {
             } },
             { $unset: ['deactivatedAt', 'deactivatedBy', 'deactivationReason', 'staffAccessRevokedAt', 'previousPrimaryRole', 'previousCustomRoleId'] } as any,
           ],
+          PIPELINE_UPDATE,
         );
         outcome = r.modifiedCount ? 'reactivated' : 'noop';
         return { outcome, reason };

@@ -18,6 +18,7 @@ const { requireLocalDb, TAG, STATE, mongoose } = require('./common');
     const r = await col.deleteMany({ $or: [{ tenantId: { $in: ids } }, { tenantId: { $in: ids.map(String) } }, { schoolSlug: slugRe }, ...(c.name === 'tenants' ? [{ _id: { $in: ids } }] : [])] });
     if (r.deletedCount) report[c.name] = r.deletedCount;
   }
+  for (const e of st.extraCleanup || []) { const r = await db.collection(e.collection).deleteMany(e.filter); report['extra:' + e.collection] = (report['extra:' + e.collection] || 0) + r.deletedCount; }
   if (st.orphanTenant) { const r = await db.collection('users').deleteMany({ tenantId: st.orphanTenant }); report.users_orphan = r.deletedCount; }
   console.log('deleted:', JSON.stringify(report));
   await mongoose.disconnect();
