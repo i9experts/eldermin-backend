@@ -4,7 +4,7 @@
 
 import {
   IsString, IsOptional, IsEnum, IsBoolean, IsNumber,
-  IsArray, IsDateString, IsMongoId, ValidateNested, Min,
+  IsArray, IsDateString, IsMongoId, ValidateNested, Min, Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
@@ -139,6 +139,14 @@ export class CreateQuestionDto {
 }
 
 export class QuestionQueryDto extends PaginationDto {
+  // Overrides PaginationDto's uncapped limit - the Question Bank list UI
+  // used to work around pagination entirely by requesting limit:1000 in one
+  // shot, which silently hid every question outside that single
+  // newest-first page once a bank grew past it (see QuestionBankTab). The
+  // UI now paginates for real, so a hard cap here stops any client from
+  // reintroducing that "fetch everything" pattern.
+  @IsOptional() @Type(() => Number) @Min(1) @Max(200) limit?: number = 20;
+
   @IsOptional() @IsString() subject?: string;
   @IsOptional() @IsString() grade?: string;
   @IsOptional() @IsString() topic?: string;
