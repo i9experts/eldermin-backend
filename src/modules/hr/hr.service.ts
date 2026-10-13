@@ -1522,7 +1522,9 @@ export class HrService {
   // read or write their own leave data via these methods.
 
   async getOwnStaffRecord(tenantId: string, userId: string): Promise<StaffDocument> {
-    const staff = await this.staffModel.findOne({ tenantId: this.newTid(tenantId), userId: this.newTid(userId) });
+    // Matches staff.userId / tenantId stored as either a string or an ObjectId (create-login stores
+    // userId as an ObjectId, the JWT carries strings: B0 id typing), strictly the caller's own tenant.
+    const staff = await this.staffModel.findOne({ tenantId: idForms(tenantId), userId: idForms(userId) });
     if (!staff) throw new NotFoundException('No staff record is linked to your account. Contact HR to have your login connected to your employee record.');
     return staff;
   }
