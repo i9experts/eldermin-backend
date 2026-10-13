@@ -1263,7 +1263,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     if (subject) filter.subject = { $regex: `^${this.escapeRegex(subject.trim())}$`, $options: 'i' };
     if (grade) filter.grade = { $regex: `^${this.escapeRegex(grade.trim())}$`, $options: 'i' };
 
-    const [byType, byDifficulty, byBlooms, bySubject] = await Promise.all([
+    const [total, byType, byDifficulty, byBlooms, bySubject] = await Promise.all([
+      this.questionModel.countDocuments(filter),
       this.questionModel.aggregate([
         { $match: filter },
         { $group: { _id: '$type', count: { $sum: 1 } } },
@@ -1282,7 +1283,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
         { $sort: { count: -1 } },
       ]),
     ]);
-    return { byType, byDifficulty, byBlooms, bySubject };
+    return { total, byType, byDifficulty, byBlooms, bySubject };
   }
 
   async deleteQuestion(id: string, schoolSlug: string) {
