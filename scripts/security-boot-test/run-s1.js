@@ -189,8 +189,8 @@ async function http(method, p, token, body) {
 
   // ---------- P9 institution suspension ----------
   const instSlug = st.tenantA.slug;
-  await db.collection('institutions').insertOne({ _id: new mongoose.Types.ObjectId(), slug: instSlug, name: 'S2a boot inst', status: 'active', createdAt: new Date(), updatedAt: new Date() });
-  st.extraCleanup.push({ collection: 'institutions', filter: { slug: instSlug } }, { collection: 'subscription_history', filter: { institutionSlug: instSlug } }, { collection: 'subscriptionhistories', filter: { institutionSlug: instSlug } });
+  await db.collection('platform_institutions').insertOne({ _id: new mongoose.Types.ObjectId(), slug: instSlug, name: 'S2a boot inst', status: 'active', createdAt: new Date(), updatedAt: new Date() });
+  st.extraCleanup.push({ collection: 'platform_institutions', filter: { slug: instSlug } }, { collection: 'subscription_history', filter: { institutionSlug: instSlug } });
   const saId = new mongoose.Types.ObjectId(); const saEmail = `sa.${stamp}@s2a-boot-super.test`;
   await db.collection('users').insertOne({ _id: saId, email: saEmail, passwordHash: await bcrypt.hash('SuperAdmin#1', 4), primaryRole: 'super_admin', isActive: true, profile: { firstName: 'SA', lastName: 'Boot' }, createdAt: new Date(), updatedAt: new Date() });
   st.extraCleanup.push({ collection: 'users', filter: { _id: saId } }); save();

@@ -18,7 +18,9 @@ const { requireLocalDb, TAG, STATE, mongoose } = require('./common');
     const r = await col.deleteMany({ $or: [{ tenantId: { $in: ids } }, { tenantId: { $in: ids.map(String) } }, { schoolSlug: slugRe }, ...(c.name === 'tenants' ? [{ _id: { $in: ids } }] : [])] });
     if (r.deletedCount) report[c.name] = r.deletedCount;
   }
-  for (const e of st.extraCleanup || []) { const r = await db.collection(e.collection).deleteMany(e.filter); report['extra:' + e.collection] = (report['extra:' + e.collection] || 0) + r.deletedCount; }
+  for (const e of st.extraCleanup || []) { const f = { ...e.filter }; if (typeof f._id === 'string') f._id = new mongoose.Types.ObjectId(f._id); // JSON state loses the ObjectId type
+    const r = await db.collection(e.collection).deleteMany(f); report['extra:' + e.collection] = (report['extra:' + e.collection] || 0) + r.deletedCount; }
+  { const r = await db.collection('users').deleteMany({ email: /@s2a-boot-super\.test$/ }); if (r.deletedCount) report.users_super_admin_throwaway = r.deletedCount; }
   if (st.orphanTenant) { const r = await db.collection('users').deleteMany({ tenantId: st.orphanTenant }); report.users_orphan = r.deletedCount; }
   console.log('deleted:', JSON.stringify(report));
   await mongoose.disconnect();
