@@ -84,7 +84,7 @@ describe('updateStaff status changes (web profile status dropdown: raw $set path
   it('back to active from a revoked status reactivates through the audited path (login first)', async () => {
     const { svc, calls } = build(staff({ status: 'resigned', isActive: false }));
     await svc.updateStaff(T, SID, { status: 'active', isActive: true }, ACTOR);
-    expect(svc.accountAccess.reactivateStaffLogin).toHaveBeenCalledWith(UID, 'staff_status_restored', ACTOR.userId, ACTOR);
+    expect(svc.accountAccess.reactivateStaffLogin).toHaveBeenCalledWith(UID, 'status set to active (was resigned, inactive)', ACTOR.userId, ACTOR);
     expect(calls).toEqual(['login.reactivate', 'staff.findOneAndUpdate']);
   });
   it('an edit that touches no status/isActive does not even read the staff row (e.g. Campuses supervisors)', async () => {
@@ -127,5 +127,63 @@ describe('HR password reset / create-login on a deactivated account', () => {
   it('create-login explains reactivation instead of the generic duplicate error', async () => {
     const { svc } = build(staff(), { login: { isActive: false } });
     await expect(svc.createLoginForStaff(T, T, SID)).rejects.toThrow('Reactivate');
+  });
+});
+
+
+// Status -> Active goes through the SAME audited fail-closed code as POST /hr/staff/:id/reactivate.
+import { ServiceUnavailableException } from '@nestjs/common';
+import { AccountAccessService } from '../auth/account-access.service';
+import { CriticalAuditService } from '../../common/critical-audit.service';
+
+describe('status -> active auto-reactivation is audited fail-closed (real AccountAccessService)', () => {
+  function real(auditFails: boolean) {
+    const { svc, calls } = build(staff({ status: 'resigned', isActive: false }));
+    const rows: any[] = [];
+    const auditModel: any = { create: jest.fn(async (d: any) => { if (auditFails) throw new Error('down'); rows.push(d); return { _id: 'a', ...d }; }), updateOne: jest.fn(async () => ({})) };
+    const userModel: any = {
+      findOne: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve({ _id: UID, primaryRole: 'teacher', isActive: false, tenantId: T, deactivationReason: 'staff_status_resigned', deactivatedAt: new Date() }) }) })),
+      updateOne: jest.fn(async () => { calls.push('user.update'); return { modifiedCount: 1 }; }),
+    };
+    const tenantModel: any = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve({ slug: 'sch' }) }) }) };
+    svc.accountAccess = new AccountAccessService(userModel, tenantModel, auditModel, new CriticalAuditService(auditModel));
+    return { svc, calls, rows, userModel };
+  }
+  it('writes the audit entry (actor, reason, before/after) and then restores', async () => {
+    const { svc, rows, calls } = real(false);
+    await svc.updateStaff(T, SID, { status: 'active' }, ACTOR);
+    expect(rows[0]).toMatchObject({ action: 'Reactivate login', performedById: ACTOR.userId, outcome: 'pending' });
+    expect(rows[0].oldValue).toContain('"isActive":false');
+    expect(rows[0].newValue).toContain('status set to active (was resigned, inactive)');
+    expect(calls).toEqual(['user.update', 'staff.findOneAndUpdate']);
+  });
+  it('audit store down -> 503 and NEITHER the login nor the Staff row is changed', async () => {
+    const { svc, calls, userModel } = real(true);
+    await expect(svc.updateStaff(T, SID, { status: 'active' }, ACTOR)).rejects.toThrow(ServiceUnavailableException);
+    expect(userModel.updateOne).not.toHaveBeenCalled(); expect(calls).toEqual([]);
+  });
+});
+
+it('status dropdown sends only {status:"active"} for a removed (isActive=false) staff: also sets isActive true', async () => {
+  const { svc } = build(staff({ status: 'terminated', isActive: false }));
+  await svc.updateStaff(T, SID, { status: 'active' }, ACTOR);
+  expect(svc.accountAccess.reactivateStaffLogin).toHaveBeenCalled();
+  expect(svc.staffModel.findOneAndUpdate.mock.calls[0][1].$set).toEqual({ status: 'active', isActive: true });
+});
+it('on_leave on a removed staff does NOT silently revive them', async () => {
+  const { svc } = build(staff({ status: 'terminated', isActive: false }));
+  await svc.updateStaff(T, SID, { status: 'on_leave' }, ACTOR);
+  expect(svc.accountAccess.reactivateStaffLogin).not.toHaveBeenCalled();
+});
+
+import { ConflictException } from '@nestjs/common';
+describe('POST /hr/exit duplicate (unique tenant+staff index)', () => {
+  const mk = (err: any) => { const s: any = Object.create(HrService.prototype); s.exitRecordModel = { create: jest.fn().mockRejectedValue(err) }; s.DEFAULT_CLEARANCE_CHECKLIST = []; return s; };
+  it('duplicate key -> 409 with a clear message (was 500)', async () => {
+    await expect(mk({ code: 11000 }).createExitRecord(T, T, { staffId: SID }, ACTOR.userId)).rejects.toThrow(ConflictException);
+    await expect(mk({ code: 11000 }).createExitRecord(T, T, { staffId: SID }, ACTOR.userId)).rejects.toThrow('exit record already exists');
+  });
+  it('other errors are not masked', async () => {
+    await expect(mk(new Error('boom')).createExitRecord(T, T, { staffId: SID }, ACTOR.userId)).rejects.toThrow('boom');
   });
 });

@@ -1,4 +1,4 @@
-import { Optional, Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Optional, Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as net from 'net';
@@ -426,6 +426,10 @@ export class HrService {
       const existing: any = await this.staffModel.findOne({ _id: staffId, tenantId: this.newTid(tenantId) }).lean();
       if (!existing) throw new NotFoundException('Staff member not found');
       const wasRevoked = staffRevokesAccess(existing.status, existing.isActive);
+      // The web status dropdown sends only {status}. Setting a removed (isActive=false) staff member back
+      // to 'active' without an explicit isActive means "bring them back": mark them active too, otherwise
+      // they would stay hidden and locked out while the dropdown says Active.
+      if (safe.status === 'active' && !('isActive' in safe) && existing.isActive === false) safe.isActive = true;
       const nextStatus = 'status' in safe ? safe.status : existing.status;
       const nextActive = 'isActive' in safe ? safe.isActive : existing.isActive;
       const willRevoke = staffRevokesAccess(nextStatus, nextActive);
@@ -434,7 +438,9 @@ export class HrService {
           if (sameId(existing.userId, actor?.userId)) throw new BadRequestException('You cannot deactivate your own account.');
           await this.revokeLogin(existing, `staff_status_${nextStatus ?? 'inactive'}`, actor);
         } else if (!willRevoke && wasRevoked && actor?.userId) {
-          await this.accountAccess.reactivateStaffLogin(existing.userId, 'staff_status_restored', actor.userId, actor);
+          // Same audited, FAIL-CLOSED path as POST /hr/staff/:id/reactivate (actor, reason, before/after).
+          // Documented default reason when none is supplied (the status dropdown has no reason field).
+          await this.accountAccess.reactivateStaffLogin(existing.userId, `status set to active (was ${existing.status}${existing.isActive === false ? ', inactive' : ''})`, actor.userId, actor);
         }
       }
     }
@@ -3266,12 +3272,18 @@ export class HrService {
       noticePeriodDays = byType[data.employmentType] ?? settings?.defaultNoticePeriodDays ?? 30;
     }
 
-    return this.exitRecordModel.create({
-      ...data, clearanceChecklist, noticePeriodDays,
-      tenantId: this.newTid(tenantId),
-      institutionId: this.newTid(institutionId),
-      processedBy: this.newTid(userId),
-    });
+    try {
+      return await this.exitRecordModel.create({
+        ...data, clearanceChecklist, noticePeriodDays,
+        tenantId: this.newTid(tenantId),
+        institutionId: this.newTid(institutionId),
+        processedBy: this.newTid(userId),
+      });
+    } catch (err: any) {
+      // unique index (tenantId, staffId): one exit record per staff member
+      if (err?.code === 11000) throw new ConflictException('An exit record already exists for this staff member. Open the existing record instead.');
+      throw err;
+    }
   }
 
   async updateExitRecord(tenantId: string, id: string, data: any) {
