@@ -484,12 +484,33 @@ export class OrganizationService {
       { $set: { 'sections.$.classTeacherId': classTeacherId, 'sections.$.classTeacher': classTeacherName } },
     );
 
-    // Step 3: set the new teacher's own TeacherProfile.
+    // Step 3: set the new teacher's own TeacherProfile. Must create one if
+    // it doesn't exist yet (a plain updateOne with no upsert previously
+    // matched zero documents here and silently no-opped for any staff
+    // member who'd never had a TeacherProfile created before - the
+    // Section/Student writes above still succeeded, so the admin saw a
+    // success toast and "Teacher: X" on the grade, while that teacher's
+    // own attendance screen kept reporting them as not a class teacher at
+    // all, since it reads this same TeacherProfile document).
     const classTeacherOfName = `${grade.name}${sectionName ? ` - ${sectionName}` : ''}`;
-    await this.teacherProfileModel.updateOne(
-      { staffId: newTeacherStaff._id },
-      { $set: { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName } },
-    );
+    const classTeacherFields = { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName };
+    const existingProfile = await this.teacherProfileModel.findOne({ staffId: newTeacherStaff._id });
+    if (existingProfile) {
+      await this.teacherProfileModel.updateOne({ _id: existingProfile._id }, { $set: classTeacherFields });
+    } else {
+      await this.teacherProfileModel.create({
+        tenantId: (newTeacherStaff as any).tenantId,
+        institutionId: (newTeacherStaff as any).institutionId,
+        staffId: newTeacherStaff._id,
+        employeeId: (newTeacherStaff as any).employeeId,
+        firstName: newTeacherStaff.firstName,
+        lastName: newTeacherStaff.lastName,
+        designation: (newTeacherStaff as any).designation,
+        department: (newTeacherStaff as any).department,
+        campusId: (newTeacherStaff as any).campusId || null,
+        ...classTeacherFields,
+      });
+    }
 
     // Step 4: denormalize onto every student currently in this class.
     await this.studentModel.updateMany(
