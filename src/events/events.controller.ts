@@ -19,7 +19,7 @@ export class EventsController {
   @Get()
   getEvents(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getEvents(schoolSlug, query);
+    return this.service.getEvents(schoolSlug, query, req.user);
   }
 
   @Post()
@@ -31,7 +31,7 @@ export class EventsController {
   @Get(':id')
   getEventById(@Request() req: any, @Param('id') id: string) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getEventById(schoolSlug, id);
+    return this.service.getEventById(schoolSlug, id, req.user);
   }
 
   @Patch(':id')

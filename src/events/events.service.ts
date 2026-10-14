@@ -10,9 +10,11 @@ import { Order, OrderDocument } from './schemas/order.schema';
 import { Ticket, TicketDocument } from './schemas/ticket.schema';
 import { SeatMap, SeatMapDocument } from './schemas/seat-map.schema';
 import { MerchItem, MerchItemDocument } from './schemas/merch-item.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { PdfService } from '../pdf/pdf.service';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
+import { isTeacherCaller, assertTeacherHasCampus } from '../staff-portal/teacher-identity.util';
 
 const ACTIVE_TICKET_STATUSES = ['reserved', 'valid', 'checked_in'];
 
@@ -31,6 +33,7 @@ export class EventsService {
     private pdfService: PdfService,
     private emailService: EmailService,
     private whatsAppService: WhatsAppService,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
   ) {}
 
   private slugify(title: string): string {
@@ -144,16 +147,48 @@ export class EventsService {
     return updated;
   }
 
-  async getEvents(schoolSlug: string, query: { status?: string; category?: string } = {}) {
+  /**
+   * Teacher visibility (owner decision): only published / cancelled / completed events (never drafts), events for
+   * the teacher's own campus or all campuses (campusId null), internal (staff) events included. Never any
+   * ticket / price data. Other roles see exactly what they saw before.
+   */
+  /** Fallback when the token has no campusId: the caller's own Staff record (same as the circulars; only userId from the token is used). */
+  private async staffCampusOf(user: { userId?: string }): Promise<any> {
+    try {
+      if (!user?.userId || !Types.ObjectId.isValid(user.userId)) return null;
+      const staff: any = await this.staffModel.findOne({ userId: new Types.ObjectId(user.userId) }).select('campusId').lean();
+      return staff?.campusId || null;
+    } catch { return null; }
+  }
+
+  private async teacherEventFilter(user: { userId?: string; campusId?: any }): Promise<any[]> {
+    const campus = assertTeacherHasCampus(user?.campusId || (await this.staffCampusOf(user)));
+    return [
+      { status: { $in: ['published', 'cancelled', 'completed'] } },
+      // private / unlisted are not for staff lists either ($nin also matches rows without a visibility field).
+      { visibility: { $nin: ['private', 'unlisted'] } },
+      { $or: [{ campusId: null }, { campusId: { $exists: false } }, { campusId: campus }] },
+    ];
+  }
+
+  async getEvents(schoolSlug: string, query: { status?: string; category?: string } = {}, requestingUser?: { role?: string; primaryRole?: string; campusId?: any; userId?: string }) {
     const filter: any = { schoolSlug };
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
+    if (isTeacherCaller(requestingUser)) {
+      filter.$and = await this.teacherEventFilter(requestingUser as any);
+    }
     return this.eventModel.find(filter).sort({ createdAt: -1 }).lean();
   }
 
-  async getEventById(schoolSlug: string, id: string) {
-    const event = await this.eventModel.findOne({ _id: id, schoolSlug }).lean();
+  async getEventById(schoolSlug: string, id: string, requestingUser?: { role?: string; primaryRole?: string; campusId?: any; userId?: string }) {
+    const teacher = isTeacherCaller(requestingUser);
+    const filter: any = { _id: id, schoolSlug };
+    if (teacher) filter.$and = await this.teacherEventFilter(requestingUser as any);
+    const event = await this.eventModel.findOne(filter).lean();
     if (!event) throw new NotFoundException('Event not found');
+    // Ticket prices / promo codes are box-office data: never sent to a teacher.
+    if (teacher) return event;
     const [ticketTypes, promoCodes] = await Promise.all([
       this.ticketTypeModel.find({ schoolSlug, eventId: id }).sort({ sortOrder: 1 }).lean(),
       this.promoCodeModel.find({ schoolSlug, eventId: id }).lean(),

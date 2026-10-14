@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { Optional, Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { assertValidObjectId } from '../../common/utils/object-id.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -25,7 +26,12 @@ import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
 import { resolveCampusScope, resolveDepartmentScope, buildInclusiveCampusFilter, ScopedUser } from '../../auth/scope.util';
 import { PdfService } from '../../pdf/pdf.service';
+import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
+import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { GradeSubmissionDto } from './dto/assignment.dto';
+import {
+  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+} from '../../staff-portal/teacher-identity.util';
 
 @Injectable()
 export class TeachingService {
@@ -46,9 +52,15 @@ export class TeachingService {
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
     private readonly pdfService: PdfService,
     private readonly configService: ConfigService,
+    @Optional() private readonly staffNotifier?: StaffNotifier,
   ) {}
 
   private tid(t: string) { return t; }
+
+  /** TEACHER callers only: who am I, from the DB (Staff.userId), never from the JWT claims. 403 when no Staff record. */
+  private teacherIdentity(user: ScopedUser): Promise<TeacherIdentity> {
+    return resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user as any);
+  }
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────────
 
@@ -260,6 +272,19 @@ export class TeachingService {
     return this.lessonPlanModel.find(filter).sort({ planDate: -1 }).limit(100).lean();
   }
 
+  /**
+   * A teacher authors and submits their own plans; approval belongs to the
+   * guarded approve/reject routes. Stops a teacher self-approving through
+   * create or the raw-$set PATCH: only draft|submitted may be set, and the
+   * approver-owned fields are never writable by a teacher.
+   */
+  private sanitizeTeacherLessonPlanApproval(data: any): void {
+    if (data.status !== undefined && data.status !== 'draft' && data.status !== 'submitted') {
+      throw new ForbiddenException('Teachers can only save a lesson plan as draft or submit it for approval.');
+    }
+    delete data.approvedBy; delete data.approvedAt; delete data.approverNotes; delete data.rejectionReason;
+  }
+
   async createLessonPlan(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     const { objectives, teacherId, ...rest } = data;
     const payload: any = {
@@ -272,7 +297,12 @@ export class TeachingService {
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     };
     if (objectives) payload.learningObjectives = objectives;
-    if (teacherId) {
+    if (isTeacherCaller(requestingUser)) {
+      // A teacher can only author plans for themselves: derived server-side, never trusted from the body.
+      const me = await this.teacherIdentity(requestingUser!);
+      payload.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId, 'You can only create lesson plans for yourself'));
+      this.sanitizeTeacherLessonPlanApproval(payload);
+    } else if (teacherId) {
       try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore invalid id */ }
     }
     try {
@@ -283,7 +313,19 @@ export class TeachingService {
     }
   }
 
-  async updateLessonPlan(tenantId: string, id: string, data: any) {
+  async updateLessonPlan(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'lesson plan');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      const existing: any = await this.lessonPlanModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).select('teacherId').lean();
+      if (!existing) return null;
+      assertOwnsTeacherDoc(me, existing.teacherId, 'You can only modify your own lesson plans');
+      data = { ...data };
+      // Ownership/tenancy are not editable by a teacher; teacherId may only be (re)stated as myself.
+      delete data.tenantId; delete data.institutionId; delete data.campusId;
+      if ('teacherId' in data) data.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, data.teacherId, 'You can only create lesson plans for yourself'));
+      this.sanitizeTeacherLessonPlanApproval(data);
+    }
     return this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: data },
@@ -445,20 +487,50 @@ Rules:
     };
   }
 
+  /** Best-effort: tell the plan's author about the decision. Never throws. */
+  private async notifyLessonPlanAuthor(tenantId: string, plan: any, title: string, body: string) {
+    if (!this.staffNotifier || !plan?.teacherId) return;
+    try {
+      let staff: any = await this.staffModel.findById(plan.teacherId).select('userId').lean();
+      if (!staff) {
+        const profile: any = await this.teacherProfileModel.findById(plan.teacherId).select('staffId').lean();
+        if (profile?.staffId) staff = await this.staffModel.findById(profile.staffId).select('userId').lean();
+      }
+      if (!staff?.userId) return;
+      const schoolSlug = await resolveSchoolSlug(this.staffModel.db, tenantId);
+      if (!schoolSlug) return;
+      await this.staffNotifier.notify({
+        recipientUserId: staff.userId, schoolSlug, type: 'lesson_plan', title, body, relatedEntityId: String(plan._id),
+      });
+    } catch { /* never fail the main action */ }
+  }
+
   async approveLessonPlan(tenantId: string, id: string, userId: string, notes: string) {
-    return this.lessonPlanModel.findOneAndUpdate(
+    assertValidObjectId(id, 'lesson plan');
+    const result = await this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'approved', approvedBy: new Types.ObjectId(userId), approvedAt: new Date(), approverNotes: notes } },
       { new: true },
     ).lean();
+    if (result) {
+      const n = (notes || '').trim();
+      await this.notifyLessonPlanAuthor(tenantId, result, 'Lesson plan approved', `Your lesson plan "${(result as any).title || ''}" was approved.${n ? ' Note: ' + n.slice(0, 120) : ''}`);
+    }
+    return result;
   }
 
   async rejectLessonPlan(tenantId: string, id: string, reason: string) {
-    return this.lessonPlanModel.findOneAndUpdate(
+    assertValidObjectId(id, 'lesson plan');
+    const result = await this.lessonPlanModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: { status: 'rejected', rejectionReason: reason } },
       { new: true },
     ).lean();
+    if (result) {
+      const r = (reason || '').trim();
+      await this.notifyLessonPlanAuthor(tenantId, result, 'Lesson plan rejected', `Your lesson plan "${(result as any).title || ''}" was rejected.${r ? ' Reason: ' + (r.length > 120 ? r.slice(0, 117) + '...' : r) : ''}`);
+    }
+    return result;
   }
 
   // ── TIMETABLE ─────────────────────────────────────────────────────────────────
@@ -962,7 +1034,11 @@ Rules:
       assignedDate: assignedDate || assessmentDate || null,
       dueDate: dueDate || assessmentDate || null,
     };
-    if (teacherId) {
+    if (isTeacherCaller(requestingUser)) {
+      // Identity comes from the authenticated user (Staff.userId), not the body.
+      const me = await this.teacherIdentity(requestingUser!);
+      payload.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId));
+    } else if (teacherId) {
       try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore */ }
     }
     let created: AssignmentDocument;
@@ -987,8 +1063,19 @@ Rules:
   // "Assign to Class" on an existing draft still materializes the
   // student roster + fires the notification, not just brand-new creates.
   async updateAssignment(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'assignment');
     const existing = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!existing) throw new NotFoundException('Assignment not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, existing.teacherId, 'You can only modify your own assignments');
+      if (data && 'teacherId' in data) {
+        // May only restate myself; never reassign to another teacher.
+        normaliseTeacherIdForWrite(me, data.teacherId, 'You can only modify your own assignments');
+        data = { ...data };
+        delete data.teacherId;
+      }
+    }
     const wasDraft = existing.status === 'draft';
     Object.assign(existing, data);
     await existing.save();
@@ -998,9 +1085,14 @@ Rules:
     return existing.toObject();
   }
 
-  async deleteAssignment(tenantId: string, id: string) {
+  async deleteAssignment(tenantId: string, id: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'assignment');
     const assignment = await this.assignmentModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!assignment) throw new NotFoundException('Assignment not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, assignment.teacherId, 'You can only modify your own assignments');
+    }
     await this.submissionModel.deleteMany({ tenantId: this.tid(tenantId), assignmentId: assignment._id });
     await assignment.deleteOne();
     return { deleted: true };
@@ -1067,6 +1159,7 @@ Rules:
   // ── ASSIGNMENT SUBMISSIONS (grading) ────────────────────────────────────────────
 
   async getSubmissionsForAssignment(tenantId: string, assignmentId: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(assignmentId, 'assignment');
     const assignment = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
     if (!assignment) throw new NotFoundException('Assignment not found');
     if (requestingUser) {
@@ -1081,6 +1174,8 @@ Rules:
   }
 
   async gradeSubmission(tenantId: string, assignmentId: string, submissionId: string, dto: GradeSubmissionDto, requestingUser?: ScopedUser) {
+    assertValidObjectId(assignmentId, 'assignment');
+    assertValidObjectId(submissionId, 'submission');
     const submission = await this.submissionModel.findOne({ _id: submissionId, tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) });
     if (!submission) throw new NotFoundException('Submission not found');
     if (dto.grade > submission.maxGrade) {
@@ -1187,6 +1282,7 @@ Rules:
   }
 
   async updateBehaviourNote(tenantId: string, id: string, data: any) {
+    assertValidObjectId(id, 'behaviour record');
     return this.behaviourModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: data },

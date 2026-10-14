@@ -22,15 +22,13 @@ import {
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
 } from './dto/assessment.dto';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
 // Read-only routes stay open to any authenticated role (matches the rest of
 // this codebase's convention of broad-permissive backend access).
-const QUESTION_BANK_EDITOR_ROLES = [
-  UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
-  UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.ACADEMIC_COORDINATOR,
-  UserRole.TEACHER,
-];
+const QUESTION_BANK_EDITOR_ROLES = STAFF_WRITE_ROLES;
 
 @Controller('assessments')
 export class AssessmentController {
@@ -111,22 +109,25 @@ export class AssessmentController {
     return this.service.getStudentReportCard(assessmentId, studentId, schoolSlug);
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
   @Post('report-cards/generate')
   async generateReportCards(@Body() dto: GenerateReportCardsDto, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.generateReportCards({ ...dto, schoolSlug });
   }
 
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('report-cards/:id/remarks')
   async updateRemarks(
     @Param('id') id: string,
     @Body() dto: UpdateReportCardRemarksDto,
     @Request() req: any,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateReportCardRemarks(id, schoolSlug, dto);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateReportCardRemarks(id, schoolSlug, dto, requestingUser);
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
   @Post('report-cards/publish')
   async publishResults(@Body() dto: PublishResultDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
@@ -165,20 +166,21 @@ export class AssessmentController {
   // ── LMS Phase 2: quiz review queue (static, before :id) ────────
   @Get('quiz-attempts')
   async getQuizAttemptsPendingReview(@Request() req: any, @Query('assessmentId') assessmentId?: string, @Query('subject') subject?: string) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getQuizAttemptsPendingReview(schoolSlug, assessmentId, subject);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getQuizAttemptsPendingReview(schoolSlug, assessmentId, subject, requestingUser);
   }
 
   @Get('quiz-attempts/:attemptId')
   async getQuizAttemptForReview(@Param('attemptId') attemptId: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getQuizAttemptForReview(schoolSlug, attemptId);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getQuizAttemptForReview(schoolSlug, attemptId, requestingUser);
   }
 
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('quiz-attempts/:attemptId/grade') @HttpCode(HttpStatus.OK)
   async gradeQuizAttempt(@Param('attemptId') attemptId: string, @Body() dto: GradeQuizAttemptDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.gradeQuizAttempt(schoolSlug, attemptId, dto.grades, userName);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.gradeQuizAttempt(schoolSlug, attemptId, dto.grades, userName, requestingUser);
   }
 
   // ── Exam Papers (static GET must precede :id below) ───────────
@@ -346,13 +348,15 @@ export class AssessmentController {
     return this.service.confirmOMRSheet(id, schoolSlug, userName, dto.answers);
   }
 
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('marks/bulk')
   @HttpCode(HttpStatus.CREATED)
   async bulkEnterMarks(@Body() dto: BulkMarkEntryDto, @Request() req: any) {
-    const { schoolSlug, academicYear, userName } = this.ctx(req);
-    return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName });
+    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
+    return this.service.bulkEnterMarks({ ...dto, schoolSlug, academicYear, enteredBy: userName }, requestingUser);
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
   @Patch('marks/verify')
   async verifyMarks(@Body() dto: VerifyMarksDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -18,8 +18,11 @@ import { Assessment, AssessmentDocument } from '../assessments/schemas/assessmen
 // actually carries Term dates.
 import { AcademicYear as SchoolAcademicYear, AcademicYearDocument as SchoolAcademicYearDocument } from '../organization/schemas/organization.schema';
 import { EmailService } from '../email/email.service';
+import { isTeacherCaller, assertTeacherHasCampus } from '../staff-portal/teacher-identity.util';
+import { assertValidObjectId } from '../common/utils/object-id.util';
+import { isCircularForStaffViewer, CircularViewer } from './circular-visibility.util';
 
-interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string }
+interface AudienceRecipient { userId: string; name: string; email?: string; phone?: string; primaryRole?: string }
 
 @Injectable()
 export class SchoolCalendarService {
@@ -71,7 +74,9 @@ export class SchoolCalendarService {
   // this can't go stale against the real invoice records. Exam/term dates
   // from Academics are not wired yet (Phase 2, documented in the module's
   // README rather than silently missing).
-  async getEvents(schoolSlug: string, query: { from?: string; to?: string; campusId?: string }) {
+  async getEvents(schoolSlug: string, query: { from?: string; to?: string; campusId?: string }, requestingUser?: { role?: string; primaryRole?: string }) {
+    // Owner decision: finance data (fee-due totals) is never part of a teacher's calendar.
+    const teacher = isTeacherCaller(requestingUser);
     const from = query.from ? new Date(query.from) : new Date(new Date().getFullYear(), 0, 1);
     const to = query.to ? new Date(query.to) : new Date(new Date().getFullYear(), 11, 31);
 
@@ -79,7 +84,7 @@ export class SchoolCalendarService {
     const manual = await this.eventModel.find(filter).sort({ startDate: 1 }).lean();
 
     const invoiceFilter: any = { schoolSlug, dueDate: { $gte: from, $lte: to }, status: { $nin: ['paid', 'cancelled'] } };
-    const invoices = await this.invoiceModel.find(invoiceFilter).select('dueDate totalAmount balanceDue').lean();
+    const invoices = teacher ? [] : await this.invoiceModel.find(invoiceFilter).select('dueDate totalAmount balanceDue').lean();
     const byDueDate = new Map<string, { count: number; total: number }>();
     for (const inv of invoices) {
       const key = new Date((inv as any).dueDate).toISOString().slice(0, 10);
@@ -117,7 +122,8 @@ export class SchoolCalendarService {
     const examEvents = assessments.map((a: any) => ({
       _id: `exam-${a._id}`,
       title: a.title,
-      description: `${a.type.replace(/_/g, ' ')} — Grade ${a.grade}${a.section ? ` ${a.section}` : ''}`,
+      // The stored grade is usually already "Grade 5": do not prefix it a second time ("Grade Grade 5").
+      description: `${a.type.replace(/_/g, ' ')} — ${/^\s*grade\b/i.test(String(a.grade ?? '')) ? '' : 'Grade '}${a.grade}${a.section ? ` ${a.section}` : ''}`,
       type: 'exam',
       color: CALENDAR_EVENT_COLORS.exam,
       startDate: a.startDate,
@@ -153,7 +159,14 @@ export class SchoolCalendarService {
     }
 
     return [
-      ...manual.map((e) => ({ ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' })),
+      ...manual
+        .filter((e: any) => !teacher || e.type !== 'fee_due')
+        .map((e: any) => {
+          const row = { ...e, color: e.color || CALENDAR_EVENT_COLORS[e.type] || CALENDAR_EVENT_COLORS.other, source: 'manual' };
+          // Teacher role: no internal authorship / tenant fields on the row.
+          if (teacher) { delete row.createdBy; delete row.schoolSlug; }
+          return row;
+        }),
       ...feeDueEvents,
       ...examEvents,
       ...termEvents,
@@ -170,6 +183,7 @@ export class SchoolCalendarService {
   }
 
   async updateCircular(schoolSlug: string, id: string, data: any) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug });
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Cannot edit a circular that has already been published');
@@ -180,6 +194,7 @@ export class SchoolCalendarService {
   }
 
   async deleteCircular(schoolSlug: string, id: string) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug });
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Cannot delete a published circular - it has already reached recipients');
@@ -187,25 +202,55 @@ export class SchoolCalendarService {
     return { message: 'Deleted' };
   }
 
-  async getCirculars(schoolSlug: string, query: { status?: string; category?: string; limit?: number }) {
+  /** Who the teacher is for circular targeting: userId from the token, Staff._id + campus from the DB (claims are not trusted). */
+  private async circularViewer(user: { userId?: string; campusId?: any }): Promise<CircularViewer> {
+    let staff: any = null;
+    try {
+      if (user?.userId && Types.ObjectId.isValid(user.userId)) {
+        staff = await this.staffModel.findOne({ userId: new Types.ObjectId(user.userId) }).select('_id campusId').lean();
+      }
+    } catch { staff = null; }
+    const campus = user?.campusId || staff?.campusId || null;
+    // Campus-targeted circulars cannot be evaluated without a campus: 403 instead of a silently shorter list.
+    assertTeacherHasCampus(campus);
+    return { userId: user?.userId ? String(user.userId) : undefined, staffId: staff?._id ? String(staff._id) : undefined, campusId: campus ? String(campus) : null };
+  }
+
+  /**
+   * Teacher role: only PUBLISHED circulars addressed to the caller (audience + campus), never drafts, scheduled
+   * or parent/student-only ones. Other roles: unchanged (every status and audience).
+   */
+  async getCirculars(schoolSlug: string, query: { status?: string; category?: string; limit?: number }, requestingUser?: any) {
     const filter: any = { schoolSlug };
+    if (isTeacherCaller(requestingUser)) {
+      filter.status = 'published';
+      if (query.category) filter.category = query.category;
+      const viewer = await this.circularViewer(requestingUser);
+      const rows: any[] = await this.circularModel.find(filter).sort({ createdAt: -1 }).lean();
+      return rows.filter((c) => isCircularForStaffViewer(c, viewer)).slice(0, query.limit || 100);
+    }
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
     return this.circularModel.find(filter).sort({ createdAt: -1 }).limit(query.limit || 100).lean();
   }
 
-  async getCircularById(schoolSlug: string, id: string) {
+  async getCircularById(schoolSlug: string, id: string, requestingUser?: any) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
+    if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer(requestingUser))) {
+      throw new NotFoundException('Circular not found');
+    }
     return circular;
   }
 
   async publishCircular(schoolSlug: string, id: string) {
+    assertValidObjectId(id, 'circular');
     const circular = await this.circularModel.findOne({ _id: id, schoolSlug });
     if (!circular) throw new NotFoundException('Circular not found');
     if (circular.status === 'published') throw new BadRequestException('Already published');
 
-    const recipients = await this.resolveAudience(schoolSlug, circular.audience as any);
+    const recipients = await this.resolveCircularAudience(schoolSlug, circular);
     if (recipients.length === 0) {
       throw new BadRequestException('No recipients matched this circular\'s audience - check the targeting before publishing');
     }
@@ -280,9 +325,14 @@ export class SchoolCalendarService {
     }
   }
 
-  async acknowledgeCircular(schoolSlug: string, circularId: string, userId: string, userName: string) {
+  async acknowledgeCircular(schoolSlug: string, circularId: string, userId: string, userName: string, requestingUser?: any) {
+    assertValidObjectId(circularId, 'circular');
     const circular = await this.circularModel.findOne({ _id: circularId, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
+    // Teacher role: only a recipient of a published circular may acknowledge (always for themselves: userId is the token's).
+    if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer({ ...requestingUser, userId }))) {
+      throw new ForbiddenException('This circular was not sent to you');
+    }
     return this.ackModel.findOneAndUpdate(
       { circularId: new Types.ObjectId(circularId), userId: new Types.ObjectId(userId) },
       { $set: { userName, acknowledgedAt: new Date(), schoolSlug } },
@@ -290,16 +340,24 @@ export class SchoolCalendarService {
     );
   }
 
-  async getAcknowledgmentStatus(schoolSlug: string, circularId: string) {
+  async getAcknowledgmentStatus(schoolSlug: string, circularId: string, requestingUser?: any) {
+    assertValidObjectId(circularId, 'circular');
     const circular = await this.circularModel.findOne({ _id: circularId, schoolSlug }).lean();
     if (!circular) throw new NotFoundException('Circular not found');
+    if (isTeacherCaller(requestingUser) && !isCircularForStaffViewer(circular, await this.circularViewer(requestingUser))) {
+      throw new NotFoundException('Circular not found');
+    }
     if (!circular.requiresAcknowledgment) {
       return { requiresAcknowledgment: false, total: 0, acknowledged: 0, pending: [] };
     }
-    const recipients = await this.resolveAudience(schoolSlug, circular.audience as any);
+    const recipients = await this.resolveCircularAudience(schoolSlug, circular);
     const acks = await this.ackModel.find({ circularId: new Types.ObjectId(circularId) }).lean();
     const ackedIds = new Set(acks.map((a) => String(a.userId)));
     const pending = recipients.filter((r) => !ackedIds.has(r.userId));
+    // Teacher role: counts only, never the names of the colleagues / parents who have not acknowledged.
+    if (isTeacherCaller(requestingUser)) {
+      return { requiresAcknowledgment: true, total: recipients.length, acknowledged: recipients.length - pending.length, pending: [] };
+    }
     return {
       requiresAcknowledgment: true,
       total: recipients.length,
@@ -309,6 +367,16 @@ export class SchoolCalendarService {
   }
 
   // ─── Audience resolution ────────────────────────────────────────────────
+
+  /**
+   * Recipients of a circular. Owner decision: fee-category circulars are never sent to the teacher role, so teacher
+   * users are removed here, the single point behind the notification rows, the urgent e-mails, recipientCount and
+   * the acknowledgment-status totals. Every other role / category is unchanged.
+   */
+  private async resolveCircularAudience(schoolSlug: string, circular: { category?: string; audience?: any }): Promise<AudienceRecipient[]> {
+    const recipients = await this.resolveAudience(schoolSlug, circular.audience as any);
+    return circular.category === 'fee' ? recipients.filter((r) => r.primaryRole !== 'teacher') : recipients;
+  }
 
   private async resolveAudience(schoolSlug: string, spec: {
     roles: string[]; scope: string; campusId?: string | null; gradeLevels?: string[];
@@ -327,19 +395,19 @@ export class SchoolCalendarService {
         const parents = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
         }).lean();
-        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone });
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || (p as any).role });
       }
       if (spec.individualStaffIds?.length) {
         const staffDocs = await this.staffModel.find({ _id: { $in: spec.individualStaffIds }, tenantId: (tenant as any)._id }).select('userId').lean();
         const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
         if (staffUserIds.length) {
           const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
-          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+          for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || (u as any).role });
         }
       }
       if (spec.userIds?.length) {
         const users = await this.userModel.find({ _id: { $in: spec.userIds.map((id) => new Types.ObjectId(id)) }, tenantId: (tenant as any)._id }).lean();
-        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+        for (const u of users) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || (u as any).role });
       }
       return Array.from(recipients.values());
     }
@@ -358,13 +426,13 @@ export class SchoolCalendarService {
         const parents = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'parent', guardianOfStudentIds: { $in: studentIds },
         }).lean();
-        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone });
+        for (const p of parents) recipients.set(String(p._id), { userId: String(p._id), name: nameOf(p), email: p.email, phone: p.phone, primaryRole: p.primaryRole || (p as any).role });
       }
       if (roles.includes('student') && studentIds.length) {
         const studentUsers = await this.userModel.find({
           tenantId: (tenant as any)._id, primaryRole: 'student', linkedStudentId: { $in: studentIds },
         }).lean();
-        for (const s of studentUsers) recipients.set(String(s._id), { userId: String(s._id), name: nameOf(s), email: s.email, phone: s.phone });
+        for (const s of studentUsers) recipients.set(String(s._id), { userId: String(s._id), name: nameOf(s), email: s.email, phone: s.phone, primaryRole: s.primaryRole || (s as any).role });
       }
     }
 
@@ -375,7 +443,7 @@ export class SchoolCalendarService {
       const staffUserIds = staffDocs.map((s) => s.userId).filter(Boolean);
       if (staffUserIds.length) {
         const staffUsers = await this.userModel.find({ _id: { $in: staffUserIds } }).lean();
-        for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone });
+        for (const u of staffUsers) recipients.set(String(u._id), { userId: String(u._id), name: nameOf(u), email: u.email, phone: u.phone, primaryRole: u.primaryRole || (u as any).role });
       }
     }
 

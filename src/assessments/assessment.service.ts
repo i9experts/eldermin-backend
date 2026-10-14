@@ -3,7 +3,8 @@
 // ============================================================
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
-import { Injectable, NotFoundException, BadRequestException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { assertValidObjectId } from '../common/utils/object-id.util';
+import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -37,6 +38,10 @@ import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Campus, Grade, GradeDocument } from '../organization/schemas/organization.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
+import { isTeacherCaller, resolveTeacherIdentity, teacherClassesOf, teacherSubjectAssignmentsOf, sameSubject, TeacherClassRef, TeacherSubjectClassRef } from '../staff-portal/teacher-identity.util';
+import { sameGrade, sameSection } from '../common/utils/class-match.util';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { Subject, SubjectDocument } from '../modules/academics/schemas/subject.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
@@ -68,8 +73,13 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
   return { grade: 'F', gpa: 0.0 };
 };
 
+export const TEACHER_MARKS_LOCKED_MESSAGE =
+  'Results for this assessment are published (or the assessment is cancelled): marks can no longer be changed. Contact an administrator.';
+
 @Injectable()
 export class AssessmentService {
+  private readonly logger = new Logger(AssessmentService.name);
+
   constructor(
     @InjectModel(Assessment.name) private assessmentModel: Model<AssessmentDocument>,
     @InjectModel(Question.name) private questionModel: Model<QuestionDocument>,
@@ -84,10 +94,51 @@ export class AssessmentService {
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
     @InjectModel(Subject.name) private subjectModel: Model<SubjectDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     private configService: ConfigService,
     private pdfService: PdfService,
     private uploadService: UploadService,
   ) {}
+
+  /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
+  private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; subjectClasses: TeacherSubjectClassRef[]; isClassTeacher: boolean; classTeacherClass?: TeacherClassRef }> {
+    const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user);
+    const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+      .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName currentAssignments').lean();
+    const isClassTeacher = !!(profile?.isClassTeacher && profile.classTeacherOfGradeName);
+    return {
+      staffId: me.staffId,
+      classes: teacherClassesOf(profile),
+      subjectClasses: teacherSubjectAssignmentsOf(profile),
+      isClassTeacher,
+      classTeacherClass: isClassTeacher
+        ? { grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined } : undefined,
+    };
+  }
+
+  /**
+   * Quiz-attempt scope for the TEACHER role (owner decision 2026-10-07, mirrors the app's isMyAttempt): a CLASS teacher sees/grades ALL
+   * subjects of their own class; a SUBJECT teacher only attempts whose class AND subject match one of their currentAssignments; both
+   * roles = the union. Grade/section tolerant (class-match.util), subject trim/case/space tolerant. No classes -> nothing.
+   */
+  private canTeacherAccessAttempt(t: { subjectClasses: TeacherSubjectClassRef[]; classTeacherClass?: TeacherClassRef }, a: { grade?: any; section?: any; subject?: any }): boolean {
+    if (t.classTeacherClass && this.classIncludes([t.classTeacherClass], a.grade, a.section)) return true;
+    return t.subjectClasses.some(c => this.classIncludes([c], a.grade, a.section) && sameSubject(c.subject, a.subject));
+  }
+
+  /** An attempt normally stores its section; when it is missing, resolve it from the student's current section (one batched read). */
+  private async fillMissingAttemptSections(rows: any[], schoolSlug: string): Promise<any[]> {
+    const missing = rows.filter(a => !a.section && a.studentId);
+    if (!missing.length || !this.studentModel?.find) return rows;
+    const students: any[] = await (this.studentModel as any).find({ _id: { $in: missing.map(a => a.studentId) }, schoolSlug }).select('currentSection').lean();
+    const byId = new Map(students.map((s: any) => [String(s._id), s.currentSection]));
+    return rows.map(a => (!a.section && byId.get(String(a.studentId)) ? { ...a, section: byId.get(String(a.studentId)) } : a));
+  }
+
+  private classIncludes(classes: TeacherClassRef[], grade: any, section: any): boolean {
+    return classes.some(c => sameGrade(c.grade, grade) && (!c.section || sameSection(c.section, section)));
+  }
 
   // Same institution/campus resolution as CertificatesService.resolveBranding
   // and IdCardsService - an institution's own name/logo take priority over
@@ -1339,12 +1390,54 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // ============================================================
   // MARK ENTRY
   // ============================================================
-  async bulkEnterMarks(dto: BulkMarkEntryDto) {
+  /**
+   * TEACHER role only: marks are frozen once the assessment's results are
+   * published ('result_published' status / resultPublished flag, see
+   * assessment.schema.ts status enum) or the assessment is 'cancelled'.
+   * 'draft' is NOT blocked server-side (unchanged behaviour; the app disables entry).
+   */
+  private assertTeacherMarksNotLocked(assessment: any) {
+    if (!assessment) return;
+    if (assessment.status === 'result_published' || assessment.status === 'cancelled' || assessment.resultPublished === true) {
+      throw new ForbiddenException(TEACHER_MARKS_LOCKED_MESSAGE);
+    }
+  }
+
+  async bulkEnterMarks(dto: BulkMarkEntryDto, requestingUser?: ScopedUser) {
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
 
     const subjectConfig = assessment.subjects.find(s => s.subject === dto.subject);
     if (!subjectConfig) throw new BadRequestException(`Subject ${dto.subject} not in assessment`);
+
+    // TEACHER role only (other roles keep today's overwrite behaviour):
+    // validate EVERYTHING first, then write. Nothing is written when any
+    // row is out of bounds or already verified (locked).
+    const teacher = isTeacherCaller(requestingUser);
+    if (teacher) {
+      this.assertTeacherMarksNotLocked(assessment);
+      const bad: string[] = [];
+      for (const m of dto.marks) {
+        if (m.isAbsent || m.isExempt) continue;
+        const v: any = m.obtainedMarks;
+        if (v === undefined || v === null) continue;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > subjectConfig.totalMarks) {
+          bad.push(`${m.studentName || m.studentId}${m.rollNumber ? ` (roll ${m.rollNumber})` : ''}: ${v}`);
+        }
+      }
+      if (bad.length) {
+        throw new BadRequestException(`Marks must be between 0 and ${subjectConfig.totalMarks} for ${dto.subject}. Invalid for ${bad.length} student(s): ${bad.join('; ')}`);
+      }
+      const ids = dto.marks.map(m => new Types.ObjectId(m.studentId));
+      const locked: any[] = await this.markModel.find({
+        assessmentId: new Types.ObjectId(dto.assessmentId), subject: dto.subject, schoolSlug: dto.schoolSlug,
+        studentId: { $in: ids }, verified: true,
+      }).select('studentId studentName rollNumber').lean() as any;
+      if (locked.length) {
+        const names = locked.map(l => `${l.studentName || l.studentId}${l.rollNumber ? ` (roll ${l.rollNumber})` : ''}`);
+        throw new ConflictException(`Marks for ${locked.length} students are verified and locked: ${names.join('; ')}`);
+      }
+    }
 
     const ops = dto.marks.map(m => {
       let percentage: number | undefined;
@@ -1385,7 +1478,11 @@ You are assisting a teacher's professional judgement, not replacing it - classif
               obtainedMarks: m.obtainedMarks,
               isAbsent: m.isAbsent || false,
               isExempt: m.isExempt || false,
-              percentage, grade_result, gpa, result,
+              // Mongoose strips undefined keys from $set, so for an
+              // absent/exempt row percentage/grade/gpa of an earlier score
+              // would survive. Teacher writes clear them explicitly.
+              ...(teacher ? { percentage: percentage ?? null, grade_result: grade_result ?? null, gpa: gpa ?? null } : { percentage, grade_result, gpa }),
+              result,
               remarks: m.remarks,
               enteredBy: dto.enteredBy,
               academicYear: dto.academicYear,
@@ -1568,16 +1665,30 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
   /** Teacher-side review queue - attempts with at least one subjective
    * answer still awaiting a mark. */
-  async getQuizAttemptsPendingReview(schoolSlug: string, assessmentId?: string, subject?: string) {
+  async getQuizAttemptsPendingReview(schoolSlug: string, assessmentId?: string, subject?: string, requestingUser?: ScopedUser) {
     const filter: any = { schoolSlug, status: 'submitted' };
     if (assessmentId) filter.assessmentId = new Types.ObjectId(assessmentId);
     if (subject) filter.subject = subject;
-    return this.quizAttemptModel.find(filter).sort({ submittedAt: 1 }).lean();
+    const rows: any[] = await this.quizAttemptModel.find(filter).sort({ submittedAt: 1 }).lean() as any;
+    if (!isTeacherCaller(requestingUser)) return rows;
+    // TEACHER role only: just the attempts of classes I teach (class teacher
+    // class + currentAssignments), matched with the tolerant grade/section rules.
+    const t = await this.teacherContext(requestingUser);
+    const resolved = await this.fillMissingAttemptSections(rows, schoolSlug);
+    return rows.filter((_, i) => this.canTeacherAccessAttempt(t, resolved[i]));
   }
 
-  async getQuizAttemptForReview(schoolSlug: string, attemptId: string) {
+  async getQuizAttemptForReview(schoolSlug: string, attemptId: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(attemptId, 'quiz attempt');
     const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug }).lean();
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
+    if (isTeacherCaller(requestingUser)) {
+      const t = await this.teacherContext(requestingUser);
+      const [resolved] = await this.fillMissingAttemptSections([attempt], schoolSlug);
+      if (!this.canTeacherAccessAttempt(t, resolved)) {
+        throw new ForbiddenException('You can only review quiz attempts of your own class or of the subjects you teach.');
+      }
+    }
     const questions = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
     const questionById = new Map(questions.map((q: any) => [String(q._id), q]));
     return {
@@ -1590,10 +1701,35 @@ You are assisting a teacher's professional judgement, not replacing it - classif
    * Once nothing is left pending, finalizes obtainedMarks and upserts
    * the MarkEntry - same completion path submitQuizAttempt uses when an
    * attempt happens to need no manual grading at all. */
-  async gradeQuizAttempt(schoolSlug: string, attemptId: string, grades: { questionId: string; marksAwarded: number }[], gradedBy: string) {
+  async gradeQuizAttempt(schoolSlug: string, attemptId: string, grades: { questionId: string; marksAwarded: number }[], gradedBy: string, requestingUser?: ScopedUser) {
+    assertValidObjectId(attemptId, 'quiz attempt');
     const attempt = await this.quizAttemptModel.findOne({ _id: attemptId, schoolSlug });
     if (!attempt) throw new NotFoundException('Quiz attempt not found');
     if (attempt.status === 'in_progress') throw new BadRequestException('This attempt has not been submitted yet.');
+
+    if (isTeacherCaller(requestingUser)) {
+      // TEACHER role only. Must teach the attempt's class; no re-grade of an
+      // already graded attempt; every mark within 0..that question's marks.
+      const t = await this.teacherContext(requestingUser);
+      const [resolved] = await this.fillMissingAttemptSections([(attempt as any).toObject ? (attempt as any).toObject() : attempt], schoolSlug);
+      if (!this.canTeacherAccessAttempt(t, resolved)) {
+        throw new ForbiddenException('You can only grade quiz attempts of your own class or of the subjects you teach.');
+      }
+      this.assertTeacherMarksNotLocked(await this.assessmentModel.findById((attempt as any).assessmentId));
+      if (attempt.status === 'graded') throw new ConflictException('This attempt is already graded.');
+      const questions: any[] = await this.loadExamPaperQuestions((attempt as any).examPaperId, schoolSlug);
+      const maxById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
+      const manual = new Set((attempt.answers as any[]).filter(a => a.needsManualGrading).map(a => String(a.questionId)));
+      const bad: string[] = [];
+      for (const g of grades) {
+        const qid = String(g.questionId);
+        const max = maxById.get(qid);
+        const v: any = g.marksAwarded;
+        if (!manual.has(qid) || max === undefined) bad.push(`${qid}: not a manually graded question of this attempt`);
+        else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > max) bad.push(`${qid}: ${v} (allowed 0..${max})`);
+      }
+      if (bad.length) throw new BadRequestException(`Invalid marks for ${bad.length} question(s): ${bad.join('; ')}`);
+    }
 
     const gradeByQuestionId = new Map(grades.map(g => [g.questionId, g.marksAwarded]));
     for (const answer of attempt.answers as any[]) {
@@ -1623,14 +1759,30 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // and upsert key (assessmentId/studentId/subject/schoolSlug)
   // bulkEnterMarks already uses, so Report Cards aggregate quiz results
   // and teacher-entered marks identically.
+  //
+  // Data-integrity guard (ALL roles): an existing MarkEntry is overwritten
+  // only when it is NOT verified AND it was itself written from a quiz
+  // (quizAttemptId set, or the legacy 'Online Quiz (auto)' enteredBy marker
+  // from before the marker existed). Manually entered or verified entries
+  // are left untouched (logged); with no entry the result is inserted.
   private async upsertMarkEntryFromAttempt(attempt: any) {
+    const key = { assessmentId: attempt.assessmentId, studentId: attempt.studentId, subject: attempt.subject, schoolSlug: attempt.schoolSlug };
+    const existing: any = await this.markModel.findOne(key).select('verified enteredBy quizAttemptId').lean();
+    if (existing) {
+      const fromQuiz = !!existing.quizAttemptId || existing.enteredBy === 'Online Quiz (auto)';
+      if (existing.verified || !fromQuiz) {
+        this.logger.warn(`Quiz attempt ${attempt._id}: not overwriting ${existing.verified ? 'verified' : 'manually entered'} mark for student ${attempt.studentId} (${attempt.subject})`);
+        return;
+      }
+    }
     const percentage = attempt.totalMarks > 0 ? parseFloat(((attempt.obtainedMarks / attempt.totalMarks) * 100).toFixed(1)) : 0;
     const gradeInfo = getGrade(percentage);
     const result = percentage >= ((attempt.passingMarks / (attempt.totalMarks || 1)) * 100) ? 'pass' : 'fail';
     await this.markModel.updateOne(
-      { assessmentId: attempt.assessmentId, studentId: attempt.studentId, subject: attempt.subject, schoolSlug: attempt.schoolSlug },
+      key,
       {
         $set: {
+          quizAttemptId: attempt._id,
           assessmentTitle: attempt.assessmentTitle, studentName: attempt.studentName, rollNumber: attempt.rollNumber,
           grade: attempt.grade, section: attempt.section, totalMarks: attempt.totalMarks, passingMarks: attempt.passingMarks,
           obtainedMarks: attempt.obtainedMarks, isAbsent: false, isExempt: false,
@@ -1824,7 +1976,22 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return rc;
   }
 
-  async updateReportCardRemarks(id: string, schoolSlug: string, dto: UpdateReportCardRemarksDto) {
+  async updateReportCardRemarks(id: string, schoolSlug: string, dto: UpdateReportCardRemarksDto, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      // TEACHER role only: must be the CLASS TEACHER of the card's class,
+      // may only write classTeacherRemarks, unknown id is a 404.
+      const t = await this.teacherContext(requestingUser);
+      const card: any = Types.ObjectId.isValid(id) ? await this.reportCardModel.findOne({ _id: id, schoolSlug }).select('grade section').lean() : null;
+      if (!card) throw new NotFoundException('Report card not found');
+      if (!t.classTeacherClass || !this.classIncludes([t.classTeacherClass], card.grade, card.section)) {
+        throw new ForbiddenException('Only the class teacher of this class can edit report card remarks.');
+      }
+      const $set: any = {};
+      if (dto.classTeacherRemarks !== undefined) $set.classTeacherRemarks = dto.classTeacherRemarks;
+      if (!Object.keys($set).length) return this.reportCardModel.findOne({ _id: id, schoolSlug });
+      return this.reportCardModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
+    }
+    assertValidObjectId(id, 'report card');
     return this.reportCardModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: dto }, { new: true },
     );

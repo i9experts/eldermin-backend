@@ -3,6 +3,7 @@
 // Eldermin ERP | NestJS + MongoDB
 // ============================================================
 
+import { assertValidObjectId } from '../common/utils/object-id.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -216,16 +217,19 @@ export class BehaviourService {
   }
 
   async getRecordById(id: string, schoolSlug: string) {
+    assertValidObjectId(id, 'behaviour record');
     const r = await this.recordModel.findOne({ _id: id, schoolSlug });
     if (!r) throw new NotFoundException('Record not found');
     return r;
   }
 
   async updateRecord(id: string, schoolSlug: string, data: any) {
+    assertValidObjectId(id, 'behaviour record');
     return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
   }
 
   async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string) {
+    assertValidObjectId(id, 'behaviour record');
     return this.recordModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { resolved: true, resolvedDate: new Date(), resolvedNote: note, verifiedBy: resolvedBy } },
@@ -234,6 +238,7 @@ export class BehaviourService {
   }
 
   async getStudentBehaviourProfile(studentId: string, schoolSlug: string, academicYear?: string) {
+    assertValidObjectId(studentId, 'student');
     const filter: any = { studentId: new Types.ObjectId(studentId), schoolSlug };
     if (academicYear) filter.academicYear = academicYear;
 
