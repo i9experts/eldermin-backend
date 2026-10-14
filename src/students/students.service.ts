@@ -4,6 +4,8 @@
 // ============================================================
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
+import { attendanceUpsert, attendanceWriteError } from './attendance-upsert.util';
+import { idForms } from '../common/utils/id-forms.util';
 import {
   Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
@@ -1830,11 +1832,13 @@ export class StudentsService {
     // has (Mongo treats "field absent" and "field is null" the same way
     // for an equality match), so daily mode's one-record-per-day
     // behavior is unchanged.
-    const saved = await this.attendanceModel.findOneAndUpdate(
-      { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug, subject: dto.subject || null },
-      { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), subject: dto.subject || null } },
-      { upsert: true, new: true },
-    );
+    const op = attendanceUpsert(dto as any, { schoolSlug: dto.schoolSlug as string }, date, new Types.ObjectId(dto.studentId));
+    let saved: any;
+    try {
+      saved = await this.attendanceModel.findOneAndUpdate(op.filter, op.update, { upsert: true, new: true });
+    } catch (err) {
+      attendanceWriteError(err, !!dto.subject);
+    }
     await this.notifyAttendance(dto.schoolSlug as string, [{ studentId: dto.studentId, status: (dto as any).status, date }]);
     return saved;
   }
@@ -1854,17 +1858,15 @@ export class StudentsService {
     const ops = dto.records.map(r => {
       const date = new Date(r.date);
       date.setHours(0, 0, 0, 0);
-      return {
-        updateOne: {
-          // subject in the filter too - see the comment in markAttendance
-          // above for why this is safe for existing daily-mode records.
-          filter: { studentId: new Types.ObjectId(r.studentId), date, schoolSlug: dto.schoolSlug, subject: r.subject || null },
-          update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
-          upsert: true,
-        },
-      };
+      // match the student in both id forms within the school, never change an existing record's stored id form
+      return { updateOne: attendanceUpsert(r as any, { schoolSlug: dto.schoolSlug as string, academicYear: dto.academicYear }, date, r.studentId) };
     });
-    const result = await this.attendanceModel.bulkWrite(ops as any);
+    let result: any;
+    try {
+      result = await this.attendanceModel.bulkWrite(ops as any);
+    } catch (err) {
+      attendanceWriteError(err, dto.records.some((r: any) => !!r.subject));
+    }
     await this.notifyAttendance(dto.schoolSlug as string, dto.records.map((r: any) => ({ studentId: r.studentId, status: r.status, date: new Date(r.date) })));
     return result;
   }
@@ -1904,7 +1906,8 @@ export class StudentsService {
 
   async getStudentAttendanceSummary(studentId: string, schoolSlug: string, month?: string) {
     assertValidObjectId(studentId, 'student');
-    const filter: any = { studentId: new Types.ObjectId(studentId), schoolSlug };
+    // both id forms: records written through the bulk route carry a string studentId (aggregate() bypasses the id-match plugin)
+    const filter: any = { studentId: idForms(studentId), schoolSlug };
     if (month) {
       const [y, m] = month.split('-').map(Number);
       filter.date = { $gte: new Date(y, m - 1, 1), $lt: new Date(y, m, 1) };
