@@ -69,7 +69,12 @@ export class BehaviourController {
   @Put('records/:id')
   async updateRecord(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
-    // D7: ownership and the field allow-list are enforced in the service (author or admin role).
+    // A teacher cannot re-attribute a record to someone else (or tenancy fields) via PUT.
+    if (isTeacherCaller(requestingUser)) {
+      dto = { ...dto };
+      delete dto.reportedBy; delete dto.reportedById; delete dto.schoolSlug; delete dto.campusId; delete dto.verifiedBy;
+    }
+    // D7: ownership (author or admin role) and the non-admin field allow-list are enforced in the service.
     return this.service.updateRecord(id, schoolSlug, dto, requestingUser);
   }
 
