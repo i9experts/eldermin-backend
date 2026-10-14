@@ -464,6 +464,7 @@ export class OrganizationService {
     sectionId: string,
     classTeacherId: string,
     schoolSlug: string,
+    tenantId?: string,
   ) {
     const grade = await this.gradeModel.findOne({ _id: gradeId, schoolSlug });
     if (!grade) throw new NotFoundException('Grade not found');
@@ -471,7 +472,14 @@ export class OrganizationService {
     if (!section) throw new NotFoundException('Section not found');
     const sectionName = section.name;
 
-    const newTeacherStaff = await this.staffModel.findOne({ userId: classTeacherId, schoolSlug }).lean();
+    // Staff is scoped by tenantId, not schoolSlug (it has no schoolSlug
+    // field at all) - filtering on schoolSlug here always matched zero
+    // documents, so every assignment attempt failed with "No staff record
+    // found for this user" even when the selected teacher was a perfectly
+    // valid, logged-in staff member.
+    const staffScope: any = { userId: classTeacherId };
+    if (tenantId) staffScope.tenantId = tenantId;
+    const newTeacherStaff = await this.staffModel.findOne(staffScope).lean();
     if (!newTeacherStaff) throw new NotFoundException('No staff record found for this user');
     const classTeacherName = `${newTeacherStaff.firstName || ''} ${newTeacherStaff.lastName || ''}`.trim();
 
@@ -479,7 +487,7 @@ export class OrganizationService {
     // had someone else assigned and it's actually changing.
     const previousClassTeacherId = (section as any).classTeacherId?.toString();
     if (previousClassTeacherId && previousClassTeacherId !== classTeacherId) {
-      const prevStaff = await this.staffModel.findOne({ userId: previousClassTeacherId, schoolSlug }).lean();
+      const prevStaff = await this.staffModel.findOne(tenantId ? { userId: previousClassTeacherId, tenantId } : { userId: previousClassTeacherId }).lean();
       if (prevStaff) {
         await this.teacherProfileModel.updateOne(
           { staffId: prevStaff._id },

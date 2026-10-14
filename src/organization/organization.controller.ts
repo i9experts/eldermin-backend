@@ -219,7 +219,7 @@ export class OrganizationController {
     @Request() req: any,
   ) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.assignClassTeacher(gradeId, sectionId, classTeacherId, schoolSlug);
+    return this.service.assignClassTeacher(gradeId, sectionId, classTeacherId, schoolSlug, req?.user?.tenantId);
   }
 
   // Departments
