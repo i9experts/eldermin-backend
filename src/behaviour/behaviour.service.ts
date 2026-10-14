@@ -160,6 +160,10 @@ export class BehaviourService {
   // BEHAVIOUR RECORDS
   // ============================================================
   async createRecord(data: any, requestingUser?: ScopedUser) {
+    // The body is not DTO-validated: a malformed studentId / campusId or a missing required field used to surface as a 500.
+    if (data?.studentId) assertValidObjectId(String(data.studentId), 'student');
+    if (data?.campusId) assertValidObjectId(String(data.campusId), 'campus');
+    if (!data?.date || Number.isNaN(new Date(data.date).getTime())) throw new BadRequestException('A valid date is required.');
     const record = new this.recordModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
@@ -167,7 +171,13 @@ export class BehaviourService {
       followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    const saved: any = await record.save();
+    let saved: any;
+    try {
+      saved = await record.save();
+    } catch (err: any) {
+      if (err?.name === 'ValidationError') throw new BadRequestException(`Invalid behaviour record: ${Object.keys(err.errors || {}).join(', ') || err.message}`);
+      throw err;
+    }
     if (saved.parentNotified) {
       await notifyGuardiansOfStudents(this.recordModel.db, [saved.studentId], {
         schoolSlug: saved.schoolSlug, type: 'behaviour',

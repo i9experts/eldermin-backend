@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { BehaviourService } from './behaviour.service';
 import { BehaviourController } from './behaviour.controller';
@@ -82,5 +82,31 @@ describe('PUT /behaviour/records/:id ownership (D7)', () => {
     const { svc, model } = svcWith(null);
     await expect(svc.updateRecord(REC, 'mine', {}, { role: 'admin', userId: ME } as any)).rejects.toBeInstanceOf(NotFoundException);
     expect(model.findOne).toHaveBeenCalledWith({ _id: REC, schoolSlug: 'mine' });
+  });
+});
+
+describe('POST /behaviour/records bad input is a 400, never a 500', () => {
+  const mk = (saveImpl?: () => Promise<any>) => {
+    const svc: any = Object.create(BehaviourService.prototype);
+    svc.recordModel = function (this: any, d: any) { Object.assign(this, d); this.save = saveImpl || (async () => this); };
+    return svc as BehaviourService;
+  };
+  it('malformed studentId / campusId / missing or invalid date -> 400', async () => {
+    const s = mk();
+    await expect(s.createRecord({ studentId: 'nope', date: '2026-01-01' })).rejects.toThrow(/Invalid/i);
+    await expect(s.createRecord({ studentId: REC, campusId: 'bad', date: '2026-01-01' })).rejects.toThrow(/Invalid/i);
+    await expect(s.createRecord({ studentId: REC })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(s.createRecord({ studentId: REC, date: 'not a date' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+  it('a Mongoose ValidationError (missing grade, bad category) is a 400 naming the fields', async () => {
+    const s = mk(async () => { throw Object.assign(new Error('v'), { name: 'ValidationError', errors: { grade: {}, category: {} } }); });
+    await expect(s.createRecord({ studentId: REC, date: '2026-01-01' })).rejects.toThrow(/grade, category/);
+  });
+  it('a valid record still saves', async () => {
+    const r: any = await mk().createRecord({ studentId: REC, date: '2026-01-01', title: 't' });
+    expect(r.title).toBe('t');
+  });
+  it('another save error is not swallowed', async () => {
+    await expect(mk(async () => { throw new Error('db down'); }).createRecord({ studentId: REC, date: '2026-01-01' })).rejects.toThrow('db down');
   });
 });
