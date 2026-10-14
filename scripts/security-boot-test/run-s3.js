@@ -43,7 +43,10 @@ async function http(method, p, token, body) {
     const userId = String((await db.collection('users').findOne({ email }))._id);
     return { staffId: s.json?._id, email, password: cl.json?.tempPassword, userId, token: lg.json?.accessToken, tv: lg.json?.accessToken ? decode(lg.json.accessToken).tv : undefined };
   }
-  const probe = async (t) => (await http('GET', '/auth/me', t)).status;
+  // /hr/holidays: reachable by any staff role, touches no per-user data, so a 401 here can only come from the JWT
+  // strategy's state check (GET /auth/me would ALSO 401 on its own isActive check and hide a broken strategy).
+  const PROBE = '/hr/holidays';
+  const probe = async (t, p = PROBE) => (await http('GET', p, t)).status;
   const waitFor401 = async (t, maxMs) => { const t0 = Date.now(); while (Date.now() - t0 <= maxMs) { if ((await probe(t)) === 401) return Date.now() - t0; await sleep(100); } return -1; };
 
   if (mode === 'default') {
@@ -70,14 +73,14 @@ async function http(method, p, token, body) {
     const u = await mkStaff('s3base');
     row('issuance', 'new login token carries tv', 'tv = 0', `tv=${u.tv}`, u.tv === 0);
     const preS3 = jwt.sign({ sub: u.userId, tenantId: st.tenantA.id, institutionId: st.tenantA.id, role: 'teacher', name: 'x', schoolSlug: st.tenantA.slug, activeModules: ['organization'] }, SECRET, { expiresIn: '1h' });
-    const r1 = await probe(preS3), r2 = await http('GET', '/hr/leave/self/balance', preS3);
-    row('pre-S3 token (no tv claim)', 'still works (treated as tv 0)', '200 on /auth/me', `${r1} (leave/self/balance ${r2.status})`, r1 === 200);
+    const r1 = await probe(preS3), r2 = await http('GET', '/auth/me', preS3);
+    row('pre-S3 token (no tv claim)', 'still works (treated as tv 0)', '200 on /hr/holidays and /auth/me', `${r1} and ${r2.status}`, r1 === 200 && r2.status === 200);
 
     // ---------- deactivation ----------
     const d1 = await mkStaff('s3deact'); const pre = await probe(d1.token);
     const t0 = Date.now(); await http('DELETE', `/hr/staff/${d1.staffId}`, tok.hr_manager); const delay = await waitFor401(d1.token, 5000);
     row('deactivation', 'existing token before / after DELETE staff', '200 -> 401', `${pre} -> 401 after ${delay} ms`, pre === 200 && delay >= 0);
-    const m = await http('GET', '/auth/me', d1.token);
+    const m = await http('GET', PROBE, d1.token);
     row('deactivation', 'message', 'This account is no longer active.', m.json?.message, m.json?.message === 'This account is no longer active.');
     const udoc = await db.collection('users').findOne({ _id: O(d1.userId) });
     row('deactivation', 'User.tokenVersion bumped', '1', udoc.tokenVersion, udoc.tokenVersion === 1);
@@ -128,8 +131,11 @@ async function http(method, p, token, body) {
     await db.collection('users').updateOne({ _id: pid }, { $set: { isActive: false } });
     const pDead = await http('GET', '/parent-portal/my-students', pt2);
     row('parent-portal token', 'guardian deactivated: parent-portal route', '401 "This account is no longer active."', `${pDead.status} "${pDead.json?.message}"`, pDead.status === 401 && /no longer active/.test(pDead.json?.message || ''));
-    const pOther = await probe(pt2);
-    row('parent-portal token', 'same token on a non-portal route (strategy, <= TTL)', '401 (TTL 1 s in this run)', pOther, pOther === 401 || (await sleep(1200), await probe(pt2)) === 401);
+    await db.collection('users').updateOne({ _id: pid }, { $set: { isActive: true } });
+    const pl3 = await login(pemail, 'Parent#12345'); const pt3 = pl3.json?.accessToken; const p3a = await probe(pt3, '/auth/me');
+    await db.collection('users').updateOne({ _id: pid }, { $inc: { tokenVersion: 1 } }); await sleep(1300);
+    const p3b = await probe(pt3, '/auth/me');
+    row('parent token on a NON-portal route (strategy only: user stays active)', 'version bumped elsewhere, after the 1 s test TTL', '200 -> 401', `${p3a} -> ${p3b}`, p3a === 200 && p3b === 401);
 
     // ---------- follow-ups 1..4 ----------
     const lv = await mkStaff('s3leave');
@@ -155,8 +161,9 @@ async function http(method, p, token, body) {
     const back = await login(st.users.owner.email, st.password);
     row('follow-up 2: suspended school', 'lifted', 'login 200', back.status, back.status === 200);
 
-    const ex1 = await http('POST', '/hr/exit', tok.hr_manager, { staffId: st.staff[3], exitType: 'resignation', resignationDate: '2026-12-01', lastWorkingDay: '2099-01-01' });
-    const ex2 = await http('POST', '/hr/exit', tok.hr_manager, { staffId: st.staff[3], exitType: 'resignation', resignationDate: '2026-12-01', lastWorkingDay: '2099-01-01' });
+    const exStaff = await mkStaff('s3exit');
+    const ex1 = await http('POST', '/hr/exit', tok.hr_manager, { staffId: exStaff.staffId, exitType: 'resignation', resignationDate: '2026-12-01', lastWorkingDay: '2099-01-01' });
+    const ex2 = await http('POST', '/hr/exit', tok.hr_manager, { staffId: exStaff.staffId, exitType: 'resignation', resignationDate: '2026-12-01', lastWorkingDay: '2099-01-01' });
     row('follow-up 4: duplicate exit record', 'second POST /hr/exit for the same staff', '201 then 409 with a clear message', `${ex1.status} then ${ex2.status} "${ex2.json?.message}"`, ex1.status === 201 && ex2.status === 409 && /already exists/.test(ex2.json?.message || ''));
 
     const rv = await mkStaff('s3reviv'); await http('DELETE', `/hr/staff/${rv.staffId}`, tok.hr_manager);
