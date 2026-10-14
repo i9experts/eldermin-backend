@@ -8,6 +8,8 @@ export interface RolesOrModuleManageRequirement {
   roles: UserRole[];
   level: 'view' | 'manage';
   allowModuleWide: boolean;
+  /** When set, a custom role passes only with a grant on exactly this sub-module. */
+  subModuleKey?: string;
 }
 
 export interface RolesOrModuleManageOptions {
@@ -20,6 +22,8 @@ export interface RolesOrModuleManageOptions {
    * sub-module grants both count.
    */
   allowModuleWide?: boolean;
+  /** Tie the route to ONE sub-module: only an exact sub-module grant passes (not module-wide, not another sub-module). */
+  subModuleKey?: string;
 }
 
 /**
@@ -38,4 +42,5 @@ export const RolesOrModuleManage = (
     roles,
     level: opts.level ?? 'manage',
     allowModuleWide: opts.allowModuleWide ?? false,
+    ...(opts.subModuleKey ? { subModuleKey: opts.subModuleKey } : {}),
   } as RolesOrModuleManageRequirement);

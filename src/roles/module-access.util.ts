@@ -73,14 +73,23 @@ export function satisfiesRequiredLevel(
  *    teaching:manage and must not unlock admin actions.
  *  - allowModuleWide=true (staff-write routes): a module-wide entry OR any
  *    sub-module entry of that module counts.
+ *  - subModuleKey given: only an entry for exactly that sub-module counts (see below).
  */
 export function customRoleGrants(
   moduleAccess: ModuleAccessEntry[] | null | undefined,
   moduleKey: string,
   level: 'view' | 'manage',
   allowModuleWide: boolean,
+  subModuleKey?: string,
 ): boolean {
   if (!Array.isArray(moduleAccess)) return false;
+  // A route tied to ONE sub-module (e.g. behaviour -> counselling) accepts only a grant on exactly that sub-module: neither a module-wide
+  // entry (the seeded Teacher role has behaviour:manage module-wide) nor another sub-module of the same module counts.
+  if (subModuleKey) {
+    return moduleAccess.some(
+      m => m && m.moduleKey === moduleKey && m.subModuleKey === subModuleKey && satisfiesRequiredLevel(m.level, level),
+    );
+  }
   return moduleAccess.some(
     m =>
       m &&

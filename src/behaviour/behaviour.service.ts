@@ -418,7 +418,28 @@ export class BehaviourService {
     };
   }
 
-  async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any) {
+  /** Ownership/tenancy fields a non-admin author can never write through PUT (the traits, remarks and the parent-share toggle stay editable). */
+  static readonly TARBIYAH_ADMIN_ONLY_FIELDS = ['assessedBy', 'assessedById', 'schoolSlug', 'campusId', 'studentId', 'studentName', '_id'];
+
+  /**
+   * Author or admin role only. Admin roles (TEACHING_ADMIN_ROLES) keep today's behaviour. Everyone else may edit only an assessment they
+   * recorded (assessedById == own userId; a legacy assessment without assessedById is not editable by them, fail closed). Unknown id -> 404.
+   */
+  async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any, requestingUser?: ScopedUser & { userId?: string }) {
+    assertValidObjectId(id, 'tarbiyah assessment');
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById parentShared').lean();
+    if (!existing) throw new NotFoundException('Assessment not found');
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role)) {
+        const me = (requestingUser as any).userId ? String((requestingUser as any).userId) : '';
+        if (!me || !existing.assessedById || String(existing.assessedById) !== me) {
+          throw new ForbiddenException('You can only edit Tarbiyah assessments you recorded yourself');
+        }
+        data = { ...data };
+        for (const f of BehaviourService.TARBIYAH_ADMIN_ONLY_FIELDS) delete data[f];
+      }
+    }
     if (data.traits) {
       const settings = await this.getCharacterSettings(schoolSlug);
       const { min, max } = settings.ratingScale;
@@ -436,7 +457,7 @@ export class BehaviourService {
       data.overallRating = getTarbiyahRating(overallPercentage);
     }
     if (data.parentShared === true) data.parentSharedDate = new Date();
-    const before: any = data.parentShared === true ? await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('parentShared').lean() : null;
+    const before: any = existing;
     const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
     if (updated && data.parentShared === true && !before?.parentShared) {
       await notifyGuardiansOfStudents(this.tarbiyahModel.db, [updated.studentId], {
