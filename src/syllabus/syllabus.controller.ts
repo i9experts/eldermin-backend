@@ -110,7 +110,7 @@ export class SyllabusController {
 
   @Get(':id')
   findOne(@Request() req: any, @Param('id') id: string) {
-    return this.service.findOne(req.user.tenantId, id);
+    return this.service.findOne(req.user.tenantId, id, req.user);
   }
 
   @Post()
@@ -121,7 +121,7 @@ export class SyllabusController {
 
   @Put(':id')
   update(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateSyllabusDto) {
-    return this.service.update(req.user.tenantId, id, dto);
+    return this.service.update(req.user.tenantId, id, dto, req.user);
   }
 
   @RolesOrModuleManage('academics', TEACHING_ADMIN_ROLES)
@@ -139,18 +139,18 @@ export class SyllabusController {
   @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/mark-topic')
   markTopic(@Request() req: any, @Param('id') id: string, @Body() dto: MarkTopicDto) {
-    return this.service.markTopic(req.user.tenantId, id, dto);
+    return this.service.markTopic(req.user.tenantId, id, dto, req.user);
   }
 
   @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/mark-sub-topic')
   markSubTopic(@Request() req: any, @Param('id') id: string, @Body() dto: MarkSubTopicDto) {
-    return this.service.markSubTopic(req.user.tenantId, id, dto);
+    return this.service.markSubTopic(req.user.tenantId, id, dto, req.user);
   }
 
   @Patch(':id/behind-schedule')
   setBehindSchedule(@Request() req: any, @Param('id') id: string, @Body('behind') behind: boolean) {
-    return this.service.setBehindSchedule(req.user.tenantId, id, behind);
+    return this.service.setBehindSchedule(req.user.tenantId, id, behind, req.user);
   }
 
   // ── LMS: lessons + publish ──────────────────────────────────
@@ -158,24 +158,24 @@ export class SyllabusController {
   @Post(':id/lessons')
   @HttpCode(HttpStatus.CREATED)
   addLesson(@Request() req: any, @Param('id') id: string, @Body() dto: CreateLessonDto) {
-    return this.service.addLesson(req.user.tenantId, id, dto, req.user.name);
+    return this.service.addLesson(req.user.tenantId, id, dto, req.user.name, req.user);
   }
 
   @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/lessons')
   updateLesson(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateLessonDto) {
-    return this.service.updateLesson(req.user.tenantId, id, dto);
+    return this.service.updateLesson(req.user.tenantId, id, dto, req.user);
   }
 
   @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Delete(':id/lessons')
   deleteLesson(@Request() req: any, @Param('id') id: string, @Body() dto: DeleteLessonDto) {
-    return this.service.deleteLesson(req.user.tenantId, id, dto);
+    return this.service.deleteLesson(req.user.tenantId, id, dto, req.user);
   }
 
   @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/publish')
   setPublished(@Request() req: any, @Param('id') id: string, @Body() dto: SetPublishedDto) {
-    return this.service.setPublished(req.user.tenantId, id, dto.published, req.user.name);
+    return this.service.setPublished(req.user.tenantId, id, dto.published, req.user.name, req.user);
   }
 }

@@ -167,25 +167,33 @@ describe('real service filters pass through the plugin and match both forms', ()
       otherTenant: matches(f, { tenantId: oid(T_OTHER), campusId: oid(C), ...extra }),
       otherCampus: matches(f, { tenantId: T, campusId: C_OTHER, ...extra }),
     }));
-  const teacher: any = { role: 'teacher', campusId: C, userId: 'u1' };
+  const teacher: any = { role: 'teacher', campusId: C, userId: '64b7f0f0f0f0f0f0f0f0f0aa' };
+  // A teacher-role caller now also resolves their own Staff identity (see
+  // teacher-identity.util.ts's resolveTeacherIdentity, used so getAssignments/
+  // getLessonPlans/getMeetings can force-scope a teacher to their own
+  // records) - these fakes stand in for that lookup, resolving a fixed
+  // Staff._id with no linked TeacherProfile.
+  const STAFF_ID = '64b7f0f0f0f0f0f0f0f0f0a1';
+  const fakeStaffModel = { findOne: () => ({ lean: () => Promise.resolve({ _id: oid(STAFF_ID) }) }) };
+  const fakeTeacherProfileModel = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve(null) }) }) };
 
   it('TeachingService.getAssignments (campus-scoped teacher)', async () => {
     const { model, calls } = recorder();
-    const svc: any = Object.assign(Object.create(TeachingService.prototype), { assignmentModel: model });
+    const svc: any = Object.assign(Object.create(TeachingService.prototype), { assignmentModel: model, staffModel: fakeStaffModel, teacherProfileModel: fakeTeacherProfileModel });
     await svc.getAssignments(T, {}, teacher);
-    expect(await both(AssignmentSchema, 'find', calls[0])).toEqual({ asObj: true, asStr: true, otherTenant: false, otherCampus: false });
+    expect(await both(AssignmentSchema, 'find', calls[0], { teacherId: oid(STAFF_ID) })).toEqual({ asObj: true, asStr: true, otherTenant: false, otherCampus: false });
   });
   it('TeachingService.getLessonPlans', async () => {
     const { model, calls } = recorder();
-    const svc: any = Object.assign(Object.create(TeachingService.prototype), { lessonPlanModel: model });
+    const svc: any = Object.assign(Object.create(TeachingService.prototype), { lessonPlanModel: model, staffModel: fakeStaffModel, teacherProfileModel: fakeTeacherProfileModel });
     await svc.getLessonPlans(T, {}, teacher);
-    expect(await both(LessonPlanSchema, 'find', calls[0])).toEqual({ asObj: true, asStr: true, otherTenant: false, otherCampus: false });
+    expect(await both(LessonPlanSchema, 'find', calls[0], { teacherId: oid(STAFF_ID) })).toEqual({ asObj: true, asStr: true, otherTenant: false, otherCampus: false });
   });
   it('PTMService.getMeetings', async () => {
     const { model, calls } = recorder();
-    const svc: any = Object.assign(Object.create(PTMService.prototype), { ptmModel: model });
+    const svc: any = Object.assign(Object.create(PTMService.prototype), { ptmModel: model, staffModel: fakeStaffModel, teacherProfileModel: fakeTeacherProfileModel });
     await svc.getMeetings(T, {}, teacher);
-    expect(await both(PTMMeetingSchema, 'find', calls[0])).toEqual({ asObj: true, asStr: true, otherTenant: false, otherCampus: false });
+    expect(await both(PTMMeetingSchema, 'find', calls[0], { teacherId: oid(STAFF_ID) })).toEqual({ asObj: true, asStr: true, otherTenant: false, otherCampus: false });
   });
   it('AssessmentService.findAll', async () => {
     const { model, calls } = recorder();

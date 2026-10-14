@@ -26,7 +26,7 @@ export class PTMController {
     // Meetings are keyed by Staff._id - req.user's own staffId isn't
     // guaranteed to be on every JWT yet, so this accepts an explicit
     // teacherId query param for now rather than guessing.
-    return projectForTeacher(req.user, await this.service.getUpcomingForTeacher(teacherId, req.user.tenantId));
+    return projectForTeacher(req.user, await this.service.getUpcomingForTeacher(teacherId, req.user.tenantId, req.user));
   }
 
   @Get('student/:studentId/history')
@@ -36,7 +36,7 @@ export class PTMController {
 
   @Get(':id')
   async getById(@Param('id') id: string, @Request() req: any) {
-    return projectForTeacher(req.user, await this.service.getMeetingById(id, req.user.tenantId));
+    return projectForTeacher(req.user, await this.service.getMeetingById(id, req.user.tenantId, req.user));
   }
 
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })

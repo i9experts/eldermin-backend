@@ -140,13 +140,25 @@ export class PTMService {
     }
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // A teacher only ever sees their own parent-teacher meetings -
+    // query.teacherId is caller-suppliable and must never be trusted to
+    // narrow (or, left absent, to widen) this to someone else's meetings,
+    // which also carry guardian phone/email.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
+      filter.teacherId = new Types.ObjectId(me.staffId);
+    }
     return this.ptmModel.find(filter).sort({ scheduledDate: -1 }).limit(200).lean();
   }
 
-  async getMeetingById(id: string, tenantId: string) {
+  async getMeetingById(id: string, tenantId: string, requestingUser?: ScopedUser) {
     assertValidObjectId(id, 'meeting');
-    const meeting = await this.ptmModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    const meeting: any = await this.ptmModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!meeting) throw new NotFoundException('Meeting not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
+      assertOwnsTeacherDoc(me, meeting.teacherId, 'You can only view your own meetings');
+    }
     return meeting;
   }
 
@@ -231,10 +243,18 @@ export class PTMService {
   }
 
   /** A teacher's own upcoming meetings - the personalized-scheduling view. */
-  async getUpcomingForTeacher(teacherId: string, tenantId: string) {
-    assertValidObjectId(teacherId, 'teacher');
+  async getUpcomingForTeacher(teacherId: string, tenantId: string, requestingUser?: ScopedUser) {
+    let effectiveTeacherId = teacherId;
+    if (isTeacherCaller(requestingUser)) {
+      // teacherId is caller-suppliable (see the controller's own comment on
+      // this route) and must never be trusted to look up someone else's
+      // upcoming meetings - force it to the caller's own Staff._id.
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
+      effectiveTeacherId = me.staffId;
+    }
+    assertValidObjectId(effectiveTeacherId, 'teacher');
     return this.ptmModel.find({
-      tenantId: this.tid(tenantId), teacherId: new Types.ObjectId(teacherId),
+      tenantId: this.tid(tenantId), teacherId: new Types.ObjectId(effectiveTeacherId),
       status: { $in: ['requested', 'confirmed'] }, scheduledDate: { $gte: new Date() },
     }).sort({ scheduledDate: 1 }).lean();
   }

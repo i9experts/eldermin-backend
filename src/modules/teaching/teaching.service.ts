@@ -317,6 +317,15 @@ export class TeachingService {
       const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
       if (effectiveCampusId) filter.campusId = effectiveCampusId;
     }
+    // A teacher only ever sees their own lesson plans - query.teacherId is
+    // caller-suppliable and must never be trusted to narrow (or, left
+    // absent as every current screen does, to widen) this to someone
+    // else's plans. Forced after the optional filter above so it always
+    // wins regardless of what (if anything) was requested.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      filter.teacherId = new Types.ObjectId(me.staffId);
+    }
     return this.lessonPlanModel.find(filter).sort({ planDate: -1 }).limit(100).lean();
   }
 
@@ -1066,6 +1075,12 @@ Rules:
       const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
       if (effectiveCampusId) filter.campusId = effectiveCampusId;
     }
+    // Same leak as getLessonPlans: a teacher must only see their own
+    // assignments/homework, never a caller-suppliable or absent filter.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      filter.teacherId = new Types.ObjectId(me.staffId);
+    }
     return this.assignmentModel.find(filter).sort({ dueDate: -1 }).lean();
   }
 
@@ -1301,17 +1316,33 @@ Rules:
       const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
       if (effectiveCampusId) filter.campusId = effectiveCampusId;
     }
+    // A teacher only ever sees behaviour notes they personally reported -
+    // unlike lesson plans/assignments/class diary, this never even had a
+    // caller-suppliable filter to begin with; every teacher saw every
+    // note at their campus.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      filter.reportedBy = new Types.ObjectId(me.staffId);
+    }
     return this.behaviourModel.find(filter).sort({ incidentDate: -1 }).limit(100).lean();
   }
 
   async createBehaviourNote(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
     try {
-      const note: any = await this.behaviourModel.create({
+      const payload: any = {
         ...data,
         tenantId: this.tid(tenantId),
         institutionId: new Types.ObjectId(institutionId),
         campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
-      });
+      };
+      // A teacher can only author a note as themselves - derived server-
+      // side, never trusted from the body, same as lesson plans/
+      // assignments/class diary entries.
+      if (isTeacherCaller(requestingUser)) {
+        const me = await this.teacherIdentity(requestingUser!);
+        payload.reportedBy = new Types.ObjectId(normaliseTeacherIdForWrite(me, data.reportedBy, 'You can only log behaviour notes as yourself'));
+      }
+      const note: any = await this.behaviourModel.create(payload);
       if (note.parentNotified) {
         const slug = await schoolSlugForTenant(this.behaviourModel.db, tenantId);
         if (slug) {
@@ -1329,8 +1360,17 @@ Rules:
     }
   }
 
-  async updateBehaviourNote(tenantId: string, id: string, data: any) {
+  async updateBehaviourNote(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
     assertValidObjectId(id, 'behaviour record');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      const existing: any = await this.behaviourModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).select('reportedBy').lean();
+      if (!existing) return null;
+      assertOwnsTeacherDoc(me, existing.reportedBy, 'You can only modify your own behaviour notes');
+      data = { ...data };
+      delete data.tenantId; delete data.institutionId; delete data.campusId;
+      if ('reportedBy' in data) data.reportedBy = new Types.ObjectId(normaliseTeacherIdForWrite(me, data.reportedBy, 'You can only log behaviour notes as yourself'));
+    }
     return this.behaviourModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: data },
@@ -1353,24 +1393,40 @@ Rules:
       const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
       if (effectiveCampusId) filter.campusId = effectiveCampusId;
     }
+    // Same leak as getLessonPlans/getAssignments: a teacher only ever sees
+    // their own class diary entries.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      filter.teacherId = new Types.ObjectId(me.staffId);
+    }
     return this.classDiaryModel.find(filter).sort({ diaryDate: -1 }).lean();
   }
 
-  async getClassDiaryEntry(tenantId: string, id: string) {
-    const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+  async getClassDiaryEntry(tenantId: string, id: string, requestingUser?: ScopedUser) {
+    const entry: any = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!entry) throw new NotFoundException('Class diary entry not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, entry.teacherId, 'You can only view your own class diary entries');
+    }
     return entry;
   }
 
   async createClassDiaryEntry(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
+    const { teacherId, ...rest } = data;
     const payload: any = {
-      ...data,
+      ...rest,
       tenantId: this.tid(tenantId),
       institutionId: new Types.ObjectId(institutionId),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     };
-    if (data.teacherId) {
-      try { payload.teacherId = new Types.ObjectId(data.teacherId); } catch { /* ignore */ }
+    if (isTeacherCaller(requestingUser)) {
+      // A teacher can only author diary entries for themselves - derived
+      // server-side, never trusted from the body.
+      const me = await this.teacherIdentity(requestingUser!);
+      payload.teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId, 'You can only create class diary entries for yourself'));
+    } else if (teacherId) {
+      try { payload.teacherId = new Types.ObjectId(teacherId); } catch { /* ignore invalid id */ }
     }
     try {
       return await this.classDiaryModel.create(payload);
@@ -1380,28 +1436,46 @@ Rules:
     }
   }
 
-  async updateClassDiaryEntry(tenantId: string, id: string, data: any) {
+  async updateClassDiaryEntry(tenantId: string, id: string, data: any, requestingUser?: ScopedUser) {
     const existing = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!existing) throw new NotFoundException('Class diary entry not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, (existing as any).teacherId, 'You can only modify your own class diary entries');
+    }
     // A shared entry's parent-visible content shouldn't silently drift
     // after the fact - require explicit re-share for a parent to see
     // edits made once it's already gone out.
-    const { shared, sharedAt, sharedBy, notifiedGuardianCount, ...editable } = data;
+    const { shared, sharedAt, sharedBy, notifiedGuardianCount, teacherId, ...editable } = data;
     Object.assign(existing, editable);
+    if (isTeacherCaller(requestingUser) && 'teacherId' in data) {
+      const me = await this.teacherIdentity(requestingUser!);
+      (existing as any).teacherId = new Types.ObjectId(normaliseTeacherIdForWrite(me, teacherId, 'You can only create class diary entries for yourself'));
+    } else if (!isTeacherCaller(requestingUser) && teacherId) {
+      try { (existing as any).teacherId = new Types.ObjectId(teacherId); } catch { /* ignore invalid id */ }
+    }
     await existing.save();
     return existing.toObject();
   }
 
-  async deleteClassDiaryEntry(tenantId: string, id: string) {
+  async deleteClassDiaryEntry(tenantId: string, id: string, requestingUser?: ScopedUser) {
     const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!entry) throw new NotFoundException('Class diary entry not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, (entry as any).teacherId, 'You can only delete your own class diary entries');
+    }
     await entry.deleteOne();
     return { deleted: true };
   }
 
-  async generateClassDiaryPdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string) {
-    const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
+  async generateClassDiaryPdf(tenantId: string, schoolSlug: string, id: string, userId: string, templateId?: string, requestingUser?: ScopedUser) {
+    const entry: any = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!entry) throw new NotFoundException('Class diary entry not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, entry.teacherId, 'You can only download your own class diary entries');
+    }
     return this.pdfService.generateClassDiaryPdf(schoolSlug, entry, userId, templateId);
   }
 
@@ -1410,6 +1484,10 @@ Rules:
   async shareClassDiaryEntry(tenantId: string, schoolSlug: string, id: string, requestingUser?: ScopedUser) {
     const entry = await this.classDiaryModel.findOne({ _id: id, tenantId: this.tid(tenantId) });
     if (!entry) throw new NotFoundException('Class diary entry not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, (entry as any).teacherId, 'You can only share your own class diary entries');
+    }
     const students = await this.getClassRoster(schoolSlug, entry.gradeLevel, entry.sectionName, entry.campusId);
     let notifiedGuardianCount = 0;
     if (students.length) {
