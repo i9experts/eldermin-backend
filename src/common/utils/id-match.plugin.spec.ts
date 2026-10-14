@@ -210,6 +210,8 @@ describe('real service filters pass through the plugin and match both forms', ()
     const svc: any = Object.assign(Object.create(AuthService.prototype), {
       userModel: model, rolesService: { getPermissionsForUser: async () => null },
       resolveScopeFieldsForUser: async () => ({}),
+      // S3 follow-up: getMe also refuses a suspended school (reads Tenant.status)
+      tenantModel: { findOne: () => ({ select: () => ({ lean: async () => ({ status: 'active' }) }) }) },
     });
     // the fake chain resolves to [] (truthy) so getMe returns normally
     await svc.getMe(uid, T);
