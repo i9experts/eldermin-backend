@@ -46,8 +46,8 @@ describe('upload without storage configuration', () => {
     const req = { user: { schoolSlug: 's' }, headers: {} };
     await expect(c.uploadSingle(file, 'docs', req)).rejects.toBeInstanceOf(ServiceUnavailableException);
     await expect(c.uploadMultiple([file], 'docs', req)).rejects.toBeInstanceOf(ServiceUnavailableException);
-    await expect(c.deleteFile('k')).rejects.toBeInstanceOf(ServiceUnavailableException);
-    await expect(c.getSignedUrl('k')).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(c.deleteFile('s/docs/k.pdf', req)).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await expect(c.getSignedUrl('s/docs/k.pdf', req)).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
   it('configured server behaves as before (SDK called, url returned)', async () => {
     Object.assign(process.env, { AWS_ACCESS_KEY_ID: 'AK', AWS_SECRET_ACCESS_KEY: 'SK', AWS_S3_BUCKET: 'b', AWS_REGION: 'r' });

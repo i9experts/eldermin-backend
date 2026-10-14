@@ -15,9 +15,15 @@ import {
   SuggestMappingsDto, CheckQualityDto,
   CreateCareRecordDto, CreateSupportCaseDto, AddSupportStrategyDto, AddSupportReviewDto, UpdateSupportCaseDto,
 } from './dto/ece.dto';
-import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { STAFF_WRITE_ROLES, SCHOOL_STAFF_ROLES } from '../auth/role-sets';
+import { Roles } from '../auth/decorators';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
+// D9: every /ece route (reads included) is for school staff. Before this only 5 writes were guarded and all reads,
+// settings and care/support records were open to any token (parent, student, reseller included). The only callers are the
+// staff pages of the web Early Years module; the parent app and the teacher app do not call /ece.
+// Handler-level @RolesOrModuleManage on the five writes still applies on top.
+@Roles(...SCHOOL_STAFF_ROLES)
 @Controller('ece')
 export class EceController {
   constructor(private readonly service: EceService) {}
