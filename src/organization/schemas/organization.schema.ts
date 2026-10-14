@@ -92,9 +92,21 @@ export class School {
   @Prop({ default: true }) onlineAdmissions: boolean;
 
   @Prop({ default: true }) isActive: boolean;
+
+  // A short, typeable identifier for the separate Eldermin Mobile app -
+  // parents/teachers/students enter this instead of a full school slug/
+  // domain to find their school. Generated lazily (see
+  // OrganizationService.getOrCreateMobileAppCode) rather than at school
+  // creation, so it self-heals for every school that existed before this
+  // field did, the same way getSchool() already upserts a School document
+  // on first access. sparse so the many schools that haven't been read
+  // since this shipped (and so have no value yet) don't collide with each
+  // other on the unique index.
+  @Prop({ unique: true, sparse: true }) mobileAppCode?: string;
 }
 
 export const SchoolSchema = SchemaFactory.createForClass(School);
+SchoolSchema.index({ mobileAppCode: 1 }, { unique: true, sparse: true });
 
 // ============================================================
 // CAMPUS
