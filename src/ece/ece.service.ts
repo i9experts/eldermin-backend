@@ -20,6 +20,8 @@ import { SNC_ECE_PAKISTAN } from './seed-data/snc-ece-pakistan.data';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { EmailService } from '../email/email.service';
+import { assertEceStudentInScope, eceCampusOf, eceScopedStudentIds } from './ece-scope.util';
+import type { ScopedUser } from '../auth/scope.util';
 
 const DEFAULT_DOMAINS: { name: string; canonicalKey: string; skills: string[] }[] = [
   { name: 'Physical Development', canonicalKey: 'physical', skills: ['Gross Motor Control', 'Fine Motor Control', 'Self-Care'] },
@@ -216,9 +218,15 @@ export class EceService {
   }
 
   // ── Observations ───────────────────────────────────────────
-  async getObservations(schoolSlug: string, query: any) {
+  async getObservations(schoolSlug: string, query: any, user?: ScopedUser | null) {
     const filter: any = { schoolSlug };
-    if (query.studentId) filter.studentId = new Types.ObjectId(query.studentId);
+    const scoped = await eceScopedStudentIds(this.studentModel, schoolSlug, user);
+    if (query.studentId) {
+      await this.assertStudentInScope(schoolSlug, query.studentId, user);
+      filter.studentId = new Types.ObjectId(query.studentId);
+    } else if (scoped) {
+      filter.studentId = { $in: scoped };
+    }
     if (query.skillId) filter['skillMappings.skillId'] = new Types.ObjectId(query.skillId);
     if (query.from || query.to) {
       filter.createdAt = {};
@@ -750,9 +758,15 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
   // diagnoses - see support-case.schema.ts for the full reasoning. Every
   // status and field here is worded as a pattern requiring educator
   // review, never a clinical claim.
-  async getSupportCases(schoolSlug: string, studentId?: string, status?: string) {
+  async getSupportCases(schoolSlug: string, studentId?: string, status?: string, user?: ScopedUser | null) {
     const filter: any = { schoolSlug };
-    if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    if (studentId) {
+      await this.assertStudentInScope(schoolSlug, studentId, user);
+      filter.studentId = new Types.ObjectId(studentId);
+    } else {
+      const scoped = await eceScopedStudentIds(this.studentModel, schoolSlug, user);
+      if (scoped) filter.studentId = { $in: scoped };
+    }
     if (status) filter.status = status;
     return this.supportCaseModel.find(filter).sort({ raisedDate: -1 }).lean();
   }
@@ -802,17 +816,32 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
     return supportCase;
   }
 
+  // ── Campus scope (see ece-scope.util.ts) ────────────────────
+  assertStudentInScope(schoolSlug: string, studentId: unknown, user?: ScopedUser | null) {
+    return assertEceStudentInScope(this.studentModel, schoolSlug, studentId, user);
+  }
+
+  /** For routes addressed by a record id (portfolio entry, care record, support case): the record's child must be in scope. */
+  async assertRecordInScope(kind: 'portfolio' | 'care' | 'support', id: string, schoolSlug: string, user?: ScopedUser | null) {
+    if (!Types.ObjectId.isValid(String(id ?? ''))) throw new BadRequestException('Invalid id');
+    const model: any = kind === 'portfolio' ? this.portfolioModel : kind === 'care' ? this.careRecordModel : this.supportCaseModel;
+    const rec: any = await model.findOne({ _id: id, schoolSlug }).select('studentId').lean();
+    if (!rec) throw new NotFoundException('Record not found');
+    await this.assertStudentInScope(schoolSlug, rec.studentId, user);
+  }
+
   // ── Children roster (real Student records filtered to Early Years -
   // deliberately self-contained here rather than modifying the actively
   // developed Students module for one narrow filter) ──────────
-  async getChildren(schoolSlug: string) {
+  async getChildren(schoolSlug: string, user?: ScopedUser | null) {
+    const campus = eceCampusOf(user);
     // 'active' only, not merely "not inactive" - a child on an academic
     // gap (e.g. a Hifz break), graduated, transferred etc. is still a real
     // record but shouldn't appear in the day-to-day Early Years roster,
     // matching the 'status: active' convention students.service.ts uses
     // everywhere else for "who's actually in class right now".
     return this.studentModel
-      .find({ schoolSlug, programType: 'early-years', status: 'active' })
+      .find({ schoolSlug, programType: 'early-years', status: 'active', ...(campus ? { campusId: campus } : {}) })
       .select('firstName lastName photo dateOfBirth currentGrade currentSection studentId')
       .sort({ firstName: 1 })
       .lean();
@@ -820,13 +849,14 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
 
   // ── Teacher Dashboard (every count here is a real query - no
   // fabricated or hardcoded stat) ─────────────────────────────
-  async getTeacherDashboard(schoolSlug: string, observedById: string) {
+  async getTeacherDashboard(schoolSlug: string, observedById: string, user?: ScopedUser | null) {
+    const campus = eceCampusOf(user);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const eceStudents = await this.studentModel.find({ schoolSlug, programType: 'early-years', status: 'active' }).select('_id').lean();
+    const eceStudents = await this.studentModel.find({ schoolSlug, programType: 'early-years', status: 'active', ...(campus ? { campusId: campus } : {}) }).select('_id').lean();
     const eceStudentIds = eceStudents.map((s: any) => s._id);
 
     const presentToday = await this.attendanceModel.countDocuments({
@@ -968,13 +998,14 @@ Be lenient - only flag genuinely vague notes, not notes that are simply brief bu
   // included here, since judging that honestly needs the AI Quality
   // Checker from the V2.5 roadmap, not a keyword heuristic pretending to
   // be real analysis.
-  async getCoordinatorInsights(schoolSlug: string) {
+  async getCoordinatorInsights(schoolSlug: string, user?: ScopedUser | null) {
+    const campus = eceCampusOf(user);
     const now = new Date();
     const sevenDaysAgo = new Date(now); sevenDaysAgo.setDate(now.getDate() - 7);
     const thirtyDaysAgo = new Date(now); thirtyDaysAgo.setDate(now.getDate() - 30);
 
     const children = await this.studentModel
-      .find({ schoolSlug, programType: 'early-years', status: 'active' })
+      .find({ schoolSlug, programType: 'early-years', status: 'active', ...(campus ? { campusId: campus } : {}) })
       .select('_id firstName lastName currentGrade currentSection')
       .lean();
     const childIds = children.map((c: any) => c._id);

@@ -6,7 +6,7 @@ import { EceController } from '../ece/ece.controller';
 import { RolesGuard } from '../auth/roles.guard';
 import { ROLES_KEY } from '../auth/decorators';
 import { ROLES_OR_MODULE_KEY } from '../roles/decorators/roles-or-module-manage.decorator';
-import { NON_STAFF_ROLES, SCHOOL_STAFF_ROLES, STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { NON_STAFF_ROLES, SCHOOL_STAFF_ROLES, STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 
 // D9. Callers proven by grep before this change: web FileUpload/homework/procurement/id-card/ECE pages (staff pages) and the
 // teacher app's homework upload; the parent app has no /upload or /ece call. So only parent/student/reseller are blocked.
@@ -82,13 +82,20 @@ describe('/ece is staff-only on every route (D9)', () => {
     expect(Reflect.getMetadata(ROLES_KEY, EceController)).toEqual(SCHOOL_STAFF_ROLES);
     expect(handlers.length).toBeGreaterThan(40);
   });
-  it('no handler overrides the class guard with a wider @Roles', () => {
-    for (const h of handlers) expect(Reflect.getMetadata(ROLES_KEY, proto[h])).toBeUndefined();
+  // round 2: ECE framework configuration (frameworks, domains, skills, indicators, age bands, seeds, mappings) is admin-roles only
+  it('only the 13 configuration handlers carry their own @Roles, and it is NARROWER than the class guard (admin roles)', () => {
+    const own = handlers.filter((h) => Reflect.getMetadata(ROLES_KEY, proto[h]));
+    for (const h of own) expect(Reflect.getMetadata(ROLES_KEY, proto[h])).toEqual(TEACHING_ADMIN_ROLES);
+    expect(own).toHaveLength(13);
+    for (const r of TEACHING_ADMIN_ROLES) expect(SCHOOL_STAFF_ROLES).toContain(r);
   });
-  it('every handler: parent/student/reseller -> 403; teacher/coordinator/admin -> pass the role check', () => {
+  it('every handler: parent/student/reseller -> 403; the staff-wide ones pass for teacher/coordinator/admin', () => {
     for (const h of handlers) {
       for (const r of NON_STAFF_ROLES) expect(() => check(EceController, proto[h], r)).toThrow(ForbiddenException);
-      for (const r of ['teacher', 'academic_coordinator', 'admin', 'principal']) expect(check(EceController, proto[h], r)).toBe(true);
+      const own = Reflect.getMetadata(ROLES_KEY, proto[h]);
+      const ok = own ? ['academic_coordinator', 'admin', 'principal'] : ['teacher', 'academic_coordinator', 'admin', 'principal'];
+      for (const r of ok) expect(check(EceController, proto[h], r)).toBe(true);
+      if (own) { expect(() => check(EceController, proto[h], 'teacher')).toThrow(ForbiddenException); expect(() => check(EceController, proto[h], 'librarian')).toThrow(ForbiddenException); }
     }
   });
   it('the five existing write guards are untouched', () => {
