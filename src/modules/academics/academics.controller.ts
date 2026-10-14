@@ -156,16 +156,19 @@ export class AcademicsController {
 
   // ─── LIBRARY — BOOKS ──────────────────────────────────────────────────────────
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/stats')
   getLibraryStats(@Request() req) {
     return this.academicsService.getLibraryStats(req.user.tenantId);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/search')
   searchBooks(@Request() req, @Query('q') q: string) {
     return this.academicsService.searchBooks(req.user.tenantId, q);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/books')
   getBooks(@Request() req, @Query() q: any) {
     return this.academicsService.getBooks(req.user.tenantId, q, req.user);
@@ -177,6 +180,7 @@ export class AcademicsController {
     return this.academicsService.createBook(req.user.tenantId, req.user.institutionId, body, req.user);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/books/:id')
   getBookById(@Request() req, @Param('id') id: string) {
     return this.academicsService.getBookById(req.user.tenantId, id);
@@ -196,11 +200,13 @@ export class AcademicsController {
 
   // ─── LIBRARY — ISSUES ─────────────────────────────────────────────────────────
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/issues')
   getIssues(@Request() req, @Query() q: any) {
     return this.academicsService.getIssues(req.user.tenantId, q, req.user);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/overdue')
   getOverdue(@Request() req) {
     return this.academicsService.getOverdueIssues(req.user.tenantId);
@@ -248,6 +254,7 @@ export class AcademicsController {
 
   // ─── LIBRARY — RESERVATIONS ───────────────────────────────────────────────────
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/reservations')
   getReservations(@Request() req, @Query() q: any) {
     return this.academicsService.getReservations(req.user.tenantId, q, req.user);
@@ -269,21 +276,25 @@ export class AcademicsController {
 
   // ─── LIBRARY — REPORTS ────────────────────────────────────────────────────────
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/reports/defaulters')
   getLibraryDefaultersReport(@Request() req) {
     return this.academicsService.getLibraryDefaultersReport(req.user.tenantId, req.user);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/reports/most-borrowed')
   getMostBorrowedReport(@Request() req, @Query('limit') limit: string) {
     return this.academicsService.getMostBorrowedReport(req.user.tenantId, limit);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/reports/circulation-by-category')
   getCirculationByCategoryReport(@Request() req) {
     return this.academicsService.getCirculationByCategoryReport(req.user.tenantId);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('library/reports/export')
   async exportLibraryReport(@Request() req, @Query('type') type: string, @Res() res: Response) {
     const { buffer, filename } = await this.academicsService.exportLibraryReport(req.user.tenantId, type, req.user);
