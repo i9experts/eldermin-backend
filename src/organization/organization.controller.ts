@@ -11,6 +11,7 @@ import {
   CreateGroupInstitutionDto, CreateClusterDto,
 } from './dto/organization.dto';
 import { ScopedUser } from '../auth/scope.util';
+import { Public } from '../auth/decorators';
 
 @Controller('organization')
 export class OrganizationController {
@@ -49,6 +50,25 @@ export class OrganizationController {
   async uploadLogo(@UploadedFile() logo: Express.Multer.File, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.uploadLogo(schoolSlug, logo);
+  }
+
+  // This school's own Eldermin Mobile app code (generated on first
+  // request if it doesn't have one yet - see
+  // OrganizationService.getOrCreateMobileAppCode).
+  @Get('mobile-code') async getMobileAppCode(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    const code = await this.service.getOrCreateMobileAppCode(schoolSlug);
+    return { code };
+  }
+
+  // Public: the Eldermin Mobile app's own school-selection screen calls
+  // this with whatever 4-digit code the user typed in. No auth - a
+  // parent/teacher/student doesn't have a school session yet at this
+  // point, that's the whole point of the code.
+  @Get('resolve-by-code/:code')
+  @Public()
+  async resolveByMobileAppCode(@Param('code') code: string) {
+    return this.service.resolveByMobileAppCode(code);
   }
 
   // Campuses

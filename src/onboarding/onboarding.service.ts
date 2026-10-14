@@ -103,9 +103,20 @@ export class OnboardingService {
       isActive: true,
     });
 
+    // This school's Eldermin Mobile app code - generated here so it's
+    // ready the moment the account exists, not only once some admin
+    // happens to open the settings page that would otherwise lazily
+    // create it (see OrganizationService.getOrCreateMobileAppCode, which
+    // stays as the fallback for every school that signed up before this
+    // existed).
+    let mobileAppCode: string;
+    do {
+      mobileAppCode = String(Math.floor(1000 + Math.random() * 9000));
+    } while (await this.schoolModel.exists({ mobileAppCode }));
+
     await this.schoolModel.findOneAndUpdate(
       { slug },
-      { $setOnInsert: { slug, name: dto.schoolName, activeModules: ['organization'] } },
+      { $setOnInsert: { slug, name: dto.schoolName, activeModules: ['organization'], mobileAppCode } },
       { upsert: true, new: true },
     );
 

@@ -69,6 +69,42 @@ export class OrganizationService {
     return { logoUrl: url };
   }
 
+  // Lazily generates and persists this school's 4-digit Eldermin Mobile
+  // app code the first time it's actually requested, rather than only at
+  // signup - the same self-healing approach getSchool() already uses for
+  // schools that predate a given field. Random (not sequential) so a code
+  // can't be guessed from how long a school has been signed up, with a
+  // real DB-checked retry loop - the collision-safe pattern already used
+  // for student/admission IDs (see StudentsService.createStudent), unlike
+  // this codebase's other short-code generators (e.g. exam paper codes)
+  // which assume uniqueness by construction instead of checking it.
+  async getOrCreateMobileAppCode(schoolSlug: string): Promise<string> {
+    const school = await this.getSchool(schoolSlug);
+    if (school.mobileAppCode) return school.mobileAppCode;
+
+    let code: string;
+    do {
+      code = String(Math.floor(1000 + Math.random() * 9000));
+    } while (await this.schoolModel.exists({ mobileAppCode: code }));
+
+    school.mobileAppCode = code;
+    await school.save();
+    return code;
+  }
+
+  // Public lookup for the Eldermin Mobile app's own school-selection
+  // screen: a parent/teacher/student types this 4-digit code instead of a
+  // full school slug/domain. Deliberately returns only non-sensitive
+  // directory info (slug + display name + logo), nothing from the
+  // school's settings or any user data - this endpoint has no auth, so it
+  // must stay safe to call with any 4-digit guess.
+  async resolveByMobileAppCode(code: string) {
+    if (!/^\d{4}$/.test(code)) throw new NotFoundException('No school found for this code.');
+    const school = await this.schoolModel.findOne({ mobileAppCode: code, isActive: true }).lean();
+    if (!school) throw new NotFoundException('No school found for this code.');
+    return { schoolSlug: school.slug, displayName: school.name, logoUrl: school.logo || '' };
+  }
+
   async getOrganizationOverview(schoolSlug: string) {
     const [school, campuses, currentYear, grades, departments] = await Promise.all([
       this.schoolModel.findOne({ slug: schoolSlug }),
