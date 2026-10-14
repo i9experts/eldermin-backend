@@ -5,7 +5,8 @@
 
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -223,18 +224,43 @@ export class BehaviourService {
     return r;
   }
 
-  async updateRecord(id: string, schoolSlug: string, data: any) {
+  /** Fields only an admin role may write through PUT: ownership/tenancy and the resolve/verify workflow (resolve has its own route). */
+  static readonly ADMIN_ONLY_RECORD_FIELDS = ['reportedBy', 'reportedById', 'schoolSlug', 'campusId', 'verifiedBy', 'verified', 'resolved', 'resolvedDate', 'resolvedNote', '_id'];
+
+  /**
+   * D7: PUT /behaviour/records/:id. Admin roles (TEACHING_ADMIN_ROLES) keep today's behaviour. Everyone else
+   * (a teacher, or a custom-role user whose base role is not an admin role) may edit only a record they
+   * authored (reportedById == own userId; a legacy record without reportedById is not editable by them, fail closed),
+   * and cannot write ownership, tenancy or resolve/verify fields. Missing id -> 404 (was 200 + null).
+   */
+  async updateRecord(id: string, schoolSlug: string, data: any, requestingUser?: ScopedUser & { userId?: string }) {
     assertValidObjectId(id, 'behaviour record');
-    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Record not found');
+    let body = data;
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role)) {
+        const me = (requestingUser as any).userId ? String((requestingUser as any).userId) : '';
+        if (!me || !existing.reportedById || String(existing.reportedById) !== me) {
+          throw new ForbiddenException('You can only edit behaviour records you logged yourself');
+        }
+        body = { ...data };
+        for (const f of BehaviourService.ADMIN_ONLY_RECORD_FIELDS) delete body[f];
+      }
+    }
+    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: body }, { new: true });
   }
 
   async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string) {
     assertValidObjectId(id, 'behaviour record');
-    return this.recordModel.findOneAndUpdate(
+    const updated = await this.recordModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { resolved: true, resolvedDate: new Date(), resolvedNote: note, verifiedBy: resolvedBy } },
       { new: true },
     );
+    if (!updated) throw new NotFoundException('Record not found');
+    return updated;
   }
 
   async getStudentBehaviourProfile(studentId: string, schoolSlug: string, academicYear?: string) {

@@ -69,14 +69,13 @@ export class BehaviourController {
   @Put('records/:id')
   async updateRecord(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
-    // A teacher cannot re-attribute a record to someone else (or tenancy fields) via PUT.
-    if (isTeacherCaller(requestingUser)) {
-      dto = { ...dto };
-      delete dto.reportedBy; delete dto.reportedById; delete dto.schoolSlug; delete dto.campusId; delete dto.verifiedBy;
-    }
-    return this.service.updateRecord(id, schoolSlug, dto);
+    // D7: ownership and the field allow-list are enforced in the service (author or admin role).
+    return this.service.updateRecord(id, schoolSlug, dto, requestingUser);
   }
 
+  // D7: was unguarded (any token, parents and students included). Same guard as create / edit; the web's
+  // Resolve button is shown to every role with the Behaviour page and keeps working for them.
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('records/:id/resolve')
   async resolveRecord(
     @Param('id') id: string,
@@ -84,7 +83,7 @@ export class BehaviourController {
     @Request() req: any,
   ) {
     const { schoolSlug, userName } = this.ctx(req);
-    return this.service.resolveRecord(id, schoolSlug, dto.note, userName);
+    return this.service.resolveRecord(id, schoolSlug, dto?.note, userName);
   }
 
   @Get('students/:studentId/profile')
