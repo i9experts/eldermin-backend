@@ -147,6 +147,28 @@ export class TeachingService {
     }).populate('campusId', 'name code').lean();
   }
 
+  // isClassTeacher/classTeacherOfGradeId/classTeacherOfGradeName/
+  // classTeacherOfSectionName/classTeacherOfName must only ever be set
+  // together, atomically, by OrganizationService.assignClassTeacher -
+  // that's the one place that also updates the Grade's own Section
+  // subdocument and denormalizes onto every Student in the class, so
+  // they all stay consistent. Letting either of these generic $set
+  // endpoints accept isClassTeacher alone (as the Add/Edit Teaching
+  // Profile forms used to) let an admin flip it on with no grade/section
+  // at all - looked like a successful assignment, but
+  // TeacherProfile.classTeacherOfGradeName stayed empty, which is
+  // exactly what a class teacher's own Attendance screen gates on. Strip
+  // them here so this one code path can't create that inconsistent state
+  // again, from this form or any direct API call.
+  private static readonly CLASS_TEACHER_FIELDS = [
+    'isClassTeacher', 'classTeacherOfGradeId', 'classTeacherOfGradeName', 'classTeacherOfSectionName', 'classTeacherOfName',
+  ];
+  private stripClassTeacherFields(data: any) {
+    const cleaned = { ...data };
+    for (const f of TeachingService.CLASS_TEACHER_FIELDS) delete cleaned[f];
+    return cleaned;
+  }
+
   async createTeacherProfile(tenantId: string, institutionId: string, data: any) {
     // staffId is a required ObjectId reference (teacher-profile.schema.ts)
     // - a Teaching Profile always describes a real HR Staff record, never
@@ -159,7 +181,7 @@ export class TeachingService {
     }
     try {
       return await this.teacherProfileModel.create({
-        ...data,
+        ...this.stripClassTeacherFields(data),
         tenantId: this.tid(tenantId),
         staffId: new Types.ObjectId(data.staffId),
         institutionId: new Types.ObjectId(institutionId),
@@ -179,7 +201,7 @@ export class TeachingService {
     // unsanitized here, unlike create) wrote a literal "" into the field,
     // which later crashed the whole Teacher Directory list with a 500 the
     // moment .populate('campusId') tried to cast it.
-    const payload = { ...data };
+    const payload = this.stripClassTeacherFields(data);
     if ('campusId' in payload) {
       payload.campusId = payload.campusId ? new Types.ObjectId(payload.campusId) : null;
     }

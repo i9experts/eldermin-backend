@@ -18,7 +18,7 @@ function make() {
     findOne: jest.fn((f: any) => { sink.filters.push(f); const r = docs.find(d => matches(d, f)) ?? null; return { lean: () => Promise.resolve(r) }; }),
   };
   const n: any = {};
-  const svc = new AcademicsService(n, n, curriculumModel, n, n, n, n, n, n, n, n, n, n);
+  const svc = new AcademicsService(n, n, curriculumModel, n, n, n, n, n, n, n, n, n, n, n);
   return { svc, sink, curriculumModel };
 }
 const teacher = { role: 'teacher' };
