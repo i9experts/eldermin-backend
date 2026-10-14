@@ -2,10 +2,11 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import { AuthStateService } from './auth-state.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(config: ConfigService) {
+  constructor(config: ConfigService, private readonly authState: AuthStateService) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -14,7 +15,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any) {
+    // S3: user must exist, be active and carry the current tokenVersion (cached <= 30 s, 503 on DB failure)
+    await this.authState.assertTokenValid(payload);
     return {
+      tv: payload.tv,
       userId: payload.sub,
       tenantId: payload.tenantId,
       institutionId: payload.institutionId,

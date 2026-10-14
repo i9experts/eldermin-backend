@@ -40,6 +40,11 @@ export class ExitRecord {
   @Prop({ enum: ['pending','processing','paid'], default: 'pending' }) settlementStatus: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) processedBy: Types.ObjectId;
   @Prop() notes: string;
+  // Set (atomically, once) when access was revoked for this exit - by the
+  // lastWorkingDay cron or the manual 'Complete exit' action. Marks the record
+  // as processed so a later reactivation is never undone by the cron.
+  @Prop() accessRevokedAt?: Date;
+  @Prop() accessRevokedBy?: string;
 }
 export const ExitRecordSchema = SchemaFactory.createForClass(ExitRecord);
 ExitRecordSchema.index({ tenantId: 1, staffId: 1 }, { unique: true });

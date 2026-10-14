@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { AuditLogModule } from '../../common/audit-log.module';
+import { AccountAccessModule } from '../auth/account-access.module';
 import { UploadModule } from '../../upload/upload.module';
 import { FinanceModule } from '../../finance/finance.module';
 import { EmailModule } from '../../email/email.module';
@@ -43,6 +45,9 @@ import { Advance, AdvanceSchema } from './schemas/advance.schema';
 import { StaffIncrement, StaffIncrementSchema } from './schemas/staff-increment.schema';
 import { SecurityDeposit, SecurityDepositSchema } from './schemas/security-deposit.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
+import { Tenant, TenantSchema } from '../organization/schemas/tenant.schema';
+import { ExitAccessService } from './exit-access.service';
+import { Role, RoleSchema } from '../../roles/schemas/role.schema';
 import { School, SchoolSchema } from '../../organization/schemas/organization.schema';
 
 import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
@@ -51,6 +56,8 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
   imports: [
     UploadModule,
     StaffPortalModule,
+    AuditLogModule,
+    AccountAccessModule,
     FinanceModule,
     EmailModule,
     PdfModule,
@@ -92,11 +99,13 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
       { name: StaffIncrement.name, schema: StaffIncrementSchema },
       { name: SecurityDeposit.name, schema: SecurityDepositSchema },
       { name: User.name, schema: UserSchema },
+      { name: Role.name, schema: RoleSchema },
+      { name: Tenant.name, schema: TenantSchema },
       { name: School.name, schema: SchoolSchema },
     ]),
   ],
   controllers: [HrController],
-  providers: [HrService],
+  providers: [HrService, ExitAccessService],
   exports: [HrService],
 })
 export class HrModule {}

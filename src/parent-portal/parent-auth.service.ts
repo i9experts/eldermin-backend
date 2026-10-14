@@ -1,3 +1,4 @@
+import { SCHOOL_SUSPENDED_MESSAGE } from '../common/constants/school-suspended';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -19,6 +20,8 @@ const RESEND_COOLDOWN_SECONDS = 45;
 const REVIEWER_TEST_PHONE = '+923172573105';
 const REVIEWER_TEST_OTP = '123456';
 
+const NO_STUDENT_RECORD_MESSAGE = "No student record found with this WhatsApp number. Please contact your school to have it registered against your child's profile first.";
+
 @Injectable()
 export class ParentAuthService {
   private logger = new Logger('ParentAuthService');
@@ -34,6 +37,8 @@ export class ParentAuthService {
 
   private async resolveSchoolForPhone(phone: string): Promise<{ schoolSlug: string; existingUser: UserDocument | null }> {
     const existingUser = await this.userModel.findOne({ phone });
+    // A deactivated account answers exactly like an unknown number (never reveals status).
+    if (existingUser && existingUser.isActive === false) throw new NotFoundException(NO_STUDENT_RECORD_MESSAGE);
     if (existingUser) {
       const tenant = await this.tenantModel.findById(existingUser.tenantId).lean();
       return { schoolSlug: (tenant as any)?.slug, existingUser };
@@ -50,14 +55,22 @@ export class ParentAuthService {
       .select('schoolSlug')
       .lean();
     if (!student) {
-      throw new NotFoundException("No student record found with this WhatsApp number. Please contact your school to have it registered against your child's profile first.");
+      throw new NotFoundException(NO_STUDENT_RECORD_MESSAGE);
     }
     return { schoolSlug: (student as any).schoolSlug, existingUser: null };
+  }
+
+  /** Suspended school: no OTP is sent and no session is issued (message intentionally reveals school status only). */
+  private async assertSchoolNotSuspended(schoolSlug?: string) {
+    if (!schoolSlug) return;
+    const tenant: any = await this.tenantModel.findOne({ slug: schoolSlug }).select('status').lean();
+    if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
   }
 
   async requestOtp(rawPhone: string) {
     const phone = normalizePhone(rawPhone);
     const { schoolSlug } = await this.resolveSchoolForPhone(phone);
+    await this.assertSchoolNotSuspended(schoolSlug);
 
     const recent = await this.otpModel.findOne({ phone }).sort({ createdAt: -1 }).lean();
     if (recent && Date.now() - new Date((recent as any).createdAt).getTime() < RESEND_COOLDOWN_SECONDS * 1000) {
@@ -120,9 +133,12 @@ export class ParentAuthService {
     const schoolSlug = (matchingStudents[0] as any).schoolSlug;
     const tenant = await this.tenantModel.findOne({ slug: schoolSlug }).lean();
     if (!tenant) throw new NotFoundException('School configuration not found for this number.');
+    if ((tenant as any).status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
 
     const studentIds = matchingStudents.map((s: any) => s._id);
     let user = await this.userModel.findOne({ phone });
+    // Deactivated login: no session, same generic answer as an unknown number (S1).
+    if (user && user.isActive === false) throw new NotFoundException(NO_STUDENT_RECORD_MESSAGE);
 
     if (!user) {
       const primaryGuardian = (matchingStudents[0] as any).guardians?.find((g: any) => matchRegex?.test(g.phone || ''));
@@ -151,6 +167,7 @@ export class ParentAuthService {
 
     const payload = {
       sub: (user._id as any).toString(),
+      tv: Number.isInteger((user as any).tokenVersion) ? (user as any).tokenVersion : 0, // S3
       tenantId: (tenant as any)._id.toString(),
       institutionId: ((user.institutionId as any) || (tenant as any)._id).toString(),
       role: 'parent',

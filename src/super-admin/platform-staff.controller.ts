@@ -75,8 +75,8 @@ export class PlatformStaffController {
 
   @RequirePlatformAccess('team', undefined, 'manage')
   @Patch('staff/:id/status')
-  setStaffActive(@Param('id') id: string, @Body() body: { isActive: boolean }) {
-    return this.service.setStaffActive(id, body.isActive);
+  setStaffActive(@Param('id') id: string, @Body() body: { isActive: boolean }, @Request() req: any) {
+    return this.service.setStaffActive(id, body.isActive, req?.user?.userId);
   }
 
   @RequirePlatformAccess('team', undefined, 'manage')

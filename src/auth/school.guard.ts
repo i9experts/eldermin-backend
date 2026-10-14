@@ -35,8 +35,11 @@ export class SchoolGuard implements CanActivate {
 
     const userSchoolSlug = user.schoolSlug;
 
-    // If user has no schoolSlug in token, allow (for backwards compat)
-    if (!userSchoolSlug) return true;
+    // A non-super_admin token with no school cannot name one (was allowed
+    // "for backwards compat", which let a school-less token pick any school).
+    if (!userSchoolSlug) {
+      throw new ForbiddenException('Access denied. No school context on this account.');
+    }
 
     if (userSchoolSlug !== requestSlug) {
       throw new ForbiddenException(

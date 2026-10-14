@@ -4,6 +4,7 @@ import {
   UseInterceptors, UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { schoolSlugOf } from '../common/utils/school-slug.util';
 import { InstitutionSetupService } from './institution-setup.service';
 import {
   CreateBoardMemberDto, UpdateBoardMemberDto,
@@ -20,7 +21,7 @@ export class InstitutionSetupController {
   private ctx(req: any) {
     return {
       tenantId: req?.user?.tenantId,
-      schoolSlug: req?.headers['x-school-slug'] || req?.user?.schoolSlug,
+      schoolSlug: schoolSlugOf(req),
       userName: req?.user?.name || 'Admin',
     };
   }

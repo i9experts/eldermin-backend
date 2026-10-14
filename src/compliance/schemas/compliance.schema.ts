@@ -136,6 +136,8 @@ export class AuditLog {
   @Prop() newValue: string;
   @Prop({ enum: ['create', 'read', 'update', 'delete', 'login', 'logout', 'export', 'other'] }) type: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
+  // Set only by fail-closed critical audit entries (payroll / roles): pending -> applied | failed.
+  @Prop({ enum: ['pending', 'applied', 'failed'] }) outcome?: string;
 }
 export const AuditLogSchema = SchemaFactory.createForClass(AuditLog);
 AuditLogSchema.index({ schoolSlug: 1, createdAt: -1 });

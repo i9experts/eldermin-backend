@@ -92,6 +92,23 @@ export class User {
   // be scoped to.
   @Prop({ type: Types.ObjectId, ref: 'Student', default: null })
   linkedStudentId: Types.ObjectId | null;
+
+  // ── Session revocation (S3) ── absent == 0. Tokens carry the value as claim `tv`; the JWT
+  // strategy rejects a token whose tv differs. Bumped on deactivation, demotion, reactivation,
+  // password reset and 'sign out everywhere'.
+  @Prop({ default: 0 }) tokenVersion?: number;
+
+  // ── Account access (S1) ── all optional; absent == never deactivated.
+  // Set by AccountAccessService.deactivateStaffLogin (isActive=false) ...
+  @Prop() deactivatedAt?: Date;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) deactivatedBy?: Types.ObjectId;
+  @Prop() deactivationReason?: string;
+  // ... or, for a SHARED staff+guardian account, by the demotion to parent
+  // (account stays active; staff role/permissions removed, remembered here
+  // so a later reactivation can restore them).
+  @Prop() staffAccessRevokedAt?: Date;
+  @Prop() previousPrimaryRole?: string;
+  @Prop({ type: Types.ObjectId, ref: 'Role', default: null }) previousCustomRoleId?: Types.ObjectId | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

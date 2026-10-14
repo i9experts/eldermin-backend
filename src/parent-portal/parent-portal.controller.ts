@@ -4,6 +4,8 @@ import {
 import type { Response } from 'express';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { STUDENTS_WRITE_ROLES } from '../auth/admin-role-sets';
 
 const CONSENT_ADMIN_ROLES = [
   UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
@@ -52,6 +54,9 @@ export class ParentPortalController {
     return this.service.closeConsentRequest(schoolSlug, id);
   }
 
+  // Staff with students:write only (no web / parent-app / teacher-app caller
+  // exists). Parent and student tokens can never pass, even with a custom role.
+  @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
   @Post('link-guardian')
   @HttpCode(HttpStatus.CREATED)
   async linkGuardian(@Body() dto: { email: string; studentIds: string[] }, @Request() req: any) {
@@ -59,6 +64,7 @@ export class ParentPortalController {
     return this.service.linkGuardianToStudents(schoolSlug, tenantId, institutionId, dto.email, dto.studentIds);
   }
 
+  @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
   @Post('unlink-guardian')
   async unlinkGuardian(@Body() dto: { email: string; studentId: string }, @Request() req: any) {
     const { tenantId } = this.ctx(req);

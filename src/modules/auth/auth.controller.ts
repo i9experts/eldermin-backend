@@ -57,6 +57,13 @@ export class AuthController {
     return this.authService.uploadAvatar(req.user.userId, req.user.tenantId, avatar);
   }
 
+  /** Authenticated: ends ALL sessions of the caller (tokenVersion bump). The old @Public logout stays a no-op. */
+  @Post('logout-all')
+  @HttpCode(HttpStatus.OK)
+  logoutAll(@Request() req) {
+    return this.authService.logoutAll(req.user.userId);
+  }
+
   @Public()
   @Post('logout')
   @HttpCode(HttpStatus.OK)

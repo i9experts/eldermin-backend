@@ -1,3 +1,4 @@
+import { schoolSlugOf } from '../common/utils/school-slug.util';
 import {
   Controller, Get, Post, Body, Res, Query,
   UseGuards, Request, HttpStatus,
@@ -46,7 +47,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.headers['x-school-slug'];
+    const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateReportCard(schoolSlug, dto, req.user.userId);
     res.set({
       'Content-Type': 'application/pdf',
@@ -62,7 +63,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.headers['x-school-slug'];
+    const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateInvoice(schoolSlug, dto, req.user.userId);
     res.set({
       'Content-Type': 'application/pdf',
@@ -78,7 +79,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.headers['x-school-slug'];
+    const schoolSlug = schoolSlugOf(req);
     const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
     const pdf = await this.pdfService.generateBulkChallans(
       schoolSlug,
@@ -98,7 +99,7 @@ export class PdfController {
     @Body() dto: BulkReportCardDto,
     @Request() req: any,
   ) {
-    const schoolSlug = req.headers['x-school-slug'];
+    const schoolSlug = schoolSlugOf(req);
     return this.pdfService.generateBulkReportCards(schoolSlug, dto, req.user.userId);
   }
 
@@ -107,7 +108,7 @@ export class PdfController {
     @Request() req: any,
     @Query('type') type?: string,
   ) {
-    const schoolSlug = req.headers['x-school-slug'];
+    const schoolSlug = schoolSlugOf(req);
     return this.pdfService.getPdfLogs(schoolSlug, type);
   }
 
@@ -117,7 +118,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.user?.schoolSlug || req.headers['x-school-slug'] || 'demo-school';
+    const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateFromTemplate(
       schoolSlug,
       dto.type,
@@ -139,7 +140,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.user?.schoolSlug || req.headers['x-school-slug'] || 'demo-school';
+    const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateFeeReceipt(schoolSlug, dto, req.user?.sub);
     res.set({
       'Content-Type': 'application/pdf',
@@ -155,7 +156,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.headers['x-school-slug'];
+    const schoolSlug = schoolSlugOf(req);
     const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
     const pdf = await this.pdfService.generateFeeRevenueReportPdf(
       schoolSlug, { month: dto.month, academicYear, campus: dto.campus }, req.user.userId,
@@ -174,7 +175,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.user?.schoolSlug || req.headers['x-school-slug'] || 'demo-school';
+    const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTabularReportPdf(schoolSlug, dto);
     const safeName = dto.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     res.set({
@@ -191,7 +192,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
-    const schoolSlug = req.user?.schoolSlug || req.headers['x-school-slug'] || 'demo-school';
+    const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateVoucher(schoolSlug, dto, req.user?.sub);
     res.set({
       'Content-Type': 'application/pdf',

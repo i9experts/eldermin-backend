@@ -15,6 +15,15 @@ import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
 import { UserRole } from '../../auth/roles.enum';
+import { idForms } from '../../common/utils/id-forms.util';
+import { AuthStateService } from './auth-state.service';
+
+// Compared against when no active account matches the e-mail, so an unknown or
+// deactivated account costs the same as a wrong password (no timing oracle).
+import { SCHOOL_SUSPENDED_MESSAGE } from '../../common/constants/school-suspended';
+export { SCHOOL_SUSPENDED_MESSAGE };
+
+const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password-for-timing-only', 10);
 
 @Injectable()
 export class AuthService {
@@ -30,6 +39,7 @@ export class AuthService {
     private uploadService: UploadService,
     private rolesService: RolesService,
     private emailService: EmailService,
+    private authState: AuthStateService,
   ) {}
 
   /** Platform-level mirror of RolesService.getPermissionsForUser, kept as
@@ -60,7 +70,10 @@ export class AuthService {
    * the JWT and getMe never surfaced them, leaving the frontend with no
    * way to know its own scope at all despite the backend enforcing it). */
   private async resolveScopeFieldsForUser(userId: any, schoolSlug?: string | null) {
-    const staffRecord = await this.staffModel.findOne({ userId }).select('supervisedClusterIds isBoardLevel campusId department').lean();
+    // A removed / deactivated Staff row (isActive=false) no longer contributes campus,
+    // department, class-teacher or cluster scope: this is what strips staff scope from a
+    // demoted shared account. (Matches both string and ObjectId userId storage.)
+    const staffRecord = await this.staffModel.findOne({ userId: idForms(userId), isActive: { $ne: false } }).select('supervisedClusterIds isBoardLevel campusId department').lean();
     const supervisedClusterIds = staffRecord?.supervisedClusterIds?.map((id: any) => id.toString()) || undefined;
     const isBoardLevel = staffRecord?.isBoardLevel || undefined;
     let campusId = staffRecord?.campusId?.toString() || undefined;
@@ -116,7 +129,12 @@ export class AuthService {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const user: any = await this.userModel.findOne(query).lean();
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    if (!user) {
+      // Unknown OR deactivated account (the query requires isActive:true): do the same
+      // bcrypt work as a wrong password so neither the message nor the timing tells them apart.
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
+      throw new UnauthorizedException('Invalid credentials');
+    }
 
     // Support both passwordHash (new schema) and password (legacy)
     const hash = user.passwordHash || user.password;
@@ -149,6 +167,7 @@ export class AuthService {
         role,
         name,
         resellerId: String(reseller._id),
+        tv: Number.isInteger(user.tokenVersion) ? user.tokenVersion : 0,
       };
 
       return {
@@ -181,7 +200,7 @@ export class AuthService {
     } else if (slugToUse) {
       tenant = await this.tenantModel.findOne({ slug: slugToUse }).lean();
     }
-    if (tenant?.status === 'suspended') throw new ForbiddenException('Account suspended');
+    if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
 
     const tenantId = tenant?._id?.toString() || user.tenantId?.toString() || slugToUse || user._id.toString();
 
@@ -218,6 +237,7 @@ export class AuthService {
 
     const payload = {
       sub: user._id.toString(),
+      tv: Number.isInteger(user.tokenVersion) ? user.tokenVersion : 0, // S3 session version
       tenantId,
       institutionId: (user.institutionId || tenant?._id || user.tenantId)?.toString(),
       role,
@@ -337,21 +357,38 @@ export class AuthService {
       resetPasswordTokenHash: tokenHash,
       resetPasswordExpires: { $gt: new Date() },
     });
-    if (!user) throw new UnauthorizedException('This reset link is invalid or has expired');
+    // A deactivated account cannot use a reset link issued before it was deactivated;
+    // same generic answer as an invalid/expired token (account status is not revealed).
+    if (!user || user.isActive === false) throw new UnauthorizedException('This reset link is invalid or has expired');
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await this.userModel.findByIdAndUpdate(user._id, {
       $set: { passwordHash },
+      $inc: { tokenVersion: 1 }, // S3: a password reset ends every existing session of the account
       $unset: { resetPasswordTokenHash: '', resetPasswordExpires: '' },
     });
+    this.authState.invalidate(user._id);
     return { message: 'Password updated - you can now sign in with your new password.' };
+  }
+
+  /** 'Sign out everywhere' for the caller: bumps tokenVersion so every token issued so far is rejected. */
+  async logoutAll(userId: string) {
+    await this.userModel.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } });
+    this.authState.invalidate(userId);
+    return { message: 'Signed out of all sessions.' };
   }
 
   async getMe(userId: string, tenantId: string) {
     const user: any = await this.userModel
       .findOne({ _id: userId, tenantId, isActive: true })
-      .select('-passwordHash').lean();
+      // Internal secrets never leave the server (reset-token hash/expiry too).
+      .select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires').lean();
     if (!user) throw new UnauthorizedException('User not found');
+    // token+slug login (the web stores the token and calls /auth/me): a suspended school is refused here too
+    if (tenantId) {
+      const tenant: any = await this.tenantModel.findOne({ _id: idForms(tenantId) }).select('status').lean();
+      if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+    }
     const permissions = await this.rolesService.getPermissionsForUser(userId);
     // Self-healing single-campus fallback isn't critical here (unlike
     // login) - getMe only runs after a successful login, by which point

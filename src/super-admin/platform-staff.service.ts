@@ -1,3 +1,4 @@
+import { AuthStateService } from '../modules/auth/auth-state.service';
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -60,6 +61,7 @@ export class PlatformStaffService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel('OrgInstitution') private orgInstitutionModel: Model<any>,
+    private authState: AuthStateService,
   ) {}
 
   private async resolvePlatformTenant() {
@@ -159,6 +161,7 @@ export class PlatformStaffService {
       { new: true },
     ).select('-passwordHash');
     if (!user) throw new NotFoundException('Platform staff account not found');
+    this.authState.invalidate(userId);
     return user;
   }
 
@@ -218,12 +221,17 @@ export class PlatformStaffService {
     };
   }
 
-  async setStaffActive(userId: string, isActive: boolean) {
+  async setStaffActive(userId: string, isActive: boolean, actorId?: string) {
+    // Deactivation records when/by whom (S1); reactivation clears the markers. Existing
+    // tokens stay valid until S3.
+    const update: any = isActive
+      ? { $set: { isActive: true }, $inc: { tokenVersion: 1 }, $unset: { deactivatedAt: '', deactivatedBy: '', deactivationReason: '' } }
+      : { $set: { isActive: false, deactivatedAt: new Date(), deactivationReason: 'platform_staff_deactivated', ...(actorId ? { deactivatedBy: actorId } : {}) }, $inc: { tokenVersion: 1 } };
     const user = await this.userModel.findOneAndUpdate(
       { _id: userId, primaryRole: 'super_admin' },
-      { $set: { isActive } },
+      update,
       { new: true },
-    ).select('-passwordHash');
+    ).select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires');
     if (!user) throw new NotFoundException('Platform staff account not found');
     return user;
   }
@@ -233,7 +241,9 @@ export class PlatformStaffService {
     if (!user) throw new NotFoundException('Platform staff account not found');
     const tempPassword = this.generateTempPassword();
     user.passwordHash = await bcrypt.hash(tempPassword, 12);
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1; // S3: old sessions end
     await user.save();
+    this.authState.invalidate(user._id);
     return { tempPassword };
   }
 

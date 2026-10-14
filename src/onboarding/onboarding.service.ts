@@ -178,6 +178,7 @@ export class OnboardingService {
 
     const token = this.jwtService.sign({
       sub: user._id.toString(),
+      tv: 0, // S3: brand-new account
       tenantId: tenant._id.toString(),
       institutionId: institution._id.toString(),
       role: 'institution_owner',

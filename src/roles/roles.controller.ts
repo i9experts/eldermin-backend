@@ -1,16 +1,28 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Request } from '@nestjs/common';
-import { RolesService } from './roles.service';
+import { Controller, Get, Post, Put, Delete, Body, Param, Request, ForbiddenException, UseGuards } from '@nestjs/common';
+import { RolesService, RoleActor } from './roles.service';
+import { RolesAdminGuard } from './guards/roles-admin.guard';
 import { CreateRoleDto, UpdateRoleDto, AssignRoleDto } from './dto/role.dto';
 
+// Every /roles route: owner/admin/super_admin or a custom role with FULL
+// institution manage (RolesAdminGuard). Parent/student/staff -> 403.
+@UseGuards(RolesAdminGuard)
 @Controller('roles')
 export class RolesController {
   constructor(private readonly service: RolesService) {}
 
-  private ctx(req: any) {
+  private ctx(req: any): RoleActor {
+    const u = req?.user || {};
+    // No silent 'demo-school' fallback any more: a token without a school
+    // must not read or write another school's roles.
+    if (!u.schoolSlug || !u.tenantId) throw new ForbiddenException('No school context on this account.');
     return {
-      schoolSlug: req?.user?.schoolSlug || 'demo-school',
-      tenantId: req?.user?.tenantId,
-      userName: req?.user?.name || req?.user?.email || 'Admin',
+      userId: u.userId,
+      role: u.role || u.primaryRole,
+      schoolSlug: u.schoolSlug,
+      tenantId: String(u.tenantId),
+      userName: u.name || u.email || 'Admin',
+      ipAddress: (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip,
+      userAgent: req.headers?.['user-agent'],
     };
   }
 
@@ -27,37 +39,32 @@ export class RolesController {
 
   @Get()
   async getRoles(@Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getRoles(schoolSlug);
+    const { schoolSlug, tenantId } = this.ctx(req);
+    return this.service.getRoles(schoolSlug, tenantId);
   }
 
   @Post()
   async createRole(@Body() dto: CreateRoleDto, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.createRole(schoolSlug, dto, userName);
+    return this.service.createRole(this.ctx(req), dto);
   }
 
   @Put(':id')
   async updateRole(@Param('id') id: string, @Body() dto: UpdateRoleDto, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateRole(id, schoolSlug, dto);
+    return this.service.updateRole(this.ctx(req), id, dto);
   }
 
   @Post(':id/duplicate')
   async duplicateRole(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.duplicateRole(id, schoolSlug, userName);
+    return this.service.duplicateRole(this.ctx(req), id);
   }
 
   @Delete(':id')
   async deleteRole(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.deleteRole(id, schoolSlug);
+    return this.service.deleteRole(this.ctx(req), id);
   }
 
   @Post('assign')
   async assignRole(@Body() dto: AssignRoleDto, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.assignRole(schoolSlug, dto.userId, dto.roleId || null);
+    return this.service.assignRole(this.ctx(req), dto.userId, dto.roleId || null);
   }
 }
