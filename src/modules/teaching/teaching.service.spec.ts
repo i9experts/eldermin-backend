@@ -44,6 +44,7 @@ function makeService(existingPeriods: any[]) {
     noop, // staffModel
     noop, // userModel
     noop, // notificationModel
+    noop, // attendanceSettingsModel
     noop, // pdfService
     noop, // configService
   );

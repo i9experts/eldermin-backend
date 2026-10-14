@@ -29,7 +29,7 @@ describe('malformed id -> 400 on teacher-app routes', () => {
   const assignmentModel: any = { findOne: jest.fn(async () => null) };
   const noop: any = {};
   const staffModel: any = { findOne: jest.fn(() => chain({ _id: new Types.ObjectId() })) };
-  const teaching = new TeachingService({ findOne: jest.fn(() => chain({ _id: new Types.ObjectId() })) } as any, lessonPlanModel, noop, noop, noop, assignmentModel, noop, noop, noop, noop, noop /*classDiary*/, staffModel, noop, noop, noop, noop);
+  const teaching = new TeachingService({ findOne: jest.fn(() => chain({ _id: new Types.ObjectId() })) } as any, lessonPlanModel, noop, noop, noop, assignmentModel, noop, noop, noop, noop, noop /*classDiary*/, staffModel, noop, noop, noop /*attendanceSettings*/, noop, noop);
   const teacher = { userId: new Types.ObjectId().toString(), role: 'teacher', schoolSlug: 's' };
 
   it.each(BAD)('PATCH /teaching/lesson-plans/%s: 400 "Invalid lesson plan id" for teacher and admin, no query', async (bad) => {

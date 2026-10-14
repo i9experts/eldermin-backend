@@ -31,7 +31,7 @@ describe('TeachingService lesson plan notify hooks', () => {
     const noop: any = {};
     const service = new (TeachingService as any)(
       teacherProfileModel, lessonPlanModel, noop, noop, noop, noop, noop, noop, noop, noop,
-      noop /*classDiary*/, staffModel, noop, noop, noop, noop,
+      noop /*classDiary*/, staffModel, noop, noop, noop /*attendanceSettings*/, noop, noop,
       notify ? { notify } : undefined,
     ) as TeachingService;
     return { service, notify, staffModel, teacherProfileModel };

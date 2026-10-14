@@ -1822,9 +1822,17 @@ export class StudentsService {
     const date = new Date(dto.date);
     date.setHours(0, 0, 0, 0);
 
+    // subject is part of the match key, not just the update, so a
+    // subject-wise school gets one real record per student per day per
+    // subject instead of each subject's save overwriting the last one -
+    // dto.subject is undefined for a 'daily'-mode school, which matches
+    // the null default every existing pre-this-feature record already
+    // has (Mongo treats "field absent" and "field is null" the same way
+    // for an equality match), so daily mode's one-record-per-day
+    // behavior is unchanged.
     const saved = await this.attendanceModel.findOneAndUpdate(
-      { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug },
-      { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId) } },
+      { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug, subject: dto.subject || null },
+      { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), subject: dto.subject || null } },
       { upsert: true, new: true },
     );
     await this.notifyAttendance(dto.schoolSlug as string, [{ studentId: dto.studentId, status: (dto as any).status, date }]);
@@ -1848,8 +1856,10 @@ export class StudentsService {
       date.setHours(0, 0, 0, 0);
       return {
         updateOne: {
-          filter: { studentId: new Types.ObjectId(r.studentId), date, schoolSlug: dto.schoolSlug },
-          update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear } },
+          // subject in the filter too - see the comment in markAttendance
+          // above for why this is safe for existing daily-mode records.
+          filter: { studentId: new Types.ObjectId(r.studentId), date, schoolSlug: dto.schoolSlug, subject: r.subject || null },
+          update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
           upsert: true,
         },
       };
@@ -1860,7 +1870,7 @@ export class StudentsService {
   }
 
   async getAttendance(schoolSlug: string, query: AttendanceQueryDto) {
-    const { page, limit, studentId, grade, section, from, to, status, month } = query;
+    const { page, limit, studentId, grade, section, from, to, status, month, subject } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -1868,6 +1878,10 @@ export class StudentsService {
     if (grade) filter.grade = grade;
     if (section) filter.section = section;
     if (status) filter.status = status;
+    // Unfiltered in subject-wise mode returns every subject's record for
+    // the day (one per subject) - the caller decides whether to group by
+    // subject or narrow with this.
+    if (subject) filter.subject = subject;
     if (month) {
       const [y, m] = month.split('-').map(Number);
       filter.date = {
