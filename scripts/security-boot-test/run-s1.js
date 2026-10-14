@@ -111,7 +111,8 @@ async function http(method, p, token, body) {
   const { AuditLogSchema } = dist('compliance/schemas/compliance.schema.js');
   const M = (n, s_) => mongoose.models[n] || mongoose.model(n, s_);
   const audit = new CriticalAuditService(M('AuditLog', AuditLogSchema));
-  const access = new AccountAccessService(M('User', UserSchema), M('Tenant', TenantSchema), M('AuditLog', AuditLogSchema), audit);
+  // S3 added a 5th dependency (the in-process auth-state cache); this standalone script has no app cache to clear
+  const access = new AccountAccessService(M('User', UserSchema), M('Tenant', TenantSchema), M('AuditLog', AuditLogSchema), audit, { invalidate() {} });
   const cron = new ExitAccessService(M('ExitRecord', ExitRecordSchema), M('Staff', StaffSchema), M('Tenant', TenantSchema), M('School', SchoolSchema), access);
   const tenantsBefore = await db.collection('exitRecords').countDocuments({});
   // the throwaway school has no timezone set -> default Asia/Karachi
