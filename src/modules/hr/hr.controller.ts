@@ -153,7 +153,7 @@ export class HrController {
   @Get('leave/applications')
   getLeaveApplications(@Request() req) { return this.hrService.getLeaveApplications(req.user.tenantId); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/applications')
   submitLeaveApplication(@Request() req, @Body() body: any) { return this.hrService.submitLeaveApplication(req.user.tenantId, body); }
 
@@ -354,13 +354,13 @@ export class HrController {
   @Get('leave/balances/:staffId')
   getLeaveBalanceAlt(@Request() req, @Param('staffId') sid: string) { return this.hrService.getLeaveBalance(req.user.tenantId, sid); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/balances/allocate')
   allocateLeaveBalances(@Request() req, @Body() body: { policyId: string; academicYear?: string }) { return this.hrService.bulkAssignLeavePolicy(req.user.tenantId, body.policyId, body.academicYear); }
 
   // ── Leave Policies (must be before generic leave/: routes) ────────────
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies/seed-defaults')
   seedLeavePolicies(@Request() req) { return this.hrService.seedLeavePolicies(req.user.tenantId); }
 
@@ -368,19 +368,19 @@ export class HrController {
   @Get('leave/policies')
   getLeavePolicies(@Request() req) { return this.hrService.getLeavePolicies(req.user.tenantId); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies')
   createLeavePolicy(@Request() req, @Body() body: any) { return this.hrService.createLeavePolicy(req.user.tenantId, body); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Patch('leave/policies/:id')
   updateLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: any) { return this.hrService.updateLeavePolicy(req.user.tenantId, id, body); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies/:id/assign')
   assignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { staffId: string; academicYearId: string }) { return this.hrService.assignLeavePolicy(req.user.tenantId, id, body.staffId, body.academicYearId); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave/policies/:id/bulk-assign')
   bulkAssignLeavePolicy(@Request() req, @Param('id') id: string, @Body() body: { academicYearId: string }) { return this.hrService.bulkAssignLeavePolicy(req.user.tenantId, id, body.academicYearId); }
 
@@ -388,7 +388,7 @@ export class HrController {
   @Get('leave')
   getLeave(@Request() req, @Query() q: any) { return this.hrService.getLeaveApplications(req.user.tenantId, q); }
 
-  @HrWrite()
+  @RolesOrModuleManage('hr', HR_LEAVE_ADMIN_ROLES)
   @Post('leave')
   createLeave(@Request() req, @Body() body: any) { return this.hrService.createLeaveApplication(req.user.tenantId, this.iid(req), body); }
 

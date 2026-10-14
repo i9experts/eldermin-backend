@@ -11,6 +11,10 @@ import { hasPermission } from '../../auth/permissions.matrix';
 import { HR_ADMIN_ROLES, PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
 
 const proto: any = HrController.prototype;
+// Leave-administration routes keep feat/staff-portal's policy (merged to main first): same base roles
+// (HR_LEAVE_ADMIN_ROLES == HR_ADMIN_ROLES), custom roles only through a SUB-MODULE grant (module-wide hr is
+// ignored); leave approval is gated at VIEW level (the web gates it at hr:view).
+const LEAVE_ADMIN = ['submitLeaveApplication', 'allocateLeaveBalances', 'seedLeavePolicies', 'createLeavePolicy', 'updateLeavePolicy', 'assignLeavePolicy', 'bulkAssignLeavePolicy', 'createLeave', 'updateLeaveStatus'];
 const handlers = Object.getOwnPropertyNames(proto).filter(n => n !== 'constructor' && typeof proto[n] === 'function' && Reflect.getMetadata('path', proto[n]) !== undefined);
 const METHODS: Record<number, string> = { 0: 'GET', 1: 'POST', 2: 'PUT', 3: 'DELETE', 4: 'PATCH' };
 const methodOf = (h: string) => METHODS[Reflect.getMetadata('method', proto[h])];
@@ -51,7 +55,8 @@ describe('HrController route matrix', () => {
     for (const h of handlers) {
       const w = Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]);
       if (!w) continue;
-      expect(w.level).toBe('manage');
+      expect(w.level).toBe(h === 'updateLeaveStatus' ? 'view' : 'manage');
+      expect(w.allowModuleWide).toBe(!LEAVE_ADMIN.includes(h));
       expect([...w.roles].sort()).toEqual([...(payRoutes.includes(h) ? PAYROLL_PAY_ROLES : HR_ADMIN_ROLES)].sort());
     }
   });
@@ -70,6 +75,14 @@ describe('HR writes (enforced immediately)', () => {
     });
     it('custom role with hr manage -> allowed; hr view only / other module -> 403', async () => {
       const t = { userId: 'u', role: UserRole.TEACHER };
+      if (LEAVE_ADMIN.includes(h)) {
+        // staff-portal policy: sub-module grant only; module-wide hr is ignored; approval needs just view
+        const lvl = h === 'updateLeaveStatus' ? 'view' : 'manage';
+        await expect(run(h, t, models('r', { moduleAccess: [{ moduleKey: 'hr', subModuleKey: 'leave', level: lvl }] }))).resolves.toBe(true);
+        await expect(run(h, t, models('r', { moduleAccess: [{ moduleKey: 'hr', level: 'manage' }] }))).rejects.toThrow(ForbiddenException);
+        await expect(run(h, t, models('r', { moduleAccess: [{ moduleKey: 'finance', level: 'manage' }] }))).rejects.toThrow(ForbiddenException);
+        return;
+      }
       await expect(run(h, t, models('r', { moduleAccess: [{ moduleKey: 'hr', level: 'manage' }] }))).resolves.toBe(true);
       await expect(run(h, t, models('r', { moduleAccess: [{ moduleKey: 'hr', level: 'view' }] }))).rejects.toThrow(ForbiddenException);
       await expect(run(h, t, models('r', { moduleAccess: [{ moduleKey: 'finance', level: 'manage' }] }))).rejects.toThrow(ForbiddenException);
