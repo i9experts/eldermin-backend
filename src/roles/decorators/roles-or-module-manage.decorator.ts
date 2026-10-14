@@ -22,7 +22,7 @@ export interface RolesOrModuleManageOptions {
    * sub-module grants both count.
    */
   allowModuleWide?: boolean;
-  /** Tie the route to ONE sub-module: only an exact sub-module grant passes (not module-wide, not another sub-module). */
+  /** Tie the route to ONE sub-module: an exact sub-module grant passes, never a sibling sub-module; a module-wide grant passes only with allowModuleWide: true. */
   subModuleKey?: string;
 }
 

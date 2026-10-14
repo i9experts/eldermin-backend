@@ -66,8 +66,12 @@ describe('counselling and interventions are confidential (round 2)', () => {
   });
   it('existing routes WITHOUT a sub-module key behave exactly as before (module-wide still passes where it did)', () => {
     expect(customRoleGrants([{ moduleKey: 'behaviour', level: 'manage' }], 'behaviour', 'manage', true)).toBe(true);
-    expect(customRoleGrants([{ moduleKey: 'behaviour', level: 'manage' }], 'behaviour', 'manage', true, 'counselling')).toBe(false);
-    expect(customRoleGrants([{ moduleKey: 'behaviour', subModuleKey: 'counselling', level: 'view' }], 'behaviour', 'manage', true, 'counselling')).toBe(false);
+    // sub-module-tied route, allowModuleWide=false (confidential): the module-wide grant does NOT count
+    expect(customRoleGrants([{ moduleKey: 'behaviour', level: 'manage' }], 'behaviour', 'manage', false, 'counselling')).toBe(false);
+    // ... with allowModuleWide=true (e.g. institution admins on approvals) a module-wide grant counts, a sibling sub-module still does not
+    expect(customRoleGrants([{ moduleKey: 'behaviour', level: 'manage' }], 'behaviour', 'manage', true, 'counselling')).toBe(true);
+    expect(customRoleGrants([{ moduleKey: 'behaviour', subModuleKey: 'records', level: 'manage' }], 'behaviour', 'manage', true, 'counselling')).toBe(false);
+    expect(customRoleGrants([{ moduleKey: 'behaviour', subModuleKey: 'counselling', level: 'view' }], 'behaviour', 'manage', false, 'counselling')).toBe(false);
   });
 });
 

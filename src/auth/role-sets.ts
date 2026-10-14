@@ -34,3 +34,13 @@ export const NON_STAFF_ROLES: UserRole[] = [
 
 /** Every school-staff role (all roles except NON_STAFF_ROLES). Library writes/settings (D8) and upload / Early Years (D9). */
 export const SCHOOL_STAFF_ROLES: UserRole[] = (Object.values(UserRole) as UserRole[]).filter((r) => !NON_STAFF_ROLES.includes(r));
+
+/**
+ * Institution approval requests (budget, hiring, procurement, hr, academic, policy): who may decide a stage. Same people the web's Institution >
+ * Approvals tab is meant for: the admin set plus the HR and finance managers (hiring/hr and budget/procurement requests). Teachers, librarians,
+ * support staff, parents, students, resellers: no. A custom role needs a grant on the institution -> approvals sub-module.
+ */
+export const APPROVAL_DECIDER_ROLES: UserRole[] = [...TEACHING_ADMIN_ROLES, UserRole.HR_MANAGER, UserRole.FINANCE_MANAGER];
+
+/** May act on a workflow / approval that is not assigned to them, and may approve their own (nobody else may). */
+export const APPROVAL_OVERRIDE_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER];

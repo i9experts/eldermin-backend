@@ -83,11 +83,14 @@ export function customRoleGrants(
   subModuleKey?: string,
 ): boolean {
   if (!Array.isArray(moduleAccess)) return false;
-  // A route tied to ONE sub-module (e.g. behaviour -> counselling) accepts only a grant on exactly that sub-module: neither a module-wide
-  // entry (the seeded Teacher role has behaviour:manage module-wide) nor another sub-module of the same module counts.
+  // A route tied to ONE sub-module (e.g. behaviour -> counselling) accepts a grant on exactly that sub-module, never a sibling sub-module.
+  // allowModuleWide=false (confidential data): ONLY the exact grant counts, so neither a module-wide entry (the seeded Teacher role has
+  // behaviour:manage module-wide) nor another sub-module unlocks it. allowModuleWide=true: a module-wide entry also counts (e.g. a custom role
+  // with institution:manage is an institution admin and may decide approvals).
   if (subModuleKey) {
     return moduleAccess.some(
-      m => m && m.moduleKey === moduleKey && m.subModuleKey === subModuleKey && satisfiesRequiredLevel(m.level, level),
+      m => m && m.moduleKey === moduleKey && satisfiesRequiredLevel(m.level, level) &&
+        (m.subModuleKey === subModuleKey || (allowModuleWide && !m.subModuleKey)),
     );
   }
   return moduleAccess.some(

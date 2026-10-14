@@ -3,6 +3,8 @@ import {
   Body, Param, Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { DocumentsService } from './documents.service';
+import { Roles } from '../auth/decorators';
+import { SCHOOL_STAFF_ROLES } from '../auth/role-sets';
 
 @Controller('documents')
 export class DocumentsController {
@@ -65,6 +67,7 @@ export class DocumentsController {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getInstances(schoolSlug, query, requestingUser);
   }
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('workflows/my-approvals') async getMyApprovals(@Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.getMyPendingApprovals(schoolSlug, userName);
@@ -72,16 +75,22 @@ export class DocumentsController {
   @Post('workflows') @HttpCode(HttpStatus.CREATED)
   async initiateWorkflow(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, userName, requestingUser } = this.ctx(req);
-    return this.service.initiateWorkflow({ ...dto, schoolSlug, initiatedBy: userName }, requestingUser);
+    // the initiator is always the signed-in user (stored by id too, so the self-approval rule has something reliable to compare)
+    return this.service.initiateWorkflow({ ...dto, schoolSlug, initiatedBy: userName, initiatedById: requestingUser?.userId }, requestingUser);
   }
+  // Was open to any token: anyone could approve any step, in any order, under any name (`actionBy` came from the body).
+  // Now: staff only; the actor is the signed-in user; only the step's assignee (or the owner / super_admin) may act on the CURRENT pending step;
+  // nobody approves their own request (owner / super_admin exempt). See DocumentsService.takeAction.
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Patch('workflows/:id/action')
   async takeAction(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.takeAction(id, schoolSlug, dto.stepOrder, dto.action, dto.actionBy || userName, dto.comments);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.takeAction(id, schoolSlug, dto?.stepOrder, dto?.action, requestingUser, dto?.comments);
   }
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Patch('workflows/:id/cancel')
   async cancelWorkflow(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.cancelWorkflow(id, schoolSlug, userName, dto.reason);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.cancelWorkflow(id, schoolSlug, userName, dto?.reason, requestingUser);
   }
 }

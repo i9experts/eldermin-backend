@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { assertNotSelfApproval, assertStillOpen, isOverrideRole, sameName } from '../common/utils/approval-guards.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -211,15 +212,33 @@ export class DocumentsService {
     return instance.save();
   }
 
-  async takeAction(id: string, schoolSlug: string, stepOrder: number, action: 'approve'|'reject', actionBy: string, comments?: string) {
+  /**
+   * Approve / reject ONE step of a running workflow.
+   *  - the actor is the signed-in user (never a name from the body);
+   *  - only the step's assignee may act (assignedToId = user id, or assignedTo = user name); the owner / super_admin may unblock any step;
+   *    a step nobody is assigned to can only be acted on by them;
+   *  - only the CURRENT pending step of an in-progress workflow (no out-of-order approval, no acting on a finished workflow);
+   *  - nobody approves their own request (initiator), owner / super_admin exempt.
+   */
+  async takeAction(id: string, schoolSlug: string, stepOrder: number, action: 'approve'|'reject', actor: any, comments?: string) {
+    if (action !== 'approve' && action !== 'reject') throw new BadRequestException("action must be 'approve' or 'reject'");
+    if (!Types.ObjectId.isValid(String(id ?? ''))) throw new BadRequestException('Invalid workflow id');
     const instance = await this.instanceModel.findOne({ _id: id, schoolSlug });
     if (!instance) throw new NotFoundException('Workflow not found');
+    assertStillOpen(instance.status, ['in_progress'], 'workflow');
 
-    const step = instance.steps.find(s => s.stepOrder === stepOrder);
+    const step = instance.steps.find(s => s.stepOrder === Number(stepOrder));
     if (!step) throw new NotFoundException('Step not found');
+    if (step.status !== 'pending') throw new ConflictException(`This step has already been ${step.status}.`);
+    if (step.stepOrder !== instance.currentStep) throw new ConflictException('This is not the current step of the workflow.');
+
+    const uid = actor?.userId ? String(actor.userId) : '';
+    const assigned = (uid && (step as any).assignedToId && String((step as any).assignedToId) === uid) || sameName(actor?.name, step.assignedTo);
+    if (!assigned && !isOverrideRole(actor)) throw new ForbiddenException('This step is assigned to someone else.');
+    assertNotSelfApproval(actor, { id: (instance as any).initiatedById, name: instance.initiatedBy }, 'request');
 
     step.status = action === 'approve' ? 'approved' : 'rejected';
-    step.actionBy = actionBy;
+    step.actionBy = actor?.name || 'Unknown';
     step.actionAt = new Date();
     step.comments = comments || '';
 
@@ -227,7 +246,7 @@ export class DocumentsService {
       instance.status = 'rejected';
       instance.completedAt = new Date();
     } else {
-      const nextStep = instance.steps.find(s => s.stepOrder === stepOrder + 1);
+      const nextStep = instance.steps.find(s => s.stepOrder === step.stepOrder + 1);
       if (nextStep) {
         instance.currentStep = nextStep.stepOrder;
       } else {
@@ -240,12 +259,24 @@ export class DocumentsService {
     return instance;
   }
 
-  async cancelWorkflow(id: string, schoolSlug: string, cancelledBy: string, reason: string) {
-    return this.instanceModel.findOneAndUpdate(
+  /** Only the person who started a workflow (or the owner / super_admin) can cancel it, and only while it is still running. */
+  async cancelWorkflow(id: string, schoolSlug: string, cancelledBy: string, reason: string, actor?: any) {
+    if (!Types.ObjectId.isValid(String(id ?? ''))) throw new BadRequestException('Invalid workflow id');
+    if (actor) {
+      const inst: any = await this.instanceModel.findOne({ _id: id, schoolSlug }).select('status initiatedBy initiatedById').lean();
+      if (!inst) throw new NotFoundException('Workflow not found');
+      assertStillOpen(inst.status, ['pending', 'in_progress'], 'workflow');
+      const mine = actor.userId ? String(actor.userId) : '';
+      const initiator = (mine && inst.initiatedById && String(inst.initiatedById) === mine) || sameName(actor.name, inst.initiatedBy);
+      if (!initiator && !isOverrideRole(actor)) throw new ForbiddenException('Only the person who started this workflow can cancel it.');
+    }
+    const updated = await this.instanceModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { status: 'cancelled', cancelledBy, cancelReason: reason, completedAt: new Date() } },
       { new: true },
     );
+    if (!updated) throw new NotFoundException('Workflow not found');
+    return updated;
   }
 
   async getMyPendingApprovals(schoolSlug: string, userName: string) {

@@ -231,14 +231,17 @@ export class AssessmentController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  // Was open to any token and accepted any string. Now staff only (same guard as marks entry), the value must be a real status, and the
+  // publish / unpublish transition (result_published) belongs to the admin roles, exactly like report-card publish (TEACHING_ADMIN_ROLES).
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/status')
   async updateStatus(
     @Param('id') id: string,
     @Body('status') status: string,
     @Request() req: any,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateStatus(id, schoolSlug, status);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateStatus(id, schoolSlug, status, requestingUser);
   }
 
   @Post('questions')
