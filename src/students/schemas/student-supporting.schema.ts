@@ -54,9 +54,13 @@ export const StudentAttendanceSchema = SchemaFactory.createForClass(StudentAtten
 StudentAttendanceSchema.index({ studentId: 1, date: -1 });
 StudentAttendanceSchema.index({ schoolSlug: 1, date: -1 });
 StudentAttendanceSchema.index({ schoolSlug: 1, grade: 1, date: -1 });
+// One record per student, day AND subject (subject is null for daily-mode records). Replaces the old unique {studentId, date}, which
+// made a second subject on the same day a duplicate-key error. The old index is dropped by
+// scripts/migrate-student-attendance-index.ts (create-new-first); until then both exist and the code works either way
+// (attendance-upsert.util.ts answers a clear 409 for a subject save that hits the old index).
 StudentAttendanceSchema.index(
-  { studentId: 1, date: 1 },
-  { unique: true }
+  { studentId: 1, date: 1, subject: 1 },
+  { unique: true, name: 'studentId_1_date_1_subject_1' }
 );
 
 // ============================================================
