@@ -413,9 +413,19 @@ export class OrganizationService {
   }
 
   async addSection(gradeId: string, schoolSlug: string, section: any) {
+    // classTeacher/classTeacherId must only ever be set by
+    // assignClassTeacher below, atomically with the matching
+    // TeacherProfile update - stripped here so a brand-new section can't
+    // be $push-ed with a classTeacher display-name string (or a stray
+    // classTeacherId) that looks assigned but has no corresponding
+    // TeacherProfile.classTeacherOfGradeName, which is exactly what a
+    // class teacher's own Attendance screen gates on. The frontend's own
+    // "Add Section" form no longer offers this field at all; this is the
+    // server-side backstop for any other caller.
+    const { classTeacher, classTeacherId, ...safeSection } = section || {};
     return this.gradeModel.findOneAndUpdate(
       { _id: gradeId, schoolSlug },
-      { $push: { sections: section } },
+      { $push: { sections: safeSection } },
       { new: true },
     );
   }
