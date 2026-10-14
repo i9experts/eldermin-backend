@@ -234,6 +234,16 @@ export class BehaviourService {
     return r;
   }
 
+  /** Saves a new document; a Mongoose ValidationError (bad enum, missing required field) is a 400 naming the fields, never a 500. */
+  private async saveOr400<T extends { save(): Promise<any> }>(doc: T, what: string): Promise<any> {
+    try {
+      return await doc.save();
+    } catch (err: any) {
+      if (err?.name === 'ValidationError') throw new BadRequestException(`Invalid ${what}: ${Object.keys(err.errors || {}).join(', ') || err.message}`);
+      throw err;
+    }
+  }
+
   /** Fields only an admin role may write through PUT: ownership/tenancy and the resolve/verify workflow (resolve has its own route). */
   static readonly ADMIN_ONLY_RECORD_FIELDS = ['reportedBy', 'reportedById', 'schoolSlug', 'campusId', 'verifiedBy', 'verified', 'resolved', 'resolvedDate', 'resolvedNote', '_id'];
 
@@ -363,7 +373,7 @@ export class BehaviourService {
       overallRating: getTarbiyahRating(overallPercentage),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return assessment.save();
+    return this.saveOr400(assessment, 'Tarbiyah assessment');
   }
 
   async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -479,7 +489,7 @@ export class BehaviourService {
       nextSessionDate: data.nextSessionDate ? new Date(data.nextSessionDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return session.save();
+    return this.saveOr400(session, 'counselling session');
   }
 
   async getCounsellingSessions(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -540,7 +550,7 @@ export class BehaviourService {
       reviewDate: data.reviewDate ? new Date(data.reviewDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return intervention.save();
+    return this.saveOr400(intervention, 'intervention');
   }
 
   async getInterventions(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -603,7 +613,7 @@ export class BehaviourService {
       reviewDate: new Date(data.reviewDate),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return contract.save();
+    return this.saveOr400(contract, 'behaviour contract');
   }
 
   async getContracts(schoolSlug: string, query: any, requestingUser?: ScopedUser) {

@@ -110,3 +110,20 @@ describe('POST /behaviour/records bad input is a 400, never a 500', () => {
     await expect(mk(async () => { throw new Error('db down'); }).createRecord({ studentId: REC, date: '2026-01-01' })).rejects.toThrow('db down');
   });
 });
+
+describe('confidential-record creates answer 400 on a bad body (round 2)', () => {
+  const run = (method: 'createTarbiyahAssessment' | 'createCounsellingSession' | 'createIntervention' | 'createContract', save: () => Promise<any>) => {
+    const svc: any = Object.create(BehaviourService.prototype);
+    const Model = function (this: any, d: any) { Object.assign(this, d); this.save = save; } as any;
+    svc.tarbiyahModel = Model; svc.counsellingModel = Model; svc.interventionModel = Model; svc.contractModel = Model;
+    svc.getCharacterSettings = async () => ({ ratingScale: { min: 1, max: 5 } });
+    return method === 'createTarbiyahAssessment' ? svc.createTarbiyahAssessment('sch', { assessmentDate: '2026-01-01', traits: [] }) : svc[method]({ schoolSlug: 'sch' });
+  };
+  const bad = () => Promise.reject(Object.assign(new Error('v'), { name: 'ValidationError', errors: { periodType: {}, grade: {} } }));
+  it.each(['createTarbiyahAssessment', 'createCounsellingSession', 'createIntervention', 'createContract'] as const)('%s: a Mongoose ValidationError -> 400 naming the fields; other errors untouched; valid body saves', async (m) => {
+    await expect(run(m, bad)).rejects.toThrow(/periodType, grade/);
+    await expect(run(m, bad)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(run(m, () => Promise.reject(new Error('db down')))).rejects.toThrow('db down');
+    await expect(run(m, async () => ({ ok: true }))).resolves.toEqual({ ok: true });
+  });
+});
