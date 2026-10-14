@@ -81,6 +81,17 @@ describe('AuthStateService.assertTokenValid', () => {
       s.invalidate(UID);                                                      // bumped on THIS instance
       await expect(s.assertTokenValid({ sub: UID, tv: 1 })).rejects.toThrow(UnauthorizedException);
     });
+    it('a stale cache never wrongly rejects a FRESH token: rejection is confirmed against the DB (bump by another instance, user signs in again)', async () => {
+      const state: any = { isActive: true, tokenVersion: 0 };
+      const findOne = jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve({ ...state }) }) }));
+      const s = new AuthStateService({ findOne } as any);
+      await s.assertTokenValid({ sub: UID, tv: 0 });            // cached tv 0
+      state.tokenVersion = 1;                                   // bumped elsewhere; this instance still caches 0
+      await expect(s.assertTokenValid({ sub: UID, tv: 1 })).resolves.toBeUndefined();   // the NEW token is accepted (one confirming read)
+      expect(findOne).toHaveBeenCalledTimes(2);
+      await expect(s.assertTokenValid({ sub: UID, tv: 0 })).rejects.toThrow(UnauthorizedException);  // the old one is rejected (also confirmed with one more read)
+      expect(findOne).toHaveBeenCalledTimes(3);
+    });
     it('is bounded: never more than 5000 entries', async () => {
       const s = new AuthStateService({ findOne: () => ({ select: () => ({ lean: () => Promise.resolve({ isActive: true }) }) }) } as any);
       for (let i = 0; i < 5200; i++) await s.assertTokenValid({ sub: new Types.ObjectId().toHexString() });

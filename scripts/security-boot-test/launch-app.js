@@ -28,7 +28,8 @@ if (!nodeBin || !stateDir) { console.error('usage: node launch-app.js <node-bina
 const extra = Object.fromEntries(rest.map((kv) => { const i = kv.indexOf('='); return [kv.slice(0, i), kv.slice(i + 1)]; }));
 if (Object.keys(extra).some((k) => SUSPECT.test(k) || k === 'MONGODB_URI')) { console.error('Refusing: that variable cannot be overridden here.'); process.exit(2); }
 
-const dist = path.resolve(__dirname, '..', '..', 'dist', 'main.js');
+// BOOT_TEST_DIST lets the benchmark start a build from another worktree (e.g. the commit before S3)
+const dist = process.env.BOOT_TEST_DIST || path.resolve(__dirname, '..', '..', 'dist', 'main.js');
 fs.mkdirSync(stateDir, { recursive: true });
 const log = fs.openSync(path.join(stateDir, 'app.log'), 'a');
 const child = spawn(nodeBin, [dist], {

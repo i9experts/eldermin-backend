@@ -67,27 +67,38 @@ export class AuthStateService {
 
     const now = Date.now();
     let entry = this.cache.get(sub);
-    if (entry && entry.expires > now) {
-      this.stats.hits++;
-    } else {
+    let fromCache = false;
+    if (entry && entry.expires > now) { this.stats.hits++; fromCache = true; }
+    else { this.stats.misses++; entry = await this.load(sub, now); }
+
+    // A cached entry that would REJECT the token may simply be stale (e.g. the account was bumped by
+    // another instance and the user has just signed in again: the new token is NEWER than the cache).
+    // Rejections are therefore always confirmed against the database before they are returned; only
+    // acceptance can lag (by <= TTL), never a wrongful rejection of a fresh session.
+    if (fromCache && (!entry!.isActive || entry!.tv !== tokenTv)) {
       this.stats.misses++;
-      let doc: any;
-      try {
-        doc = await this.userModel.findOne({ _id: sub }).select('isActive tokenVersion').lean();
-      } catch (err) {
-        this.stats.errors++;
-        this.logger.error(`Account state lookup failed (503, not failing open): ${(err as Error)?.message}`);
-        throw new ServiceUnavailableException('Service temporarily unavailable. Please try again.');
-      }
-      if (!doc) { this.stats.rejected++; throw new UnauthorizedException('Your session is no longer valid. Please sign in again.'); }
-      entry = { isActive: doc.isActive !== false, tv: Number.isInteger(doc.tokenVersion) ? doc.tokenVersion : 0, expires: now + cacheTtlMs() };
-      if (cacheTtlMs() > 0) {
-        if (this.cache.size >= MAX_ENTRIES) this.evict(now);
-        this.cache.set(sub, entry);
-      }
+      entry = await this.load(sub, now);
     }
-    if (!entry.isActive) { this.stats.rejected++; throw new UnauthorizedException('This account is no longer active.'); }
-    if (entry.tv !== tokenTv) { this.stats.rejected++; throw new UnauthorizedException('Your session has ended. Please sign in again.'); }
+    if (!entry!.isActive) { this.stats.rejected++; throw new UnauthorizedException('This account is no longer active.'); }
+    if (entry!.tv !== tokenTv) { this.stats.rejected++; throw new UnauthorizedException('Your session has ended. Please sign in again.'); }
+  }
+
+  private async load(sub: string, now: number): Promise<Entry> {
+    let doc: any;
+    try {
+      doc = await this.userModel.findOne({ _id: sub }).select('isActive tokenVersion').lean();
+    } catch (err) {
+      this.stats.errors++;
+      this.logger.error(`Account state lookup failed (503, not failing open): ${(err as Error)?.message}`);
+      throw new ServiceUnavailableException('Service temporarily unavailable. Please try again.');
+    }
+    if (!doc) { this.cache.delete(sub); this.stats.rejected++; throw new UnauthorizedException('Your session is no longer valid. Please sign in again.'); }
+    const entry: Entry = { isActive: doc.isActive !== false, tv: Number.isInteger(doc.tokenVersion) ? doc.tokenVersion : 0, expires: now + cacheTtlMs() };
+    if (cacheTtlMs() > 0) {
+      if (this.cache.size >= MAX_ENTRIES) this.evict(now);
+      this.cache.set(sub, entry);
+    }
+    return entry;
   }
 
   private evict(now: number) {
