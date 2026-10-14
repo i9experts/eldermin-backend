@@ -32,7 +32,7 @@ describe('behaviour record resolve route (D7)', () => {
   });
   it('unknown record -> 404 (was 200 with null)', async () => {
     const { svc } = svcWith(null);
-    svc['recordModel'].findOneAndUpdate = jest.fn(async () => null);
+    (svc as any).recordModel.findOneAndUpdate = jest.fn(async () => null);
     await expect(svc.resolveRecord(REC, 's', 'n', 'T')).rejects.toBeInstanceOf(NotFoundException);
   });
   it('resolves a record and stamps who resolved it', async () => {
