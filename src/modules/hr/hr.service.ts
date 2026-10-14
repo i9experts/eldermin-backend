@@ -152,6 +152,18 @@ export class HrService {
     'department', 'campusId', 'avatarUrl', 'status', 'isActive', 'userId', 'supervisedClusterIds',
   ].join(' ');
 
+  /** "Before" snapshot for the fail-closed audit of payroll writes (null when the id is missing/invalid; the write itself then reports 404/400). */
+  async loadForAudit(kind: 'payrollRun' | 'payslip' | 'salaryComponent' | 'salaryTemplate' | 'staffSalary', tenantId: string, schoolSlug: string, id?: string) {
+    if (!id || !Types.ObjectId.isValid(id)) return null;
+    switch (kind) {
+      case 'payrollRun': return this.payrollRunModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
+      case 'payslip': return this.payslipModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).lean();
+      case 'salaryComponent': return this.salaryComponentModel.findOne({ _id: id, schoolSlug }).lean();
+      case 'salaryTemplate': return this.salaryTemplateModel.findOne({ _id: id, schoolSlug }).lean();
+      case 'staffSalary': return this.staffModel.findOne({ _id: id, tenantId: this.newTid(tenantId) }).select('firstName lastName employeeId salary salaryStructure').lean();
+    }
+  }
+
   /** `full` = caller is on the HR/admin allow-list; default false (projection) so a forgotten flag fails safe. */
   async getStaff(tenantId: string, campusId?: string, department?: string, requestingUser?: ScopedUser, full = false) {
     const filter: any = { tenantId: this.newTid(tenantId), isActive: true };

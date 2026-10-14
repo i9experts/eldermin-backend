@@ -10,11 +10,24 @@ import { CreateSelfLeaveDto } from './dto/self-leave.dto';
 import { HrAccessGuard } from './guards/hr-access.guard';
 import { HrWrite, HrRead, HrStaffDirectory } from './guards/hr-access.decorator';
 import { PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
+import { CriticalAuditService, AuditMeta } from '../../common/critical-audit.service';
 
 @Controller('hr')
 @UseGuards(AuthGuard('jwt'), HrAccessGuard)
 export class HrController {
-  constructor(private readonly hrService: HrService) {}
+  constructor(private readonly hrService: HrService, private readonly audit: CriticalAuditService) {}
+
+  // Payroll / salary writes are FAIL-CLOSED audited (before/after, masked):
+  // if the audit entry cannot be written the change is not applied.
+  private audited<T>(req: any, meta: AuditMeta, loadBefore: () => Promise<any>, mutate: () => Promise<T>): Promise<T> {
+    const u = req.user || {};
+    const ipAddress = (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket?.remoteAddress;
+    return this.audit.run(
+      { schoolSlug: u.schoolSlug, userId: u.userId, name: u.name, ipAddress, userAgent: req.headers?.['user-agent'] },
+      meta, loadBefore, mutate,
+    );
+  }
+  private before(req: any, kind: string, id?: string) { return () => this.hrService.loadForAudit(kind as any, req.user.tenantId, req.user.schoolSlug, id); }
 
   // Falls back to tenantId when institutionId is missing from an already-issued JWT
   // (older tokens/users predate per-institution scoping); avoids "institutionId required" 500s.
@@ -381,7 +394,7 @@ export class HrController {
 
   @HrWrite()
   @Post('payroll/runs')
-  createPayrollRun(@Request() req, @Body() body: any) { return this.hrService.createPayrollRun(req.user.tenantId, this.iid(req), body, req.user.userId); }
+  createPayrollRun(@Request() req, @Body() body: any) { return this.audited(req, { module: 'HR: Payroll', action: 'Create payroll run', type: 'create', resourceType: 'PayrollRun', resourceId: undefined, requested: body }, async () => null, () => this.hrService.createPayrollRun(req.user.tenantId, this.iid(req), body, req.user.userId)); }
 
   @HrWrite(PAYROLL_PAY_ROLES)
   @Patch('payroll/runs/:id/status')
@@ -389,7 +402,7 @@ export class HrController {
     @Request() req, @Param('id') id: string,
     @Body() body: { status: string; paymentMethod?: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string },
   ) {
-    return this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId, req.user.schoolSlug, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Change payroll run status', type: 'update', resourceType: 'PayrollRun', resourceId: id, requested: body }, this.before(req, 'payrollRun', id), () => this.hrService.updatePayrollStatus(req.user.tenantId, id, body.status, req.user.userId, req.user.schoolSlug, body));
   }
 
   @HrRead(PAYROLL_READ_ROLES)
@@ -401,25 +414,25 @@ export class HrController {
   @HrWrite(PAYROLL_PAY_ROLES)
   @Post('payroll/runs/:id/process-batch')
   processPayrollBatch(@Request() req, @Param('id') id: string, @Body() body: { rows: any[] }) {
-    return this.hrService.processPayrollBatch(req.user.tenantId, this.iid(req), req.user.schoolSlug, id, body.rows, req.user.userId);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Process payroll batch', type: 'update', resourceType: 'PayrollRun', resourceId: id, requested: { rows: (body.rows || []).length } }, this.before(req, 'payrollRun', id), () => this.hrService.processPayrollBatch(req.user.tenantId, this.iid(req), req.user.schoolSlug, id, body.rows, req.user.userId));
   }
 
   @HrWrite()
   @Delete('payroll/runs/:id')
   deletePayrollRun(@Request() req, @Param('id') id: string) {
-    return this.hrService.deletePayrollRun(req.user.tenantId, id);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Delete payroll run', type: 'delete', resourceType: 'PayrollRun', resourceId: id, requested: { id } }, this.before(req, 'payrollRun', id), () => this.hrService.deletePayrollRun(req.user.tenantId, id));
   }
 
   @HrWrite()
   @Post('payroll/recompute-totals')
   recomputePayslipTotals(@Request() req, @Body() body: { dryRun?: boolean }) {
-    return this.hrService.recomputePayslipTotals(req.user.tenantId, req.user.schoolSlug, body.dryRun !== false);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Recompute payslip totals', type: 'update', resourceType: 'Payslip', resourceId: undefined, requested: { dryRun: body.dryRun !== false } }, async () => null, () => this.hrService.recomputePayslipTotals(req.user.tenantId, req.user.schoolSlug, body.dryRun !== false));
   }
 
   @HrWrite()
   @Post('payroll/sync-payslip-statuses')
   syncPayslipStatuses(@Request() req) {
-    return this.hrService.syncPayslipStatuses(req.user.tenantId);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Sync payslip statuses', type: 'update', resourceType: 'Payslip', resourceId: undefined, requested: {} }, async () => null, () => this.hrService.syncPayslipStatuses(req.user.tenantId));
   }
 
   // ── PAYSLIPS ──────────────────────────────────────────────────────────
@@ -430,18 +443,18 @@ export class HrController {
 
   @HrWrite()
   @Post('payslips')
-  createPayslip(@Request() req, @Body() body: any) { return this.hrService.createPayslip(req.user.tenantId, this.iid(req), req.user.schoolSlug, body); }
+  createPayslip(@Request() req, @Body() body: any) { return this.audited(req, { module: 'HR: Payroll', action: 'Create payslip', type: 'create', resourceType: 'Payslip', resourceId: undefined, requested: body }, async () => null, () => this.hrService.createPayslip(req.user.tenantId, this.iid(req), req.user.schoolSlug, body)); }
 
   @HrWrite()
   @Patch('payslips/:id')
   updatePayslip(@Request() req, @Param('id') id: string, @Body() body: any) {
-    return this.hrService.updatePayslip(req.user.tenantId, id, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Update payslip', type: 'update', resourceType: 'Payslip', resourceId: id, requested: body }, this.before(req, 'payslip', id), () => this.hrService.updatePayslip(req.user.tenantId, id, body));
   }
 
   @HrWrite(PAYROLL_PAY_ROLES)
   @Post('payslips/:id/pay')
   payIndividualPayslip(@Request() req, @Param('id') id: string, @Body() body: { paymentMethod?: string; bankAccountId?: string; referenceNumber?: string; paymentDate?: string }) {
-    return this.hrService.payIndividualPayslip(req.user.tenantId, req.user.schoolSlug, id, req.user.userId, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Pay payslip', type: 'update', resourceType: 'Payslip', resourceId: id, requested: body }, this.before(req, 'payslip', id), () => this.hrService.payIndividualPayslip(req.user.tenantId, req.user.schoolSlug, id, req.user.userId, body));
   }
 
   // ── SALARY COMPONENTS (payroll configuration root system) ──────────────
@@ -455,19 +468,19 @@ export class HrController {
   @HrWrite()
   @Post('salary-components')
   createSalaryComponent(@Request() req, @Body() body: any) {
-    return this.hrService.createSalaryComponent(req.user.tenantId, req.user.schoolSlug, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Create salary component', type: 'create', resourceType: 'SalaryComponent', resourceId: undefined, requested: body }, async () => null, () => this.hrService.createSalaryComponent(req.user.tenantId, req.user.schoolSlug, body));
   }
 
   @HrWrite()
   @Patch('salary-components/:id')
   updateSalaryComponent(@Request() req, @Param('id') id: string, @Body() body: any) {
-    return this.hrService.updateSalaryComponent(id, req.user.schoolSlug, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Update salary component', type: 'update', resourceType: 'SalaryComponent', resourceId: id, requested: body }, this.before(req, 'salaryComponent', id), () => this.hrService.updateSalaryComponent(id, req.user.schoolSlug, body));
   }
 
   @HrWrite()
   @Delete('salary-components/:id')
   deleteSalaryComponent(@Request() req, @Param('id') id: string) {
-    return this.hrService.deleteSalaryComponent(id, req.user.schoolSlug);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Delete salary component', type: 'delete', resourceType: 'SalaryComponent', resourceId: id, requested: { id } }, this.before(req, 'salaryComponent', id), () => this.hrService.deleteSalaryComponent(id, req.user.schoolSlug));
   }
 
   // ── SALARY TEMPLATES (addresses "everything is manual") ─────────────
@@ -480,25 +493,25 @@ export class HrController {
   @HrWrite()
   @Post('salary-templates')
   createSalaryTemplate(@Request() req, @Body() body: any) {
-    return this.hrService.createSalaryTemplate(req.user.tenantId, req.user.schoolSlug, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Create salary template', type: 'create', resourceType: 'SalaryTemplate', resourceId: undefined, requested: body }, async () => null, () => this.hrService.createSalaryTemplate(req.user.tenantId, req.user.schoolSlug, body));
   }
 
   @HrWrite()
   @Patch('salary-templates/:id')
   updateSalaryTemplate(@Request() req, @Param('id') id: string, @Body() body: any) {
-    return this.hrService.updateSalaryTemplate(id, req.user.schoolSlug, body);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Update salary template', type: 'update', resourceType: 'SalaryTemplate', resourceId: id, requested: body }, this.before(req, 'salaryTemplate', id), () => this.hrService.updateSalaryTemplate(id, req.user.schoolSlug, body));
   }
 
   @HrWrite()
   @Delete('salary-templates/:id')
   deleteSalaryTemplate(@Request() req, @Param('id') id: string) {
-    return this.hrService.deleteSalaryTemplate(id, req.user.schoolSlug);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Delete salary template', type: 'delete', resourceType: 'SalaryTemplate', resourceId: id, requested: { id } }, this.before(req, 'salaryTemplate', id), () => this.hrService.deleteSalaryTemplate(id, req.user.schoolSlug));
   }
 
   @HrWrite()
   @Patch('staff/:id/salary-structure')
   setStaffSalaryStructure(@Request() req, @Param('id') id: string, @Body() body: { lines: { componentId: string; amount: number }[] }) {
-    return this.hrService.setStaffSalaryStructure(id, req.user.tenantId, req.user.schoolSlug, body.lines);
+    return this.audited(req, { module: 'HR: Payroll', action: 'Set staff salary structure', type: 'update', resourceType: 'Staff', resourceId: id, requested: body }, this.before(req, 'staffSalary', id), () => this.hrService.setStaffSalaryStructure(id, req.user.tenantId, req.user.schoolSlug, body.lines));
   }
 
   @HrRead(PAYROLL_READ_ROLES)

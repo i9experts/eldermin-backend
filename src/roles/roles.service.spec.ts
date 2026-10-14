@@ -24,7 +24,8 @@ function setup(opts: { users?: any[]; roles?: any[] } = {}) {
     const r = roles.find(x => (q._id ? String(x._id) === String(q._id) : true) && (q.schoolSlug ? x.schoolSlug === q.schoolSlug : true) && (q.name ? x.name === q.name : true));
     return Object.assign(Promise.resolve(r || null), { lean: () => Promise.resolve(r || null) });
   });
-  return { svc: new RolesService(roleModel, userModel), userModel, roleModel, saved };
+  const audit: any = { run: jest.fn((_a: any, _m: any, load: any, mut: any) => load().then(() => mut())) };
+  return { svc: new RolesService(roleModel, userModel, audit), userModel, roleModel, saved, audit };
 }
 
 const actor = (over: Partial<RoleActor> = {}): RoleActor => ({ userId: uid(), role: 'admin', tenantId: T1, schoolSlug: 's1', userName: 'A', ...over });

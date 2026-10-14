@@ -6,6 +6,7 @@ import { User, UserDocument } from '../modules/organization/schemas/user.schema'
 import { CreateRoleDto, UpdateRoleDto } from './dto/role.dto';
 import { UserRole } from '../auth/roles.enum';
 import { ROLE_RANK, UNRESTRICTED_GRANTOR_ROLES } from '../auth/admin-role-sets';
+import { CriticalAuditService } from '../common/critical-audit.service';
 import { Ceiling, describeEntry, entriesAboveCeiling, entriesWithUnknownKeys } from './role-grant.util';
 
 /** Who is calling (from the JWT). */
@@ -15,6 +16,8 @@ export interface RoleActor {
   tenantId: string;
   schoolSlug: string;
   userName: string;
+  ipAddress?: string;
+  userAgent?: string;
 }
 
 /** Base roles a custom role can never be attached to. */
@@ -60,7 +63,16 @@ export class RolesService {
   constructor(
     @InjectModel(Role.name) private roleModel: Model<RoleDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    private audit: CriticalAuditService,
   ) {}
+
+  // Role changes are FAIL-CLOSED audited with before/after (see CriticalAuditService).
+  private audited<T>(actor: RoleActor, meta: any, loadBefore: () => Promise<any>, mutate: () => Promise<T>): Promise<T> {
+    return this.audit.run(
+      { schoolSlug: actor.schoolSlug, userId: actor.userId, name: actor.userName, ipAddress: actor.ipAddress, userAgent: actor.userAgent },
+      { module: 'Roles', resourceType: 'Role', ...meta }, loadBefore, mutate,
+    );
+  }
 
   // Nests each module's real sub-modules under it, from the single shared
   // SUB_MODULES registry (role.schema.ts) — the frontend's Edit Role tree
@@ -130,8 +142,10 @@ export class RolesService {
     await this.assertWithinCeiling(actor, dto.moduleAccess);
     const existing = await this.roleModel.findOne({ schoolSlug, name: dto.name });
     if (existing) throw new BadRequestException(`A role named "${dto.name}" already exists`);
-    const role = new this.roleModel({ ...dto, schoolSlug, createdBy, isSystemDefault: false });
-    return role.save();
+    return this.audited(actor, { action: 'Create role', type: 'create', requested: dto }, async () => null, () => {
+      const role = new this.roleModel({ ...dto, schoolSlug, createdBy, isSystemDefault: false });
+      return role.save();
+    });
   }
 
   async updateRole(actor: RoleActor, id: string, dto: UpdateRoleDto) {
@@ -146,8 +160,12 @@ export class RolesService {
       throw new ForbiddenException('You cannot edit the role you currently hold.');
     }
     if (dto.moduleAccess) await this.assertWithinCeiling(actor, dto.moduleAccess);
-    Object.assign(role, dto);
-    return role.save();
+    return this.audited(
+      actor,
+      { action: 'Update role', type: 'update', resourceId: String(role._id), resourceTitle: role.name, requested: dto },
+      async () => (typeof (role as any).toObject === 'function' ? (role as any).toObject() : role),
+      () => { Object.assign(role, dto); return role.save(); },
+    );
   }
 
   async duplicateRole(actor: RoleActor, id: string) {
@@ -160,11 +178,13 @@ export class RolesService {
     while (await this.roleModel.findOne({ schoolSlug, name: newName })) {
       newName = `${role.name} (Copy ${counter++})`;
     }
-    const copy = new this.roleModel({
-      schoolSlug, name: newName, description: role.description, color: role.color,
-      moduleAccess: role.moduleAccess, isSystemDefault: false, createdBy,
+    return this.audited(actor, { action: 'Duplicate role', type: 'create', resourceId: String(role._id), resourceTitle: role.name, requested: { name: newName, moduleAccess: role.moduleAccess } }, async () => null, () => {
+      const copy = new this.roleModel({
+        schoolSlug, name: newName, description: role.description, color: role.color,
+        moduleAccess: role.moduleAccess, isSystemDefault: false, createdBy,
+      });
+      return copy.save();
     });
-    return copy.save();
   }
 
   async deleteRole(actor: RoleActor, id: string) {
@@ -176,8 +196,12 @@ export class RolesService {
     if (assignedCount > 0) {
       throw new BadRequestException(`${assignedCount} staff member(s) currently have this role — reassign them first`);
     }
-    await this.roleModel.deleteOne({ _id: id });
-    return { message: 'Role deleted' };
+    return this.audited(
+      actor,
+      { action: 'Delete role', type: 'delete', resourceId: String(role._id), resourceTitle: role.name, requested: { id } },
+      async () => (typeof (role as any).toObject === 'function' ? (role as any).toObject() : role),
+      async () => { await this.roleModel.deleteOne({ _id: id }); return { message: 'Role deleted' }; },
+    );
   }
 
   private tenantObjectId(tenantId: string) {
@@ -210,11 +234,16 @@ export class RolesService {
       if (!role) throw new NotFoundException('Role not found');
       await this.assertWithinCeiling(actor, role.moduleAccess as any);
     }
-    const user = await this.userModel.findOneAndUpdate(
-      { _id: userId, tenantId },
-      { $set: { customRoleId: roleId ? new Types.ObjectId(roleId) : null } },
-      { new: true },
-    ).select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires');
+    const user = await this.audited(
+      actor,
+      { action: roleId ? 'Assign role' : 'Unassign role', type: 'update', resourceType: 'User', resourceId: String(userId), requested: { userId, roleId } },
+      async () => ({ userId, previousCustomRoleId: (await this.userModel.findOne({ _id: userId, tenantId }).select('customRoleId').lean() as any)?.customRoleId ?? null }),
+      () => this.userModel.findOneAndUpdate(
+        { _id: userId, tenantId },
+        { $set: { customRoleId: roleId ? new Types.ObjectId(roleId) : null } },
+        { new: true },
+      ).select('-passwordHash -resetPasswordTokenHash -resetPasswordExpires'),
+    );
     if (!user) throw new NotFoundException('User not found');
     return user;
   }

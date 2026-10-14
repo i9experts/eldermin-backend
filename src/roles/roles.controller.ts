@@ -22,6 +22,8 @@ export class RolesController {
       schoolSlug: u.schoolSlug,
       tenantId: String(u.tenantId),
       userName: u.name || u.email || 'Admin',
+      ipAddress: (req.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip,
+      userAgent: req.headers?.['user-agent'],
     };
   }
 

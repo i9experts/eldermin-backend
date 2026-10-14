@@ -5,11 +5,13 @@ import { RolesController } from './roles.controller';
 import { RolesService } from './roles.service';
 import { Role, RoleSchema } from './schemas/role.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
+import { AuditLogModule } from '../common/audit-log.module';
 import { CustomRoleGuard } from './guards/custom-role.guard';
 import { RolesOrModuleManageGuard } from './guards/roles-or-module-manage.guard';
 
 @Module({
   imports: [
+    AuditLogModule,
     MongooseModule.forFeature([
       { name: Role.name, schema: RoleSchema },
       { name: User.name, schema: UserSchema },
