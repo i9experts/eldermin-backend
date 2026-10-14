@@ -7,11 +7,16 @@ import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, CreateSloTemplateDto, SyllabusQueryDto,
   CreateLessonDto, UpdateLessonDto, DeleteLessonDto,
 } from './dto/syllabus.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import {
+  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+} from '../staff-portal/teacher-identity.util';
 
 @Injectable()
 export class SyllabusService {
@@ -20,8 +25,22 @@ export class SyllabusService {
     @InjectModel(SloTemplate.name) private sloTemplateModel: Model<SloTemplateDocument>,
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     private configService: ConfigService,
   ) {}
+
+  /** TEACHER callers only: who am I, from the DB (Staff.userId), never from the JWT claims. 403 when no Staff record. */
+  private teacherIdentity(user: ScopedUser): Promise<TeacherIdentity> {
+    return resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user as any);
+  }
+
+  /** For a TEACHER caller, 403s unless the given syllabus is their own; a no-op for every other role. */
+  private async assertSyllabusOwnership(syllabus: { teacherId?: any }, requestingUser?: ScopedUser): Promise<void> {
+    if (!isTeacherCaller(requestingUser)) return;
+    const me = await this.teacherIdentity(requestingUser!);
+    assertOwnsTeacherDoc(me, syllabus.teacherId, 'You can only modify your own syllabus');
+  }
 
   // LMS Phase 3 - keeps a lesson's auto-spawned Assignment row in sync
   // with its own dueDate. Upserted on autoSpawnKey so editing the same
@@ -80,7 +99,7 @@ export class SyllabusService {
 
   async create(tenantId: string, institutionId: string, createdBy: string, createdByName: string, dto: CreateSyllabusDto, requestingUser?: ScopedUser) {
     const rollup = this.computeRollup(dto.units || []);
-    const syllabus = new this.syllabusModel({
+    const payload: any = {
       ...dto,
       tenantId,
       institutionId,
@@ -88,7 +107,17 @@ export class SyllabusService {
       createdByName,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : ((dto as any).campusId ? new Types.ObjectId((dto as any).campusId) : null),
       ...rollup,
-    });
+    };
+    // A teacher can only author a syllabus for themselves - derived
+    // server-side, never trusted from the body. createdBy (who authored
+    // the record, e.g. a coordinator creating on a teacher's behalf) is
+    // untouched - teacherId is "whose class/subject this is", a separate
+    // concept.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      payload.teacherId = normaliseTeacherIdForWrite(me, (dto as any).teacherId, 'You can only create a syllabus for yourself');
+    }
+    const syllabus = new this.syllabusModel(payload);
     return syllabus.save();
   }
 
@@ -106,18 +135,39 @@ export class SyllabusService {
       const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
       if (effectiveCampusId) filter.campusId = effectiveCampusId;
     }
+    // A teacher only ever sees their own syllabi - query.teacherId is
+    // caller-suppliable and must never be trusted to narrow (or, left
+    // absent as every current screen does, to widen) this to someone
+    // else's. Scoped by teacherId (whose class/subject it is), not
+    // createdBy (provenance/audit - a coordinator may have authored it on
+    // the teacher's behalf, which shouldn't hide it from that teacher).
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      filter.teacherId = new Types.ObjectId(me.staffId);
+    }
     return this.syllabusModel.find(filter).sort({ gradeLevel: 1, subjectName: 1 }).lean();
   }
 
-  async findOne(tenantId: string, id: string) {
-    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).lean();
+  async findOne(tenantId: string, id: string, requestingUser?: ScopedUser) {
+    const syllabus: any = await this.syllabusModel.findOne({ _id: id, tenantId }).lean();
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, syllabus.teacherId, 'You can only view your own syllabus');
+    }
     return syllabus;
   }
 
-  async update(tenantId: string, id: string, dto: UpdateSyllabusDto) {
+  async update(tenantId: string, id: string, dto: UpdateSyllabusDto, requestingUser?: ScopedUser) {
     const existing = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!existing) throw new NotFoundException('Syllabus not found');
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      assertOwnsTeacherDoc(me, (existing as any).teacherId, 'You can only modify your own syllabus');
+      if ('teacherId' in (dto as any)) {
+        (dto as any).teacherId = normaliseTeacherIdForWrite(me, (dto as any).teacherId, 'You can only create a syllabus for yourself');
+      }
+    }
 
     const update: any = { ...dto };
     if (dto.units) {
@@ -162,9 +212,10 @@ export class SyllabusService {
     return topic;
   }
 
-  async addLesson(tenantId: string, id: string, dto: CreateLessonDto, addedBy: string) {
+  async addLesson(tenantId: string, id: string, dto: CreateLessonDto, addedBy: string, requestingUser?: ScopedUser) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus, requestingUser);
     const topic = this.findTopic(syllabus, dto.unitNo, dto.topicNo);
     if (!dto.url?.trim() && !dto.fileUrl?.trim()) {
       throw new BadRequestException('A lesson needs a link (video, document, or reading).');
@@ -184,9 +235,10 @@ export class SyllabusService {
     return syllabus;
   }
 
-  async updateLesson(tenantId: string, id: string, dto: UpdateLessonDto) {
+  async updateLesson(tenantId: string, id: string, dto: UpdateLessonDto, requestingUser?: ScopedUser) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus, requestingUser);
     const topic = this.findTopic(syllabus, dto.unitNo, dto.topicNo);
     const lesson = (topic.lessons as any[]).find((l: any) => l.lessonNo === dto.lessonNo);
     if (!lesson) throw new NotFoundException(`Lesson ${dto.lessonNo} not found in topic ${dto.topicNo}`);
@@ -204,9 +256,10 @@ export class SyllabusService {
     return syllabus;
   }
 
-  async deleteLesson(tenantId: string, id: string, dto: DeleteLessonDto) {
+  async deleteLesson(tenantId: string, id: string, dto: DeleteLessonDto, requestingUser?: ScopedUser) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus, requestingUser);
     const topic = this.findTopic(syllabus, dto.unitNo, dto.topicNo);
     const before = (topic.lessons || []).length;
     topic.lessons = (topic.lessons as any[]).filter((l: any) => l.lessonNo !== dto.lessonNo);
@@ -222,7 +275,12 @@ export class SyllabusService {
   // Deliberately separate from `status` (the teacher/coordinator planning
   // workflow) - toggled only when the school is ready for this syllabus's
   // lesson content to actually appear in Parent Portal.
-  async setPublished(tenantId: string, id: string, published: boolean, publishedBy: string) {
+  async setPublished(tenantId: string, id: string, published: boolean, publishedBy: string, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const existing = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+      if (!existing) throw new NotFoundException('Syllabus not found');
+      await this.assertSyllabusOwnership(existing as any, requestingUser);
+    }
     const syllabus = await this.syllabusModel.findOneAndUpdate(
       { _id: id, tenantId },
       { $set: { publishedToStudents: published, publishedAt: published ? new Date() : undefined, publishedBy: published ? publishedBy : undefined } },
@@ -259,9 +317,10 @@ export class SyllabusService {
     return Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000)) + 1;
   }
 
-  async markSubTopic(tenantId: string, id: string, dto: MarkSubTopicDto) {
+  async markSubTopic(tenantId: string, id: string, dto: MarkSubTopicDto, requestingUser?: ScopedUser) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus, requestingUser);
 
     const unit = (syllabus.units as any[]).find((u) => u.unitNo === dto.unitNo);
     if (!unit) throw new NotFoundException(`Unit ${dto.unitNo} not found`);
@@ -521,9 +580,10 @@ The four percentages must sum to exactly 100. Base the reasoning on real, sensib
     }
   }
 
-  async markTopic(tenantId: string, id: string, dto: MarkTopicDto) {
+  async markTopic(tenantId: string, id: string, dto: MarkTopicDto, requestingUser?: ScopedUser) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus, requestingUser);
 
     const unit = (syllabus.units as any[]).find((u) => u.unitNo === dto.unitNo);
     if (!unit) throw new NotFoundException(`Unit ${dto.unitNo} not found`);
@@ -548,9 +608,10 @@ The four percentages must sum to exactly 100. Base the reasoning on real, sensib
   // a coordinator sets deliberately, rather than something the system can
   // infer purely from coverage% alone without knowing the term's real
   // calendar pace.
-  async setBehindSchedule(tenantId: string, id: string, behind: boolean) {
+  async setBehindSchedule(tenantId: string, id: string, behind: boolean, requestingUser?: ScopedUser) {
     const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId });
     if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus, requestingUser);
     if (behind) {
       syllabus.trackStatus = 'behind';
     } else {

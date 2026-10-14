@@ -4,6 +4,8 @@ import { Syllabus, SyllabusSchema } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateSchema } from './schemas/slo-template.schema';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
 import { SyllabusService } from './syllabus.service';
 import { SyllabusController } from './syllabus.controller';
 
@@ -22,6 +24,11 @@ import { SyllabusController } from './syllabus.controller';
       // Assignment row (see addLesson/updateLesson), not the whole
       // Teaching module's dependency graph.
       { name: Assignment.name, schema: AssignmentSchema },
+      // Needed to resolve a TEACHER caller's own Staff._id (never trusted
+      // from the JWT) so their own syllabi can be scoped to themselves -
+      // same resolveTeacherIdentity() pattern the Teaching module uses.
+      { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
     ]),
   ],
   controllers: [SyllabusController],

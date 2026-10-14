@@ -251,6 +251,14 @@ export class SubstitutionService {
     if (query.teacherId) filter.$or = [{ originalTeacherId: query.teacherId }, { substituteTeacherId: query.teacherId }];
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, query.campusId) : query.campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    // A teacher only ever sees fixtures where they are the original or
+    // substitute teacher - query.teacherId is caller-suppliable and must
+    // never be trusted to narrow (or, left absent, to widen) this to
+    // every fixture school-wide.
+    if (isTeacherCaller(requestingUser)) {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, requestingUser as any);
+      filter.$or = [{ originalTeacherId: me.staffId }, { substituteTeacherId: me.staffId }];
+    }
     return this.substitutionModel.find(filter).sort({ date: -1, periodNo: 1 }).limit(200).lean();
   }
 
