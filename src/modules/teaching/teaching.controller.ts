@@ -46,6 +46,17 @@ export class TeachingController {
   @Delete('teachers/:id')
   deleteTeacher(@Request() req, @Param('id') id: string) { return this.teachingService.deleteTeacherProfile(req.user.tenantId, id); }
 
+  // ── ATTENDANCE SETTINGS ───────────────────────────────────────────────────────
+
+  @Get('attendance-settings')
+  getAttendanceSettings(@Request() req) { return this.teachingService.getAttendanceSettings(req.user.schoolSlug); }
+
+  @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES)
+  @Patch('attendance-settings')
+  updateAttendanceSettings(@Request() req, @Body() body: { mode: string }) {
+    return this.teachingService.updateAttendanceSettings(req.user.schoolSlug, body.mode, req.user.name);
+  }
+
   // ── LESSON PLANS ──────────────────────────────────────────────────────────────
 
   @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES)

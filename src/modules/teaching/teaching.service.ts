@@ -21,6 +21,7 @@ import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.s
 import { ElectiveGroup, ElectiveGroupDocument } from './schemas/elective-group.schema';
 import { DutyRoster, DutyRosterDocument } from './schemas/duty-roster.schema';
 import { ClassDiaryEntry, ClassDiaryEntryDocument } from './schemas/class-diary.schema';
+import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
@@ -50,6 +51,7 @@ export class TeachingService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
+    @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
     private readonly pdfService: PdfService,
     private readonly configService: ConfigService,
     @Optional() private readonly staffNotifier?: StaffNotifier,
@@ -277,6 +279,30 @@ export class TeachingService {
       }
     }
     return { scanned: teacherStaff.length, created, updated };
+  }
+
+  // ── ATTENDANCE SETTINGS ───────────────────────────────────────────────────────
+  // School-wide policy for the Teaching Attendance screen - keyed by
+  // schoolSlug (not tenantId like the rest of this service) because
+  // that's what the actual attendance records themselves are scoped by
+  // (see StudentsService.markAttendance/bulkMarkAttendance), and what
+  // the attendance-marking screen already reads off the logged-in user.
+
+  async getAttendanceSettings(schoolSlug: string) {
+    const existing = await this.attendanceSettingsModel.findOne({ schoolSlug }).lean();
+    return { mode: existing?.mode || 'daily' };
+  }
+
+  async updateAttendanceSettings(schoolSlug: string, mode: string, updatedBy: string) {
+    if (!['daily', 'subject_wise'].includes(mode)) {
+      throw new BadRequestException("mode must be 'daily' or 'subject_wise'");
+    }
+    const updated = await this.attendanceSettingsModel.findOneAndUpdate(
+      { schoolSlug },
+      { $set: { mode, updatedBy } },
+      { upsert: true, new: true },
+    ).lean();
+    return { mode: updated.mode };
   }
 
   // ── LESSON PLANS ──────────────────────────────────────────────────────────────

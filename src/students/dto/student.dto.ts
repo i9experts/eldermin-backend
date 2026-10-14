@@ -268,6 +268,9 @@ export class MarkAttendanceDto {
   @IsOptional() @IsString() checkInTime?: string;
   @IsOptional() @IsString() checkOutTime?: string;
   @IsOptional() @IsString() remarks?: string;
+  // Only meaningful when the school's attendance mode is 'subject_wise' -
+  // see AttendanceSettings/StudentAttendance.subject.
+  @IsOptional() @IsString() subject?: string;
   schoolSlug?: string;
   academicYear?: string;
   markedBy?: string;
@@ -289,6 +292,7 @@ export class AttendanceQueryDto extends PaginationDto {
   @IsOptional() @IsDateString() to?: string;
   @IsOptional() @IsString() status?: string;
   @IsOptional() @IsString() month?: string; // e.g. "2025-02"
+  @IsOptional() @IsString() subject?: string; // subject-wise mode only
 }
 
 // ── Fee ───────────────────────────────────────────────────────

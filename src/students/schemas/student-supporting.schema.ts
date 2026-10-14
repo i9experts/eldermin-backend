@@ -35,6 +35,17 @@ export class StudentAttendance {
   @Prop() remarks: string;
   @Prop() parentNotified: boolean;
 
+  // Only set when the school's AttendanceSettings mode is 'subject_wise'
+  // (see teaching/schemas/attendance-settings.schema.ts) - lets a class
+  // teacher mark a separate status per subject for the same day, rather
+  // than one whole-day status. Absent/null for every 'daily'-mode record,
+  // including every record that existed before this field did - the
+  // upsert filter in markAttendance/bulkMarkAttendance below matches on
+  // this field too, so it stays exactly one record per student per day
+  // for daily mode and one per student per day per subject for
+  // subject-wise mode, never colliding between the two.
+  @Prop({ type: String, default: null }) subject: string | null;
+
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop({ required: true }) academicYear: string;
 }
