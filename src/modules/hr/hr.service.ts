@@ -1589,12 +1589,18 @@ export class HrService {
 
   async createPayrollRun(tenantId: string, institutionId: string, data: any, userId: string) {
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
-    return this.payrollRunModel.create({
-      ...data, periodLabel,
-      tenantId: this.newTid(tenantId),
-      institutionId: this.newTid(institutionId),
-      processedBy: this.newTid(userId),
-    });
+    try {
+      return await this.payrollRunModel.create({
+        ...data, periodLabel,
+        tenantId: this.newTid(tenantId),
+        institutionId: this.newTid(institutionId),
+        processedBy: this.newTid(userId),
+      });
+    } catch (err: any) {
+      // D15: one run per school per month (unique index tenantId+month+year) - a duplicate is a conflict, not a 500.
+      if (err?.code === 11000) throw new ConflictException(`A payroll run for ${periodLabel} already exists.`);
+      throw err;
+    }
   }
 
   /** The actual fix for the real bug found in QA: the previous flow had
@@ -1981,6 +1987,10 @@ export class HrService {
   }
 
   async createPayslip(tenantId: string, institutionId: string, schoolSlug: string, data: any) {
+    // D15: payrollRunId is required by the schema; a missing or malformed one is a 400, not a Mongoose ValidationError 500.
+    if (!data?.payrollRunId || !Types.ObjectId.isValid(String(data.payrollRunId))) {
+      throw new BadRequestException('payrollRunId is required and must be a valid payroll run id.');
+    }
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
 
     // Fold in any approved-but-unsettled expense claims for this staff member
@@ -2041,11 +2051,18 @@ export class HrService {
     const grossSalary = (data.grossSalary || 0) + reimbursement;
     const netSalary = grossSalary - totalDeductions;
 
-    const payslip = await this.payslipModel.create({
-      ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary, componentLines,
-      tenantId: this.newTid(tenantId),
-      institutionId: this.newTid(institutionId),
-    });
+    let payslip: any;
+    try {
+      payslip = await this.payslipModel.create({
+        ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary, componentLines,
+        tenantId: this.newTid(tenantId),
+        institutionId: this.newTid(institutionId),
+      });
+    } catch (err: any) {
+      // D15: unique (tenant, staff, month, year) - a second payslip for the same person and month is a conflict.
+      if (err?.code === 11000) throw new ConflictException(`A payslip for this staff member for ${periodLabel} already exists.`);
+      throw err;
+    }
 
     if (pendingClaims.length > 0) {
       await this.expenseClaimModel.updateMany(
