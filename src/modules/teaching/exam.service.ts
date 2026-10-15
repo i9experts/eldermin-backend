@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { ExamSession, ExamSessionDocument } from './schemas/exam-session.schema';
@@ -65,25 +65,35 @@ export class ExamService {
 
   async createExam(tenantId: string, institutionId: string, data: any, userId: string) {
     const conflicts = await this.checkExamConflicts(tenantId, null, data);
-    const exam = await this.examModel.create({
-      ...data,
-      tenantId: this.tid(tenantId),
-      institutionId: new Types.ObjectId(institutionId),
-      createdBy: new Types.ObjectId(userId),
-    });
-    return { ...exam.toObject(), conflicts };
+    try {
+      const exam = await this.examModel.create({
+        ...data,
+        tenantId: this.tid(tenantId),
+        institutionId: new Types.ObjectId(institutionId),
+        createdBy: new Types.ObjectId(userId),
+      });
+      return { ...exam.toObject(), conflicts };
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError') throw new BadRequestException(err.message);
+      throw err;
+    }
   }
 
   async updateExam(tenantId: string, id: string, data: any) {
     const existing = await this.examModel.findOne({ _id: id, tenantId: this.tid(tenantId) }).lean();
     if (!existing) throw new NotFoundException('Exam session not found');
     const conflicts = await this.checkExamConflicts(tenantId, id, { ...existing, ...data });
-    const updated = await this.examModel.findOneAndUpdate(
-      { _id: id, tenantId: this.tid(tenantId) },
-      { $set: data },
-      { new: true },
-    ).lean();
-    return { ...updated, conflicts };
+    try {
+      const updated = await this.examModel.findOneAndUpdate(
+        { _id: id, tenantId: this.tid(tenantId) },
+        { $set: data },
+        { new: true, runValidators: true },
+      ).lean();
+      return { ...updated, conflicts };
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError') throw new BadRequestException(err.message);
+      throw err;
+    }
   }
 
   async deleteExam(tenantId: string, id: string) {

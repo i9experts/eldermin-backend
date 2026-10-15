@@ -24,7 +24,12 @@ export class ExamSession {
   @Prop({ required: true, type: Date }) date: Date;
   @Prop({ required: true }) startTime: string;
   @Prop({ required: true }) endTime: string;
-  @Prop({ required: true }) roomNo: string;
+  // Not required - the scheduler's own Room dropdown offers "No room /
+  // TBD" (an empty string) as a deliberate, supported choice for a room
+  // not yet decided. Mongoose's `required` validator rejects an empty
+  // string, so this previously made that intended choice crash exam
+  // creation with a raw 500 ("Internal server error") instead of saving.
+  @Prop({ default: '' }) roomNo: string;
 
   // The class-sections sitting this exam together (usually one, sometimes
   // several combined into one hall for a shared subject) - same members
