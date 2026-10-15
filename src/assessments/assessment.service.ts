@@ -371,6 +371,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
   async generateExamPaperPdf(id: string, schoolSlug: string): Promise<Buffer> {
     const paper: any = await this.getExamPaperById(id, schoolSlug);
+    const branding = await this.resolveBranding(schoolSlug, paper.campusId);
     const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
     const format = this.PAPER_FORMATS.includes(paper.paperFormat) ? paper.paperFormat : 'standard';
     const scale = this.FONT_SCALE[paper.fontSize] || 1;
@@ -448,6 +449,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const coverPageHtml = format === 'formal' ? `
       <div class="cover-page">
         <div class="cover-header">
+          ${branding.logo ? `<img class="cover-logo" src="${branding.logo}" />` : ''}
           <img src="${qrDataUrl}" width="90" height="90" />
           <h1>${cfg.labels.coverTitle}</h1>
           <p class="cover-paper-title">${this.escapeHtml(paper.title)}</p>
@@ -484,6 +486,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           body { font-family: ${bodyFont}; color: #111; font-size: ${px(13)}px; line-height: 1.6; }
           .page-break { page-break-after: always; }
           .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0C447C; padding-bottom: 10px; margin-bottom: 14px; }
+          .header-left { display: flex; align-items: flex-start; gap: 10px; }
+          .header-logo { height: 48px; width: 48px; object-fit: contain; flex-shrink: 0; }
           .header-main h1 { font-size: ${px(18)}px; color: #0C447C; margin: 0 0 4px; }
           .header-main p { margin: 2px 0; font-size: ${px(12)}px; }
           .header-meta { text-align: center; font-size: ${px(10)}px; }
@@ -504,7 +508,16 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
           .q-image { margin: 8px 0 8px ${cfg.dir === 'rtl' ? '0' : '24px'}; }
           .q-image img { max-width: 320px; max-height: 220px; border: 1px solid #ddd; border-radius: 4px; }
-          .cover-page { display: flex; flex-direction: column; align-items: center; height: 250mm; padding-top: 20mm; text-align: center; }
+          .cover-page {
+            display: flex; flex-direction: column; align-items: center;
+            min-height: 225mm; padding-top: 15mm; text-align: center;
+            /* The whole cover page is one atomic block so the browser
+               never splits it mid-way (e.g. through the seal/signature
+               row) - if it ever doesn't fit on one page, the entire
+               block moves to the next page intact instead. */
+            break-inside: avoid; page-break-inside: avoid;
+          }
+          .cover-logo { height: 60px; width: auto; object-fit: contain; margin-bottom: 8px; }
           .cover-header h1 { font-size: ${px(22)}px; color: #0C447C; margin: 10px 0 4px; }
           .cover-paper-title { font-size: ${px(15)}px; font-weight: bold; margin: 4px 0; }
           .cover-code { font-size: ${px(11)}px; color: #666; margin: 0; }
@@ -513,7 +526,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .cover-field span { display: block; border-bottom: 1px solid #999; height: 18px; }
           .cover-meta { font-size: ${px(12)}px; margin-bottom: 20px; }
           .cover-declaration { max-width: 420px; font-size: ${px(11)}px; color: #444; border: 1px solid #ccc; border-radius: 4px; padding: 10px 14px; margin-bottom: 30px; background: #f9f9f9; }
-          .cover-signoff { display: flex; align-items: flex-end; gap: 40px; margin-top: auto; }
+          .cover-signoff { display: flex; align-items: flex-end; gap: 40px; margin-top: auto; break-inside: avoid; page-break-inside: avoid; }
           .cover-seal { width: 90px; height: 90px; border: 2px dashed #999; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: ${px(10)}px; color: #999; }
           .cover-invigilator span { display: block; border-bottom: 1px solid #999; width: 180px; height: 24px; margin-bottom: 4px; }
           .cover-invigilator label { font-size: ${px(10)}px; color: #666; }
@@ -522,10 +535,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       <body>
         ${coverPageHtml}
         <div class="header">
-          <div class="header-main">
-            <h1>${this.escapeHtml(paper.title)}</h1>
-            <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
-            <p>${cfg.labels.duration}: ${paper.duration} ${paper.language === 'english' ? 'minutes' : ''} &nbsp;|&nbsp; ${cfg.labels.marks}: ${totalMarks}</p>
+          <div class="header-left">
+            ${branding.logo ? `<img class="header-logo" src="${branding.logo}" />` : ''}
+            <div class="header-main">
+              <h1>${this.escapeHtml(paper.title)}</h1>
+              <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+              <p>${cfg.labels.duration}: ${paper.duration} ${paper.language === 'english' ? 'minutes' : ''} &nbsp;|&nbsp; ${cfg.labels.marks}: ${totalMarks}</p>
+            </div>
           </div>
           <div class="header-meta">
             <img src="${qrDataUrl}" width="70" height="70" />
