@@ -1,4 +1,4 @@
-import { IsArray, IsEmail, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateLeadDto {
   @IsIn(['onboarding_wizard', 'contact_form', 'manual'])
@@ -42,4 +42,8 @@ export class CreateLeadDto {
   @IsOptional() @IsString() utmCampaign?: string;
   @IsOptional() @IsString() utmContent?: string;
   @IsOptional() @IsString() utmTerm?: string;
+
+  @IsOptional() @IsBoolean() termsAccepted?: boolean;
+  @IsOptional() @IsBoolean() dataPolicyAccepted?: boolean;
+  @IsOptional() @IsString() @MaxLength(200) signature?: string;
 }

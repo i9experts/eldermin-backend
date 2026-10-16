@@ -51,6 +51,16 @@ export class MarketingLead extends Document {
   @Prop() inquiryType?: string;
   @Prop() message?: string;
 
+  // Step 8 of the onboarding wizard (legal consent + digital signature) -
+  // previously collected in the browser but never sent past a mailto:
+  // link, so the actual consent record only ever existed in whichever
+  // inbox received that email, not in the CRM. Captured here so the
+  // signature and consent timestamp survive as a real, queryable record.
+  @Prop({ default: false }) termsAccepted: boolean;
+  @Prop({ default: false }) dataPolicyAccepted: boolean;
+  @Prop({ trim: true }) signature?: string;
+  @Prop({ type: Date, default: null }) consentedAt?: Date | null;
+
   @Prop({ type: [LeadNoteSchema], default: [] }) notes: LeadNote[];
   @Prop({ type: Types.ObjectId, default: null }) convertedInstitutionId?: Types.ObjectId | null;
   @Prop({ type: Date, default: null }) lastContactedAt?: Date | null;

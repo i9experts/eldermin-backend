@@ -19,10 +19,14 @@ export class LeadsService {
   // silently merged into a closed record.
   async create(dto: CreateLeadDto) {
     const email = dto.adminEmail.toLowerCase().trim();
+    // Consent (Terms + Data Policy) and the typed signature are given
+    // together at wizard submission time - stamp that moment as the
+    // consent record's own timestamp rather than leaving it unset.
+    const consentedAt = dto.termsAccepted && dto.dataPolicyAccepted ? new Date() : null;
     const existing = await this.leadModel.findOne({ adminEmail: email, stage: { $nin: ['converted', 'lost'] } });
     if (existing) {
       const { stage: _ignoredStage, ...rest } = dto as any;
-      Object.assign(existing, rest);
+      Object.assign(existing, rest, consentedAt ? { consentedAt } : {});
       existing.notes.push({
         text: `Submitted the ${dto.source === 'contact_form' ? 'contact' : dto.source} form again - details above refreshed from this submission.`,
         authorName: 'System',
@@ -31,7 +35,7 @@ export class LeadsService {
       await existing.save();
       return existing;
     }
-    return this.leadModel.create({ ...dto, stage: 'new' });
+    return this.leadModel.create({ ...dto, stage: 'new', consentedAt });
   }
 
   async findAll(stage?: string) {
