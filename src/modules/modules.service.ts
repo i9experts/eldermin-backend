@@ -1,7 +1,7 @@
-import { Injectable, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { MODULE_REGISTRY, getModuleById, computeModulePricing } from './module-registry';
+import { MODULE_REGISTRY, getModuleById, computeModulePricing, modulesForPlan } from './module-registry';
 import { Tenant, TenantDocument } from './organization/schemas/tenant.schema';
 import { Institution, InstitutionDocument, SubscriptionHistory, SubscriptionHistoryDocument } from '../super-admin/schemas/super-admin.schema';
 
@@ -77,17 +77,34 @@ export class ModulesService {
     }
   }
 
+  // The school's subscribed package, straight from Super Admin's own
+  // billing record - undefined for a school with no Institution tracking
+  // row yet (seeded directly rather than via the lead-activation/
+  // onboarding flow), in which case plan entitlement simply isn't
+  // enforced, matching this method's existing behaviour before packages
+  // existed at all.
+  private async getPlan(schoolSlug: string): Promise<string | undefined> {
+    const inst = await this.institutionModel.findOne({ slug: schoolSlug }).select('plan').lean();
+    return (inst as any)?.plan;
+  }
+
   async listModules(schoolSlug: string) {
-    const { activeModules } = await this.resolveActiveModules(schoolSlug);
+    const [{ activeModules }, plan] = await Promise.all([
+      this.resolveActiveModules(schoolSlug),
+      this.getPlan(schoolSlug),
+    ]);
+    const planModules = plan ? modulesForPlan(plan) : null;
 
     return MODULE_REGISTRY.map((mod) => {
       const isActive = activeModules.includes(mod.id);
       const missingDeps = mod.requiredModules.filter((dep) => !activeModules.includes(dep));
       const canActivate = missingDeps.length === 0;
+      const inPlan = planModules ? planModules.includes(mod.id) : true;
 
       return {
         ...mod,
-        status: isActive ? 'active' : canActivate ? 'available' : 'locked',
+        status: isActive ? 'active' : !inPlan ? 'plan-locked' : canActivate ? 'available' : 'locked',
+        inPlan,
         missingDependencies: missingDeps.map((id) => getModuleById(id)?.name || id),
         recommendedNames: mod.recommendedModules.map((id) => getModuleById(id)?.name || id),
       };
@@ -101,12 +118,35 @@ export class ModulesService {
       active: modules.filter((m) => m.status === 'active').length,
       available: modules.filter((m) => m.status === 'available').length,
       locked: modules.filter((m) => m.status === 'locked').length,
+      planLocked: modules.filter((m) => m.status === 'plan-locked').length,
     };
+  }
+
+  // Self-service activation (a school's own Admin/Principal/Owner via the
+  // Apps & Modules marketplace) is capped at what their subscribed
+  // package actually includes - a school can turn on anything within its
+  // package on its own, but reaching beyond it is an upgrade conversation
+  // with Super Admin, not a free toggle. Super Admin's own direct control
+  // (setActiveModules below) deliberately bypasses this check entirely.
+  private async assertInPlan(schoolSlug: string, moduleIds: string[]) {
+    const plan = await this.getPlan(schoolSlug);
+    if (!plan) return; // no Institution tracking row - unrestricted, as before packages existed
+    const allowed = modulesForPlan(plan);
+    const outOfPlan = moduleIds.filter((id) => !allowed.includes(id));
+    if (outOfPlan.length > 0) {
+      const names = outOfPlan.map((id) => getModuleById(id)?.name || id);
+      throw new ForbiddenException({
+        message: `Not included in your current plan: ${names.join(', ')}. Ask your Eldermin account manager about upgrading.`,
+        outOfPlanModules: names,
+        plan,
+      });
+    }
   }
 
   async activateModule(schoolSlug: string, moduleId: string, changedBy?: string) {
     const moduleDef = getModuleById(moduleId);
     if (!moduleDef) throw new NotFoundException(`Module '${moduleId}' not found in registry`);
+    await this.assertInPlan(schoolSlug, [moduleId]);
 
     const { activeModules } = await this.resolveActiveModules(schoolSlug);
 
@@ -173,6 +213,7 @@ export class ModulesService {
   }
 
   async bulkActivate(schoolSlug: string, moduleIds: string[], changedBy?: string) {
+    await this.assertInPlan(schoolSlug, moduleIds);
     const { activeModules } = await this.resolveActiveModules(schoolSlug);
     const merged = Array.from(new Set([...activeModules, ...moduleIds, 'organization']));
     await this.syncAcrossCollections(schoolSlug, merged, changedBy);
@@ -184,13 +225,17 @@ export class ModulesService {
     };
   }
 
-  // Turns on every module in the registry at once - for a school that's
-  // genuinely using (or should have access to) everything, rather than
-  // clicking "Activate" 16 times. Respects nothing to check for
-  // dependencies since activating the full registry trivially satisfies
-  // every requiredModules list.
+  // Turns on every module the school's plan includes at once - for a
+  // school that's genuinely using (or should have access to) everything
+  // it's entitled to, rather than clicking "Activate" one at a time. Caps
+  // at the plan's module set rather than the full registry, so a Starter
+  // school hitting "Activate All" gets everything Starter includes
+  // instead of a confusing all-or-nothing ForbiddenException - reaching
+  // beyond the plan is still only possible via Super Admin's own direct
+  // control (setActiveModules below).
   async activateAll(schoolSlug: string, changedBy?: string) {
-    const allModuleIds = MODULE_REGISTRY.map((m) => m.id);
+    const plan = await this.getPlan(schoolSlug);
+    const allModuleIds = plan ? modulesForPlan(plan) : MODULE_REGISTRY.map((m) => m.id);
     await this.syncAcrossCollections(schoolSlug, allModuleIds, changedBy);
 
     return {
@@ -198,5 +243,40 @@ export class ModulesService {
       activeModules: allModuleIds,
       message: `All ${allModuleIds.length} modules activated`,
     };
+  }
+
+  // Super Admin's own direct control - sets a school's active module set
+  // to exactly the given list, bypassing assertInPlan entirely (Super
+  // Admin can grant modules outside a school's nominal plan, e.g. a
+  // goodwill add-on, or claw back modules a plan would normally include).
+  // Unlike activateModule/bulkActivate, this does not merge with the
+  // existing set or validate dependencies - it's a full replace, since
+  // Super Admin is expected to pass the complete intended module list
+  // (e.g. from "reset to plan defaults" or a checkbox grid of all 17).
+  async setActiveModules(schoolSlug: string, moduleIds: string[], changedBy = 'super-admin') {
+    const unknown = moduleIds.filter((id) => !getModuleById(id));
+    if (unknown.length > 0) {
+      throw new BadRequestException(`Unknown module id(s): ${unknown.join(', ')}`);
+    }
+
+    const updatedModules = Array.from(new Set(['organization', ...moduleIds]));
+    await this.syncAcrossCollections(schoolSlug, updatedModules, changedBy);
+
+    return {
+      success: true,
+      activeModules: updatedModules,
+      message: `Active modules updated (${updatedModules.length} modules)`,
+    };
+  }
+
+  // Resets a school's active modules back to exactly what its current
+  // plan includes - the "undo my manual overrides" button next to
+  // setActiveModules in the Super Admin command center.
+  async resetModulesToPlan(schoolSlug: string, changedBy = 'super-admin') {
+    const plan = await this.getPlan(schoolSlug);
+    if (!plan) {
+      throw new BadRequestException('School has no subscription plan on record to reset to');
+    }
+    return this.setActiveModules(schoolSlug, modulesForPlan(plan), changedBy);
   }
 }
