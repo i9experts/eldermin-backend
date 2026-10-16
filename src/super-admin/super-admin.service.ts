@@ -23,6 +23,7 @@ import { Campus, Grade, AcademicYear } from '../organization/schemas/organizatio
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { ModulesService } from '../modules/modules.service';
+import { modulesForPlan } from '../modules/module-registry';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -411,6 +412,17 @@ export class SuperAdminService {
       .filter((id): id is string => !!id);
   }
 
+  // The marketing site's wizard collects planRequested as free text
+  // ("Starter", "growth plan", etc.) rather than the normalized
+  // SchoolPlan enum - normalize it here, defaulting to 'starter' for
+  // anything unrecognized rather than silently granting everything.
+  private normalizePlanRequested(raw?: string): 'starter' | 'growth' | 'enterprise' {
+    const v = (raw || '').toLowerCase();
+    if (v.includes('enterprise')) return 'enterprise';
+    if (v.includes('growth') || v.includes('professional')) return 'growth';
+    return 'starter';
+  }
+
   // Maps free-text school-type strings (e.g. from the marketing site's
   // wizard: "Nursery/Primary", "Secondary/O-Level") to the org Institution
   // schema's strict enum (school/college/university/training_center/
@@ -456,16 +468,26 @@ export class SuperAdminService {
     // two can drift apart if not kept in sync explicitly — set both here
     // from the same merged list so a fresh login immediately has access to
     // every module the lead actually asked for, not just 'organization'.
+    //
+    // The authoritative source is now the lead's requested package
+    // (Starter/Growth/Enterprise), not the individual module checkboxes -
+    // modulesRequested is still mapped and unioned in for CRM display /
+    // in case a sales rep promised something outside the normal package,
+    // but the plan's own module set always wins the "what does this
+    // school actually get" question.
+    const normalizedPlan = this.normalizePlanRequested((lead as any).planRequested);
     const requestedModules = this.mapRequestedModulesToIds(
       Array.isArray(lead.modulesRequested) ? lead.modulesRequested : [],
     );
-    const mergedModules = Array.from(new Set(['organization', ...requestedModules]));
+    const mergedModules = Array.from(
+      new Set(['organization', ...modulesForPlan(normalizedPlan), ...requestedModules]),
+    );
 
     const tenant = await this.tenantModel.create({
       slug,
       displayName: lead.schoolName,
       status: 'onboarding',
-      plan: 'trial',
+      plan: normalizedPlan,
       activeModules: mergedModules,
       billingEmail: lead.adminEmail.toLowerCase(),
       isSetupComplete: false,
@@ -633,6 +655,11 @@ export class SuperAdminService {
     const planConfig = SUBSCRIPTION_PLANS[data.plan as keyof typeof SUBSCRIPTION_PLANS];
     const monthlyRevenue = data.customPrice || planConfig?.price || 0;
 
+    // Real module access now comes from the plan itself (ModulesService.
+    // setActiveModules below, which keeps School/Tenant/Institution in
+    // lockstep via syncAcrossCollections) - enabledModules here is no
+    // longer written directly, since setActiveModules already updates
+    // this same Institution document's enabledModules as part of that sync.
     const update: any = {
       plan: data.plan,
       status: 'active',
@@ -641,11 +668,20 @@ export class SuperAdminService {
       subscriptionEndDate: new Date(data.endDate),
       autoRenew: data.autoRenew || false,
       billingCycle: data.billingCycle || 'monthly',
-      enabledModules: data.plan === 'enterprise' || data.plan === 'professional'
-        ? ['all'] : planConfig?.features || [],
     };
 
     await this.institutionModel.findOneAndUpdate({ slug }, { $set: update });
+
+    // Changing a school's package used to have zero effect on what
+    // modules it could actually use (this institution tracking row and
+    // the school's real activeModules were entirely separate writes).
+    // Reset to the new plan's module set by default so the two never
+    // drift again on a plan change; pass resetModules: false to change
+    // billing only and leave Super Admin's prior manual module overrides
+    // (set via setActiveModules) in place.
+    if (data.resetModules !== false) {
+      await this.modulesService.setActiveModules(slug, modulesForPlan(data.plan), updatedBy);
+    }
 
     const newPrice = SUBSCRIPTION_PLANS[data.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0;
     const oldPrice = SUBSCRIPTION_PLANS[inst.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0;
@@ -663,6 +699,31 @@ export class SuperAdminService {
     }).save();
 
     return { message: 'Subscription updated' };
+  }
+
+  // ── Super Admin module control ("command center") ──────────
+  // Direct per-module control over a school, independent of (and able to
+  // override) its plan - the actual "full module control according to
+  // school's package" surface. listModules already flags each module's
+  // status relative to the school's plan (plan-locked vs available vs
+  // active), reused here so Super Admin sees the exact same picture.
+  async getSchoolModules(slug: string) {
+    const inst = await this.institutionModel.findOne({ slug }).select('plan name').lean();
+    if (!inst) throw new NotFoundException('Institution not found');
+    const modules = await this.modulesService.listModules(slug);
+    return { plan: (inst as any).plan, modules };
+  }
+
+  async setSchoolModules(slug: string, moduleIds: string[], updatedBy: string) {
+    const inst = await this.institutionModel.findOne({ slug });
+    if (!inst) throw new NotFoundException('Institution not found');
+    return this.modulesService.setActiveModules(slug, moduleIds, updatedBy);
+  }
+
+  async resetSchoolModulesToPlan(slug: string, updatedBy: string) {
+    const inst = await this.institutionModel.findOne({ slug });
+    if (!inst) throw new NotFoundException('Institution not found');
+    return this.modulesService.resetModulesToPlan(slug, updatedBy);
   }
 
   async updateHealthScores() {

@@ -79,6 +79,26 @@ export class SuperAdminController {
     return this.service.generateImpersonationToken(slug, this.adminUser(req));
   }
 
+  // ── Module command center (full control, per school/package) ──
+  @Get('institutions/:slug/modules')
+  async getSchoolModules(@Param('slug') slug: string) {
+    return this.service.getSchoolModules(slug);
+  }
+
+  @Patch('institutions/:slug/modules')
+  async setSchoolModules(
+    @Param('slug') slug: string,
+    @Body() dto: { moduleIds: string[] },
+    @Request() req: any,
+  ) {
+    return this.service.setSchoolModules(slug, dto.moduleIds || [], this.adminUser(req));
+  }
+
+  @Post('institutions/:slug/modules/reset-to-plan')
+  async resetSchoolModulesToPlan(@Param('slug') slug: string, @Request() req: any) {
+    return this.service.resetSchoolModulesToPlan(slug, this.adminUser(req));
+  }
+
   // ── Platform Analytics ────────────────────────────────────
   @Get('analytics')
   async getAnalytics() {

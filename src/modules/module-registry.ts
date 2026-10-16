@@ -219,6 +219,52 @@ export const MODULE_PRICE_PKR: Record<ModuleDefinition['pricingTier'], number> =
   enterprise: 5999,
 };
 
+// ============================================================
+// SCHOOL PACKAGES — the canonical Starter / Growth / Enterprise tiers
+// ============================================================
+// Deliberately NOT a separately hand-maintained list of module ids per
+// package (that drifts from the registry the moment a module is added or
+// its tier changes). Each module already carries the right pricingTier
+// above - including a dependency graph that was authored tier-aware
+// (e.g. 'academic' modules only ever require 'starter' modules) - so a
+// package is just "every module at or below this tier", cumulative.
+// Starter = pricingTier 'starter' only; Growth = + 'academic'; Enterprise
+// = every module. This is also why a package's module set never needs
+// its own dependency validation - it's already internally consistent.
+export type SchoolPlan = 'starter' | 'growth' | 'enterprise';
+
+const PLAN_TIERS: Record<SchoolPlan, ModuleDefinition['pricingTier'][]> = {
+  starter: ['starter'],
+  growth: ['starter', 'academic'],
+  enterprise: ['starter', 'academic', 'enterprise'],
+};
+
+// Pre-'growth' plan values still sitting on old Institution/Tenant
+// documents (the platform used 'professional'/'academic'/'operations'
+// before Starter/Growth/Enterprise existed as a named package) - treated
+// as 'growth' here rather than requiring a database migration.
+const LEGACY_PLAN_ALIASES: Record<string, SchoolPlan> = {
+  professional: 'growth',
+  academic: 'growth',
+  operations: 'growth',
+  free_trial: 'starter',
+  trial: 'starter',
+};
+
+function normalizePlan(plan: string): SchoolPlan {
+  if (plan in PLAN_TIERS) return plan as SchoolPlan;
+  return LEGACY_PLAN_ALIASES[plan] || 'starter';
+}
+
+export function modulesForPlan(plan: string): string[] {
+  const tiers = PLAN_TIERS[normalizePlan(plan)];
+  return MODULE_REGISTRY.filter((m) => tiers.includes(m.pricingTier)).map((m) => m.id);
+}
+
+export function isModuleInPlan(moduleId: string, plan: string): boolean {
+  return modulesForPlan(plan).includes(moduleId);
+}
+
 export function computeModulePricing(activeModuleIds: string[]): {
   monthlyRevenue: number;
   lineItems: { moduleId: string; name: string; pricingTier: string; price: number }[];
