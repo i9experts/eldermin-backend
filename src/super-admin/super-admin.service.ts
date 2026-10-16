@@ -307,7 +307,15 @@ export class SuperAdminService {
       date: { $gte: thirtyDaysAgo },
     }).sort({ date: 1 });
 
-    return { institution: inst, subHistory, usageTrend };
+    // The original onboarding wizard submission, when this institution was
+    // activated from a CRM lead (activateInstitutionFromLead sets the
+    // lead's own convertedInstitutionId to this institution's _id) - so
+    // Super Admin can see everything a school originally requested/signed
+    // for, not just its live usage numbers. null for an institution
+    // created directly (Add Institution) with no originating lead.
+    const onboardingLead = await this.leadModel.findOne({ convertedInstitutionId: inst._id }).lean();
+
+    return { institution: inst, subHistory, usageTrend, onboardingLead };
   }
 
   async createInstitution(data: any, createdBy: string) {
