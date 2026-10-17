@@ -8,6 +8,7 @@ import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules/report-templates/procurement-report-sections';
 import { FinanceService } from '../finance/finance.service';
 import { formatDateShort } from '../common/utils/date-format.util';
+import { studentFullName } from '../common/utils/student-name.util';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -864,7 +865,7 @@ export class PdfService implements OnModuleDestroy {
       schoolAddress: (school as any).address || '',
       academicYear: dto.academicYear,
       term: dto.term || '',
-      studentName: `${(student as any).firstName} ${(student as any).lastName}`,
+      studentName: studentFullName(student as any),
       rollNumber: (student as any).rollNumber || (student as any).admissionNumber || 'N/A',
       grade: (student as any).grade || (student as any).gradeLevel || '',
       section: (student as any).section || '',
@@ -1301,7 +1302,7 @@ export class PdfService implements OnModuleDestroy {
       dueDateLabel,
       validityLabel,
       monthLabel,
-      studentName: invoice.studentName || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : 'N/A'),
+      studentName: invoice.studentName || (student ? studentFullName(student) : 'N/A'),
       admissionNumber: student?.admissionNumber || '',
       grade: invoice.grade || student?.currentGrade || '',
       section: invoice.section || student?.currentSection || '',
@@ -1514,7 +1515,7 @@ export class PdfService implements OnModuleDestroy {
           schoolSlug,
           type: 'report-card',
           referenceId: (student as any)._id.toString(),
-          referenceName: `${(student as any).firstName} ${(student as any).lastName}`,
+          referenceName: studentFullName(student as any),
           generatedBy: userId,
           status: 'failed',
           errorMessage: err.message,
@@ -2341,7 +2342,7 @@ ${css}
       schoolName: school?.name || 'School',
       receiptNumber: payment.receiptNumber || `RCP-${String(dto.paymentId).slice(-6).toUpperCase()}`,
       paymentDate: payment.paymentDate ? new Date(payment.paymentDate).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB'),
-      studentName: payment.studentName || (student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() : ''),
+      studentName: payment.studentName || (student ? studentFullName(student) : ''),
       grade: invoice?.grade || student?.currentGrade || '',
       section: invoice?.section || student?.currentSection || '',
       admissionNumber: student?.admissionNumber || '',
