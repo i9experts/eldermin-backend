@@ -12,7 +12,7 @@ export class PdfLog {
       'report-card', 'invoice', 'tarbiyah-report', 'admission-letter',
       'fee_receipt', 'payment_voucher', 'journal_voucher', 'expense_voucher',
       'payslip', 'result_card', 'attendance_sheet', 'custom', 'fee-revenue-report',
-      'timetable', 'class_diary',
+      'timetable', 'class_diary', 'qaida-report',
     ],
   })
   type: string;
