@@ -25,57 +25,78 @@ export interface QaidaTakhtiDef {
   titleUr: string;
   description: string;
   focus: ('makhraj' | 'tajweed' | 'fluency')[];
+  // Which physical page of the Idara-tul-Islamiyat (Lahore) Noorani Qaida
+  // this board is on - always given, so a teacher testing a child always
+  // knows exactly which page to have the real book open to, regardless of
+  // whether referenceContent below is populated for this board.
+  pageReference: string;
+  // The actual letters/sets this board drills, shown in the tracker itself
+  // so a teacher can test a child without a separate physical copy open.
+  // Deliberately populated ONLY where the content is a fixed, independently
+  // verifiable list with no diacritic placement to get wrong (the plain
+  // 29-letter alphabet, and the Qur'an's own canonical muqatta'at sets) -
+  // left unset for boards whose content is specific joined-letter shapes,
+  // harakaat-marked or tashdeed-marked words as laid out on that exact
+  // page, which risk a transcription error no one should see repeated
+  // inside a product real children are taught from. Those boards rely on
+  // pageReference above instead.
+  referenceContent?: string[];
 }
+
+// The standard 29-letter Arabic abjad, in the order the Qaida itself uses
+// (Mufradat, Takhti 1) - independently verifiable, not board-specific.
+const ARABIC_29_LETTERS = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ه', 'ء', 'ي'];
 
 export const QAIDA_TAKHTIS: QaidaTakhtiDef[] = [
   { number: 1, key: 'mufradat', titleEn: 'Mufradat', titleUr: 'مفردات',
     description: 'The 29 isolated Arabic letters and their correct articulation points (makhraj).',
-    focus: ['makhraj'] },
+    focus: ['makhraj'], pageReference: 'p. 2', referenceContent: ARABIC_29_LETTERS },
   { number: 2, key: 'murakkabat', titleEn: 'Murakkabat', titleUr: 'مرکبات',
     description: 'Letters joined in pairs and triplets - recognizing how a letter’s shape changes when connected.',
-    focus: ['makhraj'] },
+    focus: ['makhraj'], pageReference: 'p. 3-5' },
   { number: 3, key: 'muqattaat', titleEn: "Huroof-e-Muqatta'at", titleUr: 'حروف مقطعات',
-    description: "The Qur'an's disjointed letter sets (الم، كهيعص...), memorized early as a point of barakah.",
-    focus: ['makhraj'] },
+    description: "The Qur'an's disjointed letter sets, memorized early as a point of barakah.",
+    focus: ['makhraj'], pageReference: 'p. 6',
+    referenceContent: ['الم', 'المص', 'الر', 'المر', 'كهيعص', 'طه', 'طسم', 'طس', 'يس', 'حم', 'عسق', 'ق', 'ن', 'ص'] },
   { number: 4, key: 'harakaat', titleEn: 'Harakaat', titleUr: 'حرکات',
-    description: 'Zabar, Zer and Pesh (fatha/kasra/damma) on every letter, isolated and joined.',
-    focus: ['makhraj', 'tajweed'] },
+    description: 'Zabar, Zer and Pesh (fatha/kasra/damma) applied to every letter below, isolated and joined.',
+    focus: ['makhraj', 'tajweed'], pageReference: 'p. 6-9', referenceContent: ARABIC_29_LETTERS },
   { number: 5, key: 'tanween', titleEn: 'Tanween', titleUr: 'تنوین',
-    description: 'Do-Zabar, Do-Zer, Do-Pesh and the nasal ghunna sound that comes with them.',
-    focus: ['tajweed'] },
+    description: 'Do-Zabar, Do-Zer, Do-Pesh applied to every letter below, and the nasal ghunna sound that comes with them.',
+    focus: ['tajweed'], pageReference: 'p. 8-9', referenceContent: ARABIC_29_LETTERS },
   { number: 6, key: 'mashq_harakaat_tanween', titleEn: 'Mashq Harakaat-o-Tanween', titleUr: 'مشق حرکات و تنوین',
     description: 'Full-word drilling combining letters, harakaat and tanween.',
-    focus: ['makhraj', 'tajweed', 'fluency'] },
+    focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 10-11' },
   { number: 7, key: 'khari_harakaat', titleEn: 'Khari Zabar, Khari Zer, Ulta Pesh', titleUr: 'کھڑی زبر، کھڑی زیر، الٹا پیش',
     description: 'The vertical/mini-letter stand-in marks for long vowels written without a full alif/ya/waw.',
-    focus: ['tajweed'] },
+    focus: ['tajweed'], pageReference: 'p. 11-12' },
   { number: 8, key: 'madd_o_leen', titleEn: 'Madd-o-Leen', titleUr: 'مدہ ولین',
     description: 'Elongation letters (huroof-e-madd) and the soft letters (huroof-e-leen) - the foundation of correct vowel length.',
-    focus: ['tajweed'] },
+    focus: ['tajweed'], pageReference: 'p. 12-14' },
   { number: 9, key: 'mashq_harakaat_madd', titleEn: 'Mashq Harakaat (Madd-o-Leen)', titleUr: 'مشق حرکات مدہ ولین',
     description: 'Real Qur’anic words practicing madd and leen together with every harakaat and tanween learned so far.',
-    focus: ['makhraj', 'tajweed', 'fluency'] },
+    focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 15-17' },
   { number: 10, key: 'sukoon', titleEn: 'Sukoon (Jazm)', titleUr: 'سکون یعنی جزم',
-    description: 'The quiescent mark - a letter with no vowel - drilled through the full alphabet, with special care for letters that sound alike when sakin.',
-    focus: ['makhraj', 'tajweed'] },
+    description: 'The quiescent mark applied to every letter below, with special care for letters that sound alike when sakin.',
+    focus: ['makhraj', 'tajweed'], pageReference: 'p. 18', referenceContent: ARABIC_29_LETTERS },
   { number: 11, key: 'mashq_sukoon', titleEn: 'Mashq Sukoon', titleUr: 'مشق سکون',
     description: 'Full-word and real ayah-fragment practice, including the waqf (stop) signs.',
-    focus: ['makhraj', 'tajweed', 'fluency'] },
+    focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 19-23' },
   { number: 12, key: 'tashdeed', titleEn: 'Tashdeed', titleUr: 'تشدید',
-    description: 'The shadda (doubling) mark - pronouncing a letter twice.',
-    focus: ['tajweed'] },
+    description: 'The shadda (doubling) mark applied to every letter below - pronouncing it twice.',
+    focus: ['tajweed'], pageReference: 'p. 24', referenceContent: ARABIC_29_LETTERS },
   { number: 13, key: 'mashq_tashdeed', titleEn: 'Mashq Tashdeed', titleUr: 'مشق تشدید',
     description: 'Word and short-surah practice applying tashdeed, including complete surahs like Ash-Shams and Ad-Duha.',
-    focus: ['makhraj', 'tajweed', 'fluency'] },
+    focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 25-26' },
   { number: 14, key: 'mashq_tashdeed_sukoon', titleEn: "Mashq Tashdeed ma' Sukoon", titleUr: 'مشق تشدید مع سکون',
     description: 'Tashdeed combined with sukoon in the same word - e.g. Surah At-Tin, Al-Inshiqaq.',
-    focus: ['tajweed', 'fluency'] },
+    focus: ['tajweed', 'fluency'], pageReference: 'p. 27' },
   { number: 15, key: 'tashdeed_tashdeed', titleEn: "Tashdeed ma' Tashdeed", titleUr: 'تشدید مع تشدید',
     description: 'Two consecutive shadda-marked letters in the same word.',
-    focus: ['tajweed', 'fluency'] },
+    focus: ['tajweed', 'fluency'], pageReference: 'p. 28' },
   { number: 16, key: 'tashdeed_baad_madd', titleEn: 'Tashdeed ba’d Huroof-e-Madd', titleUr: 'تشدید بعد حروف مدہ',
     description: 'Shadda immediately following a letter of elongation - the rule that the madd is not shortened.',
-    focus: ['tajweed', 'fluency'] },
+    focus: ['tajweed', 'fluency'], pageReference: 'p. 29' },
 ];
 
 export const QAIDA_TAKHTI_COUNT = QAIDA_TAKHTIS.length;
