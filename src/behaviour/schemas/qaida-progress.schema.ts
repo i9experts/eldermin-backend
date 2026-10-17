@@ -41,29 +41,36 @@ export interface QaidaTakhtiDef {
   // inside a product real children are taught from. Those boards rely on
   // pageReference above instead.
   referenceContent?: string[];
+  // Transliteration for each entry in referenceContent, same index order -
+  // lets a teacher mark a sabaq (lesson range) in plain English ("Alif to
+  // Kaf") the way it's actually spoken in class, instead of only by
+  // pointing at the Arabic glyph.
+  referenceLabels?: string[];
 }
 
 // The standard 29-letter Arabic abjad, in the order the Qaida itself uses
 // (Mufradat, Takhti 1) - independently verifiable, not board-specific.
 const ARABIC_29_LETTERS = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'و', 'ه', 'ء', 'ي'];
+const ARABIC_29_LABELS = ['Alif', 'Ba', 'Ta', 'Tha', 'Jeem', 'Ha', 'Kha', 'Dal', 'Zal', 'Ra', 'Za', 'Seen', 'Sheen', 'Sad', 'Dad', 'Toe', 'Zoe', 'Ain', 'Ghain', 'Fa', 'Qaf', 'Kaf', 'Lam', 'Meem', 'Noon', 'Wao', 'Ha (small)', 'Hamza', 'Ya'];
 
 export const QAIDA_TAKHTIS: QaidaTakhtiDef[] = [
   { number: 1, key: 'mufradat', titleEn: 'Mufradat', titleUr: 'مفردات',
     description: 'The 29 isolated Arabic letters and their correct articulation points (makhraj).',
-    focus: ['makhraj'], pageReference: 'p. 2', referenceContent: ARABIC_29_LETTERS },
+    focus: ['makhraj'], pageReference: 'p. 2', referenceContent: ARABIC_29_LETTERS, referenceLabels: ARABIC_29_LABELS },
   { number: 2, key: 'murakkabat', titleEn: 'Murakkabat', titleUr: 'مرکبات',
     description: 'Letters joined in pairs and triplets - recognizing how a letter’s shape changes when connected.',
     focus: ['makhraj'], pageReference: 'p. 3-5' },
   { number: 3, key: 'muqattaat', titleEn: "Huroof-e-Muqatta'at", titleUr: 'حروف مقطعات',
     description: "The Qur'an's disjointed letter sets, memorized early as a point of barakah.",
     focus: ['makhraj'], pageReference: 'p. 6',
-    referenceContent: ['الم', 'المص', 'الر', 'المر', 'كهيعص', 'طه', 'طسم', 'طس', 'يس', 'حم', 'عسق', 'ق', 'ن', 'ص'] },
+    referenceContent: ['الم', 'المص', 'الر', 'المر', 'كهيعص', 'طه', 'طسم', 'طس', 'يس', 'حم', 'عسق', 'ق', 'ن', 'ص'],
+    referenceLabels: ['Alif-Lam-Meem', 'Alif-Lam-Meem-Sad', 'Alif-Lam-Ra', 'Alif-Lam-Meem-Ra', 'Kaf-Ha-Ya-Ain-Sad', 'Ta-Ha', 'Ta-Seen-Meem', 'Ta-Seen', 'Ya-Seen', 'Ha-Meem', 'Ain-Seen-Qaf', 'Qaf', 'Noon', 'Sad'] },
   { number: 4, key: 'harakaat', titleEn: 'Harakaat', titleUr: 'حرکات',
     description: 'Zabar, Zer and Pesh (fatha/kasra/damma) applied to every letter below, isolated and joined.',
-    focus: ['makhraj', 'tajweed'], pageReference: 'p. 6-9', referenceContent: ARABIC_29_LETTERS },
+    focus: ['makhraj', 'tajweed'], pageReference: 'p. 6-9', referenceContent: ARABIC_29_LETTERS, referenceLabels: ARABIC_29_LABELS },
   { number: 5, key: 'tanween', titleEn: 'Tanween', titleUr: 'تنوین',
     description: 'Do-Zabar, Do-Zer, Do-Pesh applied to every letter below, and the nasal ghunna sound that comes with them.',
-    focus: ['tajweed'], pageReference: 'p. 8-9', referenceContent: ARABIC_29_LETTERS },
+    focus: ['tajweed'], pageReference: 'p. 8-9', referenceContent: ARABIC_29_LETTERS, referenceLabels: ARABIC_29_LABELS },
   { number: 6, key: 'mashq_harakaat_tanween', titleEn: 'Mashq Harakaat-o-Tanween', titleUr: 'مشق حرکات و تنوین',
     description: 'Full-word drilling combining letters, harakaat and tanween.',
     focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 10-11' },
@@ -78,13 +85,13 @@ export const QAIDA_TAKHTIS: QaidaTakhtiDef[] = [
     focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 15-17' },
   { number: 10, key: 'sukoon', titleEn: 'Sukoon (Jazm)', titleUr: 'سکون یعنی جزم',
     description: 'The quiescent mark applied to every letter below, with special care for letters that sound alike when sakin.',
-    focus: ['makhraj', 'tajweed'], pageReference: 'p. 18', referenceContent: ARABIC_29_LETTERS },
+    focus: ['makhraj', 'tajweed'], pageReference: 'p. 18', referenceContent: ARABIC_29_LETTERS, referenceLabels: ARABIC_29_LABELS },
   { number: 11, key: 'mashq_sukoon', titleEn: 'Mashq Sukoon', titleUr: 'مشق سکون',
     description: 'Full-word and real ayah-fragment practice, including the waqf (stop) signs.',
     focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 19-23' },
   { number: 12, key: 'tashdeed', titleEn: 'Tashdeed', titleUr: 'تشدید',
     description: 'The shadda (doubling) mark applied to every letter below - pronouncing it twice.',
-    focus: ['tajweed'], pageReference: 'p. 24', referenceContent: ARABIC_29_LETTERS },
+    focus: ['tajweed'], pageReference: 'p. 24', referenceContent: ARABIC_29_LETTERS, referenceLabels: ARABIC_29_LABELS },
   { number: 13, key: 'mashq_tashdeed', titleEn: 'Mashq Tashdeed', titleUr: 'مشق تشدید',
     description: 'Word and short-surah practice applying tashdeed, including complete surahs like Ash-Shams and Ad-Duha.',
     focus: ['makhraj', 'tajweed', 'fluency'], pageReference: 'p. 25-26' },
@@ -121,9 +128,20 @@ export const QAIDA_COMMON_ERRORS = [
 
 @Schema({ _id: false })
 class TakhtiAttempt {
+  // Settable by the teacher (not always "now") - a sabaq logged after the
+  // fact (end of day, or catching up on a missed entry) should carry the
+  // date/time it was actually taught, not when the record was saved.
   @Prop({ required: true, default: () => new Date() }) date: Date;
   @Prop({ required: true }) assessedBy: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) assessedById?: Types.ObjectId;
+
+  // The sabaq (lesson) range actually covered in this session - e.g.
+  // "Alif" to "Kaf" on the Mufradat board. Plain text (the referenceLabels
+  // entry, or free text for boards with no fixed reference list) rather
+  // than an index pair, so it stays meaningful even if QAIDA_TAKHTIS'
+  // reference content is ever revised.
+  @Prop() sabaqFrom?: string;
+  @Prop() sabaqTo?: string;
 
   // 1-5 scale, consistent with TarbiyahAssessment's TraitScore convention.
   // Only the fields relevant to this takhti's `focus` are expected to be

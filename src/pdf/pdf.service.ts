@@ -541,12 +541,16 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
         <th style="width:11%">Started</th>
         <th style="width:11%">Mastered</th>
         <th style="width:9%">Attempts</th>
-        <th style="width:26%">Latest Remarks</th>
+        <th style="width:26%">Latest Sabaq / Remarks</th>
       </tr>
     </thead>
     <tbody>
       ${data.takhtis.map((t: any) => {
         const style = QAIDA_STATUS_STYLE[t.status] || QAIDA_STATUS_STYLE.not_started;
+        const sabaq = t.latestAttempt?.sabaqFrom
+          ? `<strong>${t.latestAttempt.sabaqFrom}${t.latestAttempt.sabaqTo && t.latestAttempt.sabaqTo !== t.latestAttempt.sabaqFrom ? ` → ${t.latestAttempt.sabaqTo}` : ''}</strong>`
+          : '';
+        const remarks = t.latestAttempt?.remarks || '';
         return `<tr>
           <td><strong>${t.number}</strong></td>
           <td><strong>${t.titleEn}</strong><div class="urdu">${t.titleUr}</div></td>
@@ -554,7 +558,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
           <td>${t.startedDate ? new Date(t.startedDate).toLocaleDateString('en-GB') : '—'}</td>
           <td>${t.masteredDate ? new Date(t.masteredDate).toLocaleDateString('en-GB') : '—'}</td>
           <td>${t.attemptCount}</td>
-          <td>${t.latestAttempt?.remarks || '—'}</td>
+          <td>${[sabaq, remarks].filter(Boolean).join(' — ') || '—'}</td>
         </tr>`;
       }).join('')}
     </tbody>
@@ -1100,7 +1104,11 @@ export class PdfService implements OnModuleDestroy {
         masteredDate: record?.masteredDate,
         revisionCount: record?.revisionCount || 0,
         attemptCount: record?.attempts?.length || 0,
-        latestAttempt: latestAttempt ? { remarks: latestAttempt.remarks } : null,
+        latestAttempt: latestAttempt ? {
+          remarks: latestAttempt.remarks,
+          sabaqFrom: latestAttempt.sabaqFrom,
+          sabaqTo: latestAttempt.sabaqTo,
+        } : null,
       };
     });
     const masteredCount = takhtis.filter((t) => t.status === 'mastered').length;

@@ -1,5 +1,5 @@
 import {
-  IsArray, IsIn, IsInt, IsMongoId, IsNumber, IsOptional, IsString,
+  IsArray, IsDateString, IsIn, IsInt, IsMongoId, IsNumber, IsOptional, IsString,
   Max, MaxLength, Min,
 } from 'class-validator';
 import { QAIDA_COMMON_ERRORS } from '../schemas/qaida-progress.schema';
@@ -29,6 +29,17 @@ export class RecordTakhtiAttemptDto {
   errorsNoted?: string[];
 
   @IsOptional() @IsString() @MaxLength(1000) remarks?: string;
+
+  // The sabaq (lesson) range actually covered - e.g. "Alif" to "Kaf".
+  // Optional: a board with no fixed reference content (Murakkabat, the
+  // Mashq boards) has nothing to pick a range from, so a teacher just
+  // leaves these blank and relies on remarks/pageReference instead.
+  @IsOptional() @IsString() @MaxLength(100) sabaqFrom?: string;
+  @IsOptional() @IsString() @MaxLength(100) sabaqTo?: string;
+
+  // When this sabaq actually happened, if not right now (logging it after
+  // the fact, or at end of day for the whole class).
+  @IsOptional() @IsDateString() date?: string;
 }
 
 export class UpdateTakhtiStatusDto {
