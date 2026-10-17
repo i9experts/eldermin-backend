@@ -123,8 +123,9 @@ export class QaidaService {
     }
 
     const wasMastered = record.status === 'mastered';
+    const attemptDate = dto.date ? new Date(dto.date) : new Date();
     record.attempts.push({
-      date: new Date(),
+      date: attemptDate,
       assessedBy,
       assessedById: assessedById ? (new Types.ObjectId(assessedById) as any) : undefined,
       rating: dto.rating,
@@ -133,9 +134,11 @@ export class QaidaService {
       fluency: dto.fluency,
       errorsNoted: dto.errorsNoted || [],
       remarks: dto.remarks,
+      sabaqFrom: dto.sabaqFrom,
+      sabaqTo: dto.sabaqTo,
     } as any);
 
-    if (!record.startedDate) record.startedDate = new Date();
+    if (!record.startedDate) record.startedDate = attemptDate;
 
     if (PASSING_RATINGS.includes(dto.rating)) {
       record.status = 'mastered';
@@ -277,6 +280,12 @@ export class QaidaService {
         masteredDate: record?.masteredDate,
         revisionCount: record?.revisionCount || 0,
         attemptCount: record?.attempts?.length || 0,
+        // Every attempt's sabaq range, oldest first - a daily lesson log for
+        // this board, not just the latest snapshot.
+        sabaqLog: (record?.attempts || []).map((a) => ({
+          date: a.date, sabaqFrom: a.sabaqFrom, sabaqTo: a.sabaqTo,
+          rating: a.rating, assessedBy: a.assessedBy,
+        })),
         latestAttempt: latestAttempt ? {
           date: latestAttempt.date,
           rating: latestAttempt.rating,
@@ -286,6 +295,8 @@ export class QaidaService {
           errorsNoted: latestAttempt.errorsNoted,
           remarks: latestAttempt.remarks,
           assessedBy: latestAttempt.assessedBy,
+          sabaqFrom: latestAttempt.sabaqFrom,
+          sabaqTo: latestAttempt.sabaqTo,
         } : null,
       };
     });
