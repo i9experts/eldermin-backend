@@ -258,6 +258,12 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteFeeStructure(id, schoolSlug);
   }
+  @RequireModuleAccess('finance', 'fee', 'manage')
+  @Post('fee-structures/bulk-delete') @HttpCode(HttpStatus.OK)
+  async bulkDeleteFeeStructures(@Body('ids') ids: string[], @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.bulkDeleteFeeStructures(ids || [], schoolSlug);
+  }
 
   // Invoices
   @RequireModuleAccess('finance', 'fee', 'view')
