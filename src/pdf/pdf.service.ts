@@ -10,6 +10,8 @@ import { FinanceService } from '../finance/finance.service';
 import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
+import { TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
+import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -300,6 +302,10 @@ export class GenerateQaidaReportDto {
   @IsMongoId() studentId: string;
 }
 
+export class GenerateTarbiyahReportDto {
+  @IsMongoId() assessmentId: string;
+}
+
 const REPORT_CARD_TEMPLATE = (data: any) => `
 <!DOCTYPE html>
 <html lang="en">
@@ -585,6 +591,168 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
 </html>
 `;
 
+// Mirrors the frontend's TARBIYAH_RATING_CONFIG (src/pages/behaviour/types.ts)
+// so the PDF shows the exact same rating label/colour a teacher already
+// sees on the assessment card, rather than a second, drifting copy.
+const TARBIYAH_RATING_STYLE: Record<string, { label: string; bg: string; text: string }> = {
+  excellent:          { label: 'Excellent (Mumtaz)',      bg: '#DCFCE7', text: '#16A34A' },
+  good:               { label: 'Good (Jayyid)',           bg: '#DBEAFE', text: '#2563EB' },
+  satisfactory:       { label: 'Satisfactory (Maqbool)',  bg: '#FEF3DC', text: '#C8811A' },
+  needs_improvement:  { label: 'Needs Improvement',       bg: '#FFEDD5', text: '#EA580C' },
+  critical:           { label: 'Critical Concern',        bg: '#FEE2E2', text: '#DC2626' },
+};
+
+const starGlyphs = (score: number, max: number) => {
+  const filled = Math.max(0, Math.min(max, Math.round(score)));
+  return '★'.repeat(filled) + '☆'.repeat(Math.max(0, max - filled));
+};
+
+const CATEGORY_COLORS: Record<string, { bg: string; text: string }> = {
+  character: { bg: '#F3E8FF', text: '#7E22CE' },
+  social:    { bg: '#DBEAFE', text: '#2563EB' },
+  academic:  { bg: '#FEF3DC', text: '#C8811A' },
+  spiritual: { bg: '#DCFCE7', text: '#16A34A' },
+};
+
+const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
+  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .logo { height: 48px; max-width: 110px; object-fit: contain; }
+  .school-name { font-size: 22px; font-weight: 800; color: #1e3a5f; letter-spacing: -0.5px; }
+  .school-sub { font-size: 12px; color: #5B7290; margin-top: 2px; }
+  .doc-title { font-size: 15px; font-weight: 700; color: #B45309; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-sub { font-size: 11px; color: #5B7290; text-align: right; margin-top: 2px; }
+  .student-box { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .info-label { font-size: 10px; font-weight: 700; color: #8295AE; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+  .info-value { font-size: 14px; font-weight: 600; color: #1E2A3A; }
+  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
+  .hero { display: flex; align-items: center; gap: 24px; background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 12px; padding: 20px; }
+  .hero-score { font-size: 42px; font-weight: 900; color: #1e3a5f; line-height: 1; }
+  .hero-max { font-size: 14px; color: #8295AE; font-weight: 600; }
+  .hero-bar-track { background: #E3E9F2; border-radius: 100px; height: 10px; width: 100%; overflow: hidden; }
+  .hero-bar-fill { height: 10px; border-radius: 100px; }
+  .hero-stars { font-size: 18px; color: #F5A623; letter-spacing: 2px; margin-top: 4px; }
+  .rating-pill { display: inline-block; padding: 4px 14px; border-radius: 100px; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+  .share-pill { display: inline-block; padding: 3px 10px; border-radius: 100px; font-size: 10.5px; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11.5px; }
+  th { background: #1e3a5f; color: #fff; padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 7px 10px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
+  tr:nth-child(even) td { background: #F9FAFC; }
+  .cat-chip { display: inline-block; padding: 1px 8px; border-radius: 100px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+  .local-script { direction: rtl; font-size: 13px; color: #5B7290; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .list-card { background: #F9FAFC; border: 1px solid #EEF2F8; border-radius: 10px; padding: 14px; }
+  .list-card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .list-item { font-size: 12px; margin-bottom: 5px; display: flex; justify-content: space-between; }
+  .remarks-box { background: #F9FAFC; border: 1px solid #EEF2F8; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 34px; padding-top: 16px; border-top: 1px solid #EEF2F8; }
+  .sig-item { text-align: center; }
+  .sig-line { width: 140px; border-bottom: 1.5px solid #1E2A3A; margin-bottom: 6px; height: 32px; }
+  .sig-label { font-size: 11px; color: #5B7290; font-weight: 600; }
+  .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #8295AE; border-top: 1px solid #EEF2F8; padding-top: 10px; }
+  .footer strong { color: #1e3a5f; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div class="header-left">
+      ${data.schoolLogo ? `<img class="logo" src="${data.schoolLogo}" />` : ''}
+      <div>
+        <div class="school-name">${data.schoolName}</div>
+        <div class="school-sub">${data.schoolAddress || ''}</div>
+      </div>
+    </div>
+    <div>
+      <div class="doc-title">${data.moduleDisplayName} — Character Development Report</div>
+      <div class="doc-sub">${data.period}</div>
+    </div>
+  </div>
+
+  <div class="student-box">
+    <div><div class="info-label">Student Name</div><div class="info-value">${data.studentName}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${data.grade} ${data.section || ''}</div></div>
+    <div><div class="info-label">Assessed By</div><div class="info-value">${data.assessedBy}</div></div>
+    <div><div class="info-label">Assessment Date</div><div class="info-value">${data.assessmentDate}</div></div>
+  </div>
+
+  <div class="section-title">Overall ${data.moduleDisplayName} Score</div>
+  <div class="hero">
+    <div style="text-align:center;flex-shrink:0;">
+      <div class="hero-score">${data.overallScore.toFixed(1)}<span class="hero-max">/${data.scaleMax}</span></div>
+      <div class="hero-stars">${data.overallStars}</div>
+    </div>
+    <div style="flex:1;">
+      <div class="rating-pill" style="background:${data.ratingStyle.bg};color:${data.ratingStyle.text}">${data.ratingStyle.label}</div>
+      <div class="hero-bar-track"><div class="hero-bar-fill" style="width:${data.overallPercentage}%;background:${data.ratingStyle.text}"></div></div>
+      <div style="margin-top:8px;font-size:11px;color:#5B7290;">
+        ${data.overallPercentage}% overall ·
+        <span class="share-pill" style="background:${data.parentShared ? '#DCFCE7' : '#FEF3DC'};color:${data.parentShared ? '#16A34A' : '#C8811A'}">
+          ${data.parentShared ? 'Shared with Parent' : 'Not Shared with Parent'}
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Characteristic-by-Characteristic Breakdown</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:26%">Characteristic</th>
+        <th style="width:12%">Category</th>
+        <th style="width:14%">Score</th>
+        <th style="width:48%">Teacher's Observation</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${data.traits.map((t: any) => `<tr>
+        <td><strong>${t.nameEn}</strong>${t.nameLocal ? `<div class="local-script">${t.nameLocal}</div>` : ''}</td>
+        <td><span class="cat-chip" style="background:${CATEGORY_COLORS[t.category]?.bg || '#F1F5F9'};color:${CATEGORY_COLORS[t.category]?.text || '#475569'}">${t.category || 'general'}</span></td>
+        <td><span style="color:#F5A623;letter-spacing:1px;">${starGlyphs(t.score, data.scaleMax)}</span><div style="font-size:10px;color:#8295AE;">${t.score}/${data.scaleMax}</div></td>
+        <td>${t.observation || '—'}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>
+
+  <div class="section-title">Strengths &amp; Areas for Growth</div>
+  <div class="two-col">
+    <div class="list-card">
+      <div class="list-card-title" style="color:#16A34A;">✦ Strengths</div>
+      ${data.strengths.length > 0 ? data.strengths.map((t: any) => `<div class="list-item"><span>${t.nameEn}</span><span style="color:#F5A623;">${starGlyphs(t.score, data.scaleMax)}</span></div>`).join('') : '<p style="font-size:11px;color:#8295AE;font-style:italic;">None identified</p>'}
+    </div>
+    <div class="list-card">
+      <div class="list-card-title" style="color:#C8811A;">⚠ Needs Work</div>
+      ${data.needsWork.length > 0 ? data.needsWork.map((t: any) => `<div class="list-item"><span>${t.nameEn}</span><span style="color:#F5A623;">${starGlyphs(t.score, data.scaleMax)}</span></div>`).join('') : '<p style="font-size:11px;color:#8295AE;font-style:italic;">None identified</p>'}
+    </div>
+  </div>
+
+  ${data.teacherObservations ? `
+  <div class="section-title">Teacher's Observations</div>
+  <div class="remarks-box">${data.teacherObservations}</div>` : ''}
+
+  ${data.recommendedActions ? `
+  <div class="section-title">Recommended Actions</div>
+  <div class="remarks-box">${data.recommendedActions}</div>` : ''}
+
+  <div class="sig-row">
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">${data.moduleDisplayName} Coordinator</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+  </div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${data.schoolName} · ${new Date().toLocaleDateString('en-GB')}</div>
+</div>
+</body>
+</html>
+`;
+
 const INVOICE_TEMPLATE = (data: any) => `
 <!DOCTYPE html>
 <html lang="en">
@@ -797,6 +965,8 @@ export class PdfService implements OnModuleDestroy {
     @InjectModel('Campus') private campusModel: Model<any>,
     @InjectModel('GroupInstitution') private groupInstitutionModel: Model<any>,
     @InjectModel('QaidaProgress') private qaidaModel: Model<any>,
+    @InjectModel(TarbiyahAssessment.name) private tarbiyahModel: Model<any>,
+    @InjectModel(CharacterProgramSettings.name) private characterSettingsModel: Model<any>,
     private financeService: FinanceService,
   ) {}
 
@@ -1149,6 +1319,132 @@ export class PdfService implements OnModuleDestroy {
       schoolSlug,
       type: 'qaida-report',
       referenceId: dto.studentId,
+      referenceName: data.studentName,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Fetches a logo image server-side and returns it as a data: URI, rather
+   * than letting the Puppeteer page try to load the (often S3-hosted,
+   * sometimes private) URL itself over the network - same reasoning as
+   * embedSchoolLogo above, just producing an <img src> string instead of a
+   * pdf-lib image object for templates rendered through htmlToPdf.
+   */
+  private async logoDataUri(logoUrl: string | null | undefined): Promise<string | null> {
+    if (!logoUrl) return null;
+    try {
+      const res = await fetch(logoUrl);
+      if (!res.ok) {
+        this.logger.warn(`School logo fetch failed (${res.status} ${res.statusText}): ${logoUrl}`);
+        return null;
+      }
+      const bytes = Buffer.from(await res.arrayBuffer());
+      const contentType = res.headers.get('content-type')
+        || (logoUrl.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg');
+      return `data:${contentType};base64,${bytes.toString('base64')}`;
+    } catch (err: any) {
+      this.logger.warn(`School logo embed failed for ${logoUrl}: ${err?.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Tarbiyah (character development) assessment report for a single
+   * assessment period - the "Full Report" behind each student's assessment
+   * card. Reads TarbiyahAssessment + the school's CharacterProgramSettings
+   * directly (same convention as generateReportCard/generateQaidaReport
+   * reading their models directly) so PdfModule stays a one-directional,
+   * model-only dependency.
+   */
+  async generateTarbiyahReport(
+    schoolSlug: string,
+    dto: GenerateTarbiyahReportDto,
+    userId: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const assessment: any = await this.tarbiyahModel.findOne({
+      _id: dto.assessmentId, schoolSlug,
+    }).lean();
+    if (!assessment) throw new NotFoundException('Tarbiyah assessment not found');
+
+    const settings: any = await this.characterSettingsModel.findOne({ schoolSlug }).lean();
+    const moduleDisplayName = settings?.moduleDisplayName || 'Tarbiyah';
+    const traitDefs = settings?.characteristics?.length ? settings.characteristics : TARBIYAH_TRAITS;
+    const scaleMin = settings?.ratingScale?.min ?? 1;
+    const scaleMax = settings?.ratingScale?.max ?? 5;
+
+    // A campus-specific logo (school GROUP member institution) takes
+    // priority over the tenant-level School.logo, same resolution order as
+    // resolveSchoolBranding - just keyed by the assessment's campusId
+    // rather than a campus name string.
+    let brandName = (school as any).name;
+    let logoUrl: string | null = (school as any).logo || null;
+    if (assessment.campusId) {
+      const campus = await this.campusModel.findOne({ _id: assessment.campusId, schoolSlug }, { institutionId: 1 }).lean();
+      if (campus?.institutionId) {
+        const institution = await this.groupInstitutionModel.findOne({ _id: campus.institutionId, schoolSlug }).lean();
+        if (institution) {
+          brandName = (institution as any).name || brandName;
+          logoUrl = (institution as any).logoUrl || logoUrl;
+        }
+      }
+    }
+    const schoolLogo = await this.logoDataUri(logoUrl);
+
+    const traitScoreMap = new Map<string, any>((assessment.traits || []).map((t: any) => [t.traitKey, t]));
+    const traits = traitDefs.map((def: any) => {
+      const recorded = traitScoreMap.get(def.key);
+      return {
+        nameEn: def.nameEn,
+        nameLocal: def.nameLocal || def.nameAr || '',
+        category: def.category || 'general',
+        score: recorded?.score ?? 0,
+        observation: recorded?.observation || '',
+      };
+    });
+    const strengths = traits.filter((t) => t.score >= scaleMax - (scaleMax - scaleMin) * 0.2);
+    const needsWork = traits.filter((t) => t.score <= scaleMin + (scaleMax - scaleMin) * 0.4);
+
+    const ratingStyle = TARBIYAH_RATING_STYLE[assessment.overallRating] || TARBIYAH_RATING_STYLE.satisfactory;
+
+    const data = {
+      schoolName: brandName,
+      schoolAddress: (school as any).address || '',
+      schoolLogo,
+      moduleDisplayName,
+      studentName: assessment.studentName,
+      grade: assessment.grade,
+      section: assessment.section || '',
+      period: assessment.period,
+      assessedBy: assessment.assessedBy,
+      assessmentDate: assessment.assessmentDate
+        ? new Date(assessment.assessmentDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+        : 'N/A',
+      scaleMax,
+      overallScore: assessment.overallScore || 0,
+      overallStars: starGlyphs(assessment.overallScore || 0, scaleMax),
+      overallPercentage: Math.round(assessment.overallPercentage || 0),
+      ratingStyle,
+      parentShared: !!assessment.parentShared,
+      traits,
+      strengths,
+      needsWork,
+      teacherObservations: assessment.teacherObservations || '',
+      recommendedActions: assessment.recommendedActions || '',
+    };
+
+    const html = TARBIYAH_REPORT_TEMPLATE(data);
+    const pdf = await this.htmlToPdf(html);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'tarbiyah-report',
+      referenceId: dto.assessmentId,
       referenceName: data.studentName,
       generatedBy: userId,
       status: 'success',
