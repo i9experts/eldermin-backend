@@ -1,8 +1,16 @@
-import { Optional, Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { Optional, Injectable, Logger, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as net from 'net';
 import * as crypto from 'crypto';
+// No published TypeScript types for node-zklib - a small, plain-JS
+// ZKTeco TCP/UDP protocol client (connect / getAttendances / getUsers /
+// disconnect). require() keeps it an implicit `any` rather than fighting
+// a missing .d.ts for a one-purpose dependency.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ZKLib = require('node-zklib');
+import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
 import { UploadService } from '../../upload/upload.service';
 import { EmailService } from '../../email/email.service';
 import * as bcrypt from 'bcryptjs';
@@ -62,6 +70,9 @@ import { idForms, sameId } from '../../common/utils/id-forms.util';
 
 @Injectable()
 export class HrService {
+  private readonly logger = new Logger(HrService.name);
+  private biometricAutoSyncInFlight = false;
+
   constructor(
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(Designation.name) private designationModel: Model<DesignationDocument>,
@@ -93,6 +104,7 @@ export class HrService {
     @InjectModel(HiringSettings.name) private hiringSettingsModel: Model<HiringSettingsDocument>,
     @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
     @InjectModel(Shift.name) private shiftModel: Model<ShiftDocument>,
+    @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel(Grievance.name) private grievanceModel: Model<GrievanceDocument>,
     @InjectModel(DailyWorkSummary.name) private dailyWorkSummaryModel: Model<DailyWorkSummaryDocument>,
     @InjectModel(ExpenseClaim.name) private expenseClaimModel: Model<ExpenseClaimDocument>,
@@ -1106,7 +1118,7 @@ export class HrService {
     const ops = records.map(r => ({
       updateOne: {
         filter: { tenantId: this.newTid(tenantId), staffId: this.newTid(r.staffId), date: new Date(r.date) },
-        update: { $set: { ...r, tenantId: this.newTid(tenantId), institutionId: this.newTid(institutionId) } },
+        update: { $set: { ...r, tenantId: this.newTid(tenantId), institutionId: this.newTid(institutionId), source: 'manual' } },
         upsert: true,
       },
     }));
@@ -1192,36 +1204,191 @@ export class HrService {
       lastSyncAt: config.lastSyncAt || null,
       lastSyncCount: config.lastSyncCount || 0,
       lastSyncError: config.lastSyncError || null,
+      lastSyncUnmatchedIds: config.lastSyncUnmatchedIds || [],
     };
   }
 
-  async syncBiometricAttendance(tenantId: string, institutionId: string) {
+  /** Pulls raw punch logs off a ZKTeco (or compatible) terminal over its
+   * classic TCP/IP protocol (port 4370) and turns them into StaffAttendance
+   * records. This is a cloud-initiated PULL, not a device push - budget
+   * terminals like the K50 have no ADMS/cloud-push firmware, so the school
+   * must port-forward the device's port to a public IP/DDNS hostname and
+   * put that in BiometricConfig.deviceIp for this to reach it at all.
+   *
+   * Matching: each punch carries only the device's own numeric "User ID"
+   * (ZKLib's `deviceUserId`), which is matched against Staff.deviceEnrollmentId
+   * - an admin must type each teacher's device User ID into their profile
+   * once. A punch whose deviceUserId matches no staff member is skipped and
+   * reported back in unmatchedDeviceIds rather than silently dropped.
+   *
+   * In/out derivation: the device reports raw timestamps with no reliable
+   * in/out flag, so the EARLIEST punch of a (staff, date) pair becomes
+   * checkInTime and the LATEST becomes checkOutTime; a lone punch in a day
+   * is checkInTime only - no checkout is fabricated.
+   *
+   * Manual-edit protection: a record a human already corrected via the
+   * attendance UI or CSV import keeps `source: 'manual' | 'csv'` and is left
+   * alone here - biometric sync only creates new records or updates ones it
+   * previously wrote itself (source: 'biometric'), so it never clobbers a
+   * human's correction. */
+  async syncBiometricAttendance(tenantId: string, institutionId: string, schoolSlug?: string) {
     const config = await this.biometricConfigModel.findOne({ tenantId: this.newTid(tenantId) }).lean();
     if (!config) throw new BadRequestException('Biometric device is not configured yet');
 
-    const reachable = await this.testDeviceConnection(config.deviceIp, config.devicePort);
-    await this.biometricConfigModel.updateOne({ _id: config._id }, { $set: { isConnected: reachable } });
-    if (!reachable) {
-      await this.biometricConfigModel.updateOne(
-        { _id: config._id },
-        { $set: { lastSyncError: `Could not reach device at ${config.deviceIp}:${config.devicePort}` } },
-      );
-      throw new BadRequestException(`Could not reach device at ${config.deviceIp}:${config.devicePort}`);
+    const zk = new ZKLib(config.deviceIp, config.devicePort, 10000, 4000);
+    let connected = false;
+    try {
+      await zk.createSocket();
+      connected = true;
+    } catch (err: any) {
+      const message = `Could not connect to device at ${config.deviceIp}:${config.devicePort}: ${err?.message || err}`;
+      await this.biometricConfigModel.updateOne({ _id: config._id }, { $set: { isConnected: false, lastSyncError: message } });
+      throw new BadRequestException(message);
     }
 
-    // TODO: integrate a ZKTeco SDK (e.g. node-zklib) here to pull real punch
-    // logs over the socket and translate them into StaffAttendance records
-    // via the same upsert path as markStaffAttendance(). Device is reachable
-    // but no punch data is pulled yet — use CSV import as the working path.
+    let rawLogs: any[] = [];
+    try {
+      const result = await zk.getAttendances();
+      rawLogs = result?.data || [];
+    } catch (err: any) {
+      const message = `Failed to read attendance logs from device: ${err?.message || err}`;
+      await this.biometricConfigModel.updateOne({ _id: config._id }, { $set: { isConnected: true, lastSyncError: message } });
+      throw new BadRequestException(message);
+    } finally {
+      try { await zk.disconnect(); } catch { /* best-effort - we already have what we need */ }
+    }
+
+    // Map device User ID -> staffId for this tenant.
+    const staffList = await this.staffModel
+      .find({ tenantId: this.newTid(tenantId), deviceEnrollmentId: { $nin: [null, ''] } })
+      .select('deviceEnrollmentId shiftId shiftIds')
+      .lean();
+    const staffByDeviceId = new Map(staffList.map((s: any) => [String(s.deviceEnrollmentId), s]));
+
+    // Group raw punches by (staffId, calendar date) to find each day's
+    // earliest/latest punch.
+    const grouped = new Map<string, { staffId: string; date: string; earliest: Date; latest: Date }>();
+    const unmatchedIds = new Set<string>();
+    for (const log of rawLogs) {
+      const deviceUserId = String(log?.deviceUserId ?? '').trim();
+      if (!deviceUserId) continue;
+      const staff = staffByDeviceId.get(deviceUserId);
+      if (!staff) { unmatchedIds.add(deviceUserId); continue; }
+      const recordTime: Date = log.recordTime instanceof Date ? log.recordTime : new Date(log.recordTime);
+      if (isNaN(recordTime.getTime())) continue;
+      const dateKey = recordTime.toISOString().slice(0, 10);
+      const key = `${staff._id}_${dateKey}`;
+      const entry = grouped.get(key);
+      if (!entry) {
+        grouped.set(key, { staffId: String(staff._id), date: dateKey, earliest: recordTime, latest: recordTime });
+      } else {
+        if (recordTime < entry.earliest) entry.earliest = recordTime;
+        if (recordTime > entry.latest) entry.latest = recordTime;
+      }
+    }
+
+    const shiftCtx = await this.buildShiftContext(tenantId, schoolSlug);
+    const staffShiftsMap = new Map(staffList.map((s: any) => {
+      const ids: string[] = (s.shiftIds && s.shiftIds.length > 0) ? s.shiftIds.map((id: any) => String(id)) : (s.shiftId ? [String(s.shiftId)] : []);
+      return [String(s._id), ids];
+    }));
+
+    const toHHMM = (d: Date) => `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+
+    let synced = 0;
+    if (grouped.size > 0) {
+      // Don't overwrite a record a human already hand-corrected - only ever
+      // create new rows or update ones biometric sync wrote itself.
+      const existing = await this.staffAttendanceModel.find({
+        tenantId: this.newTid(tenantId),
+        $or: Array.from(grouped.values()).map(g => ({ staffId: this.newTid(g.staffId), date: new Date(g.date) })),
+      }).select('staffId date source').lean();
+      const protectedKeys = new Set(
+        existing.filter((e: any) => e.source && e.source !== 'biometric')
+          .map((e: any) => `${e.staffId}_${new Date(e.date).toISOString().slice(0, 10)}`),
+      );
+
+      const ops: any[] = [];
+      for (const entry of grouped.values()) {
+        if (protectedKeys.has(`${entry.staffId}_${entry.date}`)) continue;
+        const checkInTime = toHHMM(entry.earliest);
+        const checkOutTime = entry.latest.getTime() !== entry.earliest.getTime() ? toHHMM(entry.latest) : '';
+        const assignedIds = staffShiftsMap.get(entry.staffId) || [];
+        const status = this.resolveAttendanceStatus(checkInTime, new Date(entry.date), assignedIds, shiftCtx);
+        ops.push({
+          updateOne: {
+            filter: { tenantId: this.newTid(tenantId), staffId: this.newTid(entry.staffId), date: new Date(entry.date) },
+            update: {
+              $set: {
+                tenantId: this.newTid(tenantId),
+                institutionId: this.newTid(institutionId),
+                staffId: this.newTid(entry.staffId),
+                date: new Date(entry.date),
+                checkInTime,
+                checkOutTime,
+                status,
+                source: 'biometric',
+              },
+            },
+            upsert: true,
+          },
+        });
+      }
+      if (ops.length) {
+        await this.staffAttendanceModel.bulkWrite(ops);
+        synced = ops.length;
+      }
+    }
+
     await this.biometricConfigModel.updateOne(
       { _id: config._id },
-      { $set: { lastSyncAt: new Date(), lastSyncCount: 0, lastSyncError: null } },
+      {
+        $set: {
+          isConnected: connected,
+          lastSyncAt: new Date(),
+          lastSyncCount: synced,
+          lastSyncError: null,
+          lastSyncUnmatchedIds: Array.from(unmatchedIds),
+        },
+      },
     );
+
     return {
-      message: 'Device is reachable. Live punch-log sync is not implemented yet — use CSV import for now.',
-      synced: 0,
+      message: unmatchedIds.size > 0
+        ? `Synced ${synced} attendance record(s). ${unmatchedIds.size} device user ID(s) didn't match any staff member - add their Device Enrollment ID on their profile.`
+        : `Synced ${synced} attendance record(s).`,
+      synced,
+      unmatchedDeviceIds: Array.from(unmatchedIds),
       lastSyncAt: new Date(),
     };
+  }
+
+  /** Auto-syncs every tenant that has enabled biometric auto-sync, roughly
+   * every 10 minutes - each tenant's own autoSyncIntervalMins then decides
+   * whether this tick actually does anything for them, same re-entrancy
+   * guard pattern as ExitAccessService.runDueExits(). */
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  async runAutoBiometricSync() {
+    if (this.biometricAutoSyncInFlight) { this.logger.warn('runAutoBiometricSync: previous run still in progress, skipping this tick'); return; }
+    this.biometricAutoSyncInFlight = true;
+    try {
+      const configs = await this.biometricConfigModel.find({ autoSyncEnabled: true }).lean();
+      for (const config of configs) {
+        const dueAt = config.lastSyncAt
+          ? new Date(config.lastSyncAt.getTime() + (config.autoSyncIntervalMins || 30) * 60 * 1000)
+          : null;
+        if (dueAt && dueAt > new Date()) continue;
+        try {
+          const tenant: any = await this.tenantModel.findOne({ _id: config.tenantId }).select('slug').lean();
+          const tenantId = String(config.tenantId);
+          await this.syncBiometricAttendance(tenantId, tenantId, tenant?.slug);
+        } catch (err: any) {
+          this.logger.error(`Auto biometric sync failed for tenant ${config.tenantId}: ${err?.message || err}`);
+        }
+      }
+    } finally {
+      this.biometricAutoSyncInFlight = false;
+    }
   }
 
   async importAttendanceCsv(tenantId: string, institutionId: string, file: Express.Multer.File, schoolSlug?: string) {
@@ -1246,10 +1413,8 @@ export class HrService {
     // school-wide AttendanceSettings if no shifts are configured at all)
     // instead of defaulting every row to 'present' regardless of when
     // someone actually checked in.
-    const attendanceSettings = schoolSlug ? await this.getAttendanceSettings(tenantId, schoolSlug) : null;
-    const shifts = schoolSlug ? await this.shiftModel.find({ schoolSlug, isActive: true }).lean() : [];
-    const shiftById = new Map(shifts.map((s: any) => [String(s._id), s]));
-    const defaultShift = shifts.find((s: any) => s.isDefault) || null;
+    const shiftCtx = await this.buildShiftContext(tenantId, schoolSlug);
+    const { attendanceSettings, shifts } = shiftCtx;
 
     const staffList = await this.staffModel.find({ tenantId: this.newTid(tenantId) }).select('employeeId shiftId shiftIds').lean();
     const employeeIdMap = new Map(staffList.map(s => [s.employeeId, s._id.toString()]));
@@ -1273,31 +1438,9 @@ export class HrService {
       let status = 'present';
       if (statusCol !== -1) {
         status = cols[statusCol] || 'present';
-      } else if (attendanceSettings || shifts.length) {
+      } else {
         const assignedIds = staffShiftsMap.get(String(staffId)) || [];
-        const assignedShifts = assignedIds.map(id => shiftById.get(id)).filter(Boolean);
-        // A specific date this person was actually assigned a shift for -
-        // e.g. their Mon-Thu shift on a Monday, their Friday-only shift on
-        // a Friday, or their Saturday shift only on a Saturday that isn't
-        // off under that shift's own policy.
-        const resolvedShift = this.resolveShiftForDate(assignedShifts, new Date(date)) || defaultShift;
-        const rule = resolvedShift
-          ? {
-              standardCheckInTime: resolvedShift.startTime,
-              graceMinutes: resolvedShift.graceMinutes,
-              lateThresholdMinutes: resolvedShift.lateThresholdMinutes,
-              halfDayCutoffTime: resolvedShift.halfDayCutoffTime || attendanceSettings?.halfDayCutoffTime,
-            }
-          : attendanceSettings;
-        // No shift (assigned or default) covers this exact date - most
-        // likely a policy-driven day off (e.g. an alternate Saturday) or a
-        // day genuinely outside anyone's working days. Not an absence -
-        // there was never an expectation of showing up.
-        if (!resolvedShift && assignedShifts.length > 0) {
-          status = 'weekend';
-        } else {
-          status = rule ? this.computeAttendanceStatus(checkInTime, rule) : 'present';
-        }
+        status = this.resolveAttendanceStatus(checkInTime, new Date(date), assignedIds, shiftCtx);
       }
       ops.push({
         updateOne: {
@@ -1311,6 +1454,7 @@ export class HrService {
               checkInTime,
               checkOutTime: checkOutCol !== -1 ? cols[checkOutCol] || '' : '',
               status,
+              source: 'csv',
             },
           },
           upsert: true,
@@ -3674,6 +3818,50 @@ export class HrService {
     if (lateBy <= graceMins) return 'present';
     if (lateBy <= graceMins + lateThresholdMins) return 'late';
     return 'half_day';
+  }
+
+  /** Shift/AttendanceSettings data a whole batch of status derivations
+   * (CSV import, biometric sync) needs looked up once rather than per-row. */
+  private async buildShiftContext(tenantId: string, schoolSlug?: string) {
+    const attendanceSettings = schoolSlug ? await this.getAttendanceSettings(tenantId, schoolSlug) : null;
+    const shifts = schoolSlug ? await this.shiftModel.find({ schoolSlug, isActive: true }).lean() : [];
+    const shiftById = new Map(shifts.map((s: any) => [String(s._id), s]));
+    const defaultShift = shifts.find((s: any) => s.isDefault) || null;
+    return { attendanceSettings, shifts, shiftById, defaultShift };
+  }
+
+  /** Derives present/late/half_day/weekend for one staff member on one date
+   * from their assigned shift (falling back to the school's default shift,
+   * then to school-wide AttendanceSettings) - the logic CSV import and
+   * biometric sync both need so a punch/row is judged by the same rules
+   * regardless of how it entered the system. */
+  private resolveAttendanceStatus(
+    checkInTime: string,
+    date: Date,
+    assignedShiftIds: string[],
+    ctx: { attendanceSettings: any; shifts: any[]; shiftById: Map<string, any>; defaultShift: any },
+  ): string {
+    if (!(ctx.attendanceSettings || ctx.shifts.length)) return 'present';
+    const assignedShifts = assignedShiftIds.map(id => ctx.shiftById.get(id)).filter(Boolean);
+    // A specific date this person was actually assigned a shift for - e.g.
+    // their Mon-Thu shift on a Monday, their Friday-only shift on a Friday,
+    // or their Saturday shift only on a Saturday that isn't off under that
+    // shift's own policy.
+    const resolvedShift = this.resolveShiftForDate(assignedShifts, date) || ctx.defaultShift;
+    const rule = resolvedShift
+      ? {
+          standardCheckInTime: resolvedShift.startTime,
+          graceMinutes: resolvedShift.graceMinutes,
+          lateThresholdMinutes: resolvedShift.lateThresholdMinutes,
+          halfDayCutoffTime: resolvedShift.halfDayCutoffTime || ctx.attendanceSettings?.halfDayCutoffTime,
+        }
+      : ctx.attendanceSettings;
+    // No shift (assigned or default) covers this exact date - most likely a
+    // policy-driven day off (e.g. an alternate Saturday) or a day genuinely
+    // outside anyone's working days. Not an absence - there was never an
+    // expectation of showing up.
+    if (!resolvedShift && assignedShifts.length > 0) return 'weekend';
+    return rule ? this.computeAttendanceStatus(checkInTime, rule) : 'present';
   }
 
   // ── GRIEVANCE ────────────────────────────────────────────────────────

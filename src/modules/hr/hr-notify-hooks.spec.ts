@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import { HrService } from './hr.service';
 
 // Unit tests for the leave-status notification hook in updateLeaveStatus.
-// HrService has 43 injected deps before the optional notifier (S1 added accountAccess); unused ones
+// HrService has 44 injected deps before the optional notifier (biometric sync's cron added tenantModel); unused ones
 // are `{}`.
 
 const TENANT = new Types.ObjectId().toString();
@@ -28,7 +28,7 @@ function make(opts: { notify?: jest.Mock | null; applicant?: any; slug?: string 
     findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(opts.approverStaff ?? null) }) }),
   };
   const leaveBalanceModel: any = { updateOne: jest.fn().mockResolvedValue({}) };
-  const args: any[] = Array.from({ length: 43 }, () => ({}));
+  const args: any[] = Array.from({ length: 44 }, () => ({}));
   args[0] = staffModel;
   args[2] = leaveApplicationModel;
   args[7] = { deleteMany: jest.fn().mockResolvedValue({}) };
