@@ -114,6 +114,14 @@ export class BehaviourController {
     return this.service.getTarbiyahTraitAnalytics(schoolSlug, grade, period);
   }
 
+  // Class-wise / school-wide / consolidated leaderboard behind the
+  // Tarbiyah "Reports" tab - see BehaviourService.getTarbiyahReportData.
+  @Get('tarbiyah/report')
+  async getTarbiyahReport(@Request() req: any, @Query() query: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.getTarbiyahReportData(schoolSlug, query, requestingUser);
+  }
+
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('tarbiyah')
   @HttpCode(HttpStatus.CREATED)
