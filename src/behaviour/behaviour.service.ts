@@ -382,6 +382,131 @@ export class BehaviourService {
     };
   }
 
+  /**
+   * The Tarbiyah "Reports" tab - class-wise / school-wide / consolidated
+   * aggregate view behind the on-screen leaderboard and the PDF export
+   * (PdfService.generateTarbiyahClassReport/generateTarbiyahSchoolReport
+   * re-run this same shape of aggregation independently, since PdfModule
+   * is kept a one-directional, model-only dependency rather than reaching
+   * into BehaviourService). `grade` narrows to a class (with `section`
+   * optionally narrowing further within it); omitted, this aggregates
+   * school-wide and also returns a class-comparison table. `period`
+   * narrows to one term; omitted, this is a "consolidated" view - scores
+   * are averaged across every period on record, and a period-by-period
+   * trend is returned alongside the consolidated averages.
+   */
+  async getTarbiyahReportData(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+    const { grade, section, period, campusId, category } = query;
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
+
+    const filter: any = { schoolSlug };
+    if (grade) filter.grade = grade;
+    if (section) filter.section = section;
+    if (period) filter.period = period;
+    if (effectiveCampusId) filter.campusId = new Types.ObjectId(effectiveCampusId);
+
+    const settings = await this.getCharacterSettings(schoolSlug);
+    const allTraitDefs = settings?.characteristics?.length ? settings.characteristics : TARBIYAH_TRAITS;
+    const traitDefs = category ? allTraitDefs.filter((t: any) => t.category === category) : allTraitDefs;
+    const traitKeys = traitDefs.map((t: any) => t.key);
+    const scaleMax = settings?.ratingScale?.max ?? 5;
+
+    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, periodTrendAgg] = await Promise.all([
+      this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: { _id: null, totalAssessments: { $sum: 1 }, totalStudents: { $addToSet: '$studentId' }, avgOverallScore: { $avg: '$overallScore' } } },
+      ]),
+      this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: {
+            _id: '$studentId',
+            studentName: { $last: '$studentName' }, grade: { $last: '$grade' }, section: { $last: '$section' },
+            avgOverallScore: { $avg: '$overallScore' }, assessmentCount: { $sum: 1 },
+        } },
+        { $sort: { avgOverallScore: -1 } },
+      ]),
+      this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $unwind: '$traits' },
+        ...(traitKeys.length ? [{ $match: { 'traits.traitKey': { $in: traitKeys } } }] : []),
+        { $group: {
+            _id: { traitKey: '$traits.traitKey', studentId: '$studentId' },
+            studentName: { $last: '$studentName' }, grade: { $last: '$grade' }, section: { $last: '$section' },
+            avgScore: { $avg: '$traits.score' },
+        } },
+        { $sort: { avgScore: -1 } },
+      ]),
+      this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $unwind: '$traits' },
+        ...(traitKeys.length ? [{ $match: { 'traits.traitKey': { $in: traitKeys } } }] : []),
+        { $group: {
+            _id: { traitKey: '$traits.traitKey', grade: '$grade', section: '$section' },
+            avgScore: { $avg: '$traits.score' }, count: { $sum: 1 },
+        } },
+        { $sort: { avgScore: -1 } },
+      ]),
+      !grade ? this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: {
+            _id: { grade: '$grade', section: '$section' },
+            avgOverallScore: { $avg: '$overallScore' }, studentIds: { $addToSet: '$studentId' },
+        } },
+        { $project: { grade: '$_id.grade', section: '$_id.section', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, _id: 0 } },
+        { $sort: { avgOverallScore: -1 } },
+      ]) : Promise.resolve(null),
+      !period ? this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: { _id: '$period', avgOverallScore: { $avg: '$overallScore' }, assessmentCount: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]) : Promise.resolve(null),
+    ]);
+
+    const summary = summaryAgg[0]
+      ? { totalAssessments: summaryAgg[0].totalAssessments, totalStudents: summaryAgg[0].totalStudents.length, avgOverallScore: summaryAgg[0].avgOverallScore || 0 }
+      : { totalAssessments: 0, totalStudents: 0, avgOverallScore: 0 };
+
+    const traitStudentMap = new Map<string, any[]>();
+    for (const row of traitStudentRows) {
+      const key = row._id.traitKey;
+      if (!traitStudentMap.has(key)) traitStudentMap.set(key, []);
+      traitStudentMap.get(key)!.push({ studentId: row._id.studentId, studentName: row.studentName, grade: row.grade, section: row.section, avgScore: row.avgScore });
+    }
+    const traitClassMap = new Map<string, any[]>();
+    for (const row of traitClassRows) {
+      const key = row._id.traitKey;
+      if (!traitClassMap.has(key)) traitClassMap.set(key, []);
+      traitClassMap.get(key)!.push({ grade: row._id.grade, section: row._id.section, avgScore: row.avgScore, count: row.count });
+    }
+
+    const traitLeaderboard = traitDefs.map((def: any) => {
+      const students = traitStudentMap.get(def.key) || [];
+      const classes = traitClassMap.get(def.key) || [];
+      const traitAvg = students.length ? students.reduce((a: number, s: any) => a + s.avgScore, 0) / students.length : 0;
+      return {
+        key: def.key,
+        nameEn: def.nameEn,
+        nameLocal: def.nameLocal || def.nameAr || '',
+        category: def.category || 'general',
+        traitAvg,
+        topStudents: students.slice(0, 5),
+        topClass: classes[0] || null,
+      };
+    });
+
+    return {
+      scaleMax,
+      summary,
+      studentRanking: studentRankingAgg.map((s: any) => ({
+        studentId: s._id, studentName: s.studentName, grade: s.grade, section: s.section,
+        avgOverallScore: s.avgOverallScore || 0, assessmentCount: s.assessmentCount,
+      })),
+      traitLeaderboard,
+      classComparison,
+      periodTrend: periodTrendAgg ? periodTrendAgg.map((p: any) => ({ period: p._id, avgOverallScore: p.avgOverallScore || 0, assessmentCount: p.assessmentCount })) : null,
+    };
+  }
+
   async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any) {
     if (data.traits) {
       const settings = await this.getCharacterSettings(schoolSlug);
