@@ -283,7 +283,7 @@ export class HrController {
 
   @HrWrite()
   @Post('attendance/biometric/sync')
-  syncBiometricAttendance(@Request() req) { return this.hrService.syncBiometricAttendance(req.user.tenantId, this.iid(req)); }
+  syncBiometricAttendance(@Request() req) { return this.hrService.syncBiometricAttendance(req.user.tenantId, this.iid(req), req.user.schoolSlug); }
 
   @HrRead()
   @Get('attendance/biometric/status')
