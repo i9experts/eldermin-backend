@@ -16,6 +16,7 @@ import {
   CreateGroupInstitutionDto,
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
+import { buildClassTeacherOfName } from './utils/class-teacher-label.util';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
@@ -510,7 +511,7 @@ export class OrganizationService {
     // success toast and "Teacher: X" on the grade, while that teacher's
     // own attendance screen kept reporting them as not a class teacher at
     // all, since it reads this same TeacherProfile document).
-    const classTeacherOfName = `${grade.name}${sectionName ? ` - ${sectionName}` : ''}`;
+    const classTeacherOfName = buildClassTeacherOfName(grade.name, sectionName);
     const classTeacherFields = { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName };
     const existingProfile = await this.teacherProfileModel.findOne({ staffId: newTeacherStaff._id });
     if (existingProfile) {
