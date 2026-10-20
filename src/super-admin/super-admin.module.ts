@@ -22,7 +22,6 @@ import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.sch
 import { InstitutionSchema as OrgInstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema, AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { MarketingLead, LeadSchema } from '../leads/schemas/lead.schema';
-import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { ModulesModule } from '../modules/modules.module';
@@ -53,7 +52,6 @@ import { ModulesModule } from '../modules/modules.module';
       { name: 'OrgInstitution', schema: OrgInstitutionSchema },
       { name: 'School', schema: SchoolSchema },
       { name: MarketingLead.name, schema: LeadSchema },
-      { name: ParentLead.name, schema: ParentLeadSchema },
       { name: Campus.name, schema: CampusSchema },
       { name: Grade.name, schema: GradeSchema },
       { name: AcademicYear.name, schema: AcademicYearSchema },

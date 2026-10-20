@@ -30,9 +30,6 @@ import {
 } from './schemas/notification-and-message.schema';
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
-import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
-import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
-import { GeocodingService } from '../leads/geocoding.service';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
 import { EmailModule } from '../email/email.module';
@@ -74,12 +71,6 @@ import { ParentAuthController } from './parent-auth.controller';
       { name: Message.name, schema: MessageSchema },
       { name: PhoneOtp.name, schema: PhoneOtpSchema },
       { name: Tenant.name, schema: TenantSchema },
-      // Registered as 'OrgInstitution', not Institution.name - the literal
-      // class name "Institution" is already taken by the (unrelated)
-      // platform-billing Institution model in super-admin.schema.ts; this
-      // is the established convention (see onboarding.module.ts).
-      { name: 'OrgInstitution', schema: InstitutionSchema },
-      { name: ParentLead.name, schema: ParentLeadSchema },
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
     ]),
@@ -91,7 +82,7 @@ import { ParentAuthController } from './parent-auth.controller';
     PdfModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
-  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor, GeocodingService],
+  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor],
   exports: [ParentPortalService, ParentAuthService],
 })
 export class ParentPortalModule {}
