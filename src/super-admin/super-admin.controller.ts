@@ -142,6 +142,22 @@ export class SuperAdminController {
     return this.service.createAnnouncement({ ...dto, createdBy: this.adminUser(req) });
   }
 
+  // ── Parent Leads (SmartVan parent-app registrations) ───────
+  @Get('parent-leads')
+  async getParentLeads(@Query() query: any) {
+    return this.service.getParentLeads(query);
+  }
+
+  @Get('parent-leads/filter-options')
+  async getParentLeadFilterOptions() {
+    return this.service.getParentLeadFilterOptions();
+  }
+
+  @Get('parent-leads/insights')
+  async getParentLeadInsights(@Query() query: any) {
+    return this.service.getParentLeadInsights(query);
+  }
+
   // ── Support Tickets ───────────────────────────────────────
   @Get('tickets')
   async getTickets(@Query() query: any) {
