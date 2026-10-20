@@ -112,6 +112,13 @@ export class QuestionOption {
 }
 export const QuestionOptionSchema = SchemaFactory.createForClass(QuestionOption);
 
+@Schema({ _id: false })
+export class MatchingPair {
+  @Prop({ required: true }) left: string;
+  @Prop({ required: true }) right: string;
+}
+export const MatchingPairSchema = SchemaFactory.createForClass(MatchingPair);
+
 @Schema({ timestamps: true, collection: 'question_bank' })
 export class Question {
   @Prop({ required: true }) subject: string;
@@ -142,6 +149,14 @@ export class Question {
 
   @Prop({ type: [QuestionOptionSchema], default: [] })
   options: QuestionOption[];
+
+  // For type: 'matching' - each pair's correct left/right correspondence.
+  // The exam-paper PDF prints the right-hand column shuffled (seeded off
+  // this question's _id so reprinting the same paper doesn't reshuffle
+  // the answer key); this array is always stored in the unshuffled,
+  // correct order.
+  @Prop({ type: [MatchingPairSchema], default: [] })
+  matchingPairs: MatchingPair[];
 
   @Prop() correctAnswer: string;     // for short/long/fill_blank
   @Prop() answerExplanation: string;
