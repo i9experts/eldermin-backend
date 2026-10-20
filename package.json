@@ -24,7 +24,8 @@
     "audit:orphaned-staff-logins": "node dist/scripts/audit-orphaned-staff-logins.js",
     "audit:campus-scope": "ts-node -r tsconfig-paths/register src/scripts/audit-campus-scope-readiness.ts",
     "audit:teacher-class-matching": "ts-node -r tsconfig-paths/register src/scripts/audit-teacher-class-matching.ts",
-    "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts"
+    "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts",
+    "fix:class-teacher-names": "ts-node -r tsconfig-paths/register src/scripts/fix-duplicate-class-teacher-names.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
