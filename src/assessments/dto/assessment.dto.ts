@@ -108,6 +108,11 @@ export class QuestionOptionDto {
   @IsOptional() @IsBoolean() isCorrect?: boolean;
 }
 
+export class MatchingPairDto {
+  @IsString() left: string;
+  @IsString() right: string;
+}
+
 export class CreateQuestionDto {
   @IsString() subject: string;
   @IsString() grade: string;
@@ -127,6 +132,9 @@ export class CreateQuestionDto {
 
   @IsOptional() @IsArray() @ValidateNested({ each: true })
   @Type(() => QuestionOptionDto) options?: QuestionOptionDto[];
+
+  @IsOptional() @IsArray() @ValidateNested({ each: true })
+  @Type(() => MatchingPairDto) matchingPairs?: MatchingPairDto[];
 
   @IsOptional() @IsString() correctAnswer?: string;
   @IsOptional() @IsString() answerExplanation?: string;

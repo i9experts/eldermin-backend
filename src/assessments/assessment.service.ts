@@ -425,6 +425,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
             ? `<div class="options">${q.options.map((o: any, i: number) => `
                 <div class="option"><span class="opt-marker">${cfg.dir === 'rtl' ? this.arabicIndicNumeral(i) : String.fromCharCode(65 + i)}</span> ${this.escapeHtml(o.text)}</div>
               `).join('')}</div>`
+            : q.type === 'matching' && q.matchingPairs?.length
+            ? this.renderMatchingColumns(q.matchingPairs, q._id?.toString() || q.questionText, cfg)
             : Array.from({ length: q.answerLines ?? this.defaultAnswerLines(q.type, q.marks) })
                 .map(() => `<div class="answer-space"></div>`).join('');
           const imageHtml = q.questionImage ? `<div class="q-image"><img src="${q.questionImage}" /></div>` : '';
@@ -506,6 +508,12 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: ${format === 'compact' ? '1fr' : '1fr 1fr'}; gap: 4px; }
           .opt-marker { font-weight: bold; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 6px; }
           .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
+          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: flex; flex-direction: ${cfg.dir === 'rtl' ? 'row-reverse' : 'row'}; gap: 32px; }
+          .matching-col { flex: 1; }
+          .matching-col-title { font-weight: bold; font-size: ${px(11)}px; margin-bottom: 6px; text-decoration: underline; }
+          .matching-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 7px; }
+          .matching-blank { border-bottom: 1px solid #333; width: 28px; display: inline-block; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 4px; }
+          .matching-marker { font-weight: bold; flex-shrink: 0; }
           .q-image { margin: 8px 0 8px ${cfg.dir === 'rtl' ? '0' : '24px'}; }
           .q-image img { max-width: 320px; max-height: 220px; border: 1px solid #ddd; border-radius: 4px; }
           .cover-page {
@@ -801,8 +809,69 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   private arabicIndicNumeral(index: number): string {
     // Options lettered with real Arabic-Indic numerals for RTL papers
     // (١، ٢، ٣...) rather than forcing Latin A/B/C/D into an RTL layout.
-    const numerals = ['١', '٢', '٣', '٤', '٥', '٦'];
-    return numerals[index] || String(index + 1);
+    // Composed digit-by-digit (not a fixed small lookup table) so this
+    // also covers a matching question's right-hand column, which can run
+    // well past the 6 choices an MCQ typically has.
+    const digits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+    return String(index + 1).split('').map(d => digits[Number(d)] ?? d).join('');
+  }
+
+  // "Match the columns" print layout: Column A (left items) numbered
+  // 1..N in their stored order; Column B (right items) shown under a
+  // deterministic per-question shuffle, lettered (or Arabic-Indic
+  // numbered, for RTL papers, matching the MCQ option-marker convention)
+  // so a student has to actually match rather than read straight across.
+  // The answer key stays derivable: each left row prints a blank for the
+  // student to write the matching marker into, and printing this HTML a
+  // second time for the same question reproduces the identical shuffle.
+  private renderMatchingColumns(pairs: Array<{ left: string; right: string }>, seed: string, cfg: { dir: string }): string {
+    const shuffledRight = this.seededShuffle(pairs.map((p) => p.right), seed);
+    const marker = (i: number) => cfg.dir === 'rtl' ? this.arabicIndicNumeral(i) : String.fromCharCode(65 + i);
+    const colA = cfg.dir === 'rtl' ? 'كالم الف' : 'Column A';
+    const colB = cfg.dir === 'rtl' ? 'كالم ب' : 'Column B';
+    return `
+      <div class="matching-columns">
+        <div class="matching-col">
+          <div class="matching-col-title">${colA}</div>
+          ${pairs.map((p, i) => `
+            <div class="matching-row">
+              <span class="matching-marker">${i + 1}.</span>
+              <span>${this.escapeHtml(p.left)}</span>
+              <span class="matching-blank"></span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="matching-col">
+          <div class="matching-col-title">${colB}</div>
+          ${shuffledRight.map((text, i) => `
+            <div class="matching-row">
+              <span class="matching-marker">${marker(i)}.</span>
+              <span>${this.escapeHtml(text)}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // Deterministic per-question shuffle for a matching question's
+  // right-hand column - seeded off the question's own _id (a stable,
+  // always-present string) rather than Math.random(), so reprinting the
+  // same exam paper PDF twice doesn't silently reshuffle the answer key
+  // a teacher may have already written down or shared.
+  private seededShuffle<T>(items: T[], seed: string): T[] {
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+    const rand = () => {
+      h = (Math.imul(1103515245, h) + 12345) | 0;
+      return ((h >>> 0) % 1000) / 1000;
+    };
+    const result = [...items];
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
   }
 
   // ============================================================
