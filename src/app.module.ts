@@ -17,6 +17,7 @@ import { AcademicsModule } from './modules/academics/academics.module';
 import { AdmissionsModule } from './admissions/admissions.module';
 import { AssessmentModule } from './assessments/assessment.module';
 import { BehaviourModule } from './behaviour/behaviour.module';
+import { ParentEngagementModule } from './parent-engagement/parent-engagement.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { CampusModule } from './campus/campus.module';
 import { UploadModule } from './upload/upload.module';
@@ -89,6 +90,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     AssessmentModule,
     DocumentsModule,
     BehaviourModule,
+    ParentEngagementModule,
     SuperAdminModule,
     CampusModule,
     UploadModule,
