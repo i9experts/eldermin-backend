@@ -22,16 +22,21 @@ import { PickupLog, PickupLogDocument } from './schemas/pickup-log.schema';
 import { idMatch, idMatchIn } from '../common/utils/id-match.util';
 import { BulkLogPickupDto } from './dto/parent-engagement.dto';
 
-// Final weights (sum to 1.0). The directive's initial draft (27/22/17/17/17
-// after an even 2pt bump from 25/20/15/15/15 to fully allocate the reserved
-// 10%) — kept here as one documented, easily-retunable config object rather
-// than scattered magic numbers.
+// Final weights (sum to 1.0), rebalanced for Phase 2 to make room for the
+// two newly-built dimensions (Tarbiyah-at-home, hygiene). Fee punctuality
+// and circular response stay the heaviest-weighted since they're the most
+// concrete, least gameable signals; the two new dimensions get meaningful
+// but not dominant weight since they're newer, softer signals with less
+// of a track record. Kept here as one documented, easily-retunable config
+// object rather than scattered magic numbers.
 export const PARENT_ENGAGEMENT_WEIGHTS = {
-  feePunctuality: 0.27,
-  circularResponse: 0.22,
-  leaveBehavior: 0.17,
-  appEngagement: 0.17,
-  pickupTimeliness: 0.17,
+  feePunctuality: 0.22,
+  circularResponse: 0.18,
+  leaveBehavior: 0.14,
+  appEngagement: 0.14,
+  pickupTimeliness: 0.12,
+  tarbiyahAtHome: 0.12,
+  hygieneCompliance: 0.08,
 };
 
 type DimensionKey = keyof typeof PARENT_ENGAGEMENT_WEIGHTS;
@@ -97,6 +102,8 @@ export class ParentEngagementService {
     @InjectModel('Circular') private circularModel: Model<any>,
     @InjectModel('CircularAcknowledgment') private ackModel: Model<any>,
     @InjectModel('User') private userModel: Model<any>,
+    @InjectModel('HomeTask') private homeTaskModel: Model<any>,
+    @InjectModel('HygieneCheck') private hygieneModel: Model<any>,
   ) {}
 
   // ── Pickup log ───────────────────────────────────────────────
@@ -235,6 +242,52 @@ export class ParentEngagementService {
     return { key: 'pickupTimeliness', label: 'Pickup/drop-off timeliness', score: parseFloat(score.toFixed(1)), dataPoints: logs.length };
   }
 
+  private async scoreTarbiyahAtHome(schoolSlug: string, student: any): Promise<DimensionResult> {
+    const since = new Date(Date.now() - 90 * dayMs);
+    const tasks = await this.homeTaskModel.find({
+      schoolSlug, studentId: idMatch(student._id), assignedDate: { $gte: since },
+    }).select('status reviewRating').lean();
+    if (!tasks.length) return { key: 'tarbiyahAtHome', label: 'Tarbiyah-at-home collaboration', score: null, dataPoints: 0 };
+
+    // Completion is what counts — a task a parent marked done but a teacher
+    // never got around to reviewing still counts as fully done. Reviews,
+    // when present, nudge the score (a 5/5 review tops it up, a 1/5 pulls
+    // it down) but their absence is never held against the parent.
+    const completed = tasks.filter((t: any) => t.status === 'completed');
+    const completionRate = (completed.length / tasks.length) * 100;
+
+    const reviewed = completed.filter((t: any) => typeof t.reviewRating === 'number');
+    let score = completionRate;
+    if (reviewed.length) {
+      const avgReview = reviewed.reduce((sum: number, t: any) => sum + t.reviewRating, 0) / reviewed.length;
+      const reviewPct = ((avgReview - 1) / 4) * 100; // 1-5 scale -> 0-100
+      score = clamp(completionRate * 0.7 + reviewPct * 0.3);
+    }
+    return { key: 'tarbiyahAtHome', label: 'Tarbiyah-at-home collaboration', score: parseFloat(score.toFixed(1)), dataPoints: tasks.length };
+  }
+
+  private async scoreHygieneCompliance(schoolSlug: string, student: any): Promise<DimensionResult> {
+    const since = new Date(Date.now() - 60 * dayMs);
+    const checks = await this.hygieneModel.find({
+      schoolSlug, studentId: idMatch(student._id), date: { $gte: since },
+    }).select('items').lean();
+    if (!checks.length) return { key: 'hygieneCompliance', label: 'Hygiene & grooming compliance', score: null, dataPoints: 0 };
+
+    let compliant = 0; let total = 0;
+    for (const c of checks) {
+      const items = (c as any).items || {};
+      for (const key of ['uniform', 'capOrScarf', 'shoes', 'lunchBrought']) {
+        total += 1;
+        if (items[key] !== false) compliant += 1;
+      }
+    }
+    const score = total ? (compliant / total) * 100 : null;
+    return {
+      key: 'hygieneCompliance', label: 'Hygiene & grooming compliance',
+      score: score === null ? null : parseFloat(score.toFixed(1)), dataPoints: checks.length,
+    };
+  }
+
   // ── Combine ──────────────────────────────────────────────────
   async computeScore(schoolSlug: string, studentId: string): Promise<ParentEngagementScore> {
     const student = await this.studentModel.findOne({ _id: studentId, schoolSlug })
@@ -247,14 +300,16 @@ export class ParentEngagementService {
     }
     const studentForScoring = { ...student, currentGrade: (student as any).currentGrade };
 
-    const [fee, circular, leave, engagement, pickup] = await Promise.all([
+    const [fee, circular, leave, engagement, pickup, tarbiyahHome, hygiene] = await Promise.all([
       this.scoreFeePunctuality(schoolSlug, studentForScoring),
       this.scoreCircularResponse(schoolSlug, studentForScoring),
       this.scoreLeaveBehavior(schoolSlug, studentForScoring),
       this.scoreAppEngagement(studentForScoring),
       this.scorePickupTimeliness(schoolSlug, studentForScoring),
+      this.scoreTarbiyahAtHome(schoolSlug, studentForScoring),
+      this.scoreHygieneCompliance(schoolSlug, studentForScoring),
     ]);
-    const dimensions = [fee, circular, leave, engagement, pickup];
+    const dimensions = [fee, circular, leave, engagement, pickup, tarbiyahHome, hygiene];
 
     const present = dimensions.filter((d) => d.score !== null) as (DimensionResult & { score: number })[];
     let overallScore: number | null = null;

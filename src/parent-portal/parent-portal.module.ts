@@ -44,6 +44,7 @@ import { PdfModule } from '../pdf/pdf.module';
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
+import { HomeTasksModule } from '../home-tasks/home-tasks.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { ParentAuthController } from './parent-auth.controller';
     CertificatesModule,
     UploadModule,
     PdfModule,
+    HomeTasksModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
   providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor, GeocodingService],

@@ -18,6 +18,8 @@ import { AdmissionsModule } from './admissions/admissions.module';
 import { AssessmentModule } from './assessments/assessment.module';
 import { BehaviourModule } from './behaviour/behaviour.module';
 import { ParentEngagementModule } from './parent-engagement/parent-engagement.module';
+import { HomeTasksModule } from './home-tasks/home-tasks.module';
+import { HygieneModule } from './hygiene/hygiene.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { CampusModule } from './campus/campus.module';
 import { UploadModule } from './upload/upload.module';
@@ -91,6 +93,8 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     DocumentsModule,
     BehaviourModule,
     ParentEngagementModule,
+    HomeTasksModule,
+    HygieneModule,
     SuperAdminModule,
     CampusModule,
     UploadModule,
