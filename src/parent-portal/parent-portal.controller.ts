@@ -13,11 +13,16 @@ const CONSENT_ADMIN_ROLES = [
 ];
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentPortalService } from './parent-portal.service';
+import { HomeTasksService } from '../home-tasks/home-tasks.service';
+import { CompleteHomeTaskDto } from '../home-tasks/dto/home-task.dto';
 
 @Controller('parent-portal')
 @UseInterceptors(GuardianRefreshInterceptor)
 export class ParentPortalController {
-  constructor(private readonly service: ParentPortalService) {}
+  constructor(
+    private readonly service: ParentPortalService,
+    private readonly homeTasksService: HomeTasksService,
+  ) {}
 
   private ctx(req: any) {
     return {
@@ -294,6 +299,22 @@ export class ParentPortalController {
   async createLeave(@Param('studentId') studentId: string, @Body() dto: any, @Request() req: any) {
     const { requestingUser, userId, name, schoolSlug } = this.ctx(req);
     return this.service.createStudentLeave(studentId, requestingUser, userId, name, schoolSlug, dto);
+  }
+
+  // ── Home Tasks (Tarbiyah-at-home) ──────────────────────────────
+  @Get('students/:studentId/home-tasks')
+  async getHomeTasks(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.homeTasksService.getTasksForStudent(studentId, requestingUser, schoolSlug);
+  }
+
+  @Post('students/:studentId/home-tasks/:taskId/complete')
+  async completeHomeTask(
+    @Param('studentId') studentId: string, @Param('taskId') taskId: string,
+    @Body() dto: CompleteHomeTaskDto, @Request() req: any,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.homeTasksService.completeTask(studentId, taskId, requestingUser, schoolSlug, dto);
   }
 
   // ── Notifications / Inbox ─────────────────────────────────────

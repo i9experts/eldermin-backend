@@ -10,6 +10,8 @@ import { Invoice, InvoiceSchema, Payment, PaymentSchema } from '../finance/schem
 import { Circular, CircularSchema } from '../school-calendar/schemas/circular.schema';
 import { CircularAcknowledgment, CircularAcknowledgmentSchema } from '../school-calendar/schemas/circular-acknowledgment.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
+import { HomeTask, HomeTaskSchema } from '../home-tasks/schemas/home-task.schema';
+import { HygieneCheck, HygieneCheckSchema } from '../hygiene/schemas/hygiene-check.schema';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { User, UserSchema } from '../modules/organization/schemas/user.schema';
       { name: Circular.name, schema: CircularSchema },
       { name: CircularAcknowledgment.name, schema: CircularAcknowledgmentSchema },
       { name: User.name, schema: UserSchema },
+      { name: HomeTask.name, schema: HomeTaskSchema },
+      { name: HygieneCheck.name, schema: HygieneCheckSchema },
     ]),
   ],
   controllers: [ParentEngagementController],
