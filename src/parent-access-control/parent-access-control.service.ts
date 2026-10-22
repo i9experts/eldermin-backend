@@ -10,6 +10,7 @@ import { ParentFeatureAccess, ParentFeatureAccessDocument } from './schemas/pare
 import { PARENT_FEATURE_KEYS, ParentFeatureKey } from './parent-feature.constants';
 import { SetParentFeatureAccessDto } from './dto/parent-feature-access.dto';
 import { ScopedUser } from '../auth/scope.util';
+import { User } from '../modules/organization/schemas/user.schema';
 
 export interface FeatureCheckResult {
   suspended: boolean;
@@ -21,7 +22,31 @@ export class ParentAccessControlService {
   constructor(
     @InjectModel(ParentFeatureAccess.name) private model: Model<ParentFeatureAccessDocument>,
     @InjectModel('Student') private studentModel: Model<any>,
+    @InjectModel(User.name) private userModel: Model<any>,
   ) {}
+
+  /**
+   * Resolves which parent (User) accounts are linked to a student, so the
+   * admin UI can get a parentUserId to call getAccess/setFeatureAccess with.
+   * A guardian subdocument on Student carries no userId of its own — the
+   * link only exists on the User side (guardianOfStudentIds), set when the
+   * guardian's own mobile-app login is created/first used. Same lookup
+   * pattern as ParentEngagementService.linkedParentIds — no further
+   * schoolSlug/tenant filter needed since studentId is already school-scoped.
+   * A guardian who has never registered on the parent app simply won't
+   * appear here yet (nothing to restrict until they have a login).
+   */
+  async listParentsForStudent(studentId: string) {
+    const parents = await this.userModel
+      .find({ primaryRole: 'parent', isActive: { $ne: false }, guardianOfStudentIds: studentId })
+      .select('name profile.firstName profile.lastName phone email').lean();
+    return parents.map((p: any) => ({
+      parentUserId: String(p._id),
+      name: p.name || `${p.profile?.firstName || ''} ${p.profile?.lastName || ''}`.trim() || 'Parent',
+      phone: p.phone || null,
+      email: p.email || null,
+    }));
+  }
 
   /**
    * Called from each of the 6 suspendable parent-app endpoints before

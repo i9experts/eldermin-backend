@@ -20,6 +20,16 @@ export class ParentAccessControlController {
     };
   }
 
+  // Lists which parent (User) accounts are linked to this student, so the
+  // admin UI has a parentUserId to call the two endpoints below with — a
+  // guardian subdocument on Student carries no userId of its own (only set
+  // once the guardian's own app login exists).
+  @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
+  @Get('students/:studentId/parents')
+  async listParents(@Param('studentId') studentId: string) {
+    return this.service.listParentsForStudent(studentId);
+  }
+
   // Same roles already trusted to link/unlink a guardian to a student -
   // deciding which app features a guardian can use is the same level of
   // sensitivity as deciding whether they're linked to the student at all.

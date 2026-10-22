@@ -16,7 +16,7 @@ describe('ParentAccessControlService', () => {
     it('never restricts a non-parent caller (e.g. staff/admin viewing the same screen)', async () => {
       const model: any = { findOne: jest.fn() };
       const studentModel: any = {};
-      const service = new ParentAccessControlService(model, studentModel);
+      const service = new ParentAccessControlService(model, studentModel, {} as any);
 
       const result = await service.checkFeature('demo-school', { role: 'admin', userId: String(adminUserId) } as any, String(studentId), 'quiz');
 
@@ -26,7 +26,7 @@ describe('ParentAccessControlService', () => {
 
     it('returns suspended: false when no record exists for the parent-student link', async () => {
       const model: any = { findOne: jest.fn(() => lean(null)) };
-      const service = new ParentAccessControlService(model, {} as any);
+      const service = new ParentAccessControlService(model, {} as any, {} as any);
 
       const result = await service.checkFeature('demo-school', { role: 'parent', userId: String(parentUserId) } as any, String(studentId), 'quiz');
 
@@ -39,7 +39,7 @@ describe('ParentAccessControlService', () => {
           features: { tarbiyah_report: { suspended: true, reason: 'Fee overdue 2 months' } },
         })),
       };
-      const service = new ParentAccessControlService(model, {} as any);
+      const service = new ParentAccessControlService(model, {} as any, {} as any);
 
       const result = await service.checkFeature('demo-school', { role: 'parent', userId: String(parentUserId) } as any, String(studentId), 'tarbiyah_report');
 
@@ -50,7 +50,7 @@ describe('ParentAccessControlService', () => {
       const model: any = {
         findOne: jest.fn(() => lean({ features: { quiz: { suspended: true, reason: 'test' } } })),
       };
-      const service = new ParentAccessControlService(model, {} as any);
+      const service = new ParentAccessControlService(model, {} as any, {} as any);
 
       const result = await service.checkFeature('demo-school', { role: 'parent', userId: String(parentUserId) } as any, String(studentId), 'academic_progress_report');
 
@@ -79,7 +79,7 @@ describe('ParentAccessControlService', () => {
         findOne: jest.fn(() => lean(stored)),
       };
       const studentModel: any = { findOne: jest.fn(() => lean({ _id: studentId, firstName: 'Ali', lastName: 'Raza', currentGrade: '5', currentSection: 'A', campusId: null })) };
-      const service = new ParentAccessControlService(model, studentModel);
+      const service = new ParentAccessControlService(model, studentModel, {} as any);
       const admin = { userId: String(adminUserId), name: 'Ms. Ayesha Khan' } as any;
 
       const afterSuspend = await service.setFeatureAccess('demo-school', String(parentUserId), String(studentId), {
@@ -114,12 +114,43 @@ describe('ParentAccessControlService', () => {
         ])),
       };
       const studentModel: any = { find: jest.fn(() => lean([{ _id: studentId, firstName: 'Ali', lastName: 'Raza' }])) };
-      const service = new ParentAccessControlService(model, studentModel);
+      const service = new ParentAccessControlService(model, studentModel, {} as any);
 
       const result = await service.listRestricted('demo-school');
 
       expect(result).toHaveLength(1);
       expect(result[0].suspendedFeatures).toEqual(['quiz']);
+    });
+  });
+
+  describe('listParentsForStudent', () => {
+    it('resolves the parent (User) accounts linked to a student, for the admin UI to pick a parentUserId', async () => {
+      const userModel: any = {
+        find: jest.fn(() => lean([
+          { _id: parentUserId, name: 'Mr. Bilal Ahmed', phone: '0300-0000000', email: null },
+        ])),
+      };
+      const service = new ParentAccessControlService({} as any, {} as any, userModel);
+
+      const result = await service.listParentsForStudent(String(studentId));
+
+      expect(userModel.find).toHaveBeenCalledWith(expect.objectContaining({ primaryRole: 'parent', guardianOfStudentIds: String(studentId) }));
+      expect(result).toEqual([
+        { parentUserId: String(parentUserId), name: 'Mr. Bilal Ahmed', phone: '0300-0000000', email: null },
+      ]);
+    });
+
+    it('falls back to the profile name when no name field is set', async () => {
+      const userModel: any = {
+        find: jest.fn(() => lean([
+          { _id: parentUserId, profile: { firstName: 'Bilal', lastName: 'Ahmed' }, phone: null, email: null },
+        ])),
+      };
+      const service = new ParentAccessControlService({} as any, {} as any, userModel);
+
+      const result = await service.listParentsForStudent(String(studentId));
+
+      expect(result[0].name).toBe('Bilal Ahmed');
     });
   });
 });
