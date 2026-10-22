@@ -127,7 +127,7 @@ export class Question {
   @Prop() chapter: string;
 
   @Prop({
-    enum: ['mcq','short','long','true_false','fill_blank','matching'],
+    enum: ['mcq','short','long','true_false','fill_blank','matching','tracing','counting'],
     required: true,
   })
   type: string;
@@ -157,6 +157,27 @@ export class Question {
   // correct order.
   @Prop({ type: [MatchingPairSchema], default: [] })
   matchingPairs: MatchingPair[];
+
+  // For type: 'tracing' - what the worksheet renders as a large dotted/
+  // outlined guide for early-years learners to trace over.
+  @Prop({ type: String, enum: ['letter', 'number', 'shape', 'word'], default: null })
+  traceType: string | null;
+  @Prop({ type: String, default: null }) traceContent: string | null; // e.g. 'A', '7', 'circle', 'Cat'
+
+  // For type: 'counting' - an emoji repeated `correctCount` times, plus the
+  // decoy/correct numbers printed for the child to circle.
+  @Prop({ type: String, default: null }) countEmoji: string | null;
+  @Prop({ type: Number, default: null }) correctCount: number | null;
+  @Prop({ type: [Number], default: [] }) countOptions: number[];
+
+  // Denormalized from the SNC ECE ontology (src/ece) when a question is
+  // tagged against a real early-years standard/indicator - lets the
+  // worksheet PDF print the standard's SLO code/text without an extra
+  // lookup at render time.
+  @Prop({ type: String, default: null }) eceStandardCode: string | null;
+  @Prop({ type: String, default: null }) eceStandardText: string | null;
+  @Prop({ type: Types.ObjectId, ref: 'ECEIndicator', default: null })
+  eceIndicatorId: Types.ObjectId | null;
 
   @Prop() correctAnswer: string;     // for short/long/fill_blank
   @Prop() answerExplanation: string;
