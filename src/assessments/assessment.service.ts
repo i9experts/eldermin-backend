@@ -371,6 +371,12 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
   async generateExamPaperPdf(id: string, schoolSlug: string): Promise<Buffer> {
     const paper: any = await this.getExamPaperById(id, schoolSlug);
+    // Early-years worksheets are an untimed, large-print activity handout,
+    // not a timed exam - rendered with their own template entirely rather
+    // than branching the dense exam-paper CSS below per activity type.
+    if (paper.paperType === 'worksheet') {
+      return this.generateWorksheetPdf(paper, schoolSlug);
+    }
     const branding = await this.resolveBranding(schoolSlug, paper.campusId);
     const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
     const format = this.PAPER_FORMATS.includes(paper.paperFormat) ? paper.paperFormat : 'standard';
@@ -572,6 +578,188 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       printBackground: true,
       margin: { top: '15mm', right: '12mm', bottom: '15mm', left: '12mm' },
     });
+  }
+
+  // ============================================================
+  // EARLY YEARS WORKSHEET PDF
+  // A single-activity-per-page, large-print printable for early-years
+  // teachers - built from the same real Question Bank/ExamPaper records
+  // as a regular exam paper (ExamPaper.paperType === 'worksheet'), but
+  // deliberately its own template: no timer/marks/answer-key chrome, big
+  // glyphs/emoji instead of dense body text, and an optional SNC ECE
+  // standard banner (see src/ece) so a printed sheet is traceable back
+  // to exactly which early-years indicator it covers.
+  // ============================================================
+  private async generateWorksheetPdf(paper: any, schoolSlug: string): Promise<Buffer> {
+    const branding = await this.resolveBranding(schoolSlug, paper.campusId);
+    const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
+
+    const useNastaliq = paper.language === 'urdu' && paper.urduFontStyle !== 'naskh';
+    const bodyFont = useNastaliq ? "'Noto Nastaliq Urdu', 'Noto Sans Arabic', sans-serif" : cfg.font;
+    const nastaliqFontFace = useNastaliq ? `
+          @font-face {
+            font-family: 'Noto Nastaliq Urdu';
+            src: url(data:font/woff2;base64,${NOTO_NASTALIQ_URDU_BASE64}) format('woff2');
+            font-weight: 400;
+            font-style: normal;
+          }` : '';
+
+    const standardBannerHtml = (paper.eceStandardCode || paper.eceStandardText) ? `
+      <div class="standard-banner">
+        ${paper.eceStandardCode ? `<span class="standard-code">${this.escapeHtml(paper.eceStandardCode)}</span>` : ''}
+        ${paper.eceStandardText ? `<span class="standard-text">${this.escapeHtml(paper.eceStandardText)}</span>` : ''}
+      </div>
+    ` : '';
+
+    const activitiesHtml = paper.sections.map((section: any) => `
+      <div class="activity-section">
+        <h3 class="section-title">${this.escapeHtml(section.title)}</h3>
+        ${section.instructions ? `<p class="section-instructions">${this.escapeHtmlMultiline(section.instructions)}</p>` : ''}
+        ${section.questions.map((q: any) => this.renderWorksheetActivity(q, cfg)).join('')}
+      </div>
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html dir="${cfg.dir}" lang="${cfg.lang}">
+      <head>
+        <meta charset="UTF-8" />
+        <style>${nastaliqFontFace}
+          @page { margin: 14mm 12mm; }
+          body { font-family: ${bodyFont}; color: #111; font-size: 15px; line-height: 1.6; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #0C447C; padding-bottom: 10px; margin-bottom: 12px; }
+          .header-left { display: flex; align-items: center; gap: 10px; }
+          .header-logo { height: 48px; width: 48px; object-fit: contain; flex-shrink: 0; }
+          .header-main h1 { font-size: 22px; color: #0C447C; margin: 0 0 4px; }
+          .header-main p { margin: 2px 0; font-size: 13px; }
+          .top-fields { display: flex; gap: 28px; margin-bottom: 10px; font-size: 13px; }
+          .top-fields span { border-bottom: 1px solid #999; padding-bottom: 2px; min-width: 140px; display: inline-block; }
+          .standard-banner { background: #eef4fb; border: 1px solid #c7dcf0; border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; font-size: 12px; color: #0C447C; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+          .standard-code { font-weight: bold; }
+          .activity-section { margin-bottom: 22px; page-break-inside: avoid; }
+          .section-title { font-size: 17px; background: #0C447C; color: white; padding: 6px 12px; border-radius: 4px; margin-bottom: 10px; }
+          .section-instructions { font-size: 13px; color: #555; margin: 0 0 10px; font-style: italic; }
+          .activity { margin-bottom: 26px; page-break-inside: avoid; }
+          .activity-prompt { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
+          /* Tracing: large dotted/outlined guide glyphs, repeated so a
+             child traces several times per row, with a hollow stroke
+             (not a solid fill) so the outline itself is what's traced. */
+          .trace-row { display: flex; flex-wrap: wrap; gap: 18px; direction: ltr; }
+          .trace-glyph {
+            font-size: 64px; font-weight: bold; line-height: 1;
+            color: transparent; -webkit-text-stroke: 1.5px #888;
+            letter-spacing: 2px;
+          }
+          .trace-word .trace-glyph { font-size: 44px; }
+          .trace-shape-row { display: flex; gap: 24px; flex-wrap: wrap; }
+          .trace-shape svg { width: 90px; height: 90px; }
+          /* Counting: the emoji set to count, then a row of circleable
+             number options (correct count + decoys, pre-shuffled). */
+          .count-emoji-box { font-size: 40px; line-height: 1.5; letter-spacing: 10px; margin-bottom: 14px; direction: ltr; }
+          .count-options { display: flex; gap: 20px; }
+          .count-option { width: 46px; height: 46px; border: 2px solid #333; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; }
+          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 12px; display: flex; flex-direction: ${cfg.dir === 'rtl' ? 'row-reverse' : 'row'}; gap: 32px; }
+          .matching-col { flex: 1; }
+          .matching-col-title { font-weight: bold; font-size: 13px; margin-bottom: 6px; text-decoration: underline; }
+          .matching-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 9px; font-size: 15px; }
+          .matching-blank { border-bottom: 1px solid #333; width: 32px; display: inline-block; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 4px; }
+          .matching-marker { font-weight: bold; flex-shrink: 0; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="header-left">
+            ${branding.logo ? `<img class="header-logo" src="${branding.logo}" />` : ''}
+            <div class="header-main">
+              <h1>${this.escapeHtml(paper.title)}</h1>
+              <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+            </div>
+          </div>
+        </div>
+        <div class="top-fields">
+          <div>${cfg.labels.name}: <span>&nbsp;</span></div>
+          <div>${cfg.labels.date}: <span>&nbsp;</span></div>
+        </div>
+        ${standardBannerHtml}
+        ${paper.generalInstructions ? `<div class="section-instructions"><strong>${cfg.labels.instructions}:</strong> ${this.escapeHtmlMultiline(paper.generalInstructions)}</div>` : ''}
+        ${activitiesHtml}
+      </body>
+      </html>
+    `;
+
+    return this.pdfService.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' },
+    });
+  }
+
+  // Simple dashed-outline SVGs for the four shapes a tracing activity can
+  // ask for - kept inline (no external asset) so the PDF stays a single
+  // self-contained HTML string like the rest of this service's rendering.
+  private readonly TRACE_SHAPE_SVG: Record<string, string> = {
+    circle: `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+    square: `<svg viewBox="0 0 100 100"><rect x="12" y="12" width="76" height="76" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+    triangle: `<svg viewBox="0 0 100 100"><polygon points="50,10 90,88 10,88" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+    star: `<svg viewBox="0 0 100 100"><polygon points="50,6 61,38 95,38 68,58 78,90 50,70 22,90 32,58 5,38 39,38" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+  };
+
+  private renderWorksheetActivity(q: any, cfg: { dir: string }): string {
+    const prompt = `<div class="activity-prompt">${this.escapeHtmlMultiline(q.questionText)}</div>`;
+
+    if (q.type === 'tracing') {
+      const content = q.traceContent || '';
+      if (q.traceType === 'shape') {
+        const shapes = content.split(',').map((s: string) => s.trim()).filter(Boolean);
+        return `
+          <div class="activity">
+            ${prompt}
+            <div class="trace-shape-row">
+              ${shapes.map((shape: string) => `<div class="trace-shape">${this.TRACE_SHAPE_SVG[shape] || this.TRACE_SHAPE_SVG.circle}</div>`).join('')}
+            </div>
+          </div>
+        `;
+      }
+      // letter / number / word: repeat the content a few times for extra
+      // tracing practice per row.
+      const repeatCount = q.traceType === 'word' ? 3 : 6;
+      const rowClass = q.traceType === 'word' ? 'trace-row trace-word' : 'trace-row';
+      return `
+        <div class="activity">
+          ${prompt}
+          <div class="${rowClass}">
+            ${Array.from({ length: repeatCount }).map(() => `<span class="trace-glyph">${this.escapeHtml(content)}</span>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    if (q.type === 'counting') {
+      const emoji = q.countEmoji || '⭐';
+      const count = q.correctCount || 0;
+      const options = (q.countOptions && q.countOptions.length ? q.countOptions : [count]);
+      return `
+        <div class="activity">
+          ${prompt}
+          <div class="count-emoji-box">${Array.from({ length: count }).map(() => this.escapeHtml(emoji)).join(' ')}</div>
+          <div class="count-options">
+            ${options.map((n: number) => `<div class="count-option">${cfg.dir === 'rtl' ? this.arabicIndicNumeral(n - 1) : n}</div>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    if (q.type === 'matching' && q.matchingPairs?.length) {
+      return `
+        <div class="activity">
+          ${prompt}
+          ${this.renderMatchingColumns(q.matchingPairs, q._id?.toString() || q.questionText, cfg)}
+        </div>
+      `;
+    }
+
+    // Fallback for any other question type reused on a worksheet.
+    return `<div class="activity">${prompt}</div>`;
   }
 
   // ============================================================

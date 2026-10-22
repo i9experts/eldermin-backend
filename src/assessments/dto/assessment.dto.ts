@@ -119,7 +119,7 @@ export class CreateQuestionDto {
   @IsOptional() @IsString() topic?: string;
   @IsOptional() @IsString() chapter?: string;
 
-  @IsEnum(['mcq','short','long','true_false','fill_blank','matching'])
+  @IsEnum(['mcq','short','long','true_false','fill_blank','matching','tracing','counting'])
   type: string;
 
   @IsOptional()
@@ -135,6 +135,17 @@ export class CreateQuestionDto {
 
   @IsOptional() @IsArray() @ValidateNested({ each: true })
   @Type(() => MatchingPairDto) matchingPairs?: MatchingPairDto[];
+
+  @IsOptional() @IsEnum(['letter', 'number', 'shape', 'word']) traceType?: string;
+  @IsOptional() @IsString() traceContent?: string;
+
+  @IsOptional() @IsString() countEmoji?: string;
+  @IsOptional() @IsNumber() @Min(0) correctCount?: number;
+  @IsOptional() @IsArray() @IsNumber({}, { each: true }) countOptions?: number[];
+
+  @IsOptional() @IsString() eceStandardCode?: string;
+  @IsOptional() @IsString() eceStandardText?: string;
+  @IsOptional() @IsMongoId() eceIndicatorId?: string;
 
   @IsOptional() @IsString() correctAnswer?: string;
   @IsOptional() @IsString() answerExplanation?: string;
@@ -249,11 +260,15 @@ export class CreateExamPaperDto {
   @IsString() academicYear: string;
   @IsOptional() @IsString() term?: string;
   @IsEnum(['english', 'urdu', 'arabic']) language: string;
-  @IsNumber() duration: number;
+  @IsOptional() @IsNumber() duration?: number;
   @IsOptional() @IsString() generalInstructions?: string;
   @IsOptional() @IsEnum(['standard', 'compact', 'formal']) paperFormat?: string;
   @IsOptional() @IsEnum(['small', 'medium', 'large']) fontSize?: string;
   @IsOptional() @IsEnum(['nastaliq', 'naskh']) urduFontStyle?: string;
+  @IsOptional() @IsEnum(['exam', 'worksheet']) paperType?: string;
+  @IsOptional() @IsMongoId() eceIndicatorId?: string;
+  @IsOptional() @IsString() eceStandardCode?: string;
+  @IsOptional() @IsString() eceStandardText?: string;
   @IsArray() @ValidateNested({ each: true }) @Type(() => PaperSectionDto) sections: PaperSectionDto[];
 }
 export class UpdateExamPaperDto extends PartialType(CreateExamPaperDto) {}
