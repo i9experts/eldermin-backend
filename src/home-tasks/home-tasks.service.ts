@@ -10,12 +10,14 @@ import { HomeTask, HomeTaskDocument } from './schemas/home-task.schema';
 import { AssignHomeTaskDto, CompleteHomeTaskDto, ReviewHomeTaskDto } from './dto/home-task.dto';
 import { assertStudentAccess, ScopedUser } from '../auth/scope.util';
 import { idMatch } from '../common/utils/id-match.util';
+import { ParentAccessControlService } from '../parent-access-control/parent-access-control.service';
 
 @Injectable()
 export class HomeTasksService {
   constructor(
     @InjectModel(HomeTask.name) private model: Model<HomeTaskDocument>,
     @InjectModel('Student') private studentModel: Model<any>,
+    private readonly parentAccess: ParentAccessControlService,
   ) {}
 
   // ── Teacher side ─────────────────────────────────────────────
@@ -54,11 +56,15 @@ export class HomeTasksService {
   // ── Parent side (called from ParentPortalController/Service) ───
   async getTasksForStudent(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_at_home');
+    if (access.suspended) return { suspended: true, feature: 'tarbiyah_at_home', reason: access.reason || null };
     return this.model.find({ studentId, schoolSlug }).sort({ assignedDate: -1 }).lean();
   }
 
   async completeTask(studentId: string, taskId: string, requestingUser: ScopedUser, schoolSlug: string, dto: CompleteHomeTaskDto) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_at_home');
+    if (access.suspended) return { suspended: true, feature: 'tarbiyah_at_home', reason: access.reason || null };
     const task = await this.model.findOneAndUpdate(
       { _id: taskId, studentId, schoolSlug },
       { $set: { status: 'completed', completedAt: new Date(), parentNotes: dto.parentNotes } },

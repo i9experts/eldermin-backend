@@ -37,6 +37,8 @@ import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/less
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
 import { PdfService } from '../pdf/pdf.service';
+import { ParentAccessControlService } from '../parent-access-control/parent-access-control.service';
+import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
 
 @Injectable()
 export class ParentPortalService {
@@ -71,6 +73,7 @@ export class ParentPortalService {
     private certificatesService: CertificatesService,
     private uploadService: UploadService,
     private pdfService: PdfService,
+    private parentAccess: ParentAccessControlService,
   ) {}
 
   // ── Admin: link a guardian's login to their child/children ─────
@@ -260,6 +263,8 @@ export class ParentPortalService {
   // ── Class Diary (shared daily classwork/homework log) ──────────
   async getClassDiary(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'school_diary');
+    if (access.suspended) return { suspended: true, feature: 'school_diary', reason: access.reason || null };
     const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
     if (!student) throw new NotFoundException('Student not found');
     const filter: any = {
@@ -270,6 +275,16 @@ export class ParentPortalService {
     };
     if ((student as any).campusId) filter.$and.push({ $or: [{ campusId: new Types.ObjectId((student as any).campusId) }, { campusId: null }] });
     return this.classDiaryModel.find(filter).sort({ diaryDate: -1 }).limit(100).lean();
+  }
+
+  /**
+   * Binary-download endpoints (PDFs) can't return the usual JSON
+   * `{ suspended: true, ... }` shape alongside their headers/bytes - the
+   * controller checks this first and, if suspended, sends that JSON
+   * response itself instead of ever calling the PDF-generating method.
+   */
+  async checkFeatureSuspended(schoolSlug: string, requestingUser: ScopedUser, studentId: string, feature: ParentFeatureKey) {
+    return this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, feature);
   }
 
   async downloadClassDiaryPdf(studentId: string, diaryId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
@@ -422,6 +437,8 @@ export class ParentPortalService {
   // grade/section to list what's actually available to them.
   async listMyQuizzes(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'quiz');
+    if (access.suspended) return { suspended: true, feature: 'quiz', reason: access.reason || null };
     const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
     if (!student) throw new NotFoundException('Student not found');
     return this.assessmentService.listAvailableQuizzes(schoolSlug, studentId, (student as any).currentGrade, (student as any).currentSection, (student as any).campusId);
@@ -429,17 +446,23 @@ export class ParentPortalService {
 
   async startQuiz(studentId: string, requestingUser: ScopedUser, schoolSlug: string, dto: { assessmentId: string; subject: string }) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'quiz');
+    if (access.suspended) return { suspended: true, feature: 'quiz', reason: access.reason || null };
     return this.assessmentService.startQuizAttempt(schoolSlug, studentId, dto);
   }
 
   async submitQuiz(studentId: string, requestingUser: ScopedUser, schoolSlug: string, attemptId: string, answers: { questionId: string; selectedOptionIndex?: number; textAnswer?: string }[]) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'quiz');
+    if (access.suspended) return { suspended: true, feature: 'quiz', reason: access.reason || null };
     return this.assessmentService.submitQuizAttempt(schoolSlug, studentId, attemptId, answers);
   }
 
   // ── Results ──────────────────────────────────────────────────
   async getResults(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
     return this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean();
   }
 
@@ -452,6 +475,8 @@ export class ParentPortalService {
   // ── Behaviour & Tarbiyah ──────────────────────────────────────
   async getBehaviourAndTarbiyah(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
+    if (access.suspended) return { suspended: true, feature: 'tarbiyah_report', reason: access.reason || null };
     const sid = new Types.ObjectId(studentId);
     const db = this.reportCardModel.db;
     const [records, notes, tarbiyah, settings]: any[] = await Promise.all([

@@ -41,6 +41,7 @@ import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
 import { ComplaintsModule } from './complaints/complaints.module';
 import { ParentPortalModule } from './parent-portal/parent-portal.module';
+import { ParentAccessControlModule } from './parent-access-control/parent-access-control.module';
 import { StaffPortalModule } from './staff-portal/staff-portal.module';
 import { ResellersModule } from './resellers/resellers.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
@@ -95,6 +96,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     ParentEngagementModule,
     HomeTasksModule,
     HygieneModule,
+    ParentAccessControlModule,
     SuperAdminModule,
     CampusModule,
     UploadModule,

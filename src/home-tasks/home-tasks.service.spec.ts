@@ -11,6 +11,8 @@ function chain(result: any) {
 const studentId = new Types.ObjectId();
 const teacherId = new Types.ObjectId();
 
+const notSuspended: any = { checkFeature: jest.fn(() => Promise.resolve({ suspended: false })) };
+
 describe('HomeTasksService', () => {
   it('assign() creates one home task per resolved student, denormalizing name/grade/section', async () => {
     const insertMany = jest.fn((docs: any[]) => Promise.resolve(docs));
@@ -23,7 +25,7 @@ describe('HomeTasksService', () => {
         { _id: studentId, firstName: 'Ali', lastName: 'Raza', currentGrade: '3', currentSection: 'B', campusId: null },
       ])),
     };
-    const service = new HomeTasksService(model, studentModel);
+    const service = new HomeTasksService(model, studentModel, notSuspended);
 
     const result = await service.assign('demo-school', {
       studentIds: [String(studentId)], title: 'Practice Sidq at home',
@@ -44,7 +46,7 @@ describe('HomeTasksService', () => {
       findOneAndUpdate: jest.fn(() => Promise.resolve(null)),
     };
     const studentModel: any = { find: jest.fn(() => chain([])) };
-    const service = new HomeTasksService(model, studentModel);
+    const service = new HomeTasksService(model, studentModel, notSuspended);
 
     await expect(
       service.completeTask(String(studentId), 'bad-task-id', { guardianOfStudentIds: [String(studentId)] } as any, 'demo-school', {}),
