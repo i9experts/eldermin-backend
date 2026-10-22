@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -424,11 +424,17 @@ export class OrganizationService {
     // "Add Section" form no longer offers this field at all; this is the
     // server-side backstop for any other caller.
     const { classTeacher, classTeacherId, ...safeSection } = section || {};
-    return this.gradeModel.findOneAndUpdate(
-      { _id: gradeId, schoolSlug },
-      { $push: { sections: safeSection } },
-      { new: true },
+    const grade = await this.gradeModel.findOne({ _id: gradeId, schoolSlug });
+    if (!grade) throw new NotFoundException('Grade not found');
+    const newName = String(safeSection?.name || '').trim();
+    const duplicate = grade.sections.some(
+      (s: any) => s.isActive !== false && String(s.name || '').trim().toLowerCase() === newName.toLowerCase(),
     );
+    if (duplicate) {
+      throw new ConflictException(`Section "${newName}" already exists for this grade.`);
+    }
+    grade.sections.push(safeSection as any);
+    return grade.save();
   }
 
   async removeSection(gradeId: string, schoolSlug: string, sectionId: string) {
