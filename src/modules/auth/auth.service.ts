@@ -11,6 +11,8 @@ import { Campus, CampusDocument } from '../../organization/schemas/organization.
 import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
 import { Reseller, ResellerDocument } from '../../resellers/schemas/reseller.schema';
 import { PlatformRole, PlatformRoleDocument } from '../../super-admin/schemas/platform-role.schema';
+import { UsageLog, UsageLogDocument } from '../../super-admin/schemas/super-admin.schema';
+import { recordLoginUsage } from '../../common/utils/usage-log.util';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
 import { EmailService } from '../../email/email.service';
@@ -35,6 +37,7 @@ export class AuthService {
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(Reseller.name) private resellerModel: Model<ResellerDocument>,
     @InjectModel(PlatformRole.name) private platformRoleModel: Model<PlatformRoleDocument>,
+    @InjectModel(UsageLog.name) private usageLogModel: Model<UsageLogDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -210,6 +213,7 @@ export class AuthService {
     const activeModules = tenant?.activeModules || ['organization'];
 
     const schoolSlug = tenant?.slug || slugToUse || null;
+    await recordLoginUsage(this.usageLogModel, schoolSlug);
     const permissions = await this.rolesService.getPermissionsForUser(user._id.toString());
     // Only ever computed for super_admin - every other role has no
     // customPlatformRoleId and this resolves to undefined for them,

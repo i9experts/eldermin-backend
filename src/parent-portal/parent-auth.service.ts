@@ -14,6 +14,8 @@ import { WhatsAppService } from '../email/whatsapp.service';
 import { normalizePhone, phoneMatchRegex } from '../common/utils/phone.util';
 import { GeocodingService } from '../leads/geocoding.service';
 import { RegisterParentLeadDto, LoginParentLeadDto } from './dto/parent-lead-auth.dto';
+import { UsageLog, UsageLogDocument } from '../super-admin/schemas/super-admin.schema';
+import { recordLoginUsage } from '../common/utils/usage-log.util';
 
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
@@ -37,6 +39,7 @@ export class ParentAuthService {
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     @InjectModel('OrgInstitution') private institutionModel: Model<InstitutionDocument>,
     @InjectModel(ParentLead.name) private parentLeadModel: Model<ParentLeadDocument>,
+    @InjectModel(UsageLog.name) private usageLogModel: Model<UsageLogDocument>,
     private jwtService: JwtService,
     private whatsAppService: WhatsAppService,
     private geocodingService: GeocodingService,
@@ -171,6 +174,8 @@ export class ParentAuthService {
       user.lastLoginAt = new Date();
       await user.save();
     }
+
+    await recordLoginUsage(this.usageLogModel, schoolSlug);
 
     const payload = {
       sub: (user._id as any).toString(),

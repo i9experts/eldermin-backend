@@ -32,6 +32,7 @@ import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
+import { UsageLog, UsageLogSchema } from '../super-admin/schemas/super-admin.schema';
 import { GeocodingService } from '../leads/geocoding.service';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
@@ -81,6 +82,7 @@ import { HomeTasksModule } from '../home-tasks/home-tasks.module';
       // is the established convention (see onboarding.module.ts).
       { name: 'OrgInstitution', schema: InstitutionSchema },
       { name: ParentLead.name, schema: ParentLeadSchema },
+      { name: UsageLog.name, schema: UsageLogSchema },
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
     ]),
