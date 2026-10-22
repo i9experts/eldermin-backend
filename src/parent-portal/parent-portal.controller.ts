@@ -153,6 +153,11 @@ export class ParentPortalController {
     @Request() req: any, @Res() res: Response,
   ) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'school_diary');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'school_diary', reason: access.reason || null });
+      return;
+    }
     const pdf = await this.service.downloadClassDiaryPdf(studentId, diaryId, requestingUser, tenantId, schoolSlug);
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="class-diary-${diaryId}.pdf"`, 'Content-Length': pdf.length });
     res.end(pdf);

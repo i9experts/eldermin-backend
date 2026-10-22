@@ -4,6 +4,7 @@ import { HomeTasksController } from './home-tasks.controller';
 import { HomeTasksService } from './home-tasks.service';
 import { HomeTask, HomeTaskSchema } from './schemas/home-task.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { ParentAccessControlModule } from '../parent-access-control/parent-access-control.module';
 
 @Module({
   imports: [
@@ -11,6 +12,7 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
       { name: HomeTask.name, schema: HomeTaskSchema },
       { name: Student.name, schema: StudentSchema },
     ]),
+    ParentAccessControlModule,
   ],
   controllers: [HomeTasksController],
   providers: [HomeTasksService],
