@@ -25,7 +25,8 @@
     "audit:campus-scope": "ts-node -r tsconfig-paths/register src/scripts/audit-campus-scope-readiness.ts",
     "audit:teacher-class-matching": "ts-node -r tsconfig-paths/register src/scripts/audit-teacher-class-matching.ts",
     "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts",
-    "fix:class-teacher-names": "ts-node -r tsconfig-paths/register src/scripts/fix-duplicate-class-teacher-names.ts"
+    "fix:class-teacher-names": "ts-node -r tsconfig-paths/register src/scripts/fix-duplicate-class-teacher-names.ts",
+    "dedupe:grade-sections": "ts-node -r tsconfig-paths/register src/scripts/dedupe-grade-sections.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
