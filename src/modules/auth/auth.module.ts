@@ -13,6 +13,7 @@ import { Campus, CampusSchema } from '../../organization/schemas/organization.sc
 import { TeacherProfile, TeacherProfileSchema } from '../teaching/schemas/teacher-profile.schema';
 import { Reseller, ResellerSchema } from '../../resellers/schemas/reseller.schema';
 import { PlatformRole, PlatformRoleSchema } from '../../super-admin/schemas/platform-role.schema';
+import { UsageLog, UsageLogSchema } from '../../super-admin/schemas/super-admin.schema';
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
 import { EmailModule } from '../../email/email.module';
@@ -41,6 +42,7 @@ import { AuthStateModule } from './auth-state.module';
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: Reseller.name, schema: ResellerSchema },
       { name: PlatformRole.name, schema: PlatformRoleSchema },
+      { name: UsageLog.name, schema: UsageLogSchema },
     ]),
   ],
   controllers: [AuthController],

@@ -52,10 +52,11 @@ function build(opts: { leads?: any[]; institutions?: any[]; geocodeThrows?: bool
   const studentModel: any = {};
   const tenantModel: any = {};
   const whatsAppService: any = {};
+  const usageLogModel: any = { findOneAndUpdate: jest.fn(() => Promise.resolve(null)) };
 
   const svc = new ParentAuthService(
     otpModel, userModel, studentModel, tenantModel,
-    institutionModel, parentLeadModel,
+    institutionModel, parentLeadModel, usageLogModel,
     jwtService, whatsAppService, geocodingService,
   );
   return { svc, leads, saved };
