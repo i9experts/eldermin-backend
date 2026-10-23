@@ -23,7 +23,7 @@ export class StudentAttendance {
   @Prop({ required: true }) date: Date;
 
   @Prop({
-    enum: ['present', 'absent', 'late', 'excused', 'half_day'],
+    enum: ['present', 'absent', 'late', 'excused', 'half_day', 'half_day_am', 'half_day_pm', 'on_leave', 'medical'],
     required: true,
   })
   status: string;

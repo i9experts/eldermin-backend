@@ -264,7 +264,7 @@ export class MarkAttendanceDto {
   @IsString() grade: string;
   @IsOptional() @IsString() section?: string;
   @IsDateString() date: string;
-  @IsEnum(['present', 'absent', 'late', 'excused', 'half_day']) status: string;
+  @IsEnum(['present', 'absent', 'late', 'excused', 'half_day', 'half_day_am', 'half_day_pm', 'on_leave', 'medical']) status: string;
   @IsOptional() @IsString() checkInTime?: string;
   @IsOptional() @IsString() checkOutTime?: string;
   @IsOptional() @IsString() remarks?: string;
