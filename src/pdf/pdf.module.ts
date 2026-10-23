@@ -8,7 +8,9 @@ import { InvoiceSchema, PaymentSchema, ExpenseSchema, BankAccountSchema } from '
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { AssessmentSchema } from '../assessments/schemas/assessment.schema';
-import { BehaviourRecordSchema } from '../behaviour/schemas/behaviour.schema';
+import { BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
+import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema';
+import { CharacterProgramSettings, CharacterProgramSettingsSchema } from '../behaviour/schemas/character-program-settings.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
 import { FinanceModule } from '../finance/finance.module';
 
@@ -38,6 +40,9 @@ import { FinanceModule } from '../finance/finance.module';
       { name: 'School', schema: SchoolSchema },
       { name: 'Assessment', schema: AssessmentSchema },
       { name: 'Behaviour', schema: BehaviourRecordSchema },
+      { name: 'QaidaProgress', schema: QaidaProgressSchema },
+      { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
+      { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },
       { name: 'ReportTemplate', schema: ReportTemplateSchema },
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },

@@ -34,6 +34,12 @@ export class BiometricConfig {
 
   @Prop()
   lastSyncError: string;
+
+  // Device-side "User ID"s seen on the last sync that didn't match any
+  // staff member's deviceEnrollmentId - surfaced to the admin so a mapping
+  // gap gets fixed instead of silently dropping that person's punches.
+  @Prop({ type: [String], default: [] })
+  lastSyncUnmatchedIds: string[];
 }
 
 export const BiometricConfigSchema = SchemaFactory.createForClass(BiometricConfig);

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -16,6 +16,7 @@ import {
   CreateGroupInstitutionDto,
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
+import { buildClassTeacherOfName } from './utils/class-teacher-label.util';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
@@ -423,11 +424,17 @@ export class OrganizationService {
     // "Add Section" form no longer offers this field at all; this is the
     // server-side backstop for any other caller.
     const { classTeacher, classTeacherId, ...safeSection } = section || {};
-    return this.gradeModel.findOneAndUpdate(
-      { _id: gradeId, schoolSlug },
-      { $push: { sections: safeSection } },
-      { new: true },
+    const grade = await this.gradeModel.findOne({ _id: gradeId, schoolSlug });
+    if (!grade) throw new NotFoundException('Grade not found');
+    const newName = String(safeSection?.name || '').trim();
+    const duplicate = grade.sections.some(
+      (s: any) => s.isActive !== false && String(s.name || '').trim().toLowerCase() === newName.toLowerCase(),
     );
+    if (duplicate) {
+      throw new ConflictException(`Section "${newName}" already exists for this grade.`);
+    }
+    grade.sections.push(safeSection as any);
+    return grade.save();
   }
 
   async removeSection(gradeId: string, schoolSlug: string, sectionId: string) {
@@ -510,7 +517,7 @@ export class OrganizationService {
     // success toast and "Teacher: X" on the grade, while that teacher's
     // own attendance screen kept reporting them as not a class teacher at
     // all, since it reads this same TeacherProfile document).
-    const classTeacherOfName = `${grade.name}${sectionName ? ` - ${sectionName}` : ''}`;
+    const classTeacherOfName = buildClassTeacherOfName(grade.name, sectionName);
     const classTeacherFields = { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName };
     const existingProfile = await this.teacherProfileModel.findOne({ staffId: newTeacherStaff._id });
     if (existingProfile) {

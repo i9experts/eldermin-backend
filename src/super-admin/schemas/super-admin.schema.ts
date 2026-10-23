@@ -28,8 +28,8 @@ export const SUBSCRIPTION_PLANS = {
     trialDays: 0,
     features: ['admissions', 'students', 'attendance', 'finance', 'hr', 'documents'],
   },
-  professional: {
-    name: 'Professional',
+  growth: {
+    name: 'Growth',
     price: 12999,
     maxStudents: 2000,
     maxStaff: 200,
@@ -107,9 +107,12 @@ export class Institution {
   @Prop() churnedAt: Date;
   @Prop() churnedReason: string;
 
-  // Subscription
+  // Subscription — 'professional' kept only so pre-existing documents
+  // still validate on resave; new writes use 'growth' (the canonical
+  // Starter/Growth/Enterprise name shown on the marketing site and in the
+  // Super Admin command center). See modulesForPlan in module-registry.ts.
   @Prop({
-    enum: ['free_trial', 'starter', 'professional', 'enterprise'],
+    enum: ['free_trial', 'starter', 'growth', 'enterprise', 'professional'],
     default: 'free_trial',
   })
   plan: string;

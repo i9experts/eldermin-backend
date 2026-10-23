@@ -137,6 +137,16 @@ export class Staff {
   @Prop({ type: [Types.ObjectId], ref: 'Shift', default: [] })
   shiftIds: Types.ObjectId[];
 
+  // The numeric "User ID" this staff member was enrolled under on a
+  // biometric attendance device (e.g. a ZKTeco fingerprint terminal).
+  // Lets syncBiometricAttendance() match a raw punch log entry back to
+  // this staff record - device-side and Eldermin-side IDs are otherwise
+  // unrelated (a school may re-use small sequential numbers on the device
+  // that collide across staff unless scoped per-tenant, which the lookup
+  // already is via tenantId).
+  @Prop({ type: String, default: null })
+  deviceEnrollmentId: string | null;
+
   @Prop({
     type: {
       title: String, middleName: String, preferredName: String, arabicName: String,

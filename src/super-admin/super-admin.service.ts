@@ -19,10 +19,12 @@ import {
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { MarketingLead } from '../leads/schemas/lead.schema';
+import { ParentLead, ParentLeadDocument, gradeBand } from '../leads/schemas/parent-lead.schema';
 import { Campus, Grade, AcademicYear } from '../organization/schemas/organization.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { ModulesService } from '../modules/modules.service';
+import { modulesForPlan } from '../modules/module-registry';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -84,6 +86,7 @@ export class SuperAdminService {
     @InjectModel(AcademicYear.name) private academicYearModel: Model<any>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(ParentLead.name) private parentLeadModel: Model<ParentLeadDocument>,
     private modulesService: ModulesService,
     private jwtService: JwtService,
   ) {}
@@ -306,7 +309,15 @@ export class SuperAdminService {
       date: { $gte: thirtyDaysAgo },
     }).sort({ date: 1 });
 
-    return { institution: inst, subHistory, usageTrend };
+    // The original onboarding wizard submission, when this institution was
+    // activated from a CRM lead (activateInstitutionFromLead sets the
+    // lead's own convertedInstitutionId to this institution's _id) - so
+    // Super Admin can see everything a school originally requested/signed
+    // for, not just its live usage numbers. null for an institution
+    // created directly (Add Institution) with no originating lead.
+    const onboardingLead = await this.leadModel.findOne({ convertedInstitutionId: inst._id }).lean();
+
+    return { institution: inst, subHistory, usageTrend, onboardingLead };
   }
 
   async createInstitution(data: any, createdBy: string) {
@@ -411,6 +422,17 @@ export class SuperAdminService {
       .filter((id): id is string => !!id);
   }
 
+  // The marketing site's wizard collects planRequested as free text
+  // ("Starter", "growth plan", etc.) rather than the normalized
+  // SchoolPlan enum - normalize it here, defaulting to 'starter' for
+  // anything unrecognized rather than silently granting everything.
+  private normalizePlanRequested(raw?: string): 'starter' | 'growth' | 'enterprise' {
+    const v = (raw || '').toLowerCase();
+    if (v.includes('enterprise')) return 'enterprise';
+    if (v.includes('growth') || v.includes('professional')) return 'growth';
+    return 'starter';
+  }
+
   // Maps free-text school-type strings (e.g. from the marketing site's
   // wizard: "Nursery/Primary", "Secondary/O-Level") to the org Institution
   // schema's strict enum (school/college/university/training_center/
@@ -456,16 +478,26 @@ export class SuperAdminService {
     // two can drift apart if not kept in sync explicitly — set both here
     // from the same merged list so a fresh login immediately has access to
     // every module the lead actually asked for, not just 'organization'.
+    //
+    // The authoritative source is now the lead's requested package
+    // (Starter/Growth/Enterprise), not the individual module checkboxes -
+    // modulesRequested is still mapped and unioned in for CRM display /
+    // in case a sales rep promised something outside the normal package,
+    // but the plan's own module set always wins the "what does this
+    // school actually get" question.
+    const normalizedPlan = this.normalizePlanRequested((lead as any).planRequested);
     const requestedModules = this.mapRequestedModulesToIds(
       Array.isArray(lead.modulesRequested) ? lead.modulesRequested : [],
     );
-    const mergedModules = Array.from(new Set(['organization', ...requestedModules]));
+    const mergedModules = Array.from(
+      new Set(['organization', ...modulesForPlan(normalizedPlan), ...requestedModules]),
+    );
 
     const tenant = await this.tenantModel.create({
       slug,
       displayName: lead.schoolName,
       status: 'onboarding',
-      plan: 'trial',
+      plan: normalizedPlan,
       activeModules: mergedModules,
       billingEmail: lead.adminEmail.toLowerCase(),
       isSetupComplete: false,
@@ -633,6 +665,11 @@ export class SuperAdminService {
     const planConfig = SUBSCRIPTION_PLANS[data.plan as keyof typeof SUBSCRIPTION_PLANS];
     const monthlyRevenue = data.customPrice || planConfig?.price || 0;
 
+    // Real module access now comes from the plan itself (ModulesService.
+    // setActiveModules below, which keeps School/Tenant/Institution in
+    // lockstep via syncAcrossCollections) - enabledModules here is no
+    // longer written directly, since setActiveModules already updates
+    // this same Institution document's enabledModules as part of that sync.
     const update: any = {
       plan: data.plan,
       status: 'active',
@@ -641,11 +678,20 @@ export class SuperAdminService {
       subscriptionEndDate: new Date(data.endDate),
       autoRenew: data.autoRenew || false,
       billingCycle: data.billingCycle || 'monthly',
-      enabledModules: data.plan === 'enterprise' || data.plan === 'professional'
-        ? ['all'] : planConfig?.features || [],
     };
 
     await this.institutionModel.findOneAndUpdate({ slug }, { $set: update });
+
+    // Changing a school's package used to have zero effect on what
+    // modules it could actually use (this institution tracking row and
+    // the school's real activeModules were entirely separate writes).
+    // Reset to the new plan's module set by default so the two never
+    // drift again on a plan change; pass resetModules: false to change
+    // billing only and leave Super Admin's prior manual module overrides
+    // (set via setActiveModules) in place.
+    if (data.resetModules !== false) {
+      await this.modulesService.setActiveModules(slug, modulesForPlan(data.plan), updatedBy);
+    }
 
     const newPrice = SUBSCRIPTION_PLANS[data.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0;
     const oldPrice = SUBSCRIPTION_PLANS[inst.plan as keyof typeof SUBSCRIPTION_PLANS]?.price || 0;
@@ -663,6 +709,31 @@ export class SuperAdminService {
     }).save();
 
     return { message: 'Subscription updated' };
+  }
+
+  // ── Super Admin module control ("command center") ──────────
+  // Direct per-module control over a school, independent of (and able to
+  // override) its plan - the actual "full module control according to
+  // school's package" surface. listModules already flags each module's
+  // status relative to the school's plan (plan-locked vs available vs
+  // active), reused here so Super Admin sees the exact same picture.
+  async getSchoolModules(slug: string) {
+    const inst = await this.institutionModel.findOne({ slug }).select('plan name').lean();
+    if (!inst) throw new NotFoundException('Institution not found');
+    const modules = await this.modulesService.listModules(slug);
+    return { plan: (inst as any).plan, modules };
+  }
+
+  async setSchoolModules(slug: string, moduleIds: string[], updatedBy: string) {
+    const inst = await this.institutionModel.findOne({ slug });
+    if (!inst) throw new NotFoundException('Institution not found');
+    return this.modulesService.setActiveModules(slug, moduleIds, updatedBy);
+  }
+
+  async resetSchoolModulesToPlan(slug: string, updatedBy: string) {
+    const inst = await this.institutionModel.findOne({ slug });
+    if (!inst) throw new NotFoundException('Institution not found');
+    return this.modulesService.resetModulesToPlan(slug, updatedBy);
   }
 
   async updateHealthScores() {
@@ -712,12 +783,25 @@ export class SuperAdminService {
   // right after onboarding a school.
   @Cron(CronExpression.EVERY_DAY_AT_2AM)
   async syncUsageSnapshots() {
-    const institutions = await this.institutionModel.find().select('slug').lean();
-    if (institutions.length === 0) return { message: 'No institutions to sync', synced: 0 };
+    const institutions = await this.institutionModel.find().select('slug name').lean();
+    if (institutions.length === 0) return { message: 'No institutions to sync', synced: 0, unmatched: [] };
 
     const slugs = institutions.map((i) => i.slug);
     const tenants = await this.tenantModel.find({ slug: { $in: slugs } }).select('slug').lean();
     const tenantIdBySlug = new Map(tenants.map((t) => [t.slug, t._id]));
+
+    // Flags institutions whose slug matches no real Tenant AND has no real
+    // Student records either - almost always means this platform_institutions
+    // row's slug was hand-typed (e.g. via Create Institution) rather than
+    // generated from/linked to the school's actual tenant, so there is
+    // nothing real for this sync to ever find under that slug no matter
+    // how many times it runs. Most common for a school onboarded before
+    // this SaaS-tracking layer existed, or for a multi-campus group where
+    // each campus got its own Super Admin row even though the real app
+    // only has ONE tenant (with multiple Campus records inside it) for
+    // the whole group - see activateInstitutionFromLead, which only ever
+    // creates one Tenant per school, not one per campus.
+    const unmatched: { slug: string; name: string }[] = [];
 
     const bulk = await Promise.all(institutions.map(async (inst) => {
       const tenantId = tenantIdBySlug.get(inst.slug);
@@ -725,6 +809,9 @@ export class SuperAdminService {
         this.studentModel.countDocuments({ schoolSlug: inst.slug, status: 'active' }),
         tenantId ? this.staffModel.countDocuments({ tenantId, isActive: true }) : Promise.resolve(0),
       ]);
+      if (!tenantId && totalStudents === 0) {
+        unmatched.push({ slug: inst.slug, name: inst.name });
+      }
       return {
         updateOne: {
           filter: { _id: inst._id },
@@ -734,7 +821,13 @@ export class SuperAdminService {
     }));
 
     await this.institutionModel.bulkWrite(bulk);
-    return { message: `Synced usage for ${institutions.length} institutions`, synced: institutions.length };
+    return {
+      message: unmatched.length > 0
+        ? `Synced usage for ${institutions.length} institutions - ${unmatched.length} have no matching tenant/student records under their current slug`
+        : `Synced usage for ${institutions.length} institutions`,
+      synced: institutions.length,
+      unmatched,
+    };
   }
 
   // ============================================================
@@ -950,6 +1043,126 @@ export class SuperAdminService {
       user: { id: String(user._id), name, email: user.email, role: user.primaryRole },
       institution: { name: inst.name, slug: inst.slug, plan: inst.plan, activeModules: tenant.activeModules || [] },
       message: 'Impersonation token valid for 30 minutes',
+    };
+  }
+
+  // ============================================================
+  // PARENT LEADS — self-serve SmartVan parent-app registrations,
+  // including parents whose school isn't an Eldermin customer yet.
+  // Built as real aggregation pipelines (group/bucket in Mongo), not
+  // pulled-to-JS, since this is meant to scale to thousands of signups.
+  // ============================================================
+
+  private buildParentLeadMatch(query: any) {
+    const match: any = {};
+    if (query.country) match['location.country'] = query.country;
+    if (query.city) match['location.city'] = query.city;
+    if (query.district) match['location.district'] = query.district;
+    if (query.schoolName) match.schoolNameRaw = new RegExp(query.schoolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    if (query.linked === 'true') match.matchedInstitutionId = { $ne: null };
+    if (query.linked === 'false') match.matchedInstitutionId = null;
+    if (query.grade) match['children.grade'] = query.grade;
+    if (query.dateFrom || query.dateTo) {
+      match.createdAt = {};
+      if (query.dateFrom) match.createdAt.$gte = new Date(query.dateFrom);
+      if (query.dateTo) match.createdAt.$lte = new Date(query.dateTo);
+    }
+    return match;
+  }
+
+  async getParentLeads(query: any) {
+    const match = this.buildParentLeadMatch(query);
+    const { page = 1, limit = 25 } = query;
+    const { skip, limit: lim } = paged(Number(page), Number(limit));
+
+    // 'primary'/'secondary' is bucketed from children[].grade in application
+    // code (gradeBand), not stored - filtering by band therefore needs an
+    // initial fetch-and-filter pass rather than a pure $match. Still scoped
+    // by every other filter first, so this only ever walks the already
+    // narrowed-down set, never the whole collection.
+    let docs = await this.parentLeadModel.find(match).sort({ createdAt: -1 }).lean();
+    if (query.gradeBand === 'primary' || query.gradeBand === 'secondary') {
+      docs = docs.filter((d: any) => (d.children || []).some((c: any) => gradeBand(c.grade) === query.gradeBand));
+    }
+
+    const total = docs.length;
+    const page_ = docs.slice(skip, skip + lim);
+    return {
+      leads: page_.map((d: any) => ({
+        id: d._id,
+        fullName: d.fullName,
+        email: d.email,
+        phone: d.phone,
+        schoolNameRaw: d.schoolNameRaw,
+        isLinked: !!d.matchedInstitutionId,
+        location: d.location,
+        children: d.children,
+        createdAt: d.createdAt,
+      })),
+      total,
+      page: Number(page),
+      limit: lim,
+    };
+  }
+
+  async getParentLeadFilterOptions() {
+    const [countries, cities, districts] = await Promise.all([
+      this.parentLeadModel.distinct('location.country'),
+      this.parentLeadModel.distinct('location.city'),
+      this.parentLeadModel.distinct('location.district'),
+    ]);
+    return {
+      countries: countries.filter(Boolean).sort(),
+      cities: cities.filter(Boolean).sort(),
+      districts: districts.filter(Boolean).sort(),
+    };
+  }
+
+  /** Charts + the "top schools parents are waiting on" leaderboard for the
+   * Super Admin Parent Leads tab. All real Mongo aggregations - this is
+   * meant to scale to a large lead volume. */
+  async getParentLeadInsights(query: any) {
+    const match = this.buildParentLeadMatch(query);
+
+    const [byLocation, trend, topUnlinkedSchools, totals] = await Promise.all([
+      this.parentLeadModel.aggregate([
+        { $match: match },
+        { $group: { _id: { country: '$location.country', city: '$location.city' }, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 25 },
+        { $project: { _id: 0, country: '$_id.country', city: '$_id.city', count: 1 } },
+      ]),
+      this.parentLeadModel.aggregate([
+        { $match: match },
+        { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } }, count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, month: '$_id', count: 1 } },
+      ]),
+      this.parentLeadModel.aggregate([
+        { $match: { ...match, matchedInstitutionId: null } },
+        { $group: { _id: '$schoolNameRaw', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 15 },
+        { $project: { _id: 0, schoolName: '$_id', count: 1 } },
+      ]),
+      this.parentLeadModel.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            linked: { $sum: { $cond: [{ $ne: ['$matchedInstitutionId', null] }, 1, 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    const totalsRow = totals[0] || { total: 0, linked: 0 };
+    return {
+      totals: { total: totalsRow.total, linked: totalsRow.linked, unlinked: totalsRow.total - totalsRow.linked },
+      byLocation,
+      registrationTrend: trend,
+      topUnlinkedSchools,
     };
   }
 }

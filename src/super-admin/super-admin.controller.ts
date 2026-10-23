@@ -79,6 +79,26 @@ export class SuperAdminController {
     return this.service.generateImpersonationToken(slug, this.adminUser(req));
   }
 
+  // ── Module command center (full control, per school/package) ──
+  @Get('institutions/:slug/modules')
+  async getSchoolModules(@Param('slug') slug: string) {
+    return this.service.getSchoolModules(slug);
+  }
+
+  @Patch('institutions/:slug/modules')
+  async setSchoolModules(
+    @Param('slug') slug: string,
+    @Body() dto: { moduleIds: string[] },
+    @Request() req: any,
+  ) {
+    return this.service.setSchoolModules(slug, dto.moduleIds || [], this.adminUser(req));
+  }
+
+  @Post('institutions/:slug/modules/reset-to-plan')
+  async resetSchoolModulesToPlan(@Param('slug') slug: string, @Request() req: any) {
+    return this.service.resetSchoolModulesToPlan(slug, this.adminUser(req));
+  }
+
   // ── Platform Analytics ────────────────────────────────────
   @Get('analytics')
   async getAnalytics() {
@@ -120,6 +140,22 @@ export class SuperAdminController {
   @HttpCode(HttpStatus.CREATED)
   async createAnnouncement(@Body() dto: any, @Request() req: any) {
     return this.service.createAnnouncement({ ...dto, createdBy: this.adminUser(req) });
+  }
+
+  // ── Parent Leads (SmartVan parent-app registrations) ───────
+  @Get('parent-leads')
+  async getParentLeads(@Query() query: any) {
+    return this.service.getParentLeads(query);
+  }
+
+  @Get('parent-leads/filter-options')
+  async getParentLeadFilterOptions() {
+    return this.service.getParentLeadFilterOptions();
+  }
+
+  @Get('parent-leads/insights')
+  async getParentLeadInsights(@Query() query: any) {
+    return this.service.getParentLeadInsights(query);
   }
 
   // ── Support Tickets ───────────────────────────────────────

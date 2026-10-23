@@ -18,6 +18,7 @@ import { pickApplicableFeeStructures } from './fee-structure-match.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
 import { canResyncInvoiceDiscount, discountActuallyChanged } from './discount-resync.util';
+import { studentFullName } from '../common/utils/student-name.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -3617,7 +3618,7 @@ export class FinanceService {
 
     const assignment = await this.studentFeeAssignmentModel.create({
       studentId: data.studentId,
-      studentName: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(),
+      studentName: studentFullName(student as any),
       feeStructureId: data.feeStructureId,
       feeStructureName: structure.name,
       academicYear: data.academicYear,
@@ -4264,7 +4265,7 @@ export class FinanceService {
         const invoice = new this.invoiceModel({
           type: 'fee',
           studentId: student._id,
-          studentName: `${(student as any).firstName || ''} ${(student as any).lastName || ''}`.trim(),
+          studentName: studentFullName(student as any),
           grade: (student as any).currentGrade,
           section: (student as any).currentSection,
           campus: studentCampusName || undefined,

@@ -17,6 +17,12 @@ export class StaffAttendance {
   @Prop() notes: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) markedBy: Types.ObjectId;
   @Prop() markedAt: Date;
+  // Where this record's checkInTime/checkOutTime/status last came from. Lets
+  // syncBiometricAttendance() skip a record a human already hand-corrected
+  // via the attendance UI (source: 'manual') instead of silently
+  // overwriting their correction on the next device sync - it may still
+  // create brand-new records and update ones it created itself.
+  @Prop({ enum: ['manual', 'csv', 'biometric'], default: 'manual' }) source: string;
 }
 export const StaffAttendanceSchema = SchemaFactory.createForClass(StaffAttendance);
 StaffAttendanceSchema.index({ tenantId: 1, staffId: 1, date: 1 }, { unique: true });

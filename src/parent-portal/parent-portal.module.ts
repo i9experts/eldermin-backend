@@ -30,6 +30,10 @@ import {
 } from './schemas/notification-and-message.schema';
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
+import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
+import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
+import { UsageLog, UsageLogSchema } from '../super-admin/schemas/super-admin.schema';
+import { GeocodingService } from '../leads/geocoding.service';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
 import { EmailModule } from '../email/email.module';
@@ -41,6 +45,8 @@ import { PdfModule } from '../pdf/pdf.module';
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
+import { HomeTasksModule } from '../home-tasks/home-tasks.module';
+import { ParentAccessControlModule } from '../parent-access-control/parent-access-control.module';
 
 @Module({
   imports: [
@@ -71,6 +77,13 @@ import { ParentAuthController } from './parent-auth.controller';
       { name: Message.name, schema: MessageSchema },
       { name: PhoneOtp.name, schema: PhoneOtpSchema },
       { name: Tenant.name, schema: TenantSchema },
+      // Registered as 'OrgInstitution', not Institution.name - the literal
+      // class name "Institution" is already taken by the (unrelated)
+      // platform-billing Institution model in super-admin.schema.ts; this
+      // is the established convention (see onboarding.module.ts).
+      { name: 'OrgInstitution', schema: InstitutionSchema },
+      { name: ParentLead.name, schema: ParentLeadSchema },
+      { name: UsageLog.name, schema: UsageLogSchema },
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
     ]),
@@ -80,9 +93,11 @@ import { ParentAuthController } from './parent-auth.controller';
     CertificatesModule,
     UploadModule,
     PdfModule,
+    HomeTasksModule,
+    ParentAccessControlModule,
   ],
   controllers: [ParentPortalController, ParentAuthController],
-  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor],
+  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor, GeocodingService],
   exports: [ParentPortalService, ParentAuthService],
 })
 export class ParentPortalModule {}

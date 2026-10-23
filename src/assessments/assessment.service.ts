@@ -372,6 +372,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
 
   async generateExamPaperPdf(id: string, schoolSlug: string): Promise<Buffer> {
     const paper: any = await this.getExamPaperById(id, schoolSlug);
+    // Early-years worksheets are an untimed, large-print activity handout,
+    // not a timed exam - rendered with their own template entirely rather
+    // than branching the dense exam-paper CSS below per activity type.
+    if (paper.paperType === 'worksheet') {
+      return this.generateWorksheetPdf(paper, schoolSlug);
+    }
+    const branding = await this.resolveBranding(schoolSlug, paper.campusId);
     const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
     const format = this.PAPER_FORMATS.includes(paper.paperFormat) ? paper.paperFormat : 'standard';
     const scale = this.FONT_SCALE[paper.fontSize] || 1;
@@ -425,6 +432,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
             ? `<div class="options">${q.options.map((o: any, i: number) => `
                 <div class="option"><span class="opt-marker">${cfg.dir === 'rtl' ? this.arabicIndicNumeral(i) : String.fromCharCode(65 + i)}</span> ${this.escapeHtml(o.text)}</div>
               `).join('')}</div>`
+            : q.type === 'matching' && q.matchingPairs?.length
+            ? this.renderMatchingColumns(q.matchingPairs, q._id?.toString() || q.questionText, cfg)
             : Array.from({ length: q.answerLines ?? this.defaultAnswerLines(q.type, q.marks) })
                 .map(() => `<div class="answer-space"></div>`).join('');
           const imageHtml = q.questionImage ? `<div class="q-image"><img src="${q.questionImage}" /></div>` : '';
@@ -449,6 +458,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const coverPageHtml = format === 'formal' ? `
       <div class="cover-page">
         <div class="cover-header">
+          ${branding.logo ? `<img class="cover-logo" src="${branding.logo}" />` : ''}
           <img src="${qrDataUrl}" width="90" height="90" />
           <h1>${cfg.labels.coverTitle}</h1>
           <p class="cover-paper-title">${this.escapeHtml(paper.title)}</p>
@@ -485,6 +495,8 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           body { font-family: ${bodyFont}; color: #111; font-size: ${px(13)}px; line-height: 1.6; }
           .page-break { page-break-after: always; }
           .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0C447C; padding-bottom: 10px; margin-bottom: 14px; }
+          .header-left { display: flex; align-items: flex-start; gap: 10px; }
+          .header-logo { height: 48px; width: 48px; object-fit: contain; flex-shrink: 0; }
           .header-main h1 { font-size: ${px(18)}px; color: #0C447C; margin: 0 0 4px; }
           .header-main p { margin: 2px 0; font-size: ${px(12)}px; }
           .header-meta { text-align: center; font-size: ${px(10)}px; }
@@ -503,9 +515,24 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: ${format === 'compact' ? '1fr' : '1fr 1fr'}; gap: 4px; }
           .opt-marker { font-weight: bold; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 6px; }
           .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
+          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: flex; flex-direction: ${cfg.dir === 'rtl' ? 'row-reverse' : 'row'}; gap: 32px; }
+          .matching-col { flex: 1; }
+          .matching-col-title { font-weight: bold; font-size: ${px(11)}px; margin-bottom: 6px; text-decoration: underline; }
+          .matching-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 7px; }
+          .matching-blank { border-bottom: 1px solid #333; width: 28px; display: inline-block; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 4px; }
+          .matching-marker { font-weight: bold; flex-shrink: 0; }
           .q-image { margin: 8px 0 8px ${cfg.dir === 'rtl' ? '0' : '24px'}; }
           .q-image img { max-width: 320px; max-height: 220px; border: 1px solid #ddd; border-radius: 4px; }
-          .cover-page { display: flex; flex-direction: column; align-items: center; height: 250mm; padding-top: 20mm; text-align: center; }
+          .cover-page {
+            display: flex; flex-direction: column; align-items: center;
+            min-height: 225mm; padding-top: 15mm; text-align: center;
+            /* The whole cover page is one atomic block so the browser
+               never splits it mid-way (e.g. through the seal/signature
+               row) - if it ever doesn't fit on one page, the entire
+               block moves to the next page intact instead. */
+            break-inside: avoid; page-break-inside: avoid;
+          }
+          .cover-logo { height: 60px; width: auto; object-fit: contain; margin-bottom: 8px; }
           .cover-header h1 { font-size: ${px(22)}px; color: #0C447C; margin: 10px 0 4px; }
           .cover-paper-title { font-size: ${px(15)}px; font-weight: bold; margin: 4px 0; }
           .cover-code { font-size: ${px(11)}px; color: #666; margin: 0; }
@@ -514,7 +541,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .cover-field span { display: block; border-bottom: 1px solid #999; height: 18px; }
           .cover-meta { font-size: ${px(12)}px; margin-bottom: 20px; }
           .cover-declaration { max-width: 420px; font-size: ${px(11)}px; color: #444; border: 1px solid #ccc; border-radius: 4px; padding: 10px 14px; margin-bottom: 30px; background: #f9f9f9; }
-          .cover-signoff { display: flex; align-items: flex-end; gap: 40px; margin-top: auto; }
+          .cover-signoff { display: flex; align-items: flex-end; gap: 40px; margin-top: auto; break-inside: avoid; page-break-inside: avoid; }
           .cover-seal { width: 90px; height: 90px; border: 2px dashed #999; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: ${px(10)}px; color: #999; }
           .cover-invigilator span { display: block; border-bottom: 1px solid #999; width: 180px; height: 24px; margin-bottom: 4px; }
           .cover-invigilator label { font-size: ${px(10)}px; color: #666; }
@@ -523,10 +550,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       <body>
         ${coverPageHtml}
         <div class="header">
-          <div class="header-main">
-            <h1>${this.escapeHtml(paper.title)}</h1>
-            <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
-            <p>${cfg.labels.duration}: ${paper.duration} ${paper.language === 'english' ? 'minutes' : ''} &nbsp;|&nbsp; ${cfg.labels.marks}: ${totalMarks}</p>
+          <div class="header-left">
+            ${branding.logo ? `<img class="header-logo" src="${branding.logo}" />` : ''}
+            <div class="header-main">
+              <h1>${this.escapeHtml(paper.title)}</h1>
+              <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+              <p>${cfg.labels.duration}: ${paper.duration} ${paper.language === 'english' ? 'minutes' : ''} &nbsp;|&nbsp; ${cfg.labels.marks}: ${totalMarks}</p>
+            </div>
           </div>
           <div class="header-meta">
             <img src="${qrDataUrl}" width="70" height="70" />
@@ -549,6 +579,188 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       printBackground: true,
       margin: { top: '15mm', right: '12mm', bottom: '15mm', left: '12mm' },
     });
+  }
+
+  // ============================================================
+  // EARLY YEARS WORKSHEET PDF
+  // A single-activity-per-page, large-print printable for early-years
+  // teachers - built from the same real Question Bank/ExamPaper records
+  // as a regular exam paper (ExamPaper.paperType === 'worksheet'), but
+  // deliberately its own template: no timer/marks/answer-key chrome, big
+  // glyphs/emoji instead of dense body text, and an optional SNC ECE
+  // standard banner (see src/ece) so a printed sheet is traceable back
+  // to exactly which early-years indicator it covers.
+  // ============================================================
+  private async generateWorksheetPdf(paper: any, schoolSlug: string): Promise<Buffer> {
+    const branding = await this.resolveBranding(schoolSlug, paper.campusId);
+    const cfg = this.LANGUAGE_CONFIG[paper.language] || this.LANGUAGE_CONFIG.english;
+
+    const useNastaliq = paper.language === 'urdu' && paper.urduFontStyle !== 'naskh';
+    const bodyFont = useNastaliq ? "'Noto Nastaliq Urdu', 'Noto Sans Arabic', sans-serif" : cfg.font;
+    const nastaliqFontFace = useNastaliq ? `
+          @font-face {
+            font-family: 'Noto Nastaliq Urdu';
+            src: url(data:font/woff2;base64,${NOTO_NASTALIQ_URDU_BASE64}) format('woff2');
+            font-weight: 400;
+            font-style: normal;
+          }` : '';
+
+    const standardBannerHtml = (paper.eceStandardCode || paper.eceStandardText) ? `
+      <div class="standard-banner">
+        ${paper.eceStandardCode ? `<span class="standard-code">${this.escapeHtml(paper.eceStandardCode)}</span>` : ''}
+        ${paper.eceStandardText ? `<span class="standard-text">${this.escapeHtml(paper.eceStandardText)}</span>` : ''}
+      </div>
+    ` : '';
+
+    const activitiesHtml = paper.sections.map((section: any) => `
+      <div class="activity-section">
+        <h3 class="section-title">${this.escapeHtml(section.title)}</h3>
+        ${section.instructions ? `<p class="section-instructions">${this.escapeHtmlMultiline(section.instructions)}</p>` : ''}
+        ${section.questions.map((q: any) => this.renderWorksheetActivity(q, cfg)).join('')}
+      </div>
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html dir="${cfg.dir}" lang="${cfg.lang}">
+      <head>
+        <meta charset="UTF-8" />
+        <style>${nastaliqFontFace}
+          @page { margin: 14mm 12mm; }
+          body { font-family: ${bodyFont}; color: #111; font-size: 15px; line-height: 1.6; }
+          .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #0C447C; padding-bottom: 10px; margin-bottom: 12px; }
+          .header-left { display: flex; align-items: center; gap: 10px; }
+          .header-logo { height: 48px; width: 48px; object-fit: contain; flex-shrink: 0; }
+          .header-main h1 { font-size: 22px; color: #0C447C; margin: 0 0 4px; }
+          .header-main p { margin: 2px 0; font-size: 13px; }
+          .top-fields { display: flex; gap: 28px; margin-bottom: 10px; font-size: 13px; }
+          .top-fields span { border-bottom: 1px solid #999; padding-bottom: 2px; min-width: 140px; display: inline-block; }
+          .standard-banner { background: #eef4fb; border: 1px solid #c7dcf0; border-radius: 6px; padding: 8px 12px; margin-bottom: 14px; font-size: 12px; color: #0C447C; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+          .standard-code { font-weight: bold; }
+          .activity-section { margin-bottom: 22px; page-break-inside: avoid; }
+          .section-title { font-size: 17px; background: #0C447C; color: white; padding: 6px 12px; border-radius: 4px; margin-bottom: 10px; }
+          .section-instructions { font-size: 13px; color: #555; margin: 0 0 10px; font-style: italic; }
+          .activity { margin-bottom: 26px; page-break-inside: avoid; }
+          .activity-prompt { font-size: 16px; font-weight: bold; margin-bottom: 10px; }
+          /* Tracing: large dotted/outlined guide glyphs, repeated so a
+             child traces several times per row, with a hollow stroke
+             (not a solid fill) so the outline itself is what's traced. */
+          .trace-row { display: flex; flex-wrap: wrap; gap: 18px; direction: ltr; }
+          .trace-glyph {
+            font-size: 64px; font-weight: bold; line-height: 1;
+            color: transparent; -webkit-text-stroke: 1.5px #888;
+            letter-spacing: 2px;
+          }
+          .trace-word .trace-glyph { font-size: 44px; }
+          .trace-shape-row { display: flex; gap: 24px; flex-wrap: wrap; }
+          .trace-shape svg { width: 90px; height: 90px; }
+          /* Counting: the emoji set to count, then a row of circleable
+             number options (correct count + decoys, pre-shuffled). */
+          .count-emoji-box { font-size: 40px; line-height: 1.5; letter-spacing: 10px; margin-bottom: 14px; direction: ltr; }
+          .count-options { display: flex; gap: 20px; }
+          .count-option { width: 46px; height: 46px; border: 2px solid #333; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; }
+          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 12px; display: flex; flex-direction: ${cfg.dir === 'rtl' ? 'row-reverse' : 'row'}; gap: 32px; }
+          .matching-col { flex: 1; }
+          .matching-col-title { font-weight: bold; font-size: 13px; margin-bottom: 6px; text-decoration: underline; }
+          .matching-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 9px; font-size: 15px; }
+          .matching-blank { border-bottom: 1px solid #333; width: 32px; display: inline-block; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 4px; }
+          .matching-marker { font-weight: bold; flex-shrink: 0; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="header-left">
+            ${branding.logo ? `<img class="header-logo" src="${branding.logo}" />` : ''}
+            <div class="header-main">
+              <h1>${this.escapeHtml(paper.title)}</h1>
+              <p><strong>${this.escapeHtml(paper.subject)}</strong> — ${this.escapeHtml(paper.grade)}${paper.section ? ' - ' + this.escapeHtml(paper.section) : ''}</p>
+            </div>
+          </div>
+        </div>
+        <div class="top-fields">
+          <div>${cfg.labels.name}: <span>&nbsp;</span></div>
+          <div>${cfg.labels.date}: <span>&nbsp;</span></div>
+        </div>
+        ${standardBannerHtml}
+        ${paper.generalInstructions ? `<div class="section-instructions"><strong>${cfg.labels.instructions}:</strong> ${this.escapeHtmlMultiline(paper.generalInstructions)}</div>` : ''}
+        ${activitiesHtml}
+      </body>
+      </html>
+    `;
+
+    return this.pdfService.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' },
+    });
+  }
+
+  // Simple dashed-outline SVGs for the four shapes a tracing activity can
+  // ask for - kept inline (no external asset) so the PDF stays a single
+  // self-contained HTML string like the rest of this service's rendering.
+  private readonly TRACE_SHAPE_SVG: Record<string, string> = {
+    circle: `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+    square: `<svg viewBox="0 0 100 100"><rect x="12" y="12" width="76" height="76" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+    triangle: `<svg viewBox="0 0 100 100"><polygon points="50,10 90,88 10,88" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+    star: `<svg viewBox="0 0 100 100"><polygon points="50,6 61,38 95,38 68,58 78,90 50,70 22,90 32,58 5,38 39,38" fill="none" stroke="#888" stroke-width="3" stroke-dasharray="6,6"/></svg>`,
+  };
+
+  private renderWorksheetActivity(q: any, cfg: { dir: string }): string {
+    const prompt = `<div class="activity-prompt">${this.escapeHtmlMultiline(q.questionText)}</div>`;
+
+    if (q.type === 'tracing') {
+      const content = q.traceContent || '';
+      if (q.traceType === 'shape') {
+        const shapes = content.split(',').map((s: string) => s.trim()).filter(Boolean);
+        return `
+          <div class="activity">
+            ${prompt}
+            <div class="trace-shape-row">
+              ${shapes.map((shape: string) => `<div class="trace-shape">${this.TRACE_SHAPE_SVG[shape] || this.TRACE_SHAPE_SVG.circle}</div>`).join('')}
+            </div>
+          </div>
+        `;
+      }
+      // letter / number / word: repeat the content a few times for extra
+      // tracing practice per row.
+      const repeatCount = q.traceType === 'word' ? 3 : 6;
+      const rowClass = q.traceType === 'word' ? 'trace-row trace-word' : 'trace-row';
+      return `
+        <div class="activity">
+          ${prompt}
+          <div class="${rowClass}">
+            ${Array.from({ length: repeatCount }).map(() => `<span class="trace-glyph">${this.escapeHtml(content)}</span>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    if (q.type === 'counting') {
+      const emoji = q.countEmoji || '⭐';
+      const count = q.correctCount || 0;
+      const options = (q.countOptions && q.countOptions.length ? q.countOptions : [count]);
+      return `
+        <div class="activity">
+          ${prompt}
+          <div class="count-emoji-box">${Array.from({ length: count }).map(() => this.escapeHtml(emoji)).join(' ')}</div>
+          <div class="count-options">
+            ${options.map((n: number) => `<div class="count-option">${cfg.dir === 'rtl' ? this.arabicIndicNumeral(n - 1) : n}</div>`).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    if (q.type === 'matching' && q.matchingPairs?.length) {
+      return `
+        <div class="activity">
+          ${prompt}
+          ${this.renderMatchingColumns(q.matchingPairs, q._id?.toString() || q.questionText, cfg)}
+        </div>
+      `;
+    }
+
+    // Fallback for any other question type reused on a worksheet.
+    return `<div class="activity">${prompt}</div>`;
   }
 
   // ============================================================
@@ -786,8 +998,69 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   private arabicIndicNumeral(index: number): string {
     // Options lettered with real Arabic-Indic numerals for RTL papers
     // (١، ٢، ٣...) rather than forcing Latin A/B/C/D into an RTL layout.
-    const numerals = ['١', '٢', '٣', '٤', '٥', '٦'];
-    return numerals[index] || String(index + 1);
+    // Composed digit-by-digit (not a fixed small lookup table) so this
+    // also covers a matching question's right-hand column, which can run
+    // well past the 6 choices an MCQ typically has.
+    const digits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+    return String(index + 1).split('').map(d => digits[Number(d)] ?? d).join('');
+  }
+
+  // "Match the columns" print layout: Column A (left items) numbered
+  // 1..N in their stored order; Column B (right items) shown under a
+  // deterministic per-question shuffle, lettered (or Arabic-Indic
+  // numbered, for RTL papers, matching the MCQ option-marker convention)
+  // so a student has to actually match rather than read straight across.
+  // The answer key stays derivable: each left row prints a blank for the
+  // student to write the matching marker into, and printing this HTML a
+  // second time for the same question reproduces the identical shuffle.
+  private renderMatchingColumns(pairs: Array<{ left: string; right: string }>, seed: string, cfg: { dir: string }): string {
+    const shuffledRight = this.seededShuffle(pairs.map((p) => p.right), seed);
+    const marker = (i: number) => cfg.dir === 'rtl' ? this.arabicIndicNumeral(i) : String.fromCharCode(65 + i);
+    const colA = cfg.dir === 'rtl' ? 'كالم الف' : 'Column A';
+    const colB = cfg.dir === 'rtl' ? 'كالم ب' : 'Column B';
+    return `
+      <div class="matching-columns">
+        <div class="matching-col">
+          <div class="matching-col-title">${colA}</div>
+          ${pairs.map((p, i) => `
+            <div class="matching-row">
+              <span class="matching-marker">${i + 1}.</span>
+              <span>${this.escapeHtml(p.left)}</span>
+              <span class="matching-blank"></span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="matching-col">
+          <div class="matching-col-title">${colB}</div>
+          ${shuffledRight.map((text, i) => `
+            <div class="matching-row">
+              <span class="matching-marker">${marker(i)}.</span>
+              <span>${this.escapeHtml(text)}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // Deterministic per-question shuffle for a matching question's
+  // right-hand column - seeded off the question's own _id (a stable,
+  // always-present string) rather than Math.random(), so reprinting the
+  // same exam paper PDF twice doesn't silently reshuffle the answer key
+  // a teacher may have already written down or shared.
+  private seededShuffle<T>(items: T[], seed: string): T[] {
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+    const rand = () => {
+      h = (Math.imul(1103515245, h) + 12345) | 0;
+      return ((h >>> 0) % 1000) / 1000;
+    };
+    const result = [...items];
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
   }
 
   // ============================================================

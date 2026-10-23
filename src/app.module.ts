@@ -17,6 +17,9 @@ import { AcademicsModule } from './modules/academics/academics.module';
 import { AdmissionsModule } from './admissions/admissions.module';
 import { AssessmentModule } from './assessments/assessment.module';
 import { BehaviourModule } from './behaviour/behaviour.module';
+import { ParentEngagementModule } from './parent-engagement/parent-engagement.module';
+import { HomeTasksModule } from './home-tasks/home-tasks.module';
+import { HygieneModule } from './hygiene/hygiene.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { CampusModule } from './campus/campus.module';
 import { UploadModule } from './upload/upload.module';
@@ -38,6 +41,7 @@ import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
 import { ComplaintsModule } from './complaints/complaints.module';
 import { ParentPortalModule } from './parent-portal/parent-portal.module';
+import { ParentAccessControlModule } from './parent-access-control/parent-access-control.module';
 import { StaffPortalModule } from './staff-portal/staff-portal.module';
 import { ResellersModule } from './resellers/resellers.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
@@ -89,6 +93,10 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     AssessmentModule,
     DocumentsModule,
     BehaviourModule,
+    ParentEngagementModule,
+    HomeTasksModule,
+    HygieneModule,
+    ParentAccessControlModule,
     SuperAdminModule,
     CampusModule,
     UploadModule,

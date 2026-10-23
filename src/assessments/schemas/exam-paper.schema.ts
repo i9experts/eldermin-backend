@@ -64,8 +64,23 @@ export class ExamPaper {
   @Prop({ required: true }) academicYear: string;
   @Prop() term: string;
   @Prop({ required: true, enum: ['english', 'urdu', 'arabic'] }) language: string;
-  @Prop({ required: true }) duration: number; // minutes
+  // Worksheets are untimed classroom handouts, not timed exams - duration
+  // only applies to 'exam' papers and is left unset for 'worksheet' ones.
+  @Prop() duration: number; // minutes
   @Prop() generalInstructions: string;
+  // 'exam': the existing real exam/test paper (default, unchanged
+  // behaviour). 'worksheet': an early-years printable worksheet, scoped
+  // to a real SNC ECE standard/indicator below, rendered with its own
+  // large-print, activity-style PDF template instead of the exam layout.
+  @Prop({ enum: ['exam', 'worksheet'], default: 'exam' }) paperType: string;
+  // Worksheet-only: the SNC ECE indicator this worksheet is built for, so
+  // a teacher printing it instantly knows exactly which early-years
+  // standard it covers. Denormalized (code/text) the same way as on
+  // Question, to avoid an extra lookup at render time.
+  @Prop({ type: Types.ObjectId, ref: 'ECEIndicator', default: null })
+  eceIndicatorId: Types.ObjectId | null;
+  @Prop({ type: String, default: null }) eceStandardCode: string | null;
+  @Prop({ type: String, default: null }) eceStandardText: string | null;
   // Globally-standardised print layouts a school admin picks from rather
   // than a free-form design - keeps every paper leaving the school
   // structurally consistent no matter who set it up. 'standard': single

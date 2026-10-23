@@ -24,7 +24,9 @@
     "audit:orphaned-staff-logins": "node dist/scripts/audit-orphaned-staff-logins.js",
     "audit:campus-scope": "ts-node -r tsconfig-paths/register src/scripts/audit-campus-scope-readiness.ts",
     "audit:teacher-class-matching": "ts-node -r tsconfig-paths/register src/scripts/audit-teacher-class-matching.ts",
-    "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts"
+    "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts",
+    "fix:class-teacher-names": "ts-node -r tsconfig-paths/register src/scripts/fix-duplicate-class-teacher-names.ts",
+    "dedupe:grade-sections": "ts-node -r tsconfig-paths/register src/scripts/dedupe-grade-sections.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
@@ -56,6 +58,7 @@
     "mammoth": "^1.8.0",
     "mongoose": "^9.6.3",
     "multer": "^2.2.0",
+    "node-zklib": "^1.3.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdf-lib": "^1.17.1",
