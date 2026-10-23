@@ -1,15 +1,17 @@
 import {
   Controller, Get, Post, Put, Delete,
-  Body, Param, Query, Request, HttpCode, HttpStatus,
+  Body, Param, Query, Request, HttpCode, HttpStatus, Res,
   UseInterceptors, UploadedFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { schoolSlugOf } from '../common/utils/school-slug.util';
 import { InstitutionSetupService } from './institution-setup.service';
 import {
   CreateBoardMemberDto, UpdateBoardMemberDto,
   CreateCommitteeDto, UpdateCommitteeDto,
   CreateMeetingDto, UpdateMeetingDto,
+  UpsertMeetingMinutesDto, UpdateActionItemStatusDto,
   CreateWorkflowDto, UpdateWorkflowDto,
   CreateAuthorityDelegationDto,
 } from './dto/institution-setup.dto';
@@ -121,6 +123,54 @@ export class InstitutionSetupController {
   async notifyMeeting(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.notifyMeetingMembers(id, schoolSlug);
+  }
+
+  // ── Meeting Minutes ───────────────────────────────────────
+  @Get('meetings/:id/minutes')
+  async getMeetingMinutes(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getMeetingMinutes(id, schoolSlug);
+  }
+
+  @Put('meetings/:id/minutes')
+  async upsertMeetingMinutes(@Param('id') id: string, @Body() dto: UpsertMeetingMinutesDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.upsertMeetingMinutes(id, schoolSlug, dto, userName);
+  }
+
+  @Put('meetings/:id/minutes/action-items/:index')
+  async updateMinutesActionItem(
+    @Param('id') id: string,
+    @Param('index') index: string,
+    @Body() dto: UpdateActionItemStatusDto,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateMinutesActionItem(id, schoolSlug, Number(index), dto.status);
+  }
+
+  @Post('meetings/:id/minutes/submit')
+  async submitMeetingMinutes(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.submitMeetingMinutesForApproval(id, schoolSlug);
+  }
+
+  @Post('meetings/:id/minutes/approve')
+  async approveMeetingMinutes(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.approveMeetingMinutes(id, schoolSlug, userName);
+  }
+
+  @Get('meetings/:id/minutes/pdf')
+  async downloadMeetingMinutesPdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+    const { schoolSlug } = this.ctx(req);
+    const pdf = await this.service.generateMeetingMinutesPdf(id, schoolSlug, req?.user?.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="meeting-minutes-${id}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
   }
 
   // ── Workflows ─────────────────────────────────────────────

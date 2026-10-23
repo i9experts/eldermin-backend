@@ -2626,6 +2626,7 @@ export class PdfService implements OnModuleDestroy {
       contract: 'Employment Contract',
       offer_letter: 'Offer Letter',
       timetable: 'Class Timetable',
+      meeting_minutes: 'Meeting Minutes',
       custom: 'Document',
       ...PROCUREMENT_REPORT_TITLES,
     };
@@ -3220,6 +3221,226 @@ ${css}
       type: 'class_diary',
       referenceId: String(diary._id || ''),
       referenceName: `${diary.gradeLevel} ${diary.sectionName || ''} — ${dateStr}`,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Formal board/committee Meeting Minutes PDF — the kind of document that
+   * gets filed, referenced in an audit, and sometimes physically signed.
+   * `meeting` is a plain (lean) Meeting document, already resolved by
+   * InstitutionSetupService (this module has no Meeting model of its own —
+   * same one-directional dependency convention as generateInvoice/
+   * generateFeeReceipt reading Finance models via injected models rather
+   * than a cross-module service call, except here the direction is
+   * reversed: the caller resolves the data, this module only renders it).
+   */
+  async generateMeetingMinutesPdf(
+    schoolSlug: string,
+    meeting: any,
+    userId: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const template = await this.getTemplateForType(schoolSlug, 'meeting_minutes');
+    const letterheadHtml = this.buildLetterheadHtml(template, school as any);
+    const primaryColor = template.letterhead?.primaryColor || '#0C447C';
+    const accentColor = template.letterhead?.accentColor || '#EF9F27';
+
+    const minutes = meeting.meetingMinutes || {};
+    const minutesStatus = minutes.status || 'draft';
+    const isApproved = minutesStatus === 'approved';
+
+    const scheduledAt = meeting.scheduledAt ? new Date(meeting.scheduledAt) : new Date();
+    const dateStr = scheduledAt.toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+    const timeStr = scheduledAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const meetingTypeLabel = (meeting.type || 'meeting').replace(/_/g, ' ');
+    const meetingCategoryLabel = (meeting.category || 'regular').replace(/_/g, ' ');
+
+    const attendanceStatusLabel: Record<string, string> = { present: 'Present', absent: 'Absent', apologies: 'Apologies Sent' };
+    const attendanceRows = (minutes.attendance || []).length
+      ? (minutes.attendance || []).map((a: any) => `
+        <tr>
+          <td>${a.name || ''}${a.kind && a.kind !== 'invited' ? ` <span class="pill">${a.kind === 'adhoc' ? 'Ad-hoc' : 'Guest'}</span>` : ''}</td>
+          <td class="status-${a.attendanceStatus || 'present'}">${attendanceStatusLabel[a.attendanceStatus] || 'Present'}</td>
+        </tr>`).join('')
+      : (meeting.attendees || []).map((name: string) => `<tr><td>${name}</td><td class="status-present">Present</td></tr>`).join('');
+
+    const presentCount = (minutes.attendance || []).filter((a: any) => a.attendanceStatus === 'present').length
+      || (meeting.attendees || []).length;
+
+    const quorumLabel: Record<string, string> = { met: 'Quorum was met', not_met: 'Quorum was NOT met', not_applicable: '' };
+    const quorumHtml = minutes.quorumStatus && minutes.quorumStatus !== 'not_applicable'
+      ? `<div class="quorum quorum-${minutes.quorumStatus}">
+          <strong>${quorumLabel[minutes.quorumStatus]}</strong>${minutes.quorumNote ? ` — ${minutes.quorumNote}` : ''}
+        </div>`
+      : '';
+
+    const agendaItems: any[] = meeting.agendaItems || [];
+    const itemMinutesByOrder = new Map((minutes.itemMinutes || []).map((im: any) => [im.agendaItemOrder, im]));
+    const voteOutcomeLabel: Record<string, string> = { none: '', unanimous: 'Carried unanimously', by_consensus: 'Carried by consensus', by_vote: 'Carried by vote' };
+
+    const agendaHtml = agendaItems.length
+      ? agendaItems.map((item, i) => {
+          const im: any = itemMinutesByOrder.get(item.order) || {};
+          const voteLine = im.voteOutcome === 'by_vote'
+            ? `Carried by vote — For: ${im.votesFor ?? 0}, Against: ${im.votesAgainst ?? 0}, Abstain: ${im.votesAbstain ?? 0}`
+            : voteOutcomeLabel[im.voteOutcome] || '';
+          return `
+          <div class="agenda-item">
+            <div class="agenda-item-head">
+              <span class="agenda-num">${i + 1}.</span> ${item.topic || 'Untitled item'}
+              ${item.presenter ? `<span class="presenter">— presented by ${item.presenter}</span>` : ''}
+            </div>
+            ${item.description ? `<p class="agenda-desc">${item.description}</p>` : ''}
+            ${im.discussion ? `<div class="field"><span class="field-label">Discussion</span><p>${im.discussion}</p></div>` : ''}
+            ${im.decision ? `<div class="field"><span class="field-label">Decision / Resolution</span><p>${im.decision}</p></div>` : ''}
+            ${voteLine ? `<div class="vote-line">${voteLine}</div>` : ''}
+          </div>`;
+        }).join('')
+      : '<p class="muted">No agenda items were recorded for this meeting.</p>';
+
+    const actionStatusLabel: Record<string, string> = { open: 'Open', in_progress: 'In Progress', done: 'Done' };
+    const actionRows = (minutes.actionItems || []).length
+      ? minutes.actionItems.map((a: any) => `
+        <tr>
+          <td>${a.description || ''}</td>
+          <td>${a.assignedTo || '—'}</td>
+          <td>${a.dueDate ? new Date(a.dueDate).toLocaleDateString('en-GB') : '—'}</td>
+          <td class="action-status-${a.status || 'open'}">${actionStatusLabel[a.status] || 'Open'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="4" class="muted" style="text-align:center;">No action items recorded</td></tr>';
+
+    const recordedAtStr = minutes.recordedAt
+      ? new Date(minutes.recordedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+      : '—';
+    const approvedAtStr = minutes.approvedAt
+      ? new Date(minutes.approvedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+      : '';
+    const nextMeetingStr = minutes.nextMeetingDate
+      ? new Date(minutes.nextMeetingDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+      : null;
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; margin: 0; padding: 18mm 16mm; position: relative; }
+  h1 { font-size: 19px; margin: 16px 0 2px; color: ${primaryColor}; letter-spacing: 0.01em; }
+  .sub { font-size: 12px; color: #6B7A90; margin-bottom: 4px; text-transform: capitalize; }
+  .ref { font-size: 10.5px; color: #94A3B8; margin-bottom: 14px; }
+  .status-badge { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 10px; border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+  .status-badge.approved { background: #DCFCE7; color: #16A34A; }
+  .status-badge.pending_approval { background: #FEF3DC; color: #C8811A; }
+  .status-badge.draft { background: #F1F5F9; color: #64748B; }
+  .meta-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-bottom: 14px; }
+  .meta-table td { padding: 5px 0; vertical-align: top; }
+  .meta-table td.label { width: 120px; font-weight: 600; color: ${accentColor}; }
+  .section-title { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: ${primaryColor}; border-bottom: 2px solid ${primaryColor}; padding-bottom: 4px; margin: 20px 0 10px; }
+  table.list { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-bottom: 4px; }
+  table.list th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; color: #64748B; border-bottom: 1px solid #E2E8F0; padding: 5px 8px; }
+  table.list td { padding: 6px 8px; border-bottom: 1px solid #F1F5F9; }
+  .pill { font-size: 9px; background: #EEF2FF; color: #4338CA; padding: 1px 6px; border-radius: 999px; margin-left: 4px; }
+  .status-present { color: #16A34A; font-weight: 600; }
+  .status-absent { color: #DC2626; font-weight: 600; }
+  .status-apologies { color: #C8811A; font-weight: 600; }
+  .action-status-open { color: #64748B; font-weight: 600; }
+  .action-status-in_progress { color: #2563EB; font-weight: 600; }
+  .action-status-done { color: #16A34A; font-weight: 600; }
+  .quorum { font-size: 11.5px; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; }
+  .quorum-met { background: #DCFCE7; color: #166534; }
+  .quorum-not_met { background: #FEE2E2; color: #991B1B; }
+  .agenda-item { border: 1px solid #E2E8F0; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; page-break-inside: avoid; }
+  .agenda-item-head { font-size: 12px; font-weight: 700; color: #0D1F35; }
+  .agenda-num { color: ${primaryColor}; }
+  .presenter { font-size: 10.5px; font-weight: 400; color: #94A3B8; margin-left: 4px; }
+  .agenda-desc { font-size: 11px; color: #64748B; margin: 4px 0; }
+  .field { margin-top: 6px; }
+  .field-label { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: ${accentColor}; }
+  .field p { font-size: 11.5px; margin: 2px 0 0; }
+  .vote-line { font-size: 10.5px; font-weight: 600; color: ${primaryColor}; margin-top: 6px; }
+  .muted { color: #94A3B8; font-size: 11px; }
+  .notes-box { font-size: 11.5px; border: 1px solid #E2E8F0; border-radius: 6px; padding: 10px 12px; white-space: pre-wrap; }
+  .sig-row { display: flex; gap: 24px; margin-top: 34px; page-break-inside: avoid; }
+  .sig-item { flex: 1; }
+  .sig-line { border-bottom: 1px solid #334155; height: 36px; }
+  .sig-label { font-size: 10.5px; color: #64748B; margin-top: 4px; }
+  .sig-sub { font-size: 9.5px; color: #94A3B8; }
+  .footer { margin-top: 18px; font-size: 9.5px; color: #94A3B8; }
+  .watermark { position: fixed; top: 45%; left: 0; right: 0; text-align: center; font-size: 56px; font-weight: 800; color: rgba(220,38,38,0.10); transform: rotate(-22deg); letter-spacing: 0.05em; pointer-events: none; z-index: 0; }
+</style>
+</head>
+<body>
+  ${!isApproved ? '<div class="watermark">DRAFT — NOT YET APPROVED</div>' : ''}
+  ${letterheadHtml}
+  <h1>Minutes of Meeting
+    <span class="status-badge ${minutesStatus}">${minutesStatus === 'pending_approval' ? 'Pending Approval' : minutesStatus.charAt(0).toUpperCase() + minutesStatus.slice(1)}</span>
+  </h1>
+  <p class="sub">${meetingCategoryLabel} ${meetingTypeLabel} meeting — ${meeting.title}</p>
+  <p class="ref">Ref: ${String(meeting._id || '')} &nbsp;·&nbsp; Generated ${new Date().toLocaleDateString('en-GB')}</p>
+
+  <table class="meta-table">
+    <tr><td class="label">Date</td><td>${dateStr}</td><td class="label">Time</td><td>${timeStr}${minutes.calledToOrder ? ` (called to order ${minutes.calledToOrder})` : ''}${minutes.adjournedAt ? ` — adjourned ${minutes.adjournedAt}` : ''}</td></tr>
+    <tr><td class="label">Location</td><td>${meeting.mode === 'virtual' ? (meeting.meetingLink || 'Virtual') : (meeting.venue || '—')}</td><td class="label">Chairperson</td><td>${meeting.chairperson || '—'}</td></tr>
+    <tr><td class="label">Minute Taker</td><td>${minutes.recordedBy || meeting.minuteTaker || '—'}</td><td class="label">Attendees Present</td><td>${presentCount}</td></tr>
+  </table>
+
+  ${quorumHtml}
+
+  <div class="section-title">Attendance</div>
+  <table class="list">
+    <tr><th>Name</th><th>Status</th></tr>
+    ${attendanceRows || '<tr><td colspan="2" class="muted">No attendance recorded</td></tr>'}
+  </table>
+
+  <div class="section-title">Agenda &amp; Proceedings</div>
+  ${agendaHtml}
+
+  <div class="section-title">Action Items</div>
+  <table class="list">
+    <tr><th>Action</th><th>Owner</th><th>Due Date</th><th>Status</th></tr>
+    ${actionRows}
+  </table>
+
+  ${minutes.generalNotes ? `
+  <div class="section-title">Other Business / General Notes</div>
+  <div class="notes-box">${minutes.generalNotes}</div>` : ''}
+
+  ${nextMeetingStr ? `<p class="sub" style="margin-top:14px;"><strong>Next Meeting:</strong> ${nextMeetingStr}</p>` : ''}
+
+  <div class="sig-row">
+    <div class="sig-item">
+      <div class="sig-line"></div>
+      <div class="sig-label">${minutes.recordedBy || meeting.minuteTaker || 'Minute Taker'}</div>
+      <div class="sig-sub">Minute Taker ${recordedAtStr !== '—' ? `· recorded ${recordedAtStr}` : ''}</div>
+    </div>
+    <div class="sig-item">
+      <div class="sig-line"></div>
+      <div class="sig-label">${minutes.approvedBy || meeting.chairperson || 'Chair / Approver'}</div>
+      <div class="sig-sub">${isApproved ? `Approved ${approvedAtStr}` : 'Chair / Approver (pending signature)'}</div>
+    </div>
+  </div>
+
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${(school as any).name} · ${new Date().toLocaleDateString('en-GB')}</div>
+</body>
+</html>`;
+
+    const pdf = await this.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'meeting_minutes',
+      referenceId: String(meeting._id || ''),
+      referenceName: `Minutes — ${meeting.title}`,
       generatedBy: userId,
       status: 'success',
       fileSizeKb: Math.round(pdf.length / 1024),
