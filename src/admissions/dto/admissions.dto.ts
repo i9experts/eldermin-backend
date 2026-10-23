@@ -210,6 +210,7 @@ export class CreateEnrollmentDto {
   @IsOptional() @IsString() section?: string;
   @IsOptional() @IsString() classAssigned?: string;
   @IsOptional() @IsString() rollNumber?: string;
+  @IsOptional() @IsString() grNo?: string;
   @IsOptional() @IsNumber() admissionFee?: number;
   @IsOptional() @IsString() campusId?: string;
   schoolSlug?: string;
@@ -226,6 +227,7 @@ export class UpdateEnrollmentDto {
   @IsOptional() @IsString() feeReceiptNumber?: string;
   @IsOptional() @IsString() classAssigned?: string;
   @IsOptional() @IsString() rollNumber?: string;
+  @IsOptional() @IsString() grNo?: string;
   @IsOptional() @IsString() section?: string;
   @IsOptional() @IsBoolean() documentsComplete?: boolean;
   @IsOptional() @IsBoolean() uniformIssued?: boolean;

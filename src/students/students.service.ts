@@ -427,6 +427,7 @@ export class StudentsService {
     lastName: string; grade: string; section?: string; campusId: string;
     admissionNumber: string; admissionDate: Date; schoolSlug: string;
     academicYear: string; enrollmentId: string;
+    grNo?: string; rollNumber?: string;
   }): Promise<Student> {
     const existing = await this.studentModel.findOne({
       admissionNumber: enrollmentData.admissionNumber,
@@ -447,6 +448,8 @@ export class StudentsService {
       enrollmentId: new Types.ObjectId(enrollmentData.enrollmentId),
       schoolSlug: enrollmentData.schoolSlug,
       status: 'active',
+      grNo: enrollmentData.grNo,
+      currentRollNumber: enrollmentData.rollNumber,
     });
     return student.save();
   }
