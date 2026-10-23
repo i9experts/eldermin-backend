@@ -25,8 +25,27 @@ export class BehaviourNote {
   @Prop({ default: false }) followUpRequired: boolean;
   @Prop() followUpDate: Date;
   @Prop({ default: false }) isResolved: boolean;
+
+  // ── Complaints Register fields (additive - existing BehaviourNote
+  // records predate these and simply have them unset; the UI treats a
+  // missing value as "not specified" rather than erroring). `type` above
+  // (positive/concern/serious/resolved) is the long-standing incident
+  // classification and is intentionally left untouched - `status` below
+  // is a separate axis tracking the complaint's own lifecycle. ──
+  @Prop({ enum: ['parent', 'teacher', 'staff', 'student', 'other'] }) complainantType: string;
+  @Prop() complainantName: string;
+  @Prop({ enum: ['academic', 'conduct', 'bullying_safety', 'attendance', 'facility', 'communication', 'other'] })
+  category: string;
+  @Prop({ type: Types.ObjectId, ref: 'Staff' }) assignedTo: Types.ObjectId;
+  @Prop() assignedToName: string;
+  @Prop({ enum: ['open', 'in_progress', 'resolved', 'closed'], default: 'open' }) status: string;
+  @Prop() resolutionNotes: string;
+  @Prop() resolvedAt: Date;
+  @Prop({ type: Types.ObjectId, ref: 'Staff' }) resolvedBy: Types.ObjectId;
+  @Prop() resolvedByName: string;
 }
 
 export const BehaviourNoteSchema = SchemaFactory.createForClass(BehaviourNote);
 BehaviourNoteSchema.index({ tenantId: 1, studentId: 1, incidentDate: -1 });
 BehaviourNoteSchema.index({ tenantId: 1, gradeLevel: 1, type: 1 });
+BehaviourNoteSchema.index({ tenantId: 1, status: 1, category: 1, incidentDate: -1 });
