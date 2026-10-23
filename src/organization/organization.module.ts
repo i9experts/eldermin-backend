@@ -28,11 +28,13 @@ import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schema
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { UploadModule } from '../upload/upload.module';
 import { EmailModule } from '../email/email.module';
+import { AppStoreConnectModule } from '../integrations/app-store-connect/app-store-connect.module';
 
 @Module({
   imports: [
     UploadModule,
     EmailModule,
+    AppStoreConnectModule,
     MongooseModule.forFeature([
       { name: School.name, schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },

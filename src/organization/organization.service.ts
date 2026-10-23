@@ -24,6 +24,7 @@ import { UploadService } from '../upload/upload.service';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
+import { AppStoreConnectService } from '../integrations/app-store-connect/app-store-connect.service';
 
 @Injectable()
 export class OrganizationService {
@@ -43,6 +44,7 @@ export class OrganizationService {
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private uploadService: UploadService,
+    private appStoreConnectService: AppStoreConnectService,
   ) {}
 
   // ── School ────────────────────────────────────────────────
@@ -807,9 +809,10 @@ export class OrganizationService {
   private static readonly PLAY_STORE_REVIEWER_PHONE = '+923172573105';
 
   async getParentAppActivation(schoolSlug: string, tenantId?: string) {
-    const [campuses, students] = await Promise.all([
+    const [campuses, students, appleAppStoreDownloads] = await Promise.all([
       this.campusModel.find({ schoolSlug, isActive: true }).select('name').lean(),
       this.studentModel.find({ schoolSlug, status: 'active' }).select('campusId guardians').lean(),
+      this.appStoreConnectService.getRecentDownloads(),
     ]);
 
     const parentUserFilter: any = { primaryRole: 'parent', phone: { $ne: OrganizationService.PLAY_STORE_REVIEWER_PHONE } };
@@ -859,8 +862,11 @@ export class OrganizationService {
     return {
       overall: { ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents },
       campuses: campusRows,
+      appleAppStoreDownloads,
       notes: {
-        downloads: 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads.',
+        downloads: appleAppStoreDownloads.configured
+          ? 'Apple App Store downloads are now connected (via App Store Connect) and shown separately below - a download is not the same as activation, since a parent can install the app without ever logging in. Google Play download counts still aren’t connected yet. "Activated Parents" and "Activation Rate" above reflect actual parent app logins (a real, already-tracked signal), independent of either store’s download count.'
+          : 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads.',
         staffApp: 'Staff currently access Eldermin through the web dashboard - there is no separate staff mobile app login yet to measure activation for, so staff numbers above are headcount only.',
       },
     };
