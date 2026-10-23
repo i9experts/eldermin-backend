@@ -31,14 +31,15 @@ function model(rows: any, count = Array.isArray(rows) ? rows.length : rows ? 1 :
 
 const eyStudent = { _id: mine, firstName: 'Ayesha', lastName: 'Khan', currentGrade: 'Nursery', currentSection: 'A', classTeacher: 'Ms Sara', programType: 'early-years', currentAcademicYear: '2025-26' };
 
-function build(over: { student?: any; portfolio?: any; observations?: any; skills?: any; portfolioCount?: number; observationCount?: number; signer?: jest.Mock } = {}) {
+function build(over: { student?: any; portfolio?: any; observations?: any; skills?: any; year?: any; portfolioCount?: number; observationCount?: number; signer?: jest.Mock } = {}) {
   const student = model('student' in over ? over.student : eyStudent);
   const portfolio = model('portfolio' in over ? over.portfolio : [], over.portfolioCount);
   const observations = model('observations' in over ? over.observations : [], over.observationCount);
   const skills = model('skills' in over ? over.skills : []);
+  const years = model('year' in over ? over.year : { name: '2025-26' });
   const upload: any = { getSignedUrl: over.signer || jest.fn(async (key: string) => `https://signed.example/${key}?sig=1`) };
-  const service = new ParentEarlyYearsService(student as any, observations as any, portfolio as any, skills as any, upload);
-  return { service, student, portfolio, observations, skills, upload };
+  const service = new ParentEarlyYearsService(student as any, observations as any, portfolio as any, skills as any, years as any, upload);
+  return { service, student, portfolio, observations, skills, years, upload };
 }
 
 // ── guards ───────────────────────────────────────────────────────
@@ -213,7 +214,7 @@ describe('parent Early Years: observations', () => {
   it('returns only shared observations, school-scoped skill names, no staff names, ids or internal context', async () => {
     const b = build({ observations: [dbObs()], observationCount: 1, skills: [{ _id: 'sk1', name: 'Pencil Control' }] });
     const res: any = await b.service.listObservations(parent(), mine);
-    expect(b.observations.seen.filter).toEqual({ schoolSlug: SCHOOL, studentId: new Types.ObjectId(mine), isSharedWithFamily: true });
+    expect(b.observations.seen.filter).toEqual({ schoolSlug: SCHOOL, studentId: new Types.ObjectId(mine), isSharedWithFamily: true, academicYearLabel: '2025-26' });
     expect(b.skills.seen.filter.schoolSlug).toBe(SCHOOL);
     expect(Object.keys(res.items[0]).sort()).toEqual(['createdAt', 'id', 'learningAreas', 'media', 'narrative', 'nextStep', 'type']);
     expect(res.items[0].learningAreas).toEqual([{ skill: 'Pencil Control', level: 'Developing' }]); // unresolved skill dropped
@@ -225,26 +226,64 @@ describe('parent Early Years: observations', () => {
     await b.service.listObservations(parent(), mine);
     expect(b.observations.seen.filter.isSharedWithFamily).toBe(true);
   });
-  it('x-academic-year narrows the list (and the summary count) to that year', async () => {
-    const b = build({ observations: [], observationCount: 0 });
-    await b.service.listObservations(parent(), mine, 1, 20, ' 2025-26 ');
-    expect(b.observations.seen.filter).toMatchObject({ isSharedWithFamily: true, academicYearLabel: '2025-26' });
-    const s = build({ observationCount: 0 });
-    await s.service.getSummary(parent(), mine, '2024-25');
-    expect(s.observations.seen.countFilter).toMatchObject({ academicYearLabel: '2024-25' });
-    const none = build();
-    await none.service.listObservations(parent(), mine, 1, 20, '   ');
-    expect(none.observations.seen.filter.academicYearLabel).toBeUndefined();
+  describe('academic year is worked out on the server', () => {
+    it('the list and the summary count use the school\'s CURRENT year (first isCurrent year of this school, newest start first)', async () => {
+      const b = build({ observations: [], observationCount: 0, year: { name: ' 2026-27 ' } });
+      await b.service.listObservations(parent(), mine);
+      expect(b.years.seen.filter).toEqual({ schoolSlug: SCHOOL, isCurrent: true });
+      expect(b.years.seen.sort).toEqual({ startDate: -1 });
+      expect(b.observations.seen.filter).toMatchObject({ isSharedWithFamily: true, academicYearLabel: '2026-27' });
+      const s = build({ observationCount: 0, year: { name: '2026-27' } });
+      await s.service.getSummary(parent(), mine);
+      expect(s.observations.seen.countFilter).toMatchObject({ academicYearLabel: '2026-27' });
+    });
+
+    it('an observation of another year is excluded by that filter (the label is part of the query, not applied afterwards)', async () => {
+      const b = build({ observations: [], observationCount: 0, year: { name: '2025-26' } });
+      await b.service.listObservations(parent(), mine);
+      expect(b.observations.seen.filter.academicYearLabel).toBe('2025-26');
+      expect(b.observations.seen.countFilter.academicYearLabel).toBe('2025-26');
+    });
+
+    it('a year sent by the client has no effect: the service has no parameter for it, and the controller does not read the header', () => {
+      expect(ParentEarlyYearsService.prototype.listObservations.length).toBeLessThanOrEqual(4);
+      expect(ParentEarlyYearsService.prototype.getSummary.length).toBeLessThanOrEqual(2);
+      const ctl = fs.readFileSync(path.join(__dirname, 'parent-early-years.controller.ts'), 'utf8').split('\n').filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//')).join('\n');
+      expect(ctl).not.toMatch(/x-academic-year|headers/i);
+    });
+
+    it('the school looked up is the token\'s, so another school\'s year never applies', async () => {
+      const b = build({ observations: [], observationCount: 0 });
+      await b.service.listObservations(parent({ schoolSlug: 'school-b' }), mine).catch(() => undefined);
+      // child lookup comes first and is by the token's school; the year lookup is only reached with that same school
+      expect(b.student.seen.filter).toEqual({ _id: mine, schoolSlug: 'school-b' });
+    });
+
+    it('no current year configured: no year filter (shared items stay visible) rather than hiding the record', async () => {
+      const none = build({ observations: [], observationCount: 0, year: null });
+      await none.service.listObservations(parent(), mine);
+      expect(none.observations.seen.filter.academicYearLabel).toBeUndefined();
+      const blank = build({ observations: [], observationCount: 0, year: { name: '   ' } });
+      await blank.service.listObservations(parent(), mine);
+      expect(blank.observations.seen.filter.academicYearLabel).toBeUndefined();
+    });
+
+    it('portfolio entries are not year-filtered (the schema has no year on them)', async () => {
+      const b = build({ portfolio: [], portfolioCount: 0 });
+      await b.service.listPortfolio(parent(), mine);
+      expect(b.portfolio.seen.filter.academicYearLabel).toBeUndefined();
+      expect(b.years.findOne).not.toHaveBeenCalled();
+    });
   });
 });
 
 describe('parent Early Years: no sensitive data path exists', () => {
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const src = strip(fs.readFileSync(path.join(__dirname, 'parent-early-years.service.ts'), 'utf8'));
-  it('the service reads only students, observations, portfolio entries and skills, and never mentions care, allergy, support or medication', () => {
+  it('the service reads only students, observations, portfolio entries, skills and the school year, and never mentions care, allergy, support or medication', () => {
     expect(src).not.toMatch(/care|allerg|support|medic|injur|toilet|nap\b|familyResponse|observedBy|observedById|(\.|'|")context\b|\bcontext:/i);
     const models = [...src.matchAll(/@InjectModel\((\w+)\.name\)/g)].map((m) => m[1]).sort();
-    expect(models).toEqual(['ECEObservation', 'ECEPortfolioEntry', 'ECESkill', 'Student']);
+    expect(models).toEqual(['AcademicYear', 'ECEObservation', 'ECEPortfolioEntry', 'ECESkill', 'Student']);
   });
   it('the module registers only the three read-only ECE models for this feature', () => {
     const mod = fs.readFileSync(path.join(__dirname, 'parent-portal.module.ts'), 'utf8');
