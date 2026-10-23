@@ -597,6 +597,8 @@ export class AdmissionsService {
         schoolSlug: enrollment.schoolSlug,
         academicYear: enrollment.academicYear,
         enrollmentId: (enrollment._id as Types.ObjectId).toString(),
+        grNo: enrollment.grNo,
+        rollNumber: enrollment.rollNumber,
       });
     }
 

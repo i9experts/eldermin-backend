@@ -124,6 +124,7 @@ export class Enrollment {
   @Prop() section: string;
   @Prop() classAssigned: string;
   @Prop() rollNumber: string;
+  @Prop() grNo: string;
 
   @Prop({
     enum: ['pending_fee','fee_paid','documents_pending','enrolled','deferred'],
