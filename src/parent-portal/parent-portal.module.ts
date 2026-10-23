@@ -53,6 +53,7 @@ import { ParentEarlyYearsService } from './parent-early-years.service';
 import { ECEObservation, ECEObservationSchema } from '../ece/schemas/observation.schema';
 import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from '../ece/schemas/portfolio-entry.schema';
 import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
+import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
       { name: ECEObservation.name, schema: ECEObservationSchema },
       { name: ECEPortfolioEntry.name, schema: ECEPortfolioEntrySchema },
       { name: ECESkill.name, schema: ECESkillSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
     ]),
     EmailModule,
     AuthModule,

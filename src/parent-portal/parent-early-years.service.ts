@@ -5,6 +5,7 @@ import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { ECEObservation, ECEObservationDocument } from '../ece/schemas/observation.schema';
 import { ECEPortfolioEntry, ECEPortfolioEntryDocument } from '../ece/schemas/portfolio-entry.schema';
 import { ECESkill, ECESkillDocument } from '../ece/schemas/ontology.schema';
+import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { UploadService } from '../upload/upload.service';
 import { assertStudentAccess, ScopedUser } from '../auth/scope.util';
 
@@ -50,6 +51,7 @@ export class ParentEarlyYearsService {
     @InjectModel(ECEObservation.name) private observationModel: Model<ECEObservationDocument>,
     @InjectModel(ECEPortfolioEntry.name) private portfolioModel: Model<ECEPortfolioEntryDocument>,
     @InjectModel(ECESkill.name) private skillModel: Model<ECESkillDocument>,
+    @InjectModel(AcademicYear.name) private yearModel: Model<AcademicYearDocument>,
     private readonly uploadService: UploadService,
   ) {}
 
@@ -118,22 +120,32 @@ export class ParentEarlyYearsService {
     return { page: p, limit: l, skip: (p - 1) * l };
   }
 
-  private yearFilter(academicYear?: string) {
-    const y = typeof academicYear === 'string' ? academicYear.trim() : '';
-    return y ? { academicYearLabel: y } : {};
+  /**
+   * Observations are labelled with the academic year they were recorded in (`academicYearLabel`), and the label is the `name` of the school's
+   * current academic year: the web sends it as `x-academic-year` (its top bar reads the first `isCurrent` year of GET /organization/academic-years,
+   * Eldermin-Frontend TopBar.tsx) and the teacher app does the same (early_years_repository.dart currentAcademicYear). A parent therefore sees the
+   * CURRENT year's shared observations only, and the year is worked out here from the school's own data: a year sent by the client is ignored.
+   * With no current year configured the filter is dropped (everything that was shared stays visible) instead of hiding the child's record.
+   * Portfolio entries carry no year label in the schema, so they are not year-filtered.
+   */
+  private async currentYearFilter(schoolSlug: string): Promise<{ academicYearLabel?: string }> {
+    const year: any = await this.yearModel.findOne({ schoolSlug, isCurrent: true }).sort({ startDate: -1 }).select('name').lean();
+    const name = typeof year?.name === 'string' ? year.name.trim() : '';
+    return name ? { academicYearLabel: name } : {};
   }
 
   // ── routes ───────────────────────────────────────────────────
-  async getSummary(user: ScopedUser, studentId: string, academicYear?: string) {
+  async getSummary(user: ScopedUser, studentId: string) {
     const { schoolSlug, student } = await this.childOf(user, studentId);
     const base = { studentId: String(student._id), firstName: student.firstName, lastName: student.lastName };
     if (student.programType !== 'early-years') return { ...base, isEarlyYears: false, programme: 'k12' };
     const sid = new Types.ObjectId(studentId);
+    const year = await this.currentYearFilter(schoolSlug);
     const [portfolioCount, observationCount, lastEntry, lastObs] = await Promise.all([
       this.portfolioModel.countDocuments({ schoolSlug, studentId: sid, isVisibleToFamily: true }),
-      this.observationModel.countDocuments({ schoolSlug, studentId: sid, isSharedWithFamily: true, ...this.yearFilter(academicYear) }),
+      this.observationModel.countDocuments({ schoolSlug, studentId: sid, isSharedWithFamily: true, ...year }),
       this.portfolioModel.findOne({ schoolSlug, studentId: sid, isVisibleToFamily: true }).sort({ createdAt: -1 }).select('createdAt').lean(),
-      this.observationModel.findOne({ schoolSlug, studentId: sid, isSharedWithFamily: true, ...this.yearFilter(academicYear) }).sort({ createdAt: -1 }).select('createdAt').lean(),
+      this.observationModel.findOne({ schoolSlug, studentId: sid, isSharedWithFamily: true, ...year }).sort({ createdAt: -1 }).select('createdAt').lean(),
     ]);
     const dates = [(lastEntry as any)?.createdAt, (lastObs as any)?.createdAt].filter(Boolean).map((d: any) => new Date(d).getTime());
     return {
@@ -175,11 +187,11 @@ export class ParentEarlyYearsService {
     return this.portfolioItem(schoolSlug, entry);
   }
 
-  async listObservations(user: ScopedUser, studentId: string, page?: number, limit?: number, academicYear?: string) {
+  async listObservations(user: ScopedUser, studentId: string, page?: number, limit?: number) {
     const { schoolSlug } = await this.eyChildOf(user, studentId);
     const sid = new Types.ObjectId(studentId);
     const { page: p, limit: l, skip } = this.paging(page, limit);
-    const filter = { schoolSlug, studentId: sid, isSharedWithFamily: true, ...this.yearFilter(academicYear) };
+    const filter = { schoolSlug, studentId: sid, isSharedWithFamily: true, ...(await this.currentYearFilter(schoolSlug)) };
     const [rows, total] = await Promise.all([
       this.observationModel.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(l)
         .select('observationType narrative nextStep skillMappings.skillId skillMappings.progressionLevel evidence createdAt').lean(),
