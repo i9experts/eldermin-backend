@@ -514,7 +514,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .options { margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: grid; grid-template-columns: ${format === 'compact' ? '1fr' : '1fr 1fr'}; gap: 4px; }
           .opt-marker { font-weight: bold; margin-${cfg.dir === 'rtl' ? 'left' : 'right'}: 6px; }
           .answer-space { border-bottom: 1px solid #ccc; height: 22px; margin-top: 6px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; }
-          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: flex; flex-direction: ${cfg.dir === 'rtl' ? 'row-reverse' : 'row'}; gap: 32px; }
+          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 24px; display: flex; flex-direction: row; gap: 32px; }
           .matching-col { flex: 1; }
           .matching-col-title { font-weight: bold; font-size: ${px(11)}px; margin-bottom: 6px; text-decoration: underline; }
           .matching-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 7px; }
@@ -658,7 +658,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
           .count-emoji-box { font-size: 40px; line-height: 1.5; letter-spacing: 10px; margin-bottom: 14px; direction: ltr; }
           .count-options { display: flex; gap: 20px; }
           .count-option { width: 46px; height: 46px; border: 2px solid #333; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; }
-          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 12px; display: flex; flex-direction: ${cfg.dir === 'rtl' ? 'row-reverse' : 'row'}; gap: 32px; }
+          .matching-columns { margin-top: 8px; margin-${cfg.dir === 'rtl' ? 'right' : 'left'}: 12px; display: flex; flex-direction: row; gap: 32px; }
           .matching-col { flex: 1; }
           .matching-col-title { font-weight: bold; font-size: 13px; margin-bottom: 6px; text-decoration: underline; }
           .matching-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 9px; font-size: 15px; }

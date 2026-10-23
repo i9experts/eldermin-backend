@@ -62,4 +62,18 @@ describe('matching-column question: PDF rendering helpers', () => {
     expect(svc.arabicIndicNumeral(5)).toBe('٦');
     expect(svc.arabicIndicNumeral(9)).toBe('١٠');
   });
+
+  it('matching-columns container uses an unconditional flex-direction: row (RTL column order comes from the inherited <html dir>, not a second CSS flip)', () => {
+    const pairs = [{ left: 'بایاں', right: 'دایاں' }];
+    const html = svc.renderMatchingColumns(pairs, 'q-dir', { dir: 'rtl' });
+    // Column A must still be the first DOM child for both LTR and RTL -
+    // visual side is left entirely to the inherited `direction`, never to
+    // row-reverse, or RTL papers double-flip and Column A lands on the
+    // wrong side (the bug reported against a live Urdu paper).
+    const colAIndex = html.indexOf('matching-col-title');
+    const colBIndex = html.indexOf('matching-col-title', colAIndex + 1);
+    expect(colAIndex).toBeGreaterThanOrEqual(0);
+    expect(colBIndex).toBeGreaterThan(colAIndex);
+    expect(html.indexOf('كالم الف')).toBeLessThan(html.indexOf('كالم ب'));
+  });
 });
