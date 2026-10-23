@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -12,6 +12,7 @@ import { School, SchoolDocument } from './schemas/organization.schema';
 import { EmailService } from '../email/email.service';
 import { WhatsAppService } from '../email/whatsapp.service';
 import { UploadService } from '../upload/upload.service';
+import { PdfService } from '../pdf/pdf.service';
 
 @Injectable()
 export class InstitutionSetupService {
@@ -25,6 +26,7 @@ export class InstitutionSetupService {
     private emailService: EmailService,
     private whatsAppService: WhatsAppService,
     private uploadService: UploadService,
+    private pdfService: PdfService,
   ) {}
 
   // ── Board Members ─────────────────────────────────────────
@@ -214,6 +216,87 @@ export class InstitutionSetupService {
       emailsSent, emailsFailed, emailFailures: failures,
       whatsapp: { attempted: membersWithWhatsapp.length, sent: whatsappResult.sent ? membersWithWhatsapp.length : 0, reason: whatsappResult.reason },
     };
+  }
+
+  // ── Meeting Minutes ───────────────────────────────────────
+  // Embedded 1:1 on the Meeting document (see MeetingMinutes in
+  // institution-setup.schema.ts) — always read/written alongside its one
+  // meeting, never queried independently.
+
+  private async getMeetingOrThrow(id: string, schoolSlug: string) {
+    const meeting = await this.meetingModel.findOne({ _id: id, schoolSlug });
+    if (!meeting) throw new NotFoundException('Meeting not found');
+    return meeting;
+  }
+
+  async getMeetingMinutes(id: string, schoolSlug: string) {
+    const meeting = await this.getMeetingOrThrow(id, schoolSlug);
+    return meeting.meetingMinutes || null;
+  }
+
+  /**
+   * Creates or updates the structured minutes for a meeting. A meeting
+   * still marked 'scheduled' is bumped to 'completed' the moment minutes
+   * are first recorded — recording minutes is itself evidence the meeting
+   * happened, the same behavior the old free-text minutes modal already
+   * had. An existing minutes `status` (pending_approval/approved) is never
+   * silently reset back to 'draft' by an ordinary content edit — only the
+   * explicit submit/approve actions below move it forward, and editing
+   * content after approval does not revoke that approval on its own
+   * (use submitMeetingMinutesForApproval again if re-approval is wanted).
+   */
+  async upsertMeetingMinutes(id: string, schoolSlug: string, dto: any, recordedBy: string) {
+    const meeting = await this.getMeetingOrThrow(id, schoolSlug);
+    const existing: any = meeting.meetingMinutes || {};
+
+    meeting.meetingMinutes = {
+      ...existing,
+      ...dto,
+      recordedBy: existing.recordedBy || recordedBy,
+      recordedAt: existing.recordedAt || new Date(),
+      status: existing.status || 'draft',
+    } as any;
+
+    if (meeting.status === 'scheduled') meeting.status = 'completed';
+
+    await meeting.save();
+    return meeting.meetingMinutes;
+  }
+
+  async updateMinutesActionItem(id: string, schoolSlug: string, index: number, status: string) {
+    const meeting = await this.getMeetingOrThrow(id, schoolSlug);
+    const actionItems = meeting.meetingMinutes?.actionItems || [];
+    if (!actionItems[index]) throw new NotFoundException('Action item not found');
+    actionItems[index].status = status;
+    meeting.markModified('meetingMinutes.actionItems');
+    await meeting.save();
+    return meeting.meetingMinutes;
+  }
+
+  async submitMeetingMinutesForApproval(id: string, schoolSlug: string) {
+    const meeting = await this.getMeetingOrThrow(id, schoolSlug);
+    if (!meeting.meetingMinutes) throw new BadRequestException('No minutes have been recorded for this meeting yet');
+    meeting.meetingMinutes.status = 'pending_approval';
+    meeting.markModified('meetingMinutes');
+    await meeting.save();
+    return meeting.meetingMinutes;
+  }
+
+  async approveMeetingMinutes(id: string, schoolSlug: string, approvedBy: string) {
+    const meeting = await this.getMeetingOrThrow(id, schoolSlug);
+    if (!meeting.meetingMinutes) throw new BadRequestException('No minutes have been recorded for this meeting yet');
+    meeting.meetingMinutes.status = 'approved';
+    meeting.meetingMinutes.approvedBy = approvedBy;
+    meeting.meetingMinutes.approvedAt = new Date();
+    meeting.markModified('meetingMinutes');
+    await meeting.save();
+    return meeting.meetingMinutes;
+  }
+
+  async generateMeetingMinutesPdf(id: string, schoolSlug: string, userId: string) {
+    const meeting = await this.meetingModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!meeting) throw new NotFoundException('Meeting not found');
+    return this.pdfService.generateMeetingMinutesPdf(schoolSlug, meeting, userId);
   }
 
   // ── Workflows ─────────────────────────────────────────────

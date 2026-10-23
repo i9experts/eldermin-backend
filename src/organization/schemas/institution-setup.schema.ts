@@ -131,6 +131,80 @@ export class AgendaItem {
 }
 export const AgendaItemSchema = SchemaFactory.createForClass(AgendaItem);
 
+// ── Meeting Minutes (structured, linked 1:1 to a Meeting) ──────────────
+// A real governance minutes record, not the free-text `minutes` string
+// above (kept untouched for backward compatibility with meetings recorded
+// before this existed). Embedded on Meeting rather than a separate
+// collection — it's always read/written alongside its one meeting, never
+// queried independently across meetings.
+@Schema({ _id: false })
+export class MinutesAttendee {
+  @Prop({ required: true }) name: string;
+  @Prop({ enum: ['present', 'absent', 'apologies'], default: 'present' })
+  attendanceStatus: string;
+  // 'invited' = was on the original meeting.attendees list; 'adhoc' = showed
+  // up without being invited; 'guest' = an observer/guest, not a voting
+  // participant.
+  @Prop({ enum: ['invited', 'adhoc', 'guest'], default: 'invited' })
+  kind: string;
+}
+export const MinutesAttendeeSchema = SchemaFactory.createForClass(MinutesAttendee);
+
+@Schema({ _id: false })
+export class AgendaItemMinutes {
+  // Matches an AgendaItem.order on the same meeting — not a Mongo ref,
+  // since agenda items are embedded subdocuments with no stable _id of
+  // their own (schema above uses `{ _id: false }`).
+  @Prop({ required: true }) agendaItemOrder: number;
+  // Denormalized so minutes stay readable even if the agenda item itself
+  // is later edited or removed from the meeting.
+  @Prop() topic: string;
+  @Prop() discussion: string;
+  @Prop() decision: string;
+  @Prop({ enum: ['none', 'unanimous', 'by_consensus', 'by_vote'], default: 'none' })
+  voteOutcome: string;
+  @Prop() votesFor: number;
+  @Prop() votesAgainst: number;
+  @Prop() votesAbstain: number;
+}
+export const AgendaItemMinutesSchema = SchemaFactory.createForClass(AgendaItemMinutes);
+
+@Schema({ _id: false })
+export class MinutesActionItem {
+  @Prop({ required: true }) description: string;
+  @Prop() assignedTo: string;
+  @Prop() dueDate: Date;
+  @Prop({ enum: ['open', 'in_progress', 'done'], default: 'open' }) status: string;
+}
+export const MinutesActionItemSchema = SchemaFactory.createForClass(MinutesActionItem);
+
+@Schema({ _id: false })
+export class MeetingMinutes {
+  @Prop({ type: [MinutesAttendeeSchema], default: [] }) attendance: MinutesAttendee[];
+  @Prop() calledToOrder: string; // e.g. "10:05 AM" — free text, not every school tracks this to the minute
+  @Prop() adjournedAt: string;
+  @Prop({ enum: ['met', 'not_met', 'not_applicable'], default: 'not_applicable' })
+  quorumStatus: string;
+  @Prop() quorumNote: string; // e.g. "6 of 9 members present, quorum of 5 required"
+  @Prop({ type: [AgendaItemMinutesSchema], default: [] }) itemMinutes: AgendaItemMinutes[];
+  @Prop({ type: [MinutesActionItemSchema], default: [] }) actionItems: MinutesActionItem[];
+  @Prop() generalNotes: string;
+  @Prop() nextMeetingDate: Date;
+  @Prop() recordedBy: string;
+  @Prop() recordedAt: Date;
+  // Lightweight, self-contained approval status — deliberately NOT routed
+  // through the generic Workflow engine above (that's a multi-step
+  // approval-chain *builder* for Finance/HR/Admissions/Procurement/
+  // Documents triggers; minutes approval is a single draft→approved
+  // transition by the chair, which a workflow definition would be pure
+  // overhead for).
+  @Prop({ enum: ['draft', 'pending_approval', 'approved'], default: 'draft' })
+  status: string;
+  @Prop() approvedBy: string;
+  @Prop() approvedAt: Date;
+}
+export const MeetingMinutesSchema = SchemaFactory.createForClass(MeetingMinutes);
+
 @Schema({ timestamps: true, collection: 'meetings' })
 export class Meeting {
   @Prop({ required: true, type: Types.ObjectId, ref: 'Tenant' }) tenantId: Types.ObjectId;
@@ -172,8 +246,13 @@ export class Meeting {
   @Prop({ enum: ['scheduled', 'completed', 'cancelled'], default: 'scheduled' })
   status: string;
 
+  // Kept as-is for backward compatibility with meetings recorded before
+  // the structured minutes recorder below existed — still readable, never
+  // migrated or overwritten.
   @Prop() minutes: string;
   @Prop({ type: [String], default: [] }) actionItems: string[];
+
+  @Prop({ type: MeetingMinutesSchema }) meetingMinutes?: MeetingMinutes;
 }
 
 export const MeetingSchema = SchemaFactory.createForClass(Meeting);

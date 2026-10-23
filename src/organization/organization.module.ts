@@ -29,12 +29,14 @@ import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { UploadModule } from '../upload/upload.module';
 import { EmailModule } from '../email/email.module';
 import { AppStoreConnectModule } from '../integrations/app-store-connect/app-store-connect.module';
+import { PdfModule } from '../pdf/pdf.module';
 
 @Module({
   imports: [
     UploadModule,
     EmailModule,
     AppStoreConnectModule,
+    PdfModule,
     MongooseModule.forFeature([
       { name: School.name, schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },

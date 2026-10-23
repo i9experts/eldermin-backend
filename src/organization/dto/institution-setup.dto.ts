@@ -140,6 +140,47 @@ export class UpdateMeetingDto {
   @IsOptional() @IsArray() @IsString({ each: true }) actionItems?: string[];
 }
 
+// ── Meeting Minutes ──────────────────────────────────────────
+export class MinutesAttendeeDto {
+  @IsString() name: string;
+  @IsOptional() @IsEnum(['present', 'absent', 'apologies']) attendanceStatus?: string;
+  @IsOptional() @IsEnum(['invited', 'adhoc', 'guest']) kind?: string;
+}
+
+export class AgendaItemMinutesDto {
+  @IsNumber() agendaItemOrder: number;
+  @IsOptional() @IsString() topic?: string;
+  @IsOptional() @IsString() discussion?: string;
+  @IsOptional() @IsString() decision?: string;
+  @IsOptional() @IsEnum(['none', 'unanimous', 'by_consensus', 'by_vote']) voteOutcome?: string;
+  @IsOptional() @IsNumber() votesFor?: number;
+  @IsOptional() @IsNumber() votesAgainst?: number;
+  @IsOptional() @IsNumber() votesAbstain?: number;
+}
+
+export class MinutesActionItemDto {
+  @IsString() description: string;
+  @IsOptional() @IsString() assignedTo?: string;
+  @IsOptional() @IsDateString() dueDate?: string;
+  @IsOptional() @IsEnum(['open', 'in_progress', 'done']) status?: string;
+}
+
+export class UpsertMeetingMinutesDto {
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MinutesAttendeeDto) attendance?: MinutesAttendeeDto[];
+  @IsOptional() @IsString() calledToOrder?: string;
+  @IsOptional() @IsString() adjournedAt?: string;
+  @IsOptional() @IsEnum(['met', 'not_met', 'not_applicable']) quorumStatus?: string;
+  @IsOptional() @IsString() quorumNote?: string;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AgendaItemMinutesDto) itemMinutes?: AgendaItemMinutesDto[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => MinutesActionItemDto) actionItems?: MinutesActionItemDto[];
+  @IsOptional() @IsString() generalNotes?: string;
+  @IsOptional() @IsDateString() nextMeetingDate?: string;
+}
+
+export class UpdateActionItemStatusDto {
+  @IsEnum(['open', 'in_progress', 'done']) status: string;
+}
+
 // ── Workflow ─────────────────────────────────────────────────
 export class WorkflowStepDto {
   @IsNumber() order: number;
