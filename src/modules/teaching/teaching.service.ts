@@ -1331,6 +1331,7 @@ Rules:
     try {
       const payload: any = {
         ...data,
+        status: data.status || 'open',
         tenantId: this.tid(tenantId),
         institutionId: new Types.ObjectId(institutionId),
         campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
@@ -1371,11 +1372,58 @@ Rules:
       delete data.tenantId; delete data.institutionId; delete data.campusId;
       if ('reportedBy' in data) data.reportedBy = new Types.ObjectId(normaliseTeacherIdForWrite(me, data.reportedBy, 'You can only log behaviour notes as yourself'));
     }
+    if (data.assignedTo) data.assignedTo = new Types.ObjectId(data.assignedTo);
+    // Moving into resolved/closed stamps who/when, unless the caller
+    // already supplied their own resolvedAt/resolvedBy (e.g. a backfill).
+    if ((data.status === 'resolved' || data.status === 'closed') && !data.resolvedAt) {
+      data.resolvedAt = new Date();
+      if (!data.resolvedBy && requestingUser?.userId) data.resolvedBy = new Types.ObjectId(requestingUser.userId);
+    }
+    if (data.resolvedBy) data.resolvedBy = new Types.ObjectId(data.resolvedBy);
     return this.behaviourModel.findOneAndUpdate(
       { _id: id, tenantId: this.tid(tenantId) },
       { $set: data },
       { new: true },
     ).lean();
+  }
+
+  // ── COMPLAINTS REGISTER (paginated, filterable list over the same
+  // BehaviourNote collection - kept as a separate method/route from
+  // getBehaviourNotes so existing callers of GET /teaching/behaviour
+  // (the Analytics tab's summary, and any caller expecting a bare array
+  // capped at 100) are completely unaffected. ──
+
+  async listComplaints(tenantId: string, query: any = {}, requestingUser?: ScopedUser) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.studentId) filter.studentId = new Types.ObjectId(query.studentId);
+    if (query.status) filter.status = query.status;
+    if (query.category) filter.category = query.category;
+    if (query.type) filter.type = query.type;
+    if (query.assignedTo) filter.assignedTo = new Types.ObjectId(query.assignedTo);
+    if (query.dateFrom || query.dateTo) {
+      filter.incidentDate = {};
+      if (query.dateFrom) filter.incidentDate.$gte = new Date(query.dateFrom);
+      if (query.dateTo) filter.incidentDate.$lte = new Date(query.dateTo);
+    }
+    if (query.search) {
+      const re = new RegExp(String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ studentName: re }, { admissionNo: re }];
+    }
+    if (requestingUser) {
+      const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+      if (effectiveCampusId) filter.campusId = effectiveCampusId;
+    }
+    if (isTeacherCaller(requestingUser)) {
+      const me = await this.teacherIdentity(requestingUser!);
+      filter.reportedBy = new Types.ObjectId(me.staffId);
+    }
+    const page = Math.max(1, parseInt(query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 20));
+    const [data, total] = await Promise.all([
+      this.behaviourModel.find(filter).sort({ incidentDate: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      this.behaviourModel.countDocuments(filter),
+    ]);
+    return { data, meta: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } };
   }
 
   // ── CLASS DIARY (daily classwork/homework log, shared to parents as a PDF) ─────

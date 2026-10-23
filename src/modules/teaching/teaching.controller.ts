@@ -265,4 +265,9 @@ export class TeachingController {
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('behaviour/:id')
   updateBehaviour(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateBehaviourNote(req.user.tenantId, id, body, req.user); }
+
+  // ── COMPLAINTS REGISTER (paginated/filterable list over the same records) ──
+
+  @Get('complaints')
+  listComplaints(@Request() req, @Query() q: any) { return this.teachingService.listComplaints(req.user.tenantId, q, req.user); }
 }
