@@ -1522,9 +1522,19 @@ export class StudentsService {
       behaviourSummary, recentBehaviour,
       recentResults,
     ] = await Promise.all([
-      // Attendance summary for current year
+      // Attendance summary, lifetime-to-date for this student. NOT
+      // filtered by academicYear: StudentAttendance.academicYear is
+      // populated unreliably by the write paths (bulkMarkAttendance only
+      // sets it from an optional top-level DTO field that the Teaching/
+      // Student attendance screens never actually send, so real records
+      // routinely have no academicYear on them at all) - matching on it
+      // here silently found zero records for every student, always
+      // showing 0%/0 days absent on this page's header even when the
+      // Attendance tab's own calendar had real data for the same
+      // student. Matches "recent attendance" just below, which already
+      // never filtered on academicYear either.
       this.attendanceModel.aggregate([
-        { $match: { studentId: sid, academicYear: currentYear } },
+        { $match: { studentId: sid } },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       // Last 30 attendance records
@@ -1559,14 +1569,22 @@ export class StudentsService {
         .sort({ date: -1 }).limit(5).lean(),
     ]);
 
-    // Compute attendance percentage
+    // Compute attendance percentage using the same shared rate math as
+    // Attendance Compliance and the Student Attendance Reporting
+    // dashboard (eldermin-backend#192), so "attendance %" means the same
+    // thing everywhere in the app rather than a third, separate formula.
     const attMap = attendanceSummary.reduce((a: any, s: any) => {
       a[s._id] = s.count; return a;
     }, {} as any);
     const totalDays = Object.values(attMap).reduce((a: any, b: any) => a + b, 0) as number;
     const presentDays = (attMap['present'] || 0) + (attMap['late'] || 0);
-    const attendancePercentage = totalDays > 0
-      ? parseFloat(((presentDays / totalDays) * 100).toFixed(1)) : 0;
+    const expandedStatuses: string[] = [];
+    for (const [status, count] of Object.entries(attMap)) {
+      for (let i = 0; i < (count as number); i++) expandedStatuses.push(status);
+    }
+    const attendancePercentage = computeAttendanceRate(
+      expandedStatuses, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES,
+    ) ?? 0;
 
     // Compute fee totals
     const feeMap = feeSummary.reduce((a: any, s: any) => {
