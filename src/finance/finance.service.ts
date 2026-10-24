@@ -1352,6 +1352,10 @@ export class FinanceService {
 
   private async postExpensePaidJournal(schoolSlug: string, expense: any) {
     if (!expense.amount) return;
+    // Explicit Cost Center (if the expense was tagged with one) takes
+    // priority over the Department/Campus fallback — see the
+    // Expense.costCenterId/costCenterName comment in finance.schema.ts.
+    const costCenterName = expense.costCenterName || expense.departmentId || expense.campusId;
     try {
       await this.postJournalEntry(schoolSlug, {
         date: new Date(),
@@ -1359,8 +1363,8 @@ export class FinanceService {
         narration: `Expense ${expense.expenseNo} — ${expense.title}`,
         sourceType: 'expense', sourceId: String(expense._id),
         lines: [
-          { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId },
-          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName: expense.departmentId || expense.campusId, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
+          { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName },
+          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
         ],
       });
     } catch (err: any) { /* see postFeeInvoiceJournal note */ }
@@ -1491,6 +1495,14 @@ export class FinanceService {
     return rows;
   }
 
+  // Cost-center actuals must be account-type aware: a posted transaction
+  // (e.g. a paid expense) tags BOTH its legs with the same costCenterName
+  // (the expense-recognition leg and the cash/bank settlement leg), so a
+  // naive debit-minus-credit net grouped only by costCenterName cancels a
+  // transaction against itself and always nets to zero. Instead we group by
+  // (costCenterName, accountCode), then only count the expense-type leg(s)
+  // toward "actual spend" — mirroring how Trial Balance derives a
+  // correctly-signed balance per account via accountIncreasesOnDebit.
   async getCostCenterReport(schoolSlug: string, from?: string, to?: string) {
     const dateFilter: any = {};
     if (from) dateFilter.$gte = new Date(from);
@@ -1499,10 +1511,37 @@ export class FinanceService {
       { $match: { schoolSlug, status: 'posted', ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}) } },
       { $unwind: '$lines' },
       { $match: { 'lines.costCenterName': { $ne: null } } },
-      { $group: { _id: '$lines.costCenterName', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } },
-      { $sort: { _id: 1 } },
+      {
+        $group: {
+          _id: { costCenterName: '$lines.costCenterName', accountCode: '$lines.accountCode' },
+          debit: { $sum: '$lines.debit' },
+          credit: { $sum: '$lines.credit' },
+        },
+      },
     ]);
-    return agg.map((a: any) => ({ costCenterName: a._id, debit: a.debit, credit: a.credit, net: a.debit - a.credit }));
+    const accounts = await this.coaModel.find({ schoolSlug }, { code: 1, type: 1 }).lean();
+    const typeByCode = new Map(accounts.map((a: any) => [a.code, a.type]));
+    const byCostCenter = new Map<string, { debit: number; credit: number; net: number }>();
+    for (const row of agg) {
+      const costCenterName = row._id.costCenterName;
+      const accountType = typeByCode.get(row._id.accountCode);
+      const existing = byCostCenter.get(costCenterName) || { debit: 0, credit: 0, net: 0 };
+      existing.debit += row.debit;
+      existing.credit += row.credit;
+      // Only the expense-type leg of a transaction contributes to "actual
+      // spend" for budget tracking; the offsetting cash/bank/payable leg
+      // posted under the same cost center is excluded from the spend total
+      // (its raw debit/credit is still folded into the totals above for
+      // transparency on the report).
+      if (accountType === 'expense') {
+        const increasesOnDebit = this.accountIncreasesOnDebit(accountType);
+        existing.net += increasesOnDebit ? (row.debit - row.credit) : (row.credit - row.debit);
+      }
+      byCostCenter.set(costCenterName, existing);
+    }
+    return Array.from(byCostCenter.entries())
+      .map(([costCenterName, v]) => ({ costCenterName, debit: v.debit, credit: v.credit, net: v.net }))
+      .sort((a, b) => (a.costCenterName < b.costCenterName ? -1 : a.costCenterName > b.costCenterName ? 1 : 0));
   }
 
   // ── Fee Structures ───────────────────────────────────────
@@ -1844,7 +1883,49 @@ export class FinanceService {
       const acc = await this.bankModel.findOne({ _id: exp.bankAccountId, schoolSlug: data.schoolSlug });
       if (acc) exp.bankAccountName = `${acc.bankName} — ${acc.accountTitle}`;
     }
+    // Denormalize costCenterName from the selected Cost Center up front, so
+    // the expense carries a real, resolvable cost-center tag from creation
+    // — not just once it's marked Paid — matching the Budget side's own
+    // convention of denormalizing a CostCenter's name onto the record that
+    // references it.
+    if (exp.costCenterId) {
+      const cc = await this.costCenterModel.findOne({ _id: exp.costCenterId, schoolSlug: data.schoolSlug });
+      if (cc) exp.costCenterName = cc.name;
+    }
     return exp.save();
+  }
+
+  // Edits an expense's cost-center/department/campus tagging (and a small
+  // set of other correctable fields) after creation — covers backfilling
+  // expenses recorded before this field existed, without needing a heavy
+  // migration tool. Re-posts the paid journal if the expense was already
+  // paid, so the ledger's costCenterName tag (and thus budget actuals)
+  // reflects the correction instead of staying stuck on the old value.
+  async updateExpense(id: string, schoolSlug: string, data: any) {
+    const update: any = {};
+    for (const key of ['costCenterId', 'costCenterName', 'departmentId', 'campusId', 'category', 'description', 'vendorName', 'paidTo']) {
+      if (data[key] !== undefined) update[key] = data[key];
+    }
+    if (update.costCenterId) {
+      const cc = await this.costCenterModel.findOne({ _id: update.costCenterId, schoolSlug });
+      if (cc) update.costCenterName = cc.name;
+    }
+    const expense = await this.expenseModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: update },
+      { new: true },
+    );
+    if (expense && expense.status === 'paid') {
+      // Re-tag the already-posted journal lines for this expense so a
+      // cost-center correction retroactively fixes budget actuals, rather
+      // than silently leaving the old (wrong/missing) tag on the ledger.
+      const costCenterName = expense.costCenterName || expense.departmentId || expense.campusId;
+      await this.journalModel.updateMany(
+        { schoolSlug, sourceType: 'expense', sourceId: String(expense._id) },
+        { $set: { 'lines.$[].costCenterName': costCenterName } },
+      );
+    }
+    return expense;
   }
 
   async approveExpense(id: string, schoolSlug: string, approvedBy: string) {
@@ -1981,6 +2062,19 @@ export class FinanceService {
     return { from, to, lines, totalAllocated, totalActual, totalVariance, totalUtilizationPct };
   }
 
+  // Spend-health, distinct from the budget's lifecycle status
+  // (draft/approved/active/closed): tells an admin scanning the Budgets vs
+  // Actuals table whether a budget is on track to its OWN allocation,
+  // independent of whether it's even approved yet. null utilizationPct
+  // (line has actual spend but $0 allocated) is treated as over_budget —
+  // any allocated spend against an unallocated line is, by definition, over.
+  private budgetHealthStatus(utilizationPct: number | null): 'on_track' | 'near_limit' | 'over_budget' {
+    if (utilizationPct === null) return 'over_budget';
+    if (utilizationPct > 100) return 'over_budget';
+    if (utilizationPct >= 80) return 'near_limit';
+    return 'on_track';
+  }
+
   async getBudgetVsActual(schoolSlug: string, budgetId: string) {
     const budget = await this.budgetModel.findOne({ _id: budgetId, schoolSlug });
     if (!budget) throw new NotFoundException('Budget not found');
@@ -1990,8 +2084,58 @@ export class FinanceService {
       budgetName: budget.name,
       academicYear: budget.academicYear,
       status: budget.status,
+      healthStatus: this.budgetHealthStatus(result.totalUtilizationPct),
       ...result,
     };
+  }
+
+  // Drill-down for a single budget's "actual" figure: the real posted
+  // ledger lines (expense-type legs only, matching getCostCenterReport's
+  // own account-type filter) that are summed into it, within its resolved
+  // period. This is what makes the cost-center matching mechanism legible
+  // to a school admin instead of an opaque number.
+  async getBudgetTransactions(schoolSlug: string, budgetId: string) {
+    const budget = await this.budgetModel.findOne({ _id: budgetId, schoolSlug });
+    if (!budget) throw new NotFoundException('Budget not found');
+    const { from, to } = await this.resolveBudgetDateRange(schoolSlug, budget);
+    const costCenterNames = new Set<string>();
+    for (const line of budget.lines || []) {
+      const name = await this.resolveBudgetLineCostCenterName(schoolSlug, budget, line);
+      if (name) costCenterNames.add(name);
+    }
+    if (!costCenterNames.size) return [];
+
+    const dateFilter: any = {};
+    if (from) dateFilter.$gte = new Date(from);
+    if (to) dateFilter.$lte = new Date(to);
+    const entries = await this.journalModel.find({
+      schoolSlug,
+      status: 'posted',
+      'lines.costCenterName': { $in: Array.from(costCenterNames) },
+      ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+    }).sort({ date: -1 }).lean();
+
+    const accounts = await this.coaModel.find({ schoolSlug }, { code: 1, type: 1 }).lean();
+    const typeByCode = new Map(accounts.map((a: any) => [a.code, a.type]));
+
+    const rows: any[] = [];
+    for (const entry of entries as any[]) {
+      for (const line of entry.lines || []) {
+        if (!line.costCenterName || !costCenterNames.has(line.costCenterName)) continue;
+        if (typeByCode.get(line.accountCode) !== 'expense') continue; // only the spend leg, matching getCostCenterReport
+        rows.push({
+          date: entry.date,
+          description: entry.narration,
+          costCenterName: line.costCenterName,
+          amount: line.debit - line.credit,
+          paidTo: line.partnerName || null,
+          sourceType: entry.sourceType,
+          sourceId: entry.sourceId,
+          reference: entry.reference,
+        });
+      }
+    }
+    return rows;
   }
 
   // Portfolio view: one row per budget with allocated/actual/variance/
@@ -2011,6 +2155,7 @@ export class FinanceService {
         budgetName: budget.name,
         academicYear: budget.academicYear,
         status: budget.status,
+        healthStatus: this.budgetHealthStatus(result.totalUtilizationPct),
         totalAllocated: result.totalAllocated,
         totalActual: result.totalActual,
         totalVariance: result.totalVariance,

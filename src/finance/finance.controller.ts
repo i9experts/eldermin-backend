@@ -334,6 +334,11 @@ export class FinanceController {
     return this.service.createExpense({ ...dto, schoolSlug, academicYear: dto.academicYear || academicYear, submittedBy: userName });
   }
   @RequireModuleAccess('finance', 'payable', 'manage')
+  @Patch('expenses/:id') async updateExpense(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateExpense(id, schoolSlug, dto);
+  }
+  @RequireModuleAccess('finance', 'payable', 'manage')
   @Patch('expenses/:id/approve') async approveExpense(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.approveExpense(id, schoolSlug, userName);
@@ -370,6 +375,11 @@ export class FinanceController {
   @Get('budgets/:id/vs-actual') async getBudgetVsActual(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getBudgetVsActual(schoolSlug, id);
+  }
+  @RequireModuleAccess('finance', 'budgeting', 'view')
+  @Get('budgets/:id/transactions') async getBudgetTransactions(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBudgetTransactions(schoolSlug, id);
   }
 
   // Bank Accounts
