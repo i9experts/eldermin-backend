@@ -273,7 +273,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       if (owned !== submittedQuestionIds.length) throw new BadRequestException("One or more selected questions were not found in this school's question bank.");
     }
     const paper = new this.examPaperModel({ ...dto, schoolSlug, createdBy, paperCode: this.generatePaperCode() });
-    return paper.save();
+    try {
+      return await paper.save();
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError') throw new BadRequestException(err.message);
+      if (err.code === 11000) throw new ConflictException('A paper with this code already exists - please try creating it again.');
+      throw err;
+    }
   }
 
   async getExamPapers(schoolSlug: string, query: any) {
@@ -310,7 +316,14 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async updateExamPaper(id: string, schoolSlug: string, dto: any) {
-    const paper = await this.examPaperModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    let paper;
+    try {
+      paper = await this.examPaperModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError') throw new BadRequestException(err.message);
+      if (err.code === 11000) throw new ConflictException('A paper with this code already exists.');
+      throw err;
+    }
     if (!paper) throw new NotFoundException('Exam paper not found');
     return paper;
   }
