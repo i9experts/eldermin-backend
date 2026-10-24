@@ -28,7 +28,8 @@ import { LeaveBalance, LeaveBalanceDocument } from './schemas/leave-balance.sche
 import { PayrollRun, PayrollRunDocument } from './schemas/payroll-run.schema';
 import { computeSalaryStructure, validateSalaryComponentGraph, CircularSalaryComponentError, ComputedSalaryLine } from './salary-calc.util';
 import { renderOfferLetterTemplate } from './offer-letter-template.util';
-import { sanitizeSelfLeaveInput } from './leave-self.util';
+import { sanitizeSelfLeaveInput, sanitizeSelfAttendanceCorrectionInput } from './leave-self.util';
+import { AttendanceCorrectionRequest, AttendanceCorrectionRequestDocument } from './schemas/attendance-correction-request.schema';
 import { countLeaveDays, DAY_CODES } from './leave-days.util';
 import { numberToWords } from './payslip-number-to-words.util';
 import { Payslip, PayslipDocument } from './schemas/payslip.schema';
@@ -113,6 +114,7 @@ export class HrService {
     @InjectModel(SecurityDeposit.name) private securityDepositModel: Model<SecurityDepositDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(School.name) private schoolModel: Model<SchoolDocument>,
+    @InjectModel(AttendanceCorrectionRequest.name) private attendanceCorrectionModel: Model<AttendanceCorrectionRequestDocument>,
     private readonly uploadService: UploadService,
     private readonly emailService: EmailService,
     private readonly financeService: FinanceService,
@@ -1714,6 +1716,93 @@ export class HrService {
       staffEmployeeId: staff.employeeId,
       department: staff.department,
     });
+  }
+
+  // ── Self-service (attendance:self) ──────────────────────────────────
+  // Same ownership model as leave:self above: a Teacher (or any staff role
+  // granted attendance:self) can only ever read/submit requests tied to
+  // their OWN Staff._id, resolved server-side. The request itself never
+  // mutates StaffAttendance directly — only reviewAttendanceCorrection
+  // (hr:write) can apply it, after approval.
+
+  async getMyAttendance(tenantId: string, userId: string, query: any = {}) {
+    const staff = await this.getOwnStaffRecord(tenantId, userId);
+    return this.getStaffAttendance(tenantId, { ...query, staffId: String(staff._id) });
+  }
+
+  async getMyAttendanceCorrectionRequests(tenantId: string, userId: string) {
+    const staff = await this.getOwnStaffRecord(tenantId, userId);
+    return this.attendanceCorrectionModel
+      .find({ tenantId: this.newTid(tenantId), staffId: staff._id })
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
+  async createMyAttendanceCorrectionRequest(tenantId: string, institutionId: string, userId: string, data: any) {
+    const staff = await this.getOwnStaffRecord(tenantId, userId);
+    const safe = sanitizeSelfAttendanceCorrectionInput(data);
+    const tid = this.newTid(tenantId);
+    // Snapshot the current record (if any) purely for the reviewer's
+    // reference — never used to decide what gets written on approval,
+    // which always uses the requester's requested* fields at review time.
+    const existing = await this.staffAttendanceModel
+      .findOne({ tenantId: tid, staffId: staff._id, date: new Date(safe.attendanceDate) })
+      .lean();
+    return this.attendanceCorrectionModel.create({
+      ...safe,
+      tenantId: tid,
+      institutionId: this.newTid(institutionId),
+      staffId: staff._id,
+      staffName: `${staff.firstName} ${staff.lastName}`,
+      staffEmployeeId: staff.employeeId,
+      attendanceDate: new Date(safe.attendanceDate),
+      currentStatus: existing?.status,
+      currentCheckInTime: existing?.checkInTime,
+      currentCheckOutTime: existing?.checkOutTime,
+      status: 'pending',
+    });
+  }
+
+  // ── Attendance correction review (hr:write) ─────────────────────────
+
+  async getAttendanceCorrectionRequests(tenantId: string, query: any = {}) {
+    const filter: any = { tenantId: this.newTid(tenantId) };
+    if (query.status) filter.status = query.status;
+    if (query.staffId) filter.staffId = this.newTid(query.staffId);
+    if (query.fromDate || query.toDate) {
+      filter.attendanceDate = {};
+      if (query.fromDate) filter.attendanceDate.$gte = new Date(query.fromDate);
+      if (query.toDate) filter.attendanceDate.$lte = new Date(query.toDate);
+    }
+    return this.attendanceCorrectionModel.find(filter).sort({ createdAt: -1 }).lean();
+  }
+
+  async reviewAttendanceCorrectionRequest(tenantId: string, id: string, decision: 'approved' | 'rejected', reviewerId: string, reviewerName: string, reviewNotes?: string) {
+    const tid = this.newTid(tenantId);
+    const existing = await this.attendanceCorrectionModel.findOne({ _id: id, tenantId: tid }).lean();
+    if (!existing) throw new NotFoundException('Attendance correction request not found');
+    if (existing.status !== 'pending') throw new BadRequestException(`This request has already been ${existing.status}`);
+
+    const updated = await this.attendanceCorrectionModel.findOneAndUpdate(
+      { _id: id, tenantId: tid },
+      { $set: { status: decision, reviewedBy: this.newTid(reviewerId), reviewerName, reviewedAt: new Date(), ...(reviewNotes ? { reviewNotes } : {}) } },
+      { new: true },
+    ).lean();
+
+    // Approving actually fixes the underlying record — the whole point of
+    // the request — via the same upsert path the admin attendance screen
+    // uses; rejecting leaves StaffAttendance exactly as it was.
+    if (decision === 'approved') {
+      await this.markStaffAttendance(tenantId, String(existing.institutionId), [{
+        staffId: String(existing.staffId),
+        date: existing.attendanceDate.toISOString().slice(0, 10),
+        status: existing.requestedStatus,
+        checkInTime: existing.requestedCheckInTime,
+        checkOutTime: existing.requestedCheckOutTime,
+        notes: `Corrected via attendance correction request (${existing._id})`,
+      }]);
+    }
+    return updated;
   }
 
   async getLeaveStats(tenantId: string) {

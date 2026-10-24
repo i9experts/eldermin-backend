@@ -50,3 +50,19 @@ export function sanitizeSelfLeaveInput(body: Record<string, any>): Record<string
   } = body || {};
   return safe;
 }
+
+/**
+ * Strips any client-supplied identity/review/snapshot fields from an
+ * attendance-correction-request submission before it's persisted, so a
+ * self-service POST can never spoof staffId, tenantId, status, or the
+ * reviewer fields — those are always set server-side.
+ */
+export function sanitizeSelfAttendanceCorrectionInput(body: Record<string, any>): Record<string, any> {
+  const {
+    staffId, staffName, staffEmployeeId, tenantId, institutionId,
+    currentStatus, currentCheckInTime, currentCheckOutTime,
+    status, reviewedBy, reviewerName, reviewedAt, reviewNotes,
+    ...safe
+  } = body || {};
+  return safe;
+}

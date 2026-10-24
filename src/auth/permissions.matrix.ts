@@ -10,6 +10,12 @@ export type Permission =
   // their own Staff record) — distinct from hr:read/hr:write, which expose
   // the full HR admin console for every staff member.
   | 'leave:self'
+  // Narrow, non-admin self-service permission: lets a staff member request a
+  // correction to their OWN attendance record (e.g. a missed/wrong biometric
+  // punch) without hr:write, which would let them edit anyone's attendance.
+  // The request itself is always pending until an HR/admin reviewer (hr:write)
+  // approves or rejects it — a staff member can never apply the change themselves.
+  | 'attendance:self'
   // Finance
   | 'finance:read' | 'finance:write' | 'finance:delete'
   // Students
@@ -143,6 +149,8 @@ export const PERMISSIONS_MATRIX: Record<UserRole, Permission[]> = {
     // Self-service leave (My Leave page): NOT hr:read/hr:write — a Teacher
     // still cannot see the HR admin console or any other staff's records.
     'leave:self',
+    // Self-service "Request Attendance Correction" — same scoping as leave:self.
+    'attendance:self',
     // A teacher is often the first person to witness a concern — must be
     // able to file it even without safeguarding:read/write.
     'safeguarding:report',
