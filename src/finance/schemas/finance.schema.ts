@@ -360,6 +360,14 @@ export class Expense {
   @Prop() accountCode: string;
   @Prop() departmentId: string;
   @Prop() campusId: string;
+  // Explicit Cost Center this expense is charged against, so it can be
+  // tagged on the journal lines when posted (see postExpensePaidJournal)
+  // and matched against a Budget line's own cost center resolution
+  // (resolveBudgetLineCostCenterName). Preferred over the departmentId/
+  // campusId fallback when set; nullable/unset is still valid for schools
+  // that only use Department/Campus.
+  @Prop({ type: Types.ObjectId, ref: 'CostCenter', default: null }) costCenterId: Types.ObjectId | null;
+  @Prop() costCenterName: string;
   @Prop() attachmentUrl: string;
   @Prop() submittedBy: string;
   // Phase 6 — optional link to the specific BankAccount this expense was
