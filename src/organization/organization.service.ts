@@ -25,6 +25,7 @@ import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { AppStoreConnectService } from '../integrations/app-store-connect/app-store-connect.service';
+import { CostCenter, CostCenterDocument } from '../finance/schemas/ledger.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -43,6 +44,7 @@ export class OrganizationService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(CostCenter.name) private costCenterModel: Model<CostCenterDocument>,
     private uploadService: UploadService,
     private appStoreConnectService: AppStoreConnectService,
   ) {}
@@ -592,7 +594,17 @@ export class OrganizationService {
   async updateDepartment(id: string, schoolSlug: string, dto: Partial<CreateDepartmentDto>) {
     const update: any = { ...dto };
     if ('campusId' in dto) update.campusId = dto.campusId || null;
-    return this.deptModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+    const dept = await this.deptModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+    // Keep any Cost Center synced from this Department (finance module) showing
+    // its current name, so Budget/Expense/Journal cost-center matching (which
+    // is done by name, not id) never silently drifts after a rename.
+    if (dept && 'name' in dto) {
+      await this.costCenterModel.updateMany(
+        { schoolSlug, departmentId: String(id) },
+        { $set: { name: dept.name } },
+      ).catch(() => undefined);
+    }
+    return dept;
   }
 
   // ── Designations ──────────────────────────────────────────

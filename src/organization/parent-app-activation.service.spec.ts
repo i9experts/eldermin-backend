@@ -22,7 +22,7 @@ function makeService(appleResult: any) {
 
   const service = new OrganizationService(
     noop, campusModel, noop, noop, noop, noop, noop, studentModel, noop, noop, noop, staffModel, noop, userModel,
-    noop, appStoreConnectService,
+    noop, noop, appStoreConnectService,
   );
   return service;
 }
