@@ -1821,6 +1821,22 @@ export class StudentsService {
   // ============================================================
   // ATTENDANCE
   // ============================================================
+  // A duplicate-key hit here means the same student/date/subject
+  // combination was written concurrently (e.g. a double-submitted save,
+  // or two tabs/devices saving the same class at once) - the second
+  // write's upsert filter race loses to the first. Detects both the
+  // single-document error shape (err.code) and the shape a bulkWrite's
+  // MongoBulkWriteError actually carries (code on nested writeErrors,
+  // not the top-level error, in recent MongoDB driver versions) so
+  // neither call site lets it fall through as a raw, un-actionable 500.
+  private isDuplicateKeyError(err: any): boolean {
+    if (!err) return false;
+    if (err.code === 11000) return true;
+    const writeErrors = err.writeErrors || err.result?.result?.writeErrors || err.result?.writeErrors;
+    if (Array.isArray(writeErrors) && writeErrors.some((e: any) => e?.code === 11000 || e?.err?.code === 11000)) return true;
+    return typeof err.message === 'string' && err.message.includes('E11000');
+  }
+
   async markAttendance(dto: MarkAttendanceDto) {
     const date = new Date(dto.date);
     date.setHours(0, 0, 0, 0);
@@ -1833,11 +1849,19 @@ export class StudentsService {
     // has (Mongo treats "field absent" and "field is null" the same way
     // for an equality match), so daily mode's one-record-per-day
     // behavior is unchanged.
-    const saved = await this.attendanceModel.findOneAndUpdate(
-      { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug, subject: dto.subject || null },
-      { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), subject: dto.subject || null } },
-      { upsert: true, new: true },
-    );
+    let saved;
+    try {
+      saved = await this.attendanceModel.findOneAndUpdate(
+        { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug, subject: dto.subject || null },
+        { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), subject: dto.subject || null } },
+        { upsert: true, new: true },
+      );
+    } catch (err: any) {
+      if (this.isDuplicateKeyError(err)) {
+        throw new ConflictException(`Attendance for ${dto.studentName || 'this student'} on ${date.toDateString()} was just saved by another request - please refresh and try again.`);
+      }
+      throw err;
+    }
     await this.notifyAttendance(dto.schoolSlug as string, [{ studentId: dto.studentId, status: (dto as any).status, date }]);
     return saved;
   }
@@ -1867,7 +1891,21 @@ export class StudentsService {
         },
       };
     });
-    const result = await this.attendanceModel.bulkWrite(ops as any);
+    let result;
+    try {
+      // ordered: false so one student's duplicate-key race doesn't abort
+      // the rest of the class's attendance from saving - a bulkWrite
+      // defaults to ordered:true, which is exactly why a single collision
+      // mid-batch used to also wipe out every other student's save in
+      // the same request (matching the "most of the class still
+      // unmarked" symptom this bug produced).
+      result = await this.attendanceModel.bulkWrite(ops as any, { ordered: false });
+    } catch (err: any) {
+      if (this.isDuplicateKeyError(err)) {
+        throw new ConflictException('Some attendance records in this batch were just saved by another request - please refresh and try again.');
+      }
+      throw err;
+    }
     await this.notifyAttendance(dto.schoolSlug as string, dto.records.map((r: any) => ({ studentId: r.studentId, status: r.status, date: new Date(r.date) })));
     return result;
   }
