@@ -13,7 +13,7 @@ jest.mock('node-zklib', () => jest.fn().mockImplementation(() => mockZkInstance)
 
 import { HrService } from './hr.service';
 
-// HrService has 44 injected deps before the optional notifier - see the
+// HrService has 45 injected deps before the optional notifier - see the
 // comment in hr-notify-hooks.spec.ts. Only the models syncBiometricAttendance
 // actually touches are given real mocks; the rest are `{}` placeholders.
 const STAFF_MODEL_IDX = 0;
@@ -53,7 +53,7 @@ function make(opts: {
     updateOne: biometricConfigUpdateOne,
   };
 
-  const args: any[] = Array.from({ length: 44 }, () => ({}));
+  const args: any[] = Array.from({ length: 45 }, () => ({}));
   args[STAFF_MODEL_IDX] = staffModel;
   args[STAFF_ATTENDANCE_MODEL_IDX] = staffAttendanceModel;
   args[BIOMETRIC_CONFIG_MODEL_IDX] = biometricConfigModel;

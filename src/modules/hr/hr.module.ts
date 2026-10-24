@@ -16,6 +16,7 @@ import { JobOpening, JobOpeningSchema } from './schemas/job-opening.schema';
 import { JobApplication, JobApplicationSchema } from './schemas/job-application.schema';
 import { InterviewSchedule, InterviewScheduleSchema } from './schemas/interview-schedule.schema';
 import { StaffAttendance, StaffAttendanceSchema } from './schemas/staff-attendance.schema';
+import { AttendanceCorrectionRequest, AttendanceCorrectionRequestSchema } from './schemas/attendance-correction-request.schema';
 import { LeaveBalance, LeaveBalanceSchema } from './schemas/leave-balance.schema';
 import { PayrollRun, PayrollRunSchema } from './schemas/payroll-run.schema';
 import { Payslip, PayslipSchema } from './schemas/payslip.schema';
@@ -70,6 +71,7 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
       { name: JobApplication.name, schema: JobApplicationSchema },
       { name: InterviewSchedule.name, schema: InterviewScheduleSchema },
       { name: StaffAttendance.name, schema: StaffAttendanceSchema },
+      { name: AttendanceCorrectionRequest.name, schema: AttendanceCorrectionRequestSchema },
       { name: LeaveBalance.name, schema: LeaveBalanceSchema },
       { name: PayrollRun.name, schema: PayrollRunSchema },
       { name: Payslip.name, schema: PayslipSchema },

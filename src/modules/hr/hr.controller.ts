@@ -7,6 +7,7 @@ import { RequirePermission } from '../../auth/decorators';
 import { HR_LEAVE_ADMIN_ROLES } from '../../auth/role-sets';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { CreateSelfLeaveDto } from './dto/self-leave.dto';
+import { CreateSelfAttendanceCorrectionDto, ReviewAttendanceCorrectionDto } from './dto/self-attendance-correction.dto';
 import { HrAccessGuard } from './guards/hr-access.guard';
 import { HrStaffUpdate, HrWrite, HrRead, HrReadSensitive, HrStaffDirectory } from './guards/hr-access.decorator';
 import { PAYROLL_PAY_ROLES, PAYROLL_READ_ROLES } from '../../auth/admin-role-sets';
@@ -310,6 +311,36 @@ export class HrController {
   @Get('attendance/muster-roll')
   getMusterRoll(@Request() req, @Query() q: any) {
     return this.hrService.getStaffMusterRoll(req.user.tenantId, { month: parseInt(q.month), year: parseInt(q.year), campusId: q.campusId, department: q.department }, req.user);
+  }
+
+  // ── Self-service "My Attendance" (attendance:self) — same shape and
+  // ownership guarantees as "My Leave" above: a Teacher (or any staff role
+  // without hr:read/hr:write) can view their own attendance history and
+  // submit a correction request for it, but can never apply the correction
+  // themselves — that stays behind @HrWrite() on the review endpoint below.
+  @RequirePermission('attendance:self')
+  @Get('attendance/self')
+  getMyAttendance(@Request() req, @Query() q: any) { return this.hrService.getMyAttendance(req.user.tenantId, req.user.userId, q); }
+
+  @RequirePermission('attendance:self')
+  @Get('attendance/self/correction-requests')
+  getMyAttendanceCorrectionRequests(@Request() req) { return this.hrService.getMyAttendanceCorrectionRequests(req.user.tenantId, req.user.userId); }
+
+  @RequirePermission('attendance:self')
+  @Post('attendance/self/correction-requests')
+  createMyAttendanceCorrectionRequest(@Request() req, @Body() body: CreateSelfAttendanceCorrectionDto) {
+    return this.hrService.createMyAttendanceCorrectionRequest(req.user.tenantId, this.iid(req), req.user.userId, body);
+  }
+
+  // ── Attendance correction review (hr:write) ─────────────────────────
+  @HrRead()
+  @Get('attendance/correction-requests')
+  getAttendanceCorrectionRequests(@Request() req, @Query() q: any) { return this.hrService.getAttendanceCorrectionRequests(req.user.tenantId, q); }
+
+  @HrWrite()
+  @Patch('attendance/correction-requests/:id')
+  reviewAttendanceCorrectionRequest(@Request() req, @Param('id') id: string, @Body() body: ReviewAttendanceCorrectionDto) {
+    return this.hrService.reviewAttendanceCorrectionRequest(req.user.tenantId, id, body.status, req.user.userId, req.user.name, body.reviewNotes);
   }
 
   // ── LEAVE ─────────────────────────────────────────────────────────────

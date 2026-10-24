@@ -1,4 +1,4 @@
-import { belongsToStaff, buildOwnLeaveFilter, sanitizeSelfLeaveInput } from './leave-self.util';
+import { belongsToStaff, buildOwnLeaveFilter, sanitizeSelfLeaveInput, sanitizeSelfAttendanceCorrectionInput } from './leave-self.util';
 
 describe('belongsToStaff', () => {
   it('returns true when the record staffId matches the given staffId', () => {
@@ -72,5 +72,36 @@ describe('sanitizeSelfLeaveInput', () => {
   it('handles an empty/undefined body without throwing', () => {
     expect(sanitizeSelfLeaveInput(undefined as any)).toEqual({});
     expect(sanitizeSelfLeaveInput({})).toEqual({});
+  });
+});
+
+describe('sanitizeSelfAttendanceCorrectionInput', () => {
+  it('strips identity, tenancy, snapshot, and review fields a client could try to spoof', () => {
+    const result = sanitizeSelfAttendanceCorrectionInput({
+      attendanceDate: '2026-10-20',
+      requestedStatus: 'present',
+      requestedCheckInTime: '08:00',
+      reason: 'Forgot to tap in, arrived on time',
+      staffId: 'someone-elses-id',
+      staffName: 'Spoofed Name',
+      tenantId: 'other-tenant',
+      institutionId: 'other-institution',
+      currentStatus: 'absent',
+      status: 'approved',
+      reviewedBy: 'me-approving-myself',
+      reviewerName: 'Spoofed Reviewer',
+      reviewNotes: 'already approved by me',
+    });
+    expect(result).toEqual({
+      attendanceDate: '2026-10-20',
+      requestedStatus: 'present',
+      requestedCheckInTime: '08:00',
+      reason: 'Forgot to tap in, arrived on time',
+    });
+  });
+
+  it('handles an empty/undefined body without throwing', () => {
+    expect(sanitizeSelfAttendanceCorrectionInput(undefined as any)).toEqual({});
+    expect(sanitizeSelfAttendanceCorrectionInput({})).toEqual({});
   });
 });
