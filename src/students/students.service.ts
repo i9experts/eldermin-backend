@@ -33,6 +33,10 @@ import { EnrollmentField, EnrollmentFieldDocument } from './schemas/enrollment-f
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
 import { QuizAttempt, QuizAttemptDocument } from '../assessments/schemas/quiz-attempt.schema';
+import {
+  computeAttendanceRate, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES,
+  isBelowThreshold, DEFAULT_MIN_STUDENT_ATTENDANCE_PERCENT,
+} from '../compliance/attendance-compliance.util';
 
 import {
   CreateStudentDto, UpdateStudentDto, StudentQueryDto,
@@ -1954,6 +1958,119 @@ export class StudentsService {
       { $match: filter },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
+  }
+
+  /** Comprehensive student attendance REPORT: one row per student over a
+   * date range (attendance %, present/late/absent/half-day/on-leave
+   * breakdown), a daily attendance-rate trend across the filtered group,
+   * and an at-risk list (below a configurable threshold, or showing a
+   * same-weekday absence pattern worth a school's attention) - the
+   * read-only reporting counterpart to the daily mark/bulk-mark
+   * endpoints above. Reuses the exact rate/threshold math already
+   * shipped for Attendance Compliance (attendance-compliance.util) so
+   * "attendance %" means the same thing everywhere in the app.
+   * Unpaginated by design, same convention as getStudentTenureReport -
+   * a report needs every matching record, not one page. */
+  async getStudentAttendanceSummaryReport(
+    schoolSlug: string,
+    filters: { from?: string; to?: string; campusId?: string; grade?: string; section?: string; studentId?: string; threshold?: number } = {},
+  ) {
+    const filter: any = { schoolSlug };
+    if (filters.studentId) filter.studentId = new Types.ObjectId(filters.studentId);
+    if (filters.grade) filter.grade = filters.grade;
+    if (filters.section) filter.section = filters.section;
+    if (filters.from || filters.to) {
+      filter.date = {};
+      if (filters.from) filter.date.$gte = new Date(filters.from);
+      if (filters.to) filter.date.$lte = new Date(filters.to);
+    }
+
+    // Campus isn't stored on StudentAttendance itself (only on the
+    // Student doc) - resolve matching student ids first, same approach
+    // AttendanceComplianceService uses.
+    if (filters.campusId && !filters.studentId) {
+      const ids = await this.studentModel.find({ schoolSlug, campusId: filters.campusId }).distinct('_id');
+      filter.studentId = { $in: ids };
+    }
+
+    const threshold = filters.threshold ?? DEFAULT_MIN_STUDENT_ATTENDANCE_PERCENT;
+    const records = await this.attendanceModel.find(filter).sort({ date: 1 }).lean();
+
+    const byStudent = new Map<string, { studentName: string; grade: string; section: string; records: any[] }>();
+    for (const r of records as any[]) {
+      const sid = String(r.studentId);
+      if (!byStudent.has(sid)) byStudent.set(sid, { studentName: r.studentName, grade: r.grade, section: r.section, records: [] });
+      byStudent.get(sid)!.records.push(r);
+    }
+
+    const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    const rows = Array.from(byStudent.entries()).map(([studentId, g]) => {
+      const statuses = g.records.map((r) => r.status);
+      const counts: Record<string, number> = {};
+      for (const s of statuses) counts[s] = (counts[s] || 0) + 1;
+      const presentCount = counts.present || 0;
+      const lateCount = counts.late || 0;
+      const absentCount = counts.absent || 0;
+      const halfDayCount = (counts.half_day_am || 0) + (counts.half_day_pm || 0) + (counts.half_day || 0);
+      const onLeaveCount = (counts.on_leave || 0) + (counts.medical || 0) + (counts.excused || 0);
+      const attendanceRate = computeAttendanceRate(statuses, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES);
+
+      // Same-weekday absence pattern: 3+ absences with at least half of
+      // them falling on one weekday is worth flagging even if the raw
+      // rate itself is still above threshold.
+      const weekdayAbsences: Record<number, number> = {};
+      let totalAbsences = 0;
+      for (const r of g.records) {
+        if (studentDayWeight(r.status) === 0 && !STUDENT_NON_SCHOOL_DAY_STATUSES.has(r.status)) {
+          const wd = new Date(r.date).getDay();
+          weekdayAbsences[wd] = (weekdayAbsences[wd] || 0) + 1;
+          totalAbsences++;
+        }
+      }
+      let patternFlag: string | null = null;
+      if (totalAbsences >= 3) {
+        const [topDay, topCount] = Object.entries(weekdayAbsences).sort((a, b) => b[1] - a[1])[0] || [];
+        if (topDay !== undefined && (topCount as number) >= 3 && (topCount as number) / totalAbsences >= 0.5) {
+          patternFlag = `Frequently absent on ${WEEKDAY_NAMES[Number(topDay)]}s`;
+        }
+      }
+
+      return {
+        studentId, studentName: g.studentName, grade: g.grade, section: g.section || '—',
+        markedDays: g.records.length,
+        presentCount, lateCount, absentCount, halfDayCount, onLeaveCount,
+        attendanceRate, belowThreshold: isBelowThreshold(attendanceRate, threshold), patternFlag,
+      };
+    }).sort((a, b) => a.studentName.localeCompare(b.studentName));
+
+    // Daily trend across every student in the filtered group - what a
+    // "today's dip in attendance" chart needs.
+    const byDate = new Map<string, string[]>();
+    for (const r of records as any[]) {
+      const key = new Date(r.date).toISOString().slice(0, 10);
+      if (!byDate.has(key)) byDate.set(key, []);
+      byDate.get(key)!.push(r.status);
+    }
+    const trend = Array.from(byDate.entries())
+      .map(([date, statuses]) => ({
+        date,
+        attendanceRate: computeAttendanceRate(statuses, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES) ?? 0,
+        presentCount: statuses.filter((s) => s === 'present' || s === 'late').length,
+        absentCount: statuses.filter((s) => s === 'absent').length,
+        total: statuses.length,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const atRisk = rows
+      .filter((r) => r.belowThreshold || r.patternFlag)
+      .sort((a, b) => (a.attendanceRate ?? 100) - (b.attendanceRate ?? 100));
+
+    const overallRate = rows.length > 0
+      ? Math.round((rows.reduce((sum, r) => sum + (r.attendanceRate ?? 0), 0) / rows.length) * 10) / 10
+      : null;
+
+    return { rows, trend, atRisk, threshold, overallRate, from: filters.from, to: filters.to, total: rows.length };
   }
 
   // ============================================================
