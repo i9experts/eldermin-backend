@@ -138,6 +138,22 @@ export class AcademicsController {
   // Syllabus endpoints have moved to the new unified /syllabus module -
   // the frontend now calls that directly instead of /academics/syllabus.
 
+  // ─── LIBRARY — CLASSIFICATION REFERENCE DATA ─────────────────────────────────
+  // Static lookup tables (age bands, Dewey ranges, Islamic sub-scheme,
+  // Early Years picture codes) used by the cataloguing form to suggest/
+  // autofill call numbers and bands - never enforced, the librarian always
+  // has final say. See library-age-band.util.ts.
+
+  @Get('library/classification-reference')
+  getLibraryClassificationReference() {
+    return this.academicsService.getLibraryClassificationReference();
+  }
+
+  @Get('library/picture-bins')
+  getLibraryPictureBins(@Request() req, @Query('campusId') campusId?: string) {
+    return this.academicsService.getLibraryPictureBins(req.user.tenantId, campusId);
+  }
+
   // ─── LIBRARY — SETTINGS ───────────────────────────────────────────────────────
 
   @Get('library/settings')

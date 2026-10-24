@@ -11,6 +11,7 @@ import { Book, BookDocument } from './schemas/book.schema';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
 import { LibrarySettings, LibrarySettingsDocument } from './schemas/library-settings.schema';
 import { Reservation, ReservationDocument } from './schemas/reservation.schema';
+import { AGE_BANDS, DEWEY_RANGES, ISLAMIC_SUBSCHEME, PICTURE_CODES } from './library-age-band.util';
 import { Timetable, TimetableDocument } from '../teaching/schemas/timetable.schema';
 import { ElectiveGroup, ElectiveGroupDocument } from '../teaching/schemas/elective-group.schema';
 import { Student, StudentDocument } from '../../students/schemas/student.schema';
@@ -527,6 +528,33 @@ export class AcademicsService {
   // Management's separate SyllabusCoverage collection. The dashboard count
   // above still reads the same underlying (now-shared) collection.
 
+  // ─── LIBRARY — CLASSIFICATION REFERENCE DATA ─────────────────────────────────
+
+  getLibraryClassificationReference() {
+    return {
+      ageBands: AGE_BANDS,
+      deweyRanges: DEWEY_RANGES,
+      islamicSubscheme: ISLAMIC_SUBSCHEME,
+      pictureCodes: PICTURE_CODES,
+    };
+  }
+
+  // Groups Early-Years-band books by their picture bin, so staff can audit
+  // "all Animals-bin books" together - a book only gets grouped once it has
+  // a pictureCode set, which the catalogue form offers whenever a book's
+  // auto-mapped age band is Early Years.
+  async getLibraryPictureBins(tenantId: string, campusId?: string) {
+    const filter: any = { tenantId: this.tid(tenantId), pictureCode: { $nin: [null, ''] }, status: { $ne: 'deaccessioned' } };
+    if (campusId) filter.campusId = campusId;
+    const books = await this.bookModel.find(filter).select('title author pictureCode accessionNo gradeLevels').lean();
+    const byCode: Record<string, any[]> = {};
+    for (const b of books) {
+      const code = (b as any).pictureCode;
+      (byCode[code] ||= []).push(b);
+    }
+    return PICTURE_CODES.map(pc => ({ ...pc, books: byCode[pc.code] || [] }));
+  }
+
   // ─── LIBRARY — SETTINGS ───────────────────────────────────────────────────────
   // Configurable circulation policy - replaces the hardcoded fine rate,
   // unlimited-checkout and unlimited-renewal behavior the first cut
@@ -546,6 +574,7 @@ export class AcademicsService {
       maxRenewals: 1,
       renewalDays: 14,
       defaultLoanDays: 14,
+      zones: [],
     };
   }
 
@@ -598,6 +627,8 @@ export class AcademicsService {
     const filter: any = { tenantId: this.tid(tenantId) };
     if (query.category)  filter.category = query.category;
     if (query.status)    filter.status = query.status;
+    if (query.pictureCode) filter.pictureCode = query.pictureCode;
+    if (query.zoneName)  filter.zoneName = query.zoneName;
     if (query.available === 'true') filter.availableCopies = { $gt: 0 };
     if (query.search)    filter.$text = { $search: query.search };
     // Deaccessioned copies are retired stock - excluded from the default
