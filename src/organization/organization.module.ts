@@ -21,6 +21,7 @@ import {
   AuthorityDelegation, AuthorityDelegationSchema,
 } from './schemas/institution-setup.schema';
 import { GroupInstitution, GroupInstitutionSchema } from './schemas/group-institution.schema';
+import { CostCenter, CostCenterSchema } from '../finance/schemas/ledger.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceSchema, StudentFee, StudentFeeSchema } from '../students/schemas/student-supporting.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
@@ -57,6 +58,7 @@ import { PdfModule } from '../pdf/pdf.module';
       { name: Staff.name, schema: StaffSchema },
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: User.name, schema: UserSchema },
+      { name: CostCenter.name, schema: CostCenterSchema },
     ]),
   ],
   controllers: [OrganizationController, InstitutionSetupController],

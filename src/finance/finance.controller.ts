@@ -128,6 +128,11 @@ export class FinanceController {
     const { schoolSlug } = this.ctx(req);
     return this.service.seedCostCentersFromCampuses(schoolSlug);
   }
+  @RequireModuleAccess('finance', 'ledger', 'manage')
+  @Post('cost-centers/sync-departments') async syncCostCentersFromDepartments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.syncCostCentersFromDepartments(schoolSlug);
+  }
 
   // ── Payment Terms ──────────────────────────────────────────
   @RequireModuleAccess('finance', 'ledger', 'view')

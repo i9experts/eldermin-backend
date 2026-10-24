@@ -59,7 +59,7 @@ import {
 } from './schemas/defaulter.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
-import { Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
+import { Campus, CampusSchema, Grade, GradeSchema, Department, DepartmentSchema } from '../organization/schemas/organization.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { EmailModule } from '../email/email.module';
 import { FeeDefaulterService } from './fee-defaulter.service';
@@ -99,6 +99,7 @@ import { FeeDefaulterController } from './fee-defaulter.controller';
       { name: Student.name, schema: StudentSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
+      { name: Department.name, schema: DepartmentSchema },
       { name: Grade.name, schema: GradeSchema },
       // Phase 8
       { name: OpeningBalance.name, schema: OpeningBalanceSchema },

@@ -59,7 +59,7 @@ import {
 } from './schemas/commission.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
-import { Campus, CampusDocument, Grade, GradeDocument } from '../organization/schemas/organization.schema';
+import { Campus, CampusDocument, Grade, GradeDocument, Department, DepartmentDocument } from '../organization/schemas/organization.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
@@ -116,6 +116,7 @@ export class FinanceService {
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<CampusDocument>,
+    @InjectModel(Department.name) private departmentModel: Model<DepartmentDocument>,
     @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
     @InjectModel(OpeningBalance.name) private openingBalanceModel: Model<OpeningBalanceDocument>,
     @InjectModel(AccountingDimension.name) private dimensionModel: Model<AccountingDimensionDocument>,
@@ -939,6 +940,29 @@ export class FinanceService {
       },
     }));
     await this.costCenterModel.bulkWrite(ops);
+    return this.costCenterModel.find({ schoolSlug });
+  }
+
+  // Upserts one cost center per active Department (the real Institution Setup
+  // module), keyed by a stable derived code so re-running is idempotent and
+  // never duplicates. Additive alongside the campus seed above — a school can
+  // have both campus-level and department-level cost centers at once.
+  async syncCostCentersFromDepartments(schoolSlug: string) {
+    const departments = await this.departmentModel.find({ schoolSlug, isActive: true }).lean();
+    const ops = departments.map((d: any) => {
+      const code = `CC-DEPT-${d.code || String(d._id)}`;
+      return {
+        updateOne: {
+          filter: { schoolSlug, code },
+          update: {
+            $set: { name: d.name, type: 'department', departmentId: String(d._id), isActive: true },
+            $setOnInsert: { schoolSlug, code },
+          },
+          upsert: true,
+        },
+      };
+    });
+    if (ops.length > 0) await this.costCenterModel.bulkWrite(ops);
     return this.costCenterModel.find({ schoolSlug });
   }
 
