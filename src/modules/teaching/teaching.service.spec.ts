@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { TeachingService } from './teaching.service';
 
@@ -160,5 +160,127 @@ describe('TeachingService conflict enforcement', () => {
       const { service } = makeService([]);
       await expect(service.deleteTimetable('tenant1', 'missing-id')).rejects.toThrow('Timetable not found');
     });
+  });
+});
+
+// updateTeacherProfile previously had no try/catch around its
+// findOneAndUpdate, unlike its sibling createTeacherProfile - a raw
+// Mongoose ValidationError/CastError or a duplicate-key error propagated
+// straight to the global exception filter as a generic 500 instead of a
+// clear 400/409. These tests pin the now-matching error handling.
+function makeTeacherProfileService(teacherProfileModel: any) {
+  const noop: any = {};
+  return new TeachingService(
+    teacherProfileModel,
+    noop, // lessonPlanModel
+    noop, // timetableModel
+    noop, // roomModel
+    noop, // periodTemplateModel
+    noop, // assignmentModel
+    noop, // submissionModel
+    noop, // behaviourModel
+    noop, // electiveGroupModel
+    noop, // dutyRosterModel
+    noop, // classDiaryModel
+    noop, // staffModel
+    noop, // userModel
+    noop, // notificationModel
+    noop, // attendanceSettingsModel
+    noop, // pdfService
+    noop, // configService
+  );
+}
+
+describe('TeachingService.updateTeacherProfile error handling', () => {
+  it('converts a ValidationError into a BadRequestException (400), not a raw 500', async () => {
+    const err: any = new Error('maxPeriodsPerDay must be a number');
+    err.name = 'ValidationError';
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.reject(err) }),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    await expect(
+      service.updateTeacherProfile('tenant1', 'profile-id', { maxPeriodsPerDay: 'not-a-number' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('converts a CastError from findOneAndUpdate into a BadRequestException (400)', async () => {
+    const err: any = new Error('Cast to ObjectId failed');
+    err.name = 'CastError';
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.reject(err) }),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    await expect(
+      service.updateTeacherProfile('tenant1', 'profile-id', { maxPeriodsPerDay: 6 }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('converts a malformed campusId (invalid ObjectId string, thrown before the DB call) into a BadRequestException', async () => {
+    // Regression: the campusId -> ObjectId cast used to run OUTSIDE the
+    // try/catch, so a bad campusId threw a raw BSONError that still hit
+    // the generic 500 handler instead of this method's own error handling.
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn(),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    await expect(
+      service.updateTeacherProfile('tenant1', 'profile-id', { campusId: 'not-a-valid-object-id' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(teacherProfileModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('converts a duplicate-key error into a ConflictException (409)', async () => {
+    const err: any = new Error('E11000 duplicate key');
+    err.code = 11000;
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.reject(err) }),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    await expect(
+      service.updateTeacherProfile('tenant1', 'profile-id', { staffId: new Types.ObjectId().toString() }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('re-throws an unexpected error unchanged', async () => {
+    const err = new Error('unexpected db outage');
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.reject(err) }),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    await expect(
+      service.updateTeacherProfile('tenant1', 'profile-id', { maxPeriodsPerDay: 5 }),
+    ).rejects.toBe(err);
+  });
+
+  it('still saves normally on success, unaffected by the added error handling', async () => {
+    const updated = { _id: 'profile-id', maxPeriodsPerDay: 6, maxPeriodsPerWeek: 30 };
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.resolve(updated) }),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    const result = await service.updateTeacherProfile('tenant1', 'profile-id', {
+      maxPeriodsPerDay: 6,
+      maxPeriodsPerWeek: 30,
+    });
+    expect(result).toEqual(updated);
+    expect(teacherProfileModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('sanitizes a cleared campusId ("") into null rather than writing the raw string', async () => {
+    const teacherProfileModel: any = {
+      findOneAndUpdate: jest.fn().mockReturnValue({ lean: () => Promise.resolve({ _id: 'profile-id', campusId: null }) }),
+    };
+    const service = makeTeacherProfileService(teacherProfileModel);
+
+    await service.updateTeacherProfile('tenant1', 'profile-id', { campusId: '' });
+    const [, update] = teacherProfileModel.findOneAndUpdate.mock.calls[0];
+    expect(update.$set.campusId).toBeNull();
   });
 });
