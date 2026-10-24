@@ -461,6 +461,19 @@ export class StudentsController {
     return projectForTeacher(requestingUser, await this.studentsService.getAttendance(schoolSlug, { ...query, grade, section }));
   }
 
+  /** GET /api/v1/students/attendance/report-summary — comprehensive
+   * reporting view (per-student attendance %, trend, at-risk list),
+   * distinct from attendance/list which is the raw daily record feed
+   * the marking screens use. */
+  @Get('attendance/report-summary')
+  async getAttendanceReportSummary(@Request() req: any, @Query() query: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    const { grade, section } = resolveClassSectionScope(requestingUser, query.grade, query.section);
+    return this.studentsService.getStudentAttendanceSummaryReport(schoolSlug, {
+      ...query, grade, section, threshold: query.threshold ? Number(query.threshold) : undefined,
+    });
+  }
+
   /** GET /api/v1/students/:id/attendance/summary */
   @Get(':id/attendance/summary')
   async getAttendanceSummary(
