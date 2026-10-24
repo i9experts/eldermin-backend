@@ -203,15 +203,23 @@ export class TeachingService {
     // unsanitized here, unlike create) wrote a literal "" into the field,
     // which later crashed the whole Teacher Directory list with a 500 the
     // moment .populate('campusId') tried to cast it.
-    const payload = this.stripClassTeacherFields(data);
-    if ('campusId' in payload) {
-      payload.campusId = payload.campusId ? new Types.ObjectId(payload.campusId) : null;
+    try {
+      const payload = this.stripClassTeacherFields(data);
+      if ('campusId' in payload) {
+        payload.campusId = payload.campusId ? new Types.ObjectId(payload.campusId) : null;
+      }
+      return await this.teacherProfileModel.findOneAndUpdate(
+        { _id: id, tenantId: this.tid(tenantId) },
+        { $set: payload },
+        { new: true },
+      ).lean();
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError' || err.name === 'BSONError') {
+        throw new BadRequestException(err.message);
+      }
+      if (err.code === 11000) throw new ConflictException('A Teaching Profile already exists for this staff member.');
+      throw err;
     }
-    return this.teacherProfileModel.findOneAndUpdate(
-      { _id: id, tenantId: this.tid(tenantId) },
-      { $set: payload },
-      { new: true },
-    ).lean();
   }
 
   async deleteTeacherProfile(tenantId: string, id: string) {
