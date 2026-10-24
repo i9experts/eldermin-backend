@@ -159,8 +159,14 @@ export class InstitutionSetupService {
   }
 
   async deleteMeeting(id: string, schoolSlug: string) {
-    const result = await this.meetingModel.findOneAndDelete({ _id: id, schoolSlug });
-    if (!result) throw new NotFoundException('Meeting not found');
+    const meeting = await this.meetingModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!meeting) throw new NotFoundException('Meeting not found');
+    if (meeting.meetingMinutes?.status === 'approved') {
+      throw new BadRequestException(
+        'This meeting has approved minutes on file and cannot be deleted. Approved minutes are an official governance record.',
+      );
+    }
+    await this.meetingModel.deleteOne({ _id: id, schoolSlug });
     return { message: 'Meeting deleted' };
   }
 
