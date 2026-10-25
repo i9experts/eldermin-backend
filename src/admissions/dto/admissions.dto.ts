@@ -77,6 +77,7 @@ export class ConvertLeadDto {
   @IsOptional() @IsString() motherName?: string;
   @IsOptional() @IsString() campusId?: string;
   @IsOptional() @IsString() assignedTo?: string;
+  @IsOptional() @IsMongoId() assignedToId?: string;
   @IsOptional() @IsString() notes?: string;
 }
 

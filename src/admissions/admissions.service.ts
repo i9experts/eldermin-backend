@@ -271,6 +271,7 @@ export class AdmissionsService {
       motherName: dto.motherName,
       campusId: dto.campusId,
       assignedTo: dto.assignedTo || lead.assignedTo,
+      assignedToId: dto.assignedToId || lead.assignedToId,
       notes: dto.notes,
       leadId: lead._id,
       status: 'submitted',
@@ -278,13 +279,43 @@ export class AdmissionsService {
       submittedAt: new Date(),
       schoolSlug,
     });
-    await applicant.save();
+
+    // applicationNumber is auto-generated from a random 4-digit suffix
+    // (applicant.schema.ts pre('validate')), so a duplicate-key hit here is
+    // a random collision, not a real conflict the caller caused — retry a
+    // few times with a freshly generated number before giving up.
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await applicant.save();
+        break;
+      } catch (err: any) {
+        if (err.name === 'ValidationError' || err.name === 'CastError' || err.name === 'BSONError') {
+          throw new BadRequestException(err.message);
+        }
+        if (err.code === 11000) {
+          if (attempt === MAX_ATTEMPTS) {
+            throw new ConflictException('Could not generate a unique application number, please try again.');
+          }
+          applicant.applicationNumber = undefined as any;
+          continue;
+        }
+        throw err;
+      }
+    }
 
     // Mark lead as converted
-    lead.status = 'converted';
-    lead.convertedToApplicantId = applicant._id as Types.ObjectId;
-    lead.lastContactedAt = new Date();
-    await lead.save();
+    try {
+      lead.status = 'converted';
+      lead.convertedToApplicantId = applicant._id as Types.ObjectId;
+      lead.lastContactedAt = new Date();
+      await lead.save();
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError' || err.name === 'BSONError') {
+        throw new BadRequestException(err.message);
+      }
+      throw err;
+    }
 
     return { lead, applicant };
   }
