@@ -252,6 +252,9 @@ export class AdmissionsService {
   }
 
   async convertLead(id: string, schoolSlug: string, dto: ConvertLeadDto) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid lead id');
+    }
     const lead = await this.leadModel.findOne({ _id: id, schoolSlug });
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.status === 'converted') {

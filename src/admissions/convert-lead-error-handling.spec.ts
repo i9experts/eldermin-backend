@@ -8,6 +8,10 @@ import { AdmissionsService } from './admissions.service';
 // auto-generated `applicationNumber` (a random 4-digit suffix with a unique
 // index), propagated uncaught to the global exception filter.
 
+// A valid-format Mongo ObjectId, since convertLead now validates the id
+// shape before querying (see "rejects a malformed lead id" below).
+const LEAD_ID = '507f1f77bcf86cd799439011';
+
 function mongoDuplicateKeyError() {
   const err: any = new Error('E11000 duplicate key error collection: eldermin.admission_applicants index: applicationNumber_1 dup key');
   err.code = 11000;
@@ -22,7 +26,7 @@ function mongoValidationError() {
 
 function makeLead(overrides: Record<string, any> = {}) {
   return {
-    _id: 'lead1',
+    _id: LEAD_ID,
     firstName: 'Ali',
     lastName: 'Khan',
     email: 'ali@example.com',
@@ -72,7 +76,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     const applicantModel = makeApplicantModel();
     const svc = makeService({ leadModel, applicantModel });
 
-    const result = await svc.convertLead('lead1', 's', {
+    const result = await svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -97,7 +101,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     const applicantModel = makeApplicantModel();
     const svc = makeService({ leadModel, applicantModel });
 
-    const result = await svc.convertLead('lead1', 's', {
+    const result = await svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -120,7 +124,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     });
     const svc = makeService({ leadModel, applicantModel });
 
-    const result = await svc.convertLead('lead1', 's', {
+    const result = await svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -139,7 +143,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     });
     const svc = makeService({ leadModel, applicantModel });
 
-    await expect(svc.convertLead('lead1', 's', {
+    await expect(svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -156,7 +160,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     });
     const svc = makeService({ leadModel, applicantModel });
 
-    await expect(svc.convertLead('lead1', 's', {
+    await expect(svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -173,7 +177,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     });
     const svc = makeService({ leadModel, applicantModel });
 
-    await expect(svc.convertLead('lead1', 's', {
+    await expect(svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -192,7 +196,7 @@ describe('AdmissionsService.convertLead: error handling', () => {
     const applicantModel = makeApplicantModel();
     const svc = makeService({ leadModel, applicantModel });
 
-    await expect(svc.convertLead('lead1', 's', {
+    await expect(svc.convertLead(LEAD_ID, 's', {
       gradeApplied: 'Grade 3',
       academicYear: '2026-27',
       dateOfBirth: '2018-06-12',
@@ -201,5 +205,27 @@ describe('AdmissionsService.convertLead: error handling', () => {
     } as any)).rejects.toMatchObject({
       response: { message: expect.stringContaining('replica set step-down') },
     });
+  });
+
+  // Regression test: the frontend's Convert Lead modal sent the literal
+  // string "undefined" as the lead id (a stale `.id` reference on a Lead
+  // object that only ever carries Mongo's `_id`), producing an unguarded
+  // Mongoose CastError on the initial findOne() lookup, BEFORE the
+  // try/catch blocks above (which only wrap the later save() calls) could
+  // help — surfacing as a bare 500 regardless of this file's other fixes.
+  it('rejects a malformed lead id with a clear 400 instead of an unhandled CastError', async () => {
+    const leadModel = { findOne: jest.fn() };
+    const applicantModel = makeApplicantModel();
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead('undefined', 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(leadModel.findOne).not.toHaveBeenCalled();
   });
 });
