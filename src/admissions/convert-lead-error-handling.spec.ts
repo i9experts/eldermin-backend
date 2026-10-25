@@ -164,4 +164,42 @@ describe('AdmissionsService.convertLead: error handling', () => {
       fatherName: 'Abdullah',
     } as any)).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('surfaces an unexpected applicant.save() error with its real message instead of swallowing it', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel({
+      saveImpl: async () => { throw new Error('connection pool exhausted'); },
+    });
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead('lead1', 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toMatchObject({
+      response: { message: expect.stringContaining('connection pool exhausted') },
+    });
+  });
+
+  it('surfaces an unexpected lead.save() error with its real message instead of swallowing it', async () => {
+    const lead = makeLead({
+      save: jest.fn(async () => { throw new Error('replica set step-down'); }),
+    });
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel();
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead('lead1', 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toMatchObject({
+      response: { message: expect.stringContaining('replica set step-down') },
+    });
+  });
 });
