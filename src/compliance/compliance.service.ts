@@ -16,6 +16,7 @@ import {
 import { UploadService } from '../upload/upload.service';
 import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { computeDsarDueDate } from './data-privacy.util';
+import { isPhotoUseWithdrawn } from './consent-check.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -232,7 +233,7 @@ export class ComplianceService {
     return approval;
   }
 
-  async getSafeguardingCases(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+  async getSafeguardingCases(schoolSlug: string, query: any, requestingUser?: ScopedUser, viewerName?: string) {
     const { page = 1, limit = 20, status, severity, type, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
@@ -245,6 +246,21 @@ export class ComplianceService {
       this.safeguardingModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.safeguardingModel.countDocuments(filter),
     ]);
+    // Safeguarding records are the most sensitive data in the system (see
+    // compliance.controller.ts) - the UI's "access is logged" banner must be
+    // true, so every read of the case list/detail is recorded here rather
+    // than relying on the app-wide AuditLogInterceptor, which deliberately
+    // never logs GET requests.
+    await this.logAction({
+      action: 'Viewed safeguarding case list',
+      module: 'Safeguarding',
+      resourceType: 'SafeguardingCase',
+      performedBy: viewerName || requestingUser?.userId || 'Unknown',
+      performedById: requestingUser?.userId && Types.ObjectId.isValid(requestingUser.userId)
+        ? new Types.ObjectId(requestingUser.userId) : undefined,
+      type: 'read',
+      schoolSlug,
+    });
     return { data, meta: { total, page, limit } };
   }
 
@@ -355,6 +371,10 @@ export class ComplianceService {
     const result = await this.consentModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!result) throw new NotFoundException('Consent record not found');
     return { deleted: true };
+  }
+
+  async isPhotoUseWithdrawn(studentId: string, schoolSlug: string): Promise<boolean> {
+    return isPhotoUseWithdrawn(this.consentModel, studentId, schoolSlug);
   }
 
   // ── Data Privacy: Retention Policies ─────────────────────────
