@@ -4,7 +4,7 @@
 // ============================================================
 
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException,
+  Injectable, Logger, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -38,6 +38,7 @@ const buildPagination = (page = 1, limit = 20) => ({
 
 @Injectable()
 export class AdmissionsService {
+  private logger = new Logger('AdmissionsService');
 
   constructor(
     @InjectModel(Lead.name) private leadModel: Model<LeadDocument>,
@@ -300,7 +301,13 @@ export class AdmissionsService {
           applicant.applicationNumber = undefined as any;
           continue;
         }
-        throw err;
+        this.logger.error(
+          `convertLead: unexpected error creating applicant for lead ${id}: ${err?.name || err?.constructor?.name}: ${err?.message}`,
+          err?.stack,
+        );
+        throw new BadRequestException(
+          `Could not create applicant from lead: ${err?.message || 'unexpected error'}`,
+        );
       }
     }
 
@@ -314,7 +321,13 @@ export class AdmissionsService {
       if (err.name === 'ValidationError' || err.name === 'CastError' || err.name === 'BSONError') {
         throw new BadRequestException(err.message);
       }
-      throw err;
+      this.logger.error(
+        `convertLead: unexpected error marking lead ${id} converted: ${err?.name || err?.constructor?.name}: ${err?.message}`,
+        err?.stack,
+      );
+      throw new BadRequestException(
+        `Applicant was created, but could not update the lead record: ${err?.message || 'unexpected error'}`,
+      );
     }
 
     return { lead, applicant };
