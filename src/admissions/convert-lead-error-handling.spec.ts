@@ -65,8 +65,8 @@ function makeApplicantModel({ saveImpl, saveAttempts }: {
 function makeService({ leadModel, applicantModel }: { leadModel: any; applicantModel: any }) {
   const n: any = {};
   // Constructor order: leadModel, applicantModel, testModel, interviewModel,
-  // enrollmentModel, retentionModel, studentsService.
-  return new AdmissionsService(leadModel, applicantModel, n, n, n, n, n);
+  // enrollmentModel, retentionModel, studentsService, uploadService.
+  return new AdmissionsService(leadModel, applicantModel, n, n, n, n, n, n);
 }
 
 describe('AdmissionsService.convertLead: error handling', () => {

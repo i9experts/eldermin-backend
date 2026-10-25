@@ -5,8 +5,9 @@
 
 import {
   Controller, Get, Post, Put, Patch, Delete, Body, Param,
-  Query, UseGuards, Request, HttpCode, HttpStatus,
+  Query, UseGuards, UseInterceptors, UploadedFile, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AdmissionsService } from './admissions.service';
 import { LeadCaptureLinkService } from './lead-capture-link.service';
 import {
@@ -181,6 +182,20 @@ export class AdmissionsController {
   ) {
     const { schoolSlug } = this.getSchoolCtx(req);
     return this.admissionsService.updateApplicant(id, schoolSlug, dto);
+  }
+
+  /** POST /api/admissions/applicants/:id/documents */
+  @Post('applicants/:id/documents')
+  @UseInterceptors(FileInterceptor('file'))
+  async addDocument(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('name') name: string,
+    @Body('type') type: string,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.getSchoolCtx(req);
+    return this.admissionsService.addDocument(id, schoolSlug, file, name, type);
   }
 
   /** PATCH /api/admissions/applicants/:id/document */

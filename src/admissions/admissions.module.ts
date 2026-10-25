@@ -19,10 +19,12 @@ import {
   Retention, RetentionSchema,
 } from './schemas/evaluation-enrollment-retention.schema';
 import { School, SchoolSchema, AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
     StudentsModule,
+    UploadModule,
     MongooseModule.forFeature([
       { name: Lead.name, schema: LeadSchema },
       { name: Applicant.name, schema: ApplicantSchema },

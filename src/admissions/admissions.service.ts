@@ -29,6 +29,7 @@ import {
   CreateRetentionDto, UpdateRetentionDto,
 } from './dto/admissions.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { UploadService } from '../upload/upload.service';
 
 // ── Helper ────────────────────────────────────────────────────
 const buildPagination = (page = 1, limit = 20) => ({
@@ -48,6 +49,7 @@ export class AdmissionsService {
     @InjectModel(Enrollment.name) private enrollmentModel: Model<EnrollmentDocument>,
     @InjectModel(Retention.name) private retentionModel: Model<RetentionDocument>,
     private studentsService: StudentsService,
+    private uploadService: UploadService,
   ) {}
 
   // ============================================================
@@ -409,7 +411,38 @@ export class AdmissionsService {
     return applicant;
   }
 
+  async addDocument(
+    id: string,
+    schoolSlug: string,
+    file: Express.Multer.File,
+    name: string,
+    type: string,
+  ) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid applicant id');
+    }
+    const applicant = await this.applicantModel.findOne({ _id: id, schoolSlug });
+    if (!applicant) throw new NotFoundException('Applicant not found');
+
+    const uploaded = await this.uploadService.uploadFile(file, 'applicant-documents', schoolSlug);
+
+    const doc = {
+      name: name || file.originalname,
+      type: type || 'other',
+      status: 'pending',
+      uploadedAt: new Date(),
+      fileUrl: uploaded.url,
+    };
+
+    applicant.documents.push(doc as any);
+    await applicant.save();
+    return applicant;
+  }
+
   async updateDocumentStatus(id: string, schoolSlug: string, dto: UpdateDocumentDto) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid applicant id');
+    }
     const applicant = await this.applicantModel.findOne({ _id: id, schoolSlug });
     if (!applicant) throw new NotFoundException('Applicant not found');
 
