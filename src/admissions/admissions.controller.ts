@@ -8,6 +8,7 @@ import {
   Query, UseGuards, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { AdmissionsService } from './admissions.service';
+import { LeadCaptureLinkService } from './lead-capture-link.service';
 import {
   CreateLeadDto, UpdateLeadDto, LeadQueryDto, ConvertLeadDto,
   CreateApplicantDto, UpdateApplicantDto, ApplicantQueryDto, UpdateDocumentDto,
@@ -16,6 +17,7 @@ import {
   CreateEnrollmentDto, UpdateEnrollmentDto,
   CreateRetentionDto, UpdateRetentionDto,
 } from './dto/admissions.dto';
+import { CreateLeadCaptureLinkDto } from './dto/lead-capture-link.dto';
 import { ScopedUser } from '../auth/scope.util';
 // import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 // import { SchoolGuard } from '../auth/guards/school.guard';
@@ -26,7 +28,10 @@ import { ScopedUser } from '../auth/scope.util';
 @Controller('admissions')
 export class AdmissionsController {
 
-  constructor(private readonly admissionsService: AdmissionsService) {}
+  constructor(
+    private readonly admissionsService: AdmissionsService,
+    private readonly leadCaptureLinkService: LeadCaptureLinkService,
+  ) {}
 
   // ── Helper: extract school context from request ─────────────
   private getSchoolCtx(req: any) {
@@ -109,6 +114,36 @@ export class AdmissionsController {
   ) {
     const { schoolSlug } = this.getSchoolCtx(req);
     return this.admissionsService.convertLead(id, schoolSlug, dto);
+  }
+
+  // ============================================================
+  // LEAD CAPTURE LINKS (shareable public application form)
+  // ============================================================
+
+  /** GET /api/admissions/lead-capture-links */
+  @Get('lead-capture-links')
+  async getLeadCaptureLinks(@Request() req: any) {
+    const { schoolSlug } = this.getSchoolCtx(req);
+    return this.leadCaptureLinkService.listLinks(schoolSlug);
+  }
+
+  /** POST /api/admissions/lead-capture-links */
+  @Post('lead-capture-links')
+  @HttpCode(HttpStatus.CREATED)
+  async createLeadCaptureLink(@Body() dto: CreateLeadCaptureLinkDto, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.getSchoolCtx(req);
+    return this.leadCaptureLinkService.createLink(schoolSlug, dto.campusId, requestingUser?.userId);
+  }
+
+  /** PATCH /api/admissions/lead-capture-links/:id */
+  @Patch('lead-capture-links/:id')
+  async updateLeadCaptureLink(
+    @Param('id') id: string,
+    @Body() dto: { isActive?: boolean; regenerateToken?: boolean },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.getSchoolCtx(req);
+    return this.leadCaptureLinkService.updateLink(id, schoolSlug, dto);
   }
 
   // ============================================================

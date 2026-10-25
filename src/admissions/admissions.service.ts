@@ -59,7 +59,7 @@ export class AdmissionsService {
     const [
       totalLeads, leadsThisMonth,
       totalApplications, underReview, shortlisted, accepted, rejected, enrolled,
-      testsScheduled, testsCompleted, interviewsCompleted,
+      testsScheduled, testsCompleted, interviewsCompleted, interviewsScheduled,
       atRiskRetention,
     ] = await Promise.all([
       this.leadModel.countDocuments(baseFilter),
@@ -76,6 +76,7 @@ export class AdmissionsService {
       this.testModel.countDocuments({ ...baseFilter, status: 'scheduled' }),
       this.testModel.countDocuments({ ...baseFilter, status: 'completed' }),
       this.interviewModel.countDocuments({ ...baseFilter, status: 'completed' }),
+      this.interviewModel.countDocuments({ ...baseFilter, status: 'scheduled' }),
       this.retentionModel.countDocuments({ ...baseFilter, status: 'at_risk' }),
     ]);
 
@@ -150,7 +151,7 @@ export class AdmissionsService {
         totalLeads, leadsThisMonth,
         totalApplications, underReview, shortlisted,
         accepted, rejected, enrolled,
-        testsScheduled, testsCompleted, interviewsCompleted,
+        testsScheduled, testsCompleted, interviewsCompleted, interviewsScheduled,
         atRiskRetention,
         conversionRate,
         leadToApplicationRate,
