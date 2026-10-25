@@ -24,7 +24,7 @@ import { Campus, Grade, AcademicYear } from '../organization/schemas/organizatio
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { ModulesService } from '../modules/modules.service';
-import { modulesForPlan } from '../modules/module-registry';
+import { modulesForPlan, getModuleById, MODULE_REGISTRY } from '../modules/module-registry';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -455,7 +455,7 @@ export class SuperAdminService {
   // flow (OnboardingService.register) creates, so an activated lead
   // ends up completely indistinguishable from a self-signed-up school.
   // ============================================================
-  async activateInstitutionFromLead(leadId: string, activatedBy: string) {
+  async activateInstitutionFromLead(leadId: string, activatedBy: string, moduleIdsOverride?: string[]) {
     const lead = await this.leadModel.findById(leadId);
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.convertedInstitutionId) {
@@ -479,19 +479,38 @@ export class SuperAdminService {
     // from the same merged list so a fresh login immediately has access to
     // every module the lead actually asked for, not just 'organization'.
     //
-    // The authoritative source is now the lead's requested package
-    // (Starter/Growth/Enterprise), not the individual module checkboxes -
-    // modulesRequested is still mapped and unioned in for CRM display /
-    // in case a sales rep promised something outside the normal package,
-    // but the plan's own module set always wins the "what does this
-    // school actually get" question.
+    // The Super Admin now reviews and confirms the exact module set before
+    // every activation (CRMTab's activation modal, pre-checked from the
+    // lead's own modulesRequested) - moduleIdsOverride carries that final,
+    // human-approved list. When present, it REPLACES the plan-wins union
+    // below entirely, same "Super Admin's explicit list is authoritative,
+    // no silent widening" trust model as ModulesService.setActiveModules.
+    // Unknown ids are rejected; missing dependencies are NOT blocked here
+    // (same precedent as setActiveModules) - the frontend picker already
+    // has the full registry (including requiredModules) to warn about
+    // that before submitting, so this stays a dumb, trustworthy write.
+    //
+    // When no override is supplied (e.g. any other/legacy caller of this
+    // endpoint), fall back to the previous behaviour unchanged: the lead's
+    // requested package (Starter/Growth/Enterprise) decides the module
+    // set, with modulesRequested unioned in for CRM display / in case a
+    // sales rep promised something outside the normal package.
     const normalizedPlan = this.normalizePlanRequested((lead as any).planRequested);
     const requestedModules = this.mapRequestedModulesToIds(
       Array.isArray(lead.modulesRequested) ? lead.modulesRequested : [],
     );
-    const mergedModules = Array.from(
-      new Set(['organization', ...modulesForPlan(normalizedPlan), ...requestedModules]),
-    );
+    let mergedModules: string[];
+    if (Array.isArray(moduleIdsOverride)) {
+      const unknown = moduleIdsOverride.filter((id) => !getModuleById(id));
+      if (unknown.length > 0) {
+        throw new BadRequestException(`Unknown module id(s): ${unknown.join(', ')}`);
+      }
+      mergedModules = Array.from(new Set(['organization', ...moduleIdsOverride]));
+    } else {
+      mergedModules = Array.from(
+        new Set(['organization', ...modulesForPlan(normalizedPlan), ...requestedModules]),
+      );
+    }
 
     const tenant = await this.tenantModel.create({
       slug,
@@ -722,6 +741,31 @@ export class SuperAdminService {
     if (!inst) throw new NotFoundException('Institution not found');
     const modules = await this.modulesService.listModules(slug);
     return { plan: (inst as any).plan, modules };
+  }
+
+  // Static module reference data for the lead-activation review modal -
+  // no School exists yet at that point, so this is just MODULE_REGISTRY
+  // as-is (id, name, category, requiredModules, pricingTier), plus which
+  // module ids the lead's own modulesRequested resolve to is NOT included
+  // here (that's lead-specific, read from GET institutions/leads/:id).
+  getModuleRegistry() {
+    return MODULE_REGISTRY;
+  }
+
+  // Resolves a lead's own modulesRequested (free-text labels from the
+  // marketing site's wizard, e.g. "Compliance & Governance") to registry
+  // ids - exposed separately so the activation-review modal can pre-check
+  // exactly what the lead asked for before the Super Admin adjusts
+  // anything, without duplicating MODULE_NAME_TO_ID client-side (those
+  // labels don't match MODULE_REGISTRY's own display names 1:1, e.g.
+  // "Human Resource" / "Teacher Module" / "Student Profile" vs. the
+  // registry's "Staff & HR" / "Teaching Management" / "Student 360").
+  async getRequestedModuleIds(leadId: string): Promise<string[]> {
+    const lead = await this.leadModel.findById(leadId).select('modulesRequested').lean();
+    if (!lead) throw new NotFoundException('Lead not found');
+    return this.mapRequestedModulesToIds(
+      Array.isArray((lead as any).modulesRequested) ? (lead as any).modulesRequested : [],
+    );
   }
 
   async setSchoolModules(slug: string, moduleIds: string[], updatedBy: string) {

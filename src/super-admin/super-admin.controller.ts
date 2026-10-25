@@ -52,8 +52,27 @@ export class SuperAdminController {
 
   @Post('institutions/activate-from-lead/:leadId')
   @HttpCode(HttpStatus.CREATED)
-  async activateFromLead(@Param('leadId') leadId: string, @Request() req: any) {
-    return this.service.activateInstitutionFromLead(leadId, this.adminUser(req));
+  async activateFromLead(
+    @Param('leadId') leadId: string,
+    @Body() dto: { moduleIds?: string[] },
+    @Request() req: any,
+  ) {
+    return this.service.activateInstitutionFromLead(leadId, this.adminUser(req), dto?.moduleIds);
+  }
+
+  // Static registry (id, name, category, dependencies, pricing tier) for
+  // the activation-review module picker - deliberately NOT routed through
+  // ModulesService.listModules, which requires an existing School to
+  // compute active/locked status against. A lead being activated has no
+  // School yet, so this just returns the reference data as-is.
+  @Get('module-registry')
+  async getModuleRegistry() {
+    return this.service.getModuleRegistry();
+  }
+
+  @Get('leads/:leadId/requested-module-ids')
+  async getLeadRequestedModuleIds(@Param('leadId') leadId: string) {
+    return { moduleIds: await this.service.getRequestedModuleIds(leadId) };
   }
 
   @Patch('institutions/:slug/status')
