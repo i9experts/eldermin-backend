@@ -16,6 +16,19 @@ export class LibraryZoneDef {
   // null = shared across all campuses; set to scope a zone to one campus's
   // physical library on a multi-campus school.
   @Prop({ type: String, default: null }) campusId: string | null;
+  // Optional Urdu translation of `name`, typed once by the admin - zone
+  // names are arbitrary school-chosen strings, not translatable from a
+  // fixed table, so this can't be derived automatically. Shown on the
+  // printed zone sign alongside the English name when set.
+  @Prop({ type: String, default: null }) urduLabel: string | null;
+  // Optional accent colour for the printed zone sign - one of the 6
+  // standard age-band ids from library-age-band.util.ts (early_years,
+  // lower_primary, upper_primary, middle, secondary, reference), or null
+  // for no colour. A zone itself isn't tied to one age band (e.g.
+  // "Non-fiction" spans all of them); this is purely a visual choice to
+  // keep a zone's sign consistent with the rest of the shelf-labelling
+  // palette, not a classification.
+  @Prop({ type: String, default: null }) color: string | null;
 }
 export const LibraryZoneDefSchema = SchemaFactory.createForClass(LibraryZoneDef);
 
