@@ -8,7 +8,12 @@ import {
   IsNumber, IsArray, IsDateString, IsMongoId, Min, Max,
 } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
+
+// An empty string from an unselected dropdown should mean "not provided",
+// not an invalid id — @IsOptional() alone only skips validation for
+// undefined/null, so @IsMongoId() would otherwise reject ''.
+const emptyToUndefined = Transform(({ value }) => (value === '' ? undefined : value));
 
 // ── Shared ────────────────────────────────────────────────────
 export class PaginationDto {
@@ -44,7 +49,7 @@ export class CreateLeadDto {
   priority?: string;
 
   @IsOptional() @IsString() assignedTo?: string;
-  @IsOptional() @IsMongoId() assignedToId?: string;
+  @emptyToUndefined @IsOptional() @IsMongoId() assignedToId?: string;
   @IsOptional() @IsString() campaign?: string;
   @IsOptional() @IsString() campusPreference?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) tags?: string[];
@@ -77,7 +82,7 @@ export class ConvertLeadDto {
   @IsOptional() @IsString() motherName?: string;
   @IsOptional() @IsString() campusId?: string;
   @IsOptional() @IsString() assignedTo?: string;
-  @IsOptional() @IsMongoId() assignedToId?: string;
+  @emptyToUndefined @IsOptional() @IsMongoId() assignedToId?: string;
   @IsOptional() @IsString() notes?: string;
 }
 
