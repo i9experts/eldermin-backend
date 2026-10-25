@@ -105,8 +105,8 @@ export class ComplianceController {
   @RequirePermission('safeguarding:read')
   @Get('safeguarding')
   async getSafeguarding(@Request() req: any, @Query() query: any) {
-    const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.service.getSafeguardingCases(schoolSlug, query, requestingUser);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.getSafeguardingCases(schoolSlug, query, requestingUser, userName);
   }
 
   // Broad on purpose — any staff member can file a safeguarding concern,
