@@ -58,6 +58,7 @@ export class AdmissionsService {
   async getDashboardStats(schoolSlug: string, academicYear?: string) {
     const baseFilter: any = { schoolSlug };
     if (academicYear) baseFilter.academicYear = academicYear;
+    const leadFilter: any = { ...baseFilter, isActive: true };
 
     const [
       totalLeads, leadsThisMonth,
@@ -65,9 +66,9 @@ export class AdmissionsService {
       testsScheduled, testsCompleted, interviewsCompleted, interviewsScheduled,
       atRiskRetention,
     ] = await Promise.all([
-      this.leadModel.countDocuments(baseFilter),
+      this.leadModel.countDocuments(leadFilter),
       this.leadModel.countDocuments({
-        ...baseFilter,
+        ...leadFilter,
         createdAt: { $gte: new Date(new Date().setDate(1)) },
       }),
       this.applicantModel.countDocuments(baseFilter),
@@ -85,7 +86,7 @@ export class AdmissionsService {
 
     // Lead source breakdown
     const sourceBreakdown = await this.leadModel.aggregate([
-      { $match: baseFilter },
+      { $match: leadFilter },
       { $group: { _id: '$source', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ]);
@@ -95,7 +96,7 @@ export class AdmissionsService {
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
     const monthlyLeads = await this.leadModel.aggregate([
-      { $match: { ...baseFilter, createdAt: { $gte: sixMonthsAgo } } },
+      { $match: { ...leadFilter, createdAt: { $gte: sixMonthsAgo } } },
       {
         $group: {
           _id: {
