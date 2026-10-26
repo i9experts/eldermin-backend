@@ -247,6 +247,8 @@ export class TeachingService {
 
     let created = 0;
     let updated = 0;
+    let skippedPossibleDuplicates: Array<{ staffId: string; name: string; matchedProfileId: string }> = [];
+    const normalizeName = (s: any) => `${s.firstName || ''} ${s.lastName || ''}`.trim().toLowerCase().replace(/\s+/g, ' ');
     for (const staff of teacherStaff as any[]) {
       const erpRole = (staff.erpRole || '').toLowerCase().trim();
       // Mirrors HrService.resolvePrimaryRole's own default: an erpRole
@@ -282,11 +284,32 @@ export class TeachingService {
         await this.teacherProfileModel.updateOne({ _id: existing._id }, { $set: fields });
         updated++;
       } else {
+        // Before creating a brand-new TeacherProfile, check whether one
+        // already exists under a DIFFERENT Staff record with the same
+        // name in this tenant - a second Staff document for the same
+        // physical person (re-entered by mistake, e.g. during a later
+        // "add a role" attempt) otherwise silently got its own TeacherProfile
+        // here, showing that person twice in the Teacher Directory with one
+        // row blank. Flagged for manual review instead of auto-created.
+        const name = normalizeName(staff);
+        const possibleDuplicate = name
+          ? await this.teacherProfileModel.findOne({
+              tenantId: tid,
+              staffId: { $ne: staff._id },
+              $expr: {
+                $eq: [{ $toLower: { $trim: { input: { $concat: ['$firstName', ' ', '$lastName'] } } } }, name],
+              },
+            }).select('_id').lean()
+          : null;
+        if (possibleDuplicate) {
+          skippedPossibleDuplicates.push({ staffId: String(staff._id), name: `${staff.firstName} ${staff.lastName}`, matchedProfileId: String(possibleDuplicate._id) });
+          continue;
+        }
         await this.teacherProfileModel.create({ ...fields, staffId: staff._id });
         created++;
       }
     }
-    return { scanned: teacherStaff.length, created, updated };
+    return { scanned: teacherStaff.length, created, updated, skippedPossibleDuplicates };
   }
 
   // ── ATTENDANCE SETTINGS ───────────────────────────────────────────────────────
