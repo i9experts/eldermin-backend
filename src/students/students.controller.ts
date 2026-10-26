@@ -341,6 +341,21 @@ export class StudentsController {
     return this.studentsService.bulkAssignCampus(schoolSlug, dto.campusId, dto.grade, dto.section);
   }
 
+  /** PATCH /api/v1/students/bulk-assign-class-section - fast way to assign
+   * or correct class/section for many selected students at once (Student
+   * Directory checkbox selection -> pick Grade/Section -> Apply). Validates
+   * against the real Institution Setup Grade/Section master so this can
+   * never introduce the free-text drift the filter-fix (getDistinctGrades
+   * Sections) had to clean up. */
+  @Patch('bulk-assign-class-section')
+  async bulkAssignClassSection(
+    @Body() dto: { studentIds: string[]; grade: string; section?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkAssignClassSection(schoolSlug, dto.studentIds, dto.grade, dto.section);
+  }
+
   /** PATCH /api/v1/students/bulk-status - suspend/withdraw/graduate/transfer
    * multiple students at once. The safe, reversible action for almost
    * every real case - keeps all history intact. */

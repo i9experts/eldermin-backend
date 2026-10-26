@@ -789,6 +789,33 @@ export class StudentsService {
     return { matched: result.matchedCount, updated: result.modifiedCount };
   }
 
+  /** Bulk class/section assignment — the fast path for a school with many
+   * students needing their class/section set or corrected at once (e.g.
+   * after a filter-data cleanup, or a batch of new enrollments that never
+   * got assigned). Selects by studentIds (from the Student Directory's
+   * checkboxes), and writes the EXACT grade/section strings from the
+   * Institution Setup master (not free text) — the one entry point for
+   * this field that can't drift, unlike CSV import or a raw API call. */
+  async bulkAssignClassSection(schoolSlug: string, studentIds: string[], grade: string, section?: string) {
+    if (!studentIds?.length) throw new BadRequestException('studentIds is required');
+    if (!grade) throw new BadRequestException('grade is required');
+
+    const matchedGrade = await this.gradeModel.findOne({ schoolSlug, name: grade, isActive: true }).lean();
+    if (!matchedGrade) throw new BadRequestException(`"${grade}" is not a class defined in Institution Setup → Classes & Sections`);
+    if (section) {
+      const hasSection = (matchedGrade.sections || []).some((s: any) => s.isActive !== false && s.name === section);
+      if (!hasSection) throw new BadRequestException(`"${section}" is not a section of "${grade}" in Institution Setup → Classes & Sections`);
+    }
+
+    const set: any = { currentGrade: grade };
+    if (section) set.currentSection = section;
+    const result = await this.studentModel.updateMany(
+      { _id: { $in: studentIds }, schoolSlug },
+      { $set: set },
+    );
+    return { matched: result.matchedCount, updated: result.modifiedCount, grade, section };
+  }
+
   async uploadPhoto(id: string, schoolSlug: string, file: Express.Multer.File) {
     const { url } = await this.uploadService.uploadFile(file, 'student-photos', schoolSlug);
     const student = await this.studentModel.findOneAndUpdate(
