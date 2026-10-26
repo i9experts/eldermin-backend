@@ -854,6 +854,54 @@ export class StudentsService {
     return { matched: result.matchedCount, updated: result.modifiedCount, programType, grade, section };
   }
 
+  private static readonly NAME_CASE_STYLES = ['upper', 'title'] as const;
+
+  private applyNameCase(value: string, style: 'upper' | 'title'): string {
+    if (style === 'upper') return value.toUpperCase();
+    // Title Case - capitalizes the first letter after a space, hyphen or
+    // apostrophe (so "muhammad ali", "ali-raza" and "o'brien" all come out
+    // as "Muhammad Ali", "Ali-Raza", "O'Brien"), lowercasing everything
+    // else first so "MUHAMMAD ALI" and "mUHAMMAD aLI" both normalize the
+    // same way instead of only ever handling one direction of fix.
+    return value.toLowerCase().replace(/(^|[\s'-])\S/g, (c) => c.toUpperCase());
+  }
+
+  /** Bulk name-case cleanup - the fast path for fixing a batch of student
+   * records entered in inconsistent casing (ALL CAPS from a CSV import,
+   * all-lowercase, etc.) without opening Student 360 for each child.
+   * firstNameCase/lastNameCase are independent and both optional, so an
+   * admin can fix just one field, or apply a different style to each
+   * (e.g. Title Case for firstName, leave lastName untouched). */
+  async bulkFixNameCase(schoolSlug: string, studentIds: string[], firstNameCase?: string, lastNameCase?: string) {
+    if (!studentIds?.length) throw new BadRequestException('studentIds is required');
+    if (!firstNameCase && !lastNameCase) throw new BadRequestException('Pick a case style for at least one of First Name or Last Name');
+    for (const style of [firstNameCase, lastNameCase]) {
+      if (style && !StudentsService.NAME_CASE_STYLES.includes(style as any)) {
+        throw new BadRequestException(`Invalid case style "${style}" - must be 'upper' or 'title'`);
+      }
+    }
+
+    const students = await this.studentModel.find({ _id: { $in: studentIds }, schoolSlug }).select('firstName lastName').lean();
+    const ops = students
+      .map((s: any) => {
+        const set: any = {};
+        if (firstNameCase && s.firstName) {
+          const next = this.applyNameCase(s.firstName, firstNameCase as 'upper' | 'title');
+          if (next !== s.firstName) set.firstName = next;
+        }
+        if (lastNameCase && s.lastName) {
+          const next = this.applyNameCase(s.lastName, lastNameCase as 'upper' | 'title');
+          if (next !== s.lastName) set.lastName = next;
+        }
+        return Object.keys(set).length ? { updateOne: { filter: { _id: s._id }, update: { $set: set } } } : null;
+      })
+      .filter(Boolean) as any[];
+
+    if (ops.length === 0) return { matched: students.length, updated: 0 };
+    const result = await this.studentModel.bulkWrite(ops);
+    return { matched: students.length, updated: result.modifiedCount ?? ops.length };
+  }
+
   async uploadPhoto(id: string, schoolSlug: string, file: Express.Multer.File) {
     const { url } = await this.uploadService.uploadFile(file, 'student-photos', schoolSlug);
     const student = await this.studentModel.findOneAndUpdate(
