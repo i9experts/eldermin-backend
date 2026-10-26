@@ -874,8 +874,17 @@ export class ParentPortalService {
     try {
       const profiles: any[] = await this.reportCardModel.db.collection('teacherProfiles')
         .find({ isClassTeacher: true }).toArray();
-      const match = profiles.find((p) => sameGrade(p.classTeacherOfGradeName, (student as any).currentGrade)
-        && (!p.classTeacherOfSectionName || sameSection(p.classTeacherOfSectionName, (student as any).currentSection)));
+      // A teacher can legitimately be class teacher of more than one
+      // section (common in Early Years) - classTeacherAssignments holds
+      // all of them; falls back to the legacy singular fields for a
+      // profile that predates that array and hasn't been touched since.
+      const match = profiles.find((p) => {
+        const assignments = p.classTeacherAssignments?.length
+          ? p.classTeacherAssignments
+          : (p.classTeacherOfGradeName ? [{ gradeName: p.classTeacherOfGradeName, sectionName: p.classTeacherOfSectionName }] : []);
+        return assignments.some((a: any) => sameGrade(a.gradeName, (student as any).currentGrade)
+          && (!a.sectionName || sameSection(a.sectionName, (student as any).currentSection)));
+      });
       const staff: any = match ? await this.staffModel.findById(match.staffId).select('userId').lean() : null;
       if (staff?.userId) {
         await this.notificationModel.create({

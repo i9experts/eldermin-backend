@@ -449,21 +449,102 @@ export class OrganizationService {
     return grade;
   }
 
+  /** Rebuilds a teacher's FULL class-teacher-assignments array by scanning
+   * every Grade/Section in the school for ones whose classTeacherId
+   * matches this user, then writes it to their TeacherProfile (upserting
+   * minimal identity fields if the profile doesn't exist yet).
+   *
+   * This is deliberately a full recompute rather than an incremental
+   * push/pull: it can never drift out of sync with Section.classTeacherId
+   * (the real source of truth), and - critically - it self-heals any
+   * TeacherProfile left in the old broken state (where a second
+   * assignment had silently overwritten the first, before
+   * classTeacherAssignments existed) the next time ANY class-teacher
+   * assignment changes anywhere in the school, with no manual data
+   * migration needed for that teacher specifically.
+   *
+   * The singular classTeacherOfGradeId/GradeName/SectionName/Name fields
+   * are kept mirrored from the first assignment for backward
+   * compatibility with any caller not yet reading the array.
+   */
+  private async recomputeClassTeacherAssignments(userId: string, schoolSlug: string, tenantId?: string) {
+    const staffScope: any = { userId };
+    if (tenantId) staffScope.tenantId = tenantId;
+    const staff = await this.staffModel.findOne(staffScope).lean();
+    if (!staff) return;
+
+    const grades = await this.gradeModel.find({ schoolSlug }).lean();
+    const assignments: Array<{ gradeId: string; gradeName: string; sectionId: string; sectionName: string; name: string }> = [];
+    for (const grade of grades as any[]) {
+      for (const section of grade.sections || []) {
+        if (section.classTeacherId && section.classTeacherId.toString() === userId) {
+          assignments.push({
+            gradeId: grade._id.toString(),
+            gradeName: grade.name,
+            sectionId: section._id.toString(),
+            sectionName: section.name,
+            name: buildClassTeacherOfName(grade.name, section.name),
+          });
+        }
+      }
+    }
+
+    const primary = assignments[0];
+    const fields = {
+      isClassTeacher: assignments.length > 0,
+      classTeacherAssignments: assignments,
+      classTeacherOfGradeId: primary?.gradeId ?? null,
+      classTeacherOfGradeName: primary?.gradeName ?? null,
+      classTeacherOfSectionName: primary?.sectionName ?? null,
+      classTeacherOfName: primary?.name ?? null,
+    };
+
+    const existingProfile = await this.teacherProfileModel.findOne({ staffId: staff._id });
+    if (existingProfile) {
+      await this.teacherProfileModel.updateOne({ _id: existingProfile._id }, { $set: fields });
+    } else if (assignments.length > 0) {
+      // Must create one if it doesn't exist yet (a plain updateOne with no
+      // upsert previously matched zero documents here and silently
+      // no-opped for any staff member who'd never had a TeacherProfile
+      // created before - the Section/Student writes still succeeded, so
+      // the admin saw a success toast and "Teacher: X" on the grade, while
+      // that teacher's own attendance screen kept reporting them as not a
+      // class teacher at all, since it reads this same TeacherProfile
+      // document).
+      await this.teacherProfileModel.create({
+        tenantId: (staff as any).tenantId,
+        institutionId: (staff as any).institutionId,
+        staffId: staff._id,
+        employeeId: (staff as any).employeeId,
+        firstName: staff.firstName,
+        lastName: staff.lastName,
+        designation: (staff as any).designation,
+        department: (staff as any).department,
+        campusId: (staff as any).campusId || null,
+        ...fields,
+      });
+    }
+    return assignments;
+  }
+
   /** Assigns a real teacher (by their User id) as the Class Teacher of a
    * specific grade+section. This is the actual foundational piece behind
    * "class teacher" anywhere in the app - previously the schema had the
    * right shape in three separate places (Section.classTeacherId,
    * TeacherProfile.isClassTeacher, Student.classTeacherId) but nothing
    * ever wired them together. This does:
-   *  1. Clears the PREVIOUS teacher's isClassTeacher flag, if this
-   *     section already had a different one assigned - a teacher should
-   *     only ever show as class teacher of the section they're
-   *     currently, actually assigned to.
-   *  2. Sets classTeacherId/classTeacher on the embedded Section itself
+   *  1. Sets classTeacherId/classTeacher on the embedded Section itself
    *     (the real, single source of truth for this assignment).
-   *  3. Sets isClassTeacher/classTeacherOfGradeId/classTeacherOfSectionName/
-   *     classTeacherOfName on the new teacher's own TeacherProfile -
-   *     denormalized for their own dashboard/profile to display directly.
+   *  2. Recomputes the PREVIOUS teacher's full classTeacherAssignments, if
+   *     this section already had a different one assigned - they may
+   *     still be class teacher of other sections, so their profile is
+   *     rebuilt from scratch rather than blindly cleared.
+   *  3. Recomputes the NEW teacher's full classTeacherAssignments -
+   *     covers this section AND any others they're already assigned to
+   *     elsewhere in the school, instead of overwriting their profile
+   *     with only this one (the bug that made a teacher with 2+ sections
+   *     only ever resolve as class teacher of whichever was assigned
+   *     most recently).
    *  4. Bulk-updates every Student currently in that grade+section with
    *     classTeacher/classTeacherId - denormalized for student lists/
    *     profiles to display without an extra join.
@@ -492,52 +573,27 @@ export class OrganizationService {
     if (!newTeacherStaff) throw new NotFoundException('No staff record found for this user');
     const classTeacherName = `${newTeacherStaff.firstName || ''} ${newTeacherStaff.lastName || ''}`.trim();
 
-    // Step 1: clear the previous teacher's flag, if this section already
-    // had someone else assigned and it's actually changing.
     const previousClassTeacherId = (section as any).classTeacherId?.toString();
-    if (previousClassTeacherId && previousClassTeacherId !== classTeacherId) {
-      const prevStaff = await this.staffModel.findOne(tenantId ? { userId: previousClassTeacherId, tenantId } : { userId: previousClassTeacherId }).lean();
-      if (prevStaff) {
-        await this.teacherProfileModel.updateOne(
-          { staffId: prevStaff._id },
-          { $set: { isClassTeacher: false, classTeacherOfGradeId: null, classTeacherOfGradeName: null, classTeacherOfSectionName: null, classTeacherOfName: null } },
-        );
-      }
-    }
 
-    // Step 2: set the assignment on the embedded Section itself.
+    // Step 1: set the assignment on the embedded Section itself, first -
+    // the recomputes below both read Section.classTeacherId as their
+    // source of truth, so this must land before either runs.
     await this.gradeModel.updateOne(
       { _id: gradeId, schoolSlug, 'sections._id': (section as any)._id },
       { $set: { 'sections.$.classTeacherId': classTeacherId, 'sections.$.classTeacher': classTeacherName } },
     );
 
-    // Step 3: set the new teacher's own TeacherProfile. Must create one if
-    // it doesn't exist yet (a plain updateOne with no upsert previously
-    // matched zero documents here and silently no-opped for any staff
-    // member who'd never had a TeacherProfile created before - the
-    // Section/Student writes above still succeeded, so the admin saw a
-    // success toast and "Teacher: X" on the grade, while that teacher's
-    // own attendance screen kept reporting them as not a class teacher at
-    // all, since it reads this same TeacherProfile document).
-    const classTeacherOfName = buildClassTeacherOfName(grade.name, sectionName);
-    const classTeacherFields = { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName };
-    const existingProfile = await this.teacherProfileModel.findOne({ staffId: newTeacherStaff._id });
-    if (existingProfile) {
-      await this.teacherProfileModel.updateOne({ _id: existingProfile._id }, { $set: classTeacherFields });
-    } else {
-      await this.teacherProfileModel.create({
-        tenantId: (newTeacherStaff as any).tenantId,
-        institutionId: (newTeacherStaff as any).institutionId,
-        staffId: newTeacherStaff._id,
-        employeeId: (newTeacherStaff as any).employeeId,
-        firstName: newTeacherStaff.firstName,
-        lastName: newTeacherStaff.lastName,
-        designation: (newTeacherStaff as any).designation,
-        department: (newTeacherStaff as any).department,
-        campusId: (newTeacherStaff as any).campusId || null,
-        ...classTeacherFields,
-      });
+    // Step 2: rebuild the previous teacher's assignments, if this section
+    // already had someone else assigned and it's actually changing - they
+    // may still legitimately be class teacher of other sections.
+    if (previousClassTeacherId && previousClassTeacherId !== classTeacherId) {
+      await this.recomputeClassTeacherAssignments(previousClassTeacherId, schoolSlug, tenantId);
     }
+
+    // Step 3: rebuild the new teacher's full assignments (covers this
+    // section plus any others they already hold elsewhere in the school).
+    const newAssignments = await this.recomputeClassTeacherAssignments(classTeacherId, schoolSlug, tenantId);
+    const classTeacherOfName = buildClassTeacherOfName(grade.name, sectionName);
 
     // Step 4: denormalize onto every student currently in this class.
     await this.studentModel.updateMany(
@@ -545,7 +601,37 @@ export class OrganizationService {
       { $set: { classTeacher: classTeacherName, classTeacherId } },
     );
 
-    return { gradeId, sectionName, classTeacherId, classTeacherName, classTeacherOfName };
+    return {
+      gradeId,
+      sectionName,
+      classTeacherId,
+      classTeacherName,
+      classTeacherOfName,
+      classTeacherAssignments: newAssignments || [],
+    };
+  }
+
+  /** Admin-triggerable repair for TeacherProfiles left in the old,
+   * broken single-assignment state (from before classTeacherAssignments
+   * existed) - rebuilds every class-teacher's full assignment array for
+   * the given school by scanning Section.classTeacherId across all
+   * grades. Idempotent and safe to call repeatedly; a no-op for any
+   * teacher whose data is already correct.
+   */
+  async recomputeAllClassTeacherAssignments(schoolSlug: string, tenantId?: string) {
+    const grades = await this.gradeModel.find({ schoolSlug }).lean();
+    const userIds = new Set<string>();
+    for (const grade of grades as any[]) {
+      for (const section of grade.sections || []) {
+        if (section.classTeacherId) userIds.add(section.classTeacherId.toString());
+      }
+    }
+    const results: Array<{ userId: string; sections: number }> = [];
+    for (const userId of userIds) {
+      const assignments = await this.recomputeClassTeacherAssignments(userId, schoolSlug, tenantId);
+      results.push({ userId, sections: assignments?.length ?? 0 });
+    }
+    return { schoolSlug, teachersProcessed: userIds.size, results };
   }
 
   async bulkCreateGrades(schoolSlug: string) {

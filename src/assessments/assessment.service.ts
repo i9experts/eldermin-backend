@@ -102,18 +102,24 @@ export class AssessmentService {
   ) {}
 
   /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
-  private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; subjectClasses: TeacherSubjectClassRef[]; isClassTeacher: boolean; classTeacherClass?: TeacherClassRef }> {
+  private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; subjectClasses: TeacherSubjectClassRef[]; isClassTeacher: boolean; classTeacherClasses: TeacherClassRef[] }> {
     const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user);
     const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
-      .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName currentAssignments').lean();
-    const isClassTeacher = !!(profile?.isClassTeacher && profile.classTeacherOfGradeName);
+      .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments currentAssignments').lean();
+    // A teacher can legitimately be class teacher of more than one section
+    // (common in Early Years) - classTeacherAssignments holds all of them;
+    // falls back to the legacy singular fields for a profile that predates
+    // that array and hasn't been touched since.
+    const classTeacherClasses: TeacherClassRef[] = profile?.classTeacherAssignments?.length
+      ? profile.classTeacherAssignments.map((a: any) => ({ grade: a.gradeName, section: a.sectionName || undefined }))
+      : (profile?.isClassTeacher && profile.classTeacherOfGradeName
+        ? [{ grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined }] : []);
     return {
       staffId: me.staffId,
       classes: teacherClassesOf(profile),
       subjectClasses: teacherSubjectAssignmentsOf(profile),
-      isClassTeacher,
-      classTeacherClass: isClassTeacher
-        ? { grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined } : undefined,
+      isClassTeacher: classTeacherClasses.length > 0,
+      classTeacherClasses,
     };
   }
 
@@ -122,8 +128,8 @@ export class AssessmentService {
    * subjects of their own class; a SUBJECT teacher only attempts whose class AND subject match one of their currentAssignments; both
    * roles = the union. Grade/section tolerant (class-match.util), subject trim/case/space tolerant. No classes -> nothing.
    */
-  private canTeacherAccessAttempt(t: { subjectClasses: TeacherSubjectClassRef[]; classTeacherClass?: TeacherClassRef }, a: { grade?: any; section?: any; subject?: any }): boolean {
-    if (t.classTeacherClass && this.classIncludes([t.classTeacherClass], a.grade, a.section)) return true;
+  private canTeacherAccessAttempt(t: { subjectClasses: TeacherSubjectClassRef[]; classTeacherClasses: TeacherClassRef[] }, a: { grade?: any; section?: any; subject?: any }): boolean {
+    if (this.classIncludes(t.classTeacherClasses, a.grade, a.section)) return true;
     return t.subjectClasses.some(c => this.classIncludes([c], a.grade, a.section) && sameSubject(c.subject, a.subject));
   }
 
@@ -2269,7 +2275,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       const t = await this.teacherContext(requestingUser);
       const card: any = Types.ObjectId.isValid(id) ? await this.reportCardModel.findOne({ _id: id, schoolSlug }).select('grade section').lean() : null;
       if (!card) throw new NotFoundException('Report card not found');
-      if (!t.classTeacherClass || !this.classIncludes([t.classTeacherClass], card.grade, card.section)) {
+      if (!this.classIncludes(t.classTeacherClasses, card.grade, card.section)) {
         throw new ForbiddenException('Only the class teacher of this class can edit report card remarks.');
       }
       const $set: any = {};

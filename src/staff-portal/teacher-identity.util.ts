@@ -98,13 +98,27 @@ export function applyTeacherAuthorship(body: any, user: { userId?: string; name?
 export interface TeacherClassRef { grade: string; section?: string }
 
 /**
- * Classes a TEACHER may act on: their class-teacher class plus every
- * TeacherProfile.currentAssignments entry (same rule as the staff portal:
- * grade must match, section is only compared when the assignment has one).
+ * Classes a TEACHER may act on: every class-teacher section (a teacher
+ * can legitimately be class teacher of more than one section - common in
+ * Early Years, where one lead teacher often covers 2-3 small sections)
+ * plus every TeacherProfile.currentAssignments entry (same rule as the
+ * staff portal: grade must match, section is only compared when the
+ * assignment has one).
+ *
+ * Prefers the classTeacherAssignments array (the real source of truth,
+ * rebuilt from Section.classTeacherId on every assignment change) and
+ * falls back to the legacy singular classTeacherOf* fields only for a
+ * profile that predates that array and hasn't been touched since (it
+ * self-heals the next time any class-teacher assignment changes in the
+ * school - see OrganizationService.recomputeClassTeacherAssignments).
  */
 export function teacherClassesOf(profile: any): TeacherClassRef[] {
   const out: TeacherClassRef[] = [];
-  if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
+  if (profile?.classTeacherAssignments?.length) {
+    for (const a of profile.classTeacherAssignments) {
+      if (a?.gradeName) out.push({ grade: a.gradeName, section: a.sectionName || undefined });
+    }
+  } else if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
     out.push({ grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined });
   }
   for (const a of profile?.currentAssignments || []) {

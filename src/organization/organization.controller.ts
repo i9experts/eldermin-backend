@@ -222,6 +222,17 @@ export class OrganizationController {
     return this.service.assignClassTeacher(gradeId, sectionId, classTeacherId, schoolSlug, req?.user?.tenantId);
   }
 
+  /** Admin-triggerable repair for TeacherProfiles left in the old, broken
+   * single-assignment state (see recomputeAllClassTeacherAssignments) -
+   * rebuilds every class-teacher's full assignment array for this school
+   * right now, instead of waiting for their next assignment change. Safe
+   * to call repeatedly; a no-op for any teacher already correct. */
+  @Post('teachers/recompute-class-assignments')
+  async recomputeClassTeacherAssignments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.recomputeAllClassTeacherAssignments(schoolSlug, req?.user?.tenantId);
+  }
+
   // Departments
   @Get('departments') async getDepts(@Request() req: any, @Query('campusId') campusId?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);
