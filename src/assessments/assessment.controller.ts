@@ -140,9 +140,15 @@ export class AssessmentController {
     @Request() req: any,
     @Query('academicYear') academicYear: string,
     @Query('grade') grade?: string,
+    @Query('section') section?: string,
+    @Query('subject') subject?: string,
+    @Query('term') term?: string,
+    @Query('type') type?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getPerformanceAnalytics(schoolSlug, academicYear, grade);
+    return this.service.getPerformanceAnalytics(schoolSlug, { academicYear, grade, section, subject, term, type, dateFrom, dateTo });
   }
 
   // ── Examination Timetable (combined route is static, must precede :id) ──
