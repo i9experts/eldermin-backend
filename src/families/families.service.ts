@@ -29,12 +29,30 @@ export class FamiliesService {
     throw new BadRequestException('Could not generate a unique family code');
   }
 
+  /** generateFamilyCode's count-then-check is still a check-then-act race
+   * under concurrent calls (two near-simultaneous commits can both land on
+   * the same next code) - rather than trying to make the read atomic, this
+   * retries the actual write a few times on the exact failure that race
+   * produces (a MongoDB E11000 on the {schoolSlug,familyCode} unique
+   * index), generating a fresh code each attempt. Used anywhere a Family
+   * gets created so a rare race degrades to "takes one extra code," not a
+   * 500. */
+  private async saveNewFamilyWithUniqueCode(schoolSlug: string, data: Omit<any, 'familyCode'>): Promise<FamilyDocument> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const familyCode = await this.generateFamilyCode(schoolSlug);
+      const family = new this.familyModel({ ...data, familyCode, schoolSlug });
+      try {
+        return await family.save();
+      } catch (err: any) {
+        if (err?.code === 11000 && attempt < 4) continue;
+        throw err;
+      }
+    }
+    throw new BadRequestException('Could not generate a unique family code - please try again');
+  }
+
   async createFamily(schoolSlug: string, dto: any) {
-    const familyCode = await this.generateFamilyCode(schoolSlug);
-    const family = new this.familyModel({
-      ...dto, familyCode, schoolSlug, source: 'manual', verified: true,
-    });
-    return family.save();
+    return this.saveNewFamilyWithUniqueCode(schoolSlug, { ...dto, source: 'manual', verified: true });
   }
 
   async searchByGuardianContact(schoolSlug: string, query: string) {
@@ -270,29 +288,63 @@ export class FamiliesService {
   async commitRetrofit(schoolSlug: string, approvedGroups: { studentIds: string[]; guardianName?: string; phone?: string; email?: string; source: string }[]) {
     let groupsCreated = 0;
     let studentsLinked = 0;
+    const failures: { guardianName?: string; phone?: string; reason: string }[] = [];
+
+    // Each group processed independently with its own try/catch - a batch
+    // of several approved groups used to run as one uncaught loop, so any
+    // single group's failure (a stale studentId from a preview computed
+    // before someone else edited that student, a rare familyCode race)
+    // aborted the WHOLE batch with a bare "Internal server error" and no
+    // indication which group - or whether any earlier groups in the same
+    // batch had already been committed. Now every group gets a real
+    // chance, and the response says exactly which ones didn't make it.
     for (const group of approvedGroups) {
-      if (!group.studentIds || group.studentIds.length < 2) continue;
-      const familyCode = await this.generateFamilyCode(schoolSlug);
-      const family = new this.familyModel({
-        familyCode, schoolSlug,
-        primaryGuardianName: group.guardianName || '',
-        phone: group.phone || '', email: group.email || '',
-        source: group.source === 'retrofit-lastname' ? 'retrofit-lastname' : 'retrofit-phone',
-        verified: false,
-        notes: group.source === 'retrofit-lastname'
-          ? `Admin-approved grouping by shared last name - please confirm this is a real family.`
-          : undefined,
-        studentIds: group.studentIds,
-      });
-      await family.save();
-      for (const studentId of group.studentIds) {
-        await this.studentModel.findByIdAndUpdate(studentId, {
-          $set: { familyId: family._id, familyCode: family.familyCode },
+      try {
+        if (!group.studentIds || group.studentIds.length < 2) {
+          failures.push({ guardianName: group.guardianName, phone: group.phone, reason: 'Needs at least 2 students to form a family' });
+          continue;
+        }
+        const invalidIds = group.studentIds.filter((id) => !Types.ObjectId.isValid(id));
+        if (invalidIds.length > 0) {
+          failures.push({ guardianName: group.guardianName, phone: group.phone, reason: 'Contains an invalid student reference - refresh and try again' });
+          continue;
+        }
+        // Re-validate against current data - the preview this group came
+        // from may be stale (a student could have been deleted, or already
+        // linked to a different family, since Preview was computed).
+        const currentStudents = await this.studentModel
+          .find({ _id: { $in: group.studentIds }, schoolSlug })
+          .select('familyId').lean();
+        if (currentStudents.length !== group.studentIds.length) {
+          failures.push({ guardianName: group.guardianName, phone: group.phone, reason: 'One or more students in this group no longer exist - refresh and try again' });
+          continue;
+        }
+        const alreadyLinked = currentStudents.filter((s: any) => s.familyId);
+        if (alreadyLinked.length > 0) {
+          failures.push({ guardianName: group.guardianName, phone: group.phone, reason: 'One or more students in this group already belong to a family - refresh and try again' });
+          continue;
+        }
+
+        const family = await this.saveNewFamilyWithUniqueCode(schoolSlug, {
+          primaryGuardianName: group.guardianName || '',
+          phone: group.phone || '', email: group.email || '',
+          source: group.source === 'retrofit-lastname' ? 'retrofit-lastname' : 'retrofit-phone',
+          verified: false,
+          notes: group.source === 'retrofit-lastname'
+            ? `Admin-approved grouping by shared last name - please confirm this is a real family.`
+            : undefined,
+          studentIds: group.studentIds,
         });
+        await this.studentModel.updateMany(
+          { _id: { $in: group.studentIds } },
+          { $set: { familyId: family._id, familyCode: family.familyCode } },
+        );
+        groupsCreated++;
+        studentsLinked += group.studentIds.length;
+      } catch (err: any) {
+        failures.push({ guardianName: group.guardianName, phone: group.phone, reason: err?.message || 'Unexpected error' });
       }
-      groupsCreated++;
-      studentsLinked += group.studentIds.length;
     }
-    return { groupsCreated, studentsLinked };
+    return { groupsCreated, studentsLinked, failures };
   }
 }
