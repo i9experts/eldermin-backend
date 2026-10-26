@@ -244,6 +244,28 @@ export class HrService {
   // data.salary is stored, and structure stays assignable later via
   // Payroll exactly as today.
   async createStaff(tenantId: string, data: any, schoolSlug?: string) {
+    // No duplicate check existed here at all - staff.schema.ts's email
+    // index is sparse but NOT unique, and employeeId is only
+    // auto-sequenced (never looked up against an existing person), so
+    // re-entering the same teacher a second time (e.g. HR onboarding
+    // re-adding someone who was also later given a second role/
+    // designation, not realizing a record already existed) silently
+    // created a second Staff document. That second record then gets its
+    // own TeacherProfile (via createTeacherProfile or the "Sync from HR"
+    // button), producing exactly the "same person listed twice, one row
+    // populated and one blank" symptom in the Teacher Directory.
+    if (data.email) {
+      const existing = await this.staffModel.findOne({
+        tenantId: this.newTid(tenantId),
+        email: { $regex: `^${data.email.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
+      }).select('firstName lastName employeeId').lean();
+      if (existing) {
+        throw new ConflictException(
+          `A staff member with this email already exists: ${existing.firstName} ${existing.lastName} (${existing.employeeId}). Edit their existing record or add a role to it instead of creating a new one.`,
+        );
+      }
+    }
+
     let employeeId = data.employeeId;
     if (!employeeId) {
       const last = await this.staffModel
