@@ -10,7 +10,7 @@ import { ROLES_OR_MODULE_KEY, RolesOrModuleManageRequirement } from '../decorato
 import { customRoleGrants } from '../module-access.util';
 
 /** Base roles that can never pass via a custom role. */
-const NEVER_CUSTOM_ROLE = new Set<string>([
+export const NEVER_CUSTOM_ROLE = new Set<string>([
   UserRole.PARENT,
   UserRole.STUDENT,
   UserRole.RESELLER_ADMIN,

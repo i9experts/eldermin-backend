@@ -109,7 +109,8 @@ export class CreatePortfolioEntryDto {
 
 export class FamilyResponseDto {
   @IsString() text: string;
-  @IsString() respondedBy: string;
+  /** Ignored: the responder is taken from the authenticated user. Kept so existing clients still validate. */
+  @IsOptional() @IsString() respondedBy?: string;
 }
 
 // ── Learning Experience ─────────────────────────────────────
@@ -171,7 +172,8 @@ export class UpdateEnvironmentAreaDto {
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 export class LogSafetyCheckDto {
-  @IsString() checkedBy: string;
+  /** Ignored: the checker is taken from the authenticated user. Kept so existing clients still validate. */
+  @IsOptional() @IsString() checkedBy?: string;
 }
 export class AddObservationNoteDto {
   @IsString() note: string;
