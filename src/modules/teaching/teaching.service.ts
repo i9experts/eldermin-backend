@@ -235,12 +235,20 @@ export class TeachingService {
    * nothing was actually written to the Teaching module's TeacherProfile
    * collection - the one Question Bank/Syllabus's "assignedOnly" filter
    * actually reads. Now genuinely upserts a TeacherProfile per teacher
-   * Staff record, merging in whatever subjects/grades HR has on file.
-   * Deliberately additive/non-destructive: HR's own Teacher Profile
-   * section is frequently left blank even for real teachers (subjects are
-   * more often assigned directly via Teaching -> Teachers instead), so
-   * this only ever adds to an existing profile's subjects/grades, never
-   * clears them back to empty just because HR's copy is blank. */
+   * Staff record, writing whatever subjects/grades HR has on file.
+   * Non-destructive only in the one direction that matters: a blank HR
+   * copy never clears an existing profile value (see the `?.length`
+   * guards below) - but once HR DOES have a real list, it REPLACES the
+   * profile's value rather than merging with it, since HR's own section
+   * is frequently left blank even for real teachers (subjects are more
+   * often assigned directly via Teaching -> Teachers instead). This used
+   * to merge ([...existing, ...fromHR]) instead of replace, which meant
+   * every click of this button permanently appended HR's value on top of
+   * whatever was already there - a grade reassignment or a casing fix
+   * made on the HR side left BOTH the old and new values forever,
+   * compounding with every sync into exactly the kind of
+   * "Grade 1, Grade 2, GRADE-2, Grade-1 +1" garbage reported on the
+   * Teacher Directory. */
   async syncTeacherProfilesFromHR(tenantId: string, institutionId: string) {
     const tid = this.tid(tenantId);
     const teacherStaff = await this.staffModel.find({ tenantId: tid }).lean();
@@ -270,11 +278,12 @@ export class TeachingService {
         department: staff.department,
         campusId: staff.campusId || null,
       };
+      // Replace, not merge with `existing` - see the function doc above.
       if (tp.subjectsCanTeach?.length) {
-        fields.subjectsCanTeach = [...new Set([...(existing?.subjectsCanTeach || []), ...tp.subjectsCanTeach])];
+        fields.subjectsCanTeach = [...new Set(tp.subjectsCanTeach)];
       }
       if (tp.gradeLevelsCanTeach?.length) {
-        fields.gradeLevelsCanTeach = [...new Set([...(existing?.gradeLevelsCanTeach || []), ...tp.gradeLevelsCanTeach])];
+        fields.gradeLevelsCanTeach = [...new Set(tp.gradeLevelsCanTeach)];
       }
       if (tp.maxPeriodsPerDay) fields.maxPeriodsPerDay = tp.maxPeriodsPerDay;
       if (tp.maxPeriodsPerWeek) fields.maxPeriodsPerWeek = tp.maxPeriodsPerWeek;
