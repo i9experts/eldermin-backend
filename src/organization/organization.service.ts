@@ -511,18 +511,47 @@ export class OrganizationService {
       // that teacher's own attendance screen kept reporting them as not a
       // class teacher at all, since it reads this same TeacherProfile
       // document).
-      await this.teacherProfileModel.create({
-        tenantId: (staff as any).tenantId,
-        institutionId: (staff as any).institutionId,
-        staffId: staff._id,
-        employeeId: (staff as any).employeeId,
-        firstName: staff.firstName,
-        lastName: staff.lastName,
-        designation: (staff as any).designation,
-        department: (staff as any).department,
-        campusId: (staff as any).campusId || null,
-        ...fields,
-      });
+      //
+      // institutionId is REQUIRED on TeacherProfile but only OPTIONAL on
+      // Staff (Staff.institutionId isn't set for every school, e.g. one
+      // that never completed multi-institution onboarding) - assigning a
+      // class teacher who never had a TeacherProfile before, at a school
+      // with such a Staff record, threw an uncaught Mongoose
+      // ValidationError here that surfaced to the admin as a bare
+      // "Internal server error" with no indication this was the cause.
+      // Falls back to the school's own GroupInstitution the same way
+      // TeachingService.syncTeacherProfilesFromHR already falls back for
+      // this exact field (teaching.service.ts).
+      let institutionId = (staff as any).institutionId;
+      if (!institutionId) {
+        const institution = await this.groupInstitutionModel.findOne({ schoolSlug }).select('_id').lean();
+        institutionId = institution?._id;
+      }
+      if (!institutionId) {
+        console.warn(
+          `recomputeClassTeacherAssignments: no institutionId resolvable for staff ${staff._id} (school ${schoolSlug}) - skipping TeacherProfile creation, Section assignment still applies.`,
+        );
+      } else {
+        try {
+          await this.teacherProfileModel.create({
+            tenantId: (staff as any).tenantId,
+            institutionId,
+            staffId: staff._id,
+            employeeId: (staff as any).employeeId,
+            firstName: staff.firstName,
+            lastName: staff.lastName,
+            designation: (staff as any).designation,
+            department: (staff as any).department,
+            campusId: (staff as any).campusId || null,
+            ...fields,
+          });
+        } catch (err: any) {
+          if (err?.name === 'ValidationError' || err?.name === 'CastError') {
+            throw new BadRequestException(`Could not create this teacher's profile - missing or invalid: ${Object.keys(err.errors || {}).join(', ') || err.message}`);
+          }
+          throw err;
+        }
+      }
     }
     return assignments;
   }
