@@ -235,7 +235,7 @@ export class TeachingController {
   getClassDiaryEntry(@Request() req, @Param('id') id: string) { return this.teachingService.getClassDiaryEntry(req.user.tenantId, id, req.user); }
 
   @Post('class-diary')
-  createClassDiaryEntry(@Request() req, @Body() body: any) { return this.teachingService.createClassDiaryEntry(req.user.tenantId, req.user.institutionId, body, req.user); }
+  createClassDiaryEntry(@Request() req, @Body() body: any) { return this.teachingService.createClassDiaryEntry(req.user.tenantId, req.user.institutionId, req.user.schoolSlug, body, req.user); }
 
   @Patch('class-diary/:id')
   updateClassDiaryEntry(@Request() req, @Param('id') id: string, @Body() body: any) { return this.teachingService.updateClassDiaryEntry(req.user.tenantId, id, body, req.user); }
