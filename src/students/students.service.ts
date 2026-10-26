@@ -48,6 +48,7 @@ import {
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
 import { normalizePhone } from '../common/utils/phone.util';
+import { gradeMatcher, sectionMatcher } from '../common/utils/class-match.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHER_STUDENT_SELECT, stripTeacherSensitive } from './teacher-student-projection.util';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
@@ -554,8 +555,17 @@ export class StudentsService {
     const filter: any = { schoolSlug };
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
-    if (grade?.length) filter.currentGrade = { $in: grade };
-    if (section?.length) filter.currentSection = { $in: section };
+    // Case/format-tolerant, not a raw exact-match $in - currentGrade/
+    // currentSection are free-text with no FK to the real Grade/Section
+    // master (see getDistinctGradesSections), so a caller filtering by the
+    // master's canonical spelling (e.g. an Assessment's grade field, which
+    // IS sourced from the master) previously matched zero students whose
+    // currentGrade was written in a different format ("Grade-1" vs
+    // "GRADE-1") - exactly the "No active students found" bug reported on
+    // Assessments' Enter Marks screen. gradeMatcher/sectionMatcher already
+    // existed for this same problem in teacher-class scoping.
+    if (grade?.length) filter.currentGrade = { $in: grade.map((g) => gradeMatcher(g)) };
+    if (section?.length) filter.currentSection = { $in: section.map((s) => sectionMatcher(s)) };
     if (status) filter.status = status;
     if (gender) filter.gender = gender;
     if (academicYear) filter.currentAcademicYear = academicYear;
