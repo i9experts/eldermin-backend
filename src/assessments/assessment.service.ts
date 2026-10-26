@@ -45,6 +45,10 @@ import { sameGrade, sameSection } from '../common/utils/class-match.util';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { Subject, SubjectDocument } from '../modules/academics/schemas/subject.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import {
+  AnalyticsMarkRow, computeStudentOverallStats, gradeDistribution, classComparison,
+  QuizAnswerRow, computeQuizInsights,
+} from './analytics.util';
 
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
@@ -2308,52 +2312,142 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   // ============================================================
   // ANALYTICS
   // ============================================================
-  async getPerformanceAnalytics(schoolSlug: string, academicYear: string, grade?: string) {
-    const filter: any = { schoolSlug, academicYear };
-    if (grade) filter.grade = grade;
+  /** Full performance-analytics engine behind the Assessments module's
+   * Analytics tab. Deliberately primaries on MarkEntry (always populated
+   * the moment a teacher saves marks) rather than ReportCard (only
+   * exists once "Generate Report Cards" has been run) - the previous
+   * version mixed the two, so Grade Distribution/Top Performers/At-Risk
+   * sat permanently empty for any school that enters marks but hasn't
+   * run that separate step yet, exactly as reported.
+   *
+   * Filters beyond academicYear (grade/section/subject/term/type/date
+   * range) resolve against the Assessment collection first - since
+   * MarkEntry itself has no term/type/date fields - then MarkEntry is
+   * matched by the resulting assessmentId set plus subject/grade/section
+   * directly (an assessment spanning "all sections" still needs
+   * per-mark section filtering when the caller filters by one). */
+  async getPerformanceAnalytics(schoolSlug: string, filters: {
+    academicYear: string; grade?: string; section?: string; subject?: string;
+    term?: string; type?: string; dateFrom?: string; dateTo?: string;
+  }) {
+    const assessmentFilter: any = { schoolSlug, academicYear: filters.academicYear };
+    if (filters.grade) assessmentFilter.grade = filters.grade;
+    if (filters.section) assessmentFilter.$or = [{ section: filters.section }, { section: { $in: [null, ''] } }];
+    if (filters.term) assessmentFilter.term = filters.term;
+    if (filters.type) assessmentFilter.type = filters.type;
+    if (filters.dateFrom || filters.dateTo) {
+      assessmentFilter.startDate = {};
+      if (filters.dateFrom) assessmentFilter.startDate.$gte = new Date(filters.dateFrom);
+      if (filters.dateTo) assessmentFilter.startDate.$lte = new Date(filters.dateTo);
+    }
+    const assessments = await this.assessmentModel.find(assessmentFilter)
+      .select('_id title type term startDate grade section').lean();
+    const assessmentIds = assessments.map((a) => a._id);
+    const assessmentById = new Map(assessments.map((a: any) => [String(a._id), a]));
 
-    const [
-      subjectWise, gradeDistribution, trendByAssessment,
-      topPerformers, weakStudents,
-    ] = await Promise.all([
-      // Subject-wise avg performance
-      this.markModel.aggregate([
-        { $match: { ...filter, isAbsent: false, obtainedMarks: { $ne: null } } },
-        { $group: {
-          _id: '$subject',
-          avgPct: { $avg: '$percentage' },
-          passRate: { $avg: { $cond: [{ $eq: ['$result', 'pass'] }, 1, 0] } },
-          total: { $sum: 1 },
-        }},
-        { $sort: { avgPct: -1 } },
-      ]),
-      // Grade distribution in report cards
-      this.reportCardModel.aggregate([
-        { $match: filter },
-        { $group: { _id: '$overallGrade', count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-      ]),
-      // Performance trend per assessment
-      this.reportCardModel.aggregate([
-        { $match: filter },
-        { $group: {
-          _id: '$assessmentId',
-          title: { $first: '$assessmentTitle' },
-          avgPct: { $avg: '$overallPercentage' },
-          passCount: { $sum: { $cond: [{ $eq: ['$overallResult', 'pass'] }, 1, 0] } },
-          total: { $sum: 1 },
-        }},
-      ]),
-      // Top 10 performers
-      this.reportCardModel.find({ ...filter, published: true })
-        .sort({ overallPercentage: -1 }).limit(10)
-        .select('studentName grade section overallPercentage overallGrade classPosition'),
-      // Students below 50%
-      this.reportCardModel.find({ ...filter, overallPercentage: { $lt: 50 } })
-        .sort({ overallPercentage: 1 }).limit(20)
-        .select('studentName grade section overallPercentage overallGrade'),
-    ]);
+    const markFilter: any = { schoolSlug, assessmentId: { $in: assessmentIds } };
+    if (filters.grade) markFilter.grade = filters.grade;
+    if (filters.section) markFilter.section = filters.section;
+    if (filters.subject) markFilter.subject = filters.subject;
 
-    return { subjectWise, gradeDistribution, trendByAssessment, topPerformers, weakStudents };
+    const allMarks = assessmentIds.length
+      ? await this.markModel.find(markFilter)
+          .select('studentId studentName grade section subject totalMarks obtainedMarks isAbsent isExempt result assessmentId').lean()
+      : [];
+
+    const markRows: AnalyticsMarkRow[] = allMarks.map((m: any) => ({
+      studentId: String(m.studentId), studentName: m.studentName, grade: m.grade, section: m.section,
+      subject: m.subject, totalMarks: m.totalMarks, obtainedMarks: m.obtainedMarks,
+      isAbsent: !!m.isAbsent, isExempt: !!m.isExempt,
+    }));
+    const studentStats = computeStudentOverallStats(markRows);
+
+    // Subject-wise avg/pass-rate straight off the mark rows (not the
+    // per-student rollup) so a student taking only some of these subjects
+    // doesn't skew another subject's own average.
+    const subjectMap = new Map<string, { sumPct: number; pass: number; total: number }>();
+    for (const m of allMarks) {
+      if (m.isAbsent || m.isExempt || m.obtainedMarks == null) continue;
+      const cur = subjectMap.get(m.subject) || { sumPct: 0, pass: 0, total: 0 };
+      const pct = m.totalMarks > 0 ? (m.obtainedMarks / m.totalMarks) * 100 : 0;
+      cur.sumPct += pct;
+      if (m.result === 'pass') cur.pass += 1;
+      cur.total += 1;
+      subjectMap.set(m.subject, cur);
+    }
+    const subjectWise = Array.from(subjectMap.entries()).map(([subject, v]) => ({
+      subject, total: v.total,
+      avgPct: parseFloat((v.sumPct / v.total).toFixed(1)),
+      passRate: parseFloat(((v.pass / v.total) * 100).toFixed(1)),
+    })).sort((a, b) => b.avgPct - a.avgPct);
+
+    // Trend per assessment, sorted chronologically.
+    const trendMap = new Map<string, { title: string; type: string; term: string; startDate: Date; sumPct: number; pass: number; total: number }>();
+    for (const m of allMarks) {
+      if (m.isAbsent || m.isExempt || m.obtainedMarks == null) continue;
+      const a = assessmentById.get(String(m.assessmentId));
+      if (!a) continue;
+      const key = String(m.assessmentId);
+      const cur = trendMap.get(key) || { title: a.title, type: a.type, term: a.term, startDate: a.startDate, sumPct: 0, pass: 0, total: 0 };
+      const pct = m.totalMarks > 0 ? (m.obtainedMarks / m.totalMarks) * 100 : 0;
+      cur.sumPct += pct;
+      if (m.result === 'pass') cur.pass += 1;
+      cur.total += 1;
+      trendMap.set(key, cur);
+    }
+    const trendByAssessment = Array.from(trendMap.entries()).map(([assessmentId, v]) => ({
+      assessmentId, title: v.title, type: v.type, term: v.term, startDate: v.startDate,
+      avgPct: parseFloat((v.sumPct / v.total).toFixed(1)),
+      passRate: parseFloat(((v.pass / v.total) * 100).toFixed(1)),
+      total: v.total,
+    })).sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
+    const sortedByPct = [...studentStats].sort((a, b) => b.overallPct - a.overallPct);
+    const topPerformers = sortedByPct.slice(0, 10).map((s) => ({
+      studentId: s.studentId, studentName: s.studentName, grade: s.grade, section: s.section,
+      overallPct: s.overallPct, strongestSubject: s.strongestSubject,
+    }));
+    const atRiskStudents = sortedByPct.filter((s) => s.overallPct < 50).slice(-20).reverse().map((s) => ({
+      studentId: s.studentId, studentName: s.studentName, grade: s.grade, section: s.section,
+      overallPct: s.overallPct, weakestSubject: s.weakestSubject,
+    }));
+
+    // Quiz-only insights (topic/Bloom's/difficulty accuracy) - the one
+    // place per-question right/wrong data exists at all. Scoped to the
+    // same filtered assessments/subject so it stays consistent with
+    // everything else on the page.
+    const quizFilter: any = { schoolSlug, assessmentId: { $in: assessmentIds } };
+    if (filters.grade) quizFilter.grade = filters.grade;
+    if (filters.section) quizFilter.section = filters.section;
+    if (filters.subject) quizFilter.subject = filters.subject;
+    const attempts = assessmentIds.length
+      ? await this.quizAttemptModel.find(quizFilter).select('answers').lean()
+      : [];
+    const questionIds = [...new Set(attempts.flatMap((a: any) => (a.answers || []).map((ans: any) => String(ans.questionId))))];
+    const questions = questionIds.length
+      ? await this.questionModel.find({ _id: { $in: questionIds } }).select('subject topic chapter bloomsLevel difficulty').lean()
+      : [];
+    const questionById = new Map(questions.map((q: any) => [String(q._id), q]));
+    const quizAnswerRows: QuizAnswerRow[] = attempts.flatMap((a: any) => (a.answers || []).map((ans: any) => ({
+      isCorrect: ans.isCorrect,
+      question: questionById.get(String(ans.questionId)) as any || null,
+    })));
+    const quizInsights = computeQuizInsights(quizAnswerRows);
+
+    return {
+      meta: {
+        totalAssessments: assessments.length,
+        totalStudentsEvaluated: studentStats.length,
+        totalQuizAttempts: attempts.length,
+      },
+      subjectWise,
+      gradeDistribution: gradeDistribution(studentStats),
+      classComparison: classComparison(studentStats),
+      trendByAssessment,
+      topPerformers,
+      atRiskStudents,
+      weakStudents: atRiskStudents, // back-compat alias for the previous field name
+      ...quizInsights,
+    };
   }
 }
