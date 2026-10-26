@@ -52,6 +52,13 @@ export class ParentPortalController {
   }
 
   @Roles(...CONSENT_ADMIN_ROLES)
+  @Get('consent-requests/:id/results')
+  async getConsentRequestResults(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getConsentRequestResults(schoolSlug, id);
+  }
+
+  @Roles(...CONSENT_ADMIN_ROLES)
   @Post('consent-requests/:id/close')
   @HttpCode(HttpStatus.OK)
   async closeConsentRequest(@Param('id') id: string, @Request() req: any) {

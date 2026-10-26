@@ -21,6 +21,9 @@ export class ConsentRequest {
   @Prop({ enum: ['field_trip', 'medical', 'photo_video', 'data_sharing', 'other'], default: 'other' }) category: string;
   @Prop() dueDate: Date;
   @Prop({ type: [Types.ObjectId], ref: 'Student', default: [] }) studentIds: Types.ObjectId[];
+  // Image URLs attached to the request (e.g. a permission slip scan, event
+  // flyer) - uploaded through the generic /upload endpoint beforehand.
+  @Prop({ type: [String], default: [] }) attachments: string[];
   @Prop({ required: true }) createdBy: string;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ required: true, index: true }) schoolSlug: string;
