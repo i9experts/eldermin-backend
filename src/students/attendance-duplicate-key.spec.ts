@@ -23,8 +23,8 @@ function makeAttendanceModel({ findOneAndUpdateImpl, bulkWriteImpl }: {
 
 function makeService(attendanceModel: any) {
   const n: any = {};
-  // Constructor order: studentModel, attendanceModel, feeModel, ... (20 args total).
-  return new StudentsService(n, attendanceModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
+  // Constructor order: studentModel, attendanceModel, feeModel, ... (21 args total).
+  return new StudentsService(n, attendanceModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
 }
 
 function mongoDuplicateKeyError() {

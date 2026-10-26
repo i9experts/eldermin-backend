@@ -37,7 +37,7 @@ function makeService(attendanceSummaryResult: any[], recentAttendance: any[] = [
   const resultModel: any = { find: jest.fn(() => chain([])) };
   const n: any = {};
   const svc = new StudentsService(studentModel, attendanceModel, feeModel, behaviourModel, resultModel, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n);
+    n, n, n, n, n, n, n, n, n, n, n, n);
   return { svc, attendanceModel };
 }
 

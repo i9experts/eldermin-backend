@@ -27,7 +27,8 @@
     "sync:module-billing": "ts-node -r tsconfig-paths/register src/scripts/sync-module-billing.ts",
     "fix:class-teacher-names": "ts-node -r tsconfig-paths/register src/scripts/fix-duplicate-class-teacher-names.ts",
     "fix:class-teacher-assignments": "ts-node -r tsconfig-paths/register src/scripts/fix-class-teacher-assignments.ts",
-    "dedupe:grade-sections": "ts-node -r tsconfig-paths/register src/scripts/dedupe-grade-sections.ts"
+    "dedupe:grade-sections": "ts-node -r tsconfig-paths/register src/scripts/dedupe-grade-sections.ts",
+    "fix:student-class-section-names": "ts-node -r tsconfig-paths/register src/scripts/fix-student-class-section-names.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
