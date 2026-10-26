@@ -1737,6 +1737,23 @@ export class FinanceService {
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status === 'paid') throw new BadRequestException('Invoice already paid');
 
+    // Guards a double-submit of the SAME payment from actually recording
+    // twice - the Collect Fee modal's Save button wasn't disabled while
+    // the request was in flight, so a double-click (or a slow network
+    // making someone click again) fired this twice with identical data,
+    // producing two Payment documents for one real receipt ("Aug fee
+    // shown as received two/three/four times" reported across many
+    // students). The frontend now disables Save during the request too -
+    // this is defense in depth for the same race via a slow retry/replay.
+    const recentDuplicate = await this.paymentModel.findOne({
+      invoiceId: invoice._id, schoolSlug,
+      amount: paymentData.amount,
+      createdAt: { $gte: new Date(Date.now() - 15000) },
+    }).sort({ createdAt: -1 }).lean();
+    if (recentDuplicate) {
+      throw new BadRequestException('A payment of this exact amount was just recorded for this invoice a few seconds ago - if this is a genuine second payment, please wait a moment and try again.');
+    }
+
     const payment = new this.paymentModel({
       ...paymentData,
       invoiceId: invoice._id,
