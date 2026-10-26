@@ -369,6 +369,19 @@ export class StudentsController {
     return this.studentsService.bulkSwitchProgram(schoolSlug, dto.studentIds, dto.programType, dto.grade, dto.section);
   }
 
+  /** PATCH /api/v1/students/bulk-fix-name-case - normalizes First/Last
+   * Name casing (e.g. fixing a batch of ALL-CAPS CSV-import records) for
+   * many selected students at once. Each field's case style is
+   * independent and optional. */
+  @Patch('bulk-fix-name-case')
+  async bulkFixNameCase(
+    @Body() dto: { studentIds: string[]; firstNameCase?: string; lastNameCase?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkFixNameCase(schoolSlug, dto.studentIds, dto.firstNameCase, dto.lastNameCase);
+  }
+
   /** PATCH /api/v1/students/bulk-status - suspend/withdraw/graduate/transfer
    * multiple students at once. The safe, reversible action for almost
    * every real case - keeps all history intact. */
