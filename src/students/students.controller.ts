@@ -356,6 +356,19 @@ export class StudentsController {
     return this.studentsService.bulkAssignClassSection(schoolSlug, dto.studentIds, dto.grade, dto.section);
   }
 
+  /** PATCH /api/v1/students/bulk-switch-program - moves a batch of
+   * students between the Early Years and K-12 programs at once (e.g. a
+   * PreK/KG cohort graduating into Grade 1 at the start of a new academic
+   * year), optionally reassigning grade/section in the same request. */
+  @Patch('bulk-switch-program')
+  async bulkSwitchProgram(
+    @Body() dto: { studentIds: string[]; programType: string; grade?: string; section?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkSwitchProgram(schoolSlug, dto.studentIds, dto.programType, dto.grade, dto.section);
+  }
+
   /** PATCH /api/v1/students/bulk-status - suspend/withdraw/graduate/transfer
    * multiple students at once. The safe, reversible action for almost
    * every real case - keeps all history intact. */
