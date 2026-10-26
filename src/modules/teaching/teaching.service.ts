@@ -1491,10 +1491,18 @@ Rules:
     return entry;
   }
 
-  async createClassDiaryEntry(tenantId: string, institutionId: string, data: any, requestingUser?: ScopedUser) {
+  async createClassDiaryEntry(tenantId: string, institutionId: string, schoolSlug: string, data: any, requestingUser?: ScopedUser) {
     const { teacherId, ...rest } = data;
     const payload: any = {
       ...rest,
+      // Required on the schema but never set here before - the client
+      // correctly never sends this (tenant/school scoping must come from
+      // the authenticated request, not the body), but nothing filled it
+      // in server-side either, so every save failed Mongoose's
+      // required-field validation with a raw "schoolSlug is required"
+      // message. Sourced from req.user, same as the sibling
+      // shareClassDiaryEntry/generateClassDiaryPdf endpoints already do.
+      schoolSlug,
       tenantId: this.tid(tenantId),
       institutionId: new Types.ObjectId(institutionId),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
