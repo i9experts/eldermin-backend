@@ -794,7 +794,7 @@ export class ParentPortalService {
   // in-app notification and see it under Consent in the parent app.
   async createConsentRequest(
     schoolSlug: string, createdBy: string,
-    dto: { title: string; description: string; category?: string; dueDate?: string; studentIds?: string[]; grades?: string[]; section?: string; allStudents?: boolean },
+    dto: { title: string; description: string; category?: string; dueDate?: string; studentIds?: string[]; grades?: string[]; section?: string; allStudents?: boolean; attachments?: string[] },
   ) {
     if (!dto?.title?.trim() || !dto?.description?.trim()) throw new BadRequestException('Title and description are required.');
     const filter: any = { schoolSlug, status: { $nin: ['left', 'graduated', 'withdrawn', 'transferred'] } };
@@ -810,11 +810,16 @@ export class ParentPortalService {
 
     const request = await this.consentRequestModel.create({
       title: dto.title.trim(), description: dto.description.trim(), category: dto.category || 'other',
-      dueDate: due, studentIds: students.map((s: any) => s._id), createdBy, schoolSlug,
+      dueDate: due, studentIds: students.map((s: any) => s._id),
+      attachments: (dto.attachments || []).filter(Boolean), createdBy, schoolSlug,
     });
+    // The description can be rich-text HTML (bold/lists/etc from the admin's
+    // editor) - the notification feed renders plain text only, so strip
+    // markup here rather than dumping raw tags into a guardian's inbox.
+    const plainBody = request.description.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
     await notifyGuardiansOfStudents(this.reportCardModel.db, students.map((s: any) => s._id), {
       schoolSlug, type: 'consent', title: `Consent needed: ${request.title}`,
-      body: request.description.slice(0, 140), relatedEntityId: String(request._id),
+      body: plainBody, relatedEntityId: String(request._id),
     });
     return { ...request.toObject(), studentCount: students.length };
   }
@@ -831,6 +836,56 @@ export class ParentPortalService {
       const total = (r.studentIds || []).length;
       return { ...r, studentIds: undefined, total, granted, declined, pending: Math.max(0, total - granted - declined) };
     });
+  }
+
+  // Full per-student/per-guardian breakdown for one consent request - who
+  // granted, who declined, who hasn't responded yet, by whom and when - the
+  // admin-facing "Results" view (and its PDF export), as opposed to
+  // listConsentRequests' aggregate counts used for the list screen.
+  async getConsentRequestResults(schoolSlug: string, id: string) {
+    const request: any = await this.consentRequestModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!request) throw new NotFoundException('Consent request not found');
+
+    const [students, responses] = await Promise.all([
+      this.studentModel.find({ _id: { $in: request.studentIds || [] } })
+        .select('firstName lastName currentGrade currentSection currentRollNumber').lean(),
+      this.consentResponseModel.find({ schoolSlug, consentRequestId: id }).lean(),
+    ]);
+    const responseMap = new Map(responses.map((r: any) => [String(r.studentId), r]));
+
+    const students2 = students.map((s: any) => {
+      const r: any = responseMap.get(String(s._id));
+      return {
+        studentId: String(s._id),
+        studentName: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+        rollNumber: s.currentRollNumber || '',
+        grade: s.currentGrade || '',
+        section: s.currentSection || '',
+        decision: r?.decision || 'pending',
+        respondedByName: r?.respondedByName || null,
+        respondedAt: r?.createdAt || null,
+        notes: r?.notes || null,
+      };
+    }).sort((a, b) =>
+      a.grade.localeCompare(b.grade) || a.section.localeCompare(b.section) || a.studentName.localeCompare(b.studentName));
+
+    const classMap = new Map<string, { grade: string; section: string; granted: number; declined: number; pending: number; total: number }>();
+    for (const row of students2) {
+      const key = `${row.grade}||${row.section}`;
+      if (!classMap.has(key)) classMap.set(key, { grade: row.grade, section: row.section, granted: 0, declined: 0, pending: 0, total: 0 });
+      const c = classMap.get(key)!;
+      c.total += 1;
+      (c as any)[row.decision] += 1;
+    }
+
+    return {
+      request: {
+        _id: request._id, title: request.title, description: request.description, category: request.category,
+        dueDate: request.dueDate, attachments: request.attachments || [], createdAt: request.createdAt, isActive: request.isActive,
+      },
+      students: students2,
+      classSummary: Array.from(classMap.values()),
+    };
   }
 
   async closeConsentRequest(schoolSlug: string, id: string) {
