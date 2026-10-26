@@ -192,4 +192,15 @@ export class SuperAdminController {
   async replyToTicket(@Param('id') id: string, @Body() dto: { message: string }, @Request() req: any) {
     return this.service.replyToTicket(id, dto.message, this.adminUser(req));
   }
+
+  // ── Class/Section Data Repair (all schools) ───────────────
+  @Get('class-section-repair/preview-all')
+  async previewClassSectionRepairAllSchools() {
+    return this.service.previewClassSectionRepairAllSchools();
+  }
+
+  @Post('class-section-repair/apply-all')
+  async applyClassSectionRepairAllSchools() {
+    return this.service.applyClassSectionRepairAllSchools();
+  }
 }

@@ -17,6 +17,7 @@ import {
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { buildClassTeacherOfName } from './utils/class-teacher-label.util';
+import { computeClassSectionRepair } from '../common/utils/class-section-repair.util';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
@@ -661,6 +662,39 @@ export class OrganizationService {
       results.push({ userId, sections: assignments?.length ?? 0 });
     }
     return { schoolSlug, teachersProcessed: userIds.size, results };
+  }
+
+  /** Read-only preview of what `applyClassSectionRepair` would change for
+   * this school - see class-section-repair.util.ts for why this matters
+   * (a class teacher's own Attendance register reading as empty is the
+   * most commonly reported symptom of this drift). */
+  async previewClassSectionRepair(schoolSlug: string) {
+    const [grades, students] = await Promise.all([
+      this.gradeModel.find({ schoolSlug, isActive: true }).select('name sections').lean(),
+      this.studentModel.find({ schoolSlug }).select('firstName lastName currentGrade currentSection').lean(),
+    ]);
+    if (grades.length === 0) return { totalStudents: students.length, fixes: [], unresolved: [] };
+    return computeClassSectionRepair(
+      grades.map((g: any) => ({ name: g.name, sections: g.sections })),
+      students.map((s: any) => ({ id: String(s._id), name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), currentGrade: s.currentGrade, currentSection: s.currentSection })),
+    );
+  }
+
+  /** Writes the fixes `previewClassSectionRepair` reports - each student's
+   * currentGrade/currentSection rewritten to the canonical Grade/Section
+   * master spelling. A student the preview could not resolve is left
+   * untouched for manual review, exactly as the preview reports it. */
+  async applyClassSectionRepair(schoolSlug: string) {
+    const report = await this.previewClassSectionRepair(schoolSlug);
+    if (report.fixes.length === 0) return { fixedCount: 0, unresolvedCount: report.unresolved.length };
+    const ops = report.fixes.map((f) => ({
+      updateOne: {
+        filter: { _id: f.studentId, schoolSlug },
+        update: { $set: { ...(f.newGrade ? { currentGrade: f.newGrade } : {}), ...(f.newSection ? { currentSection: f.newSection } : {}) } },
+      },
+    }));
+    await this.studentModel.bulkWrite(ops);
+    return { fixedCount: report.fixes.length, unresolvedCount: report.unresolved.length };
   }
 
   async bulkCreateGrades(schoolSlug: string) {

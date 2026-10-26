@@ -25,6 +25,7 @@ import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { ModulesService } from '../modules/modules.service';
 import { modulesForPlan, getModuleById, MODULE_REGISTRY } from '../modules/module-registry';
+import { computeClassSectionRepair } from '../common/utils/class-section-repair.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -1207,6 +1208,64 @@ export class SuperAdminService {
       byLocation,
       registrationTrend: trend,
       topUnlinkedSchools,
+    };
+  }
+
+  // ============================================================
+  // CLASS/SECTION DATA REPAIR — platform-wide variant. Runs the same
+  // repair as OrganizationService.previewClassSectionRepair/
+  // applyClassSectionRepair (see class-section-repair.util.ts), but
+  // across every school at once, for the case where this drift isn't
+  // isolated to one tenant.
+  // ============================================================
+  private async activeSchoolSlugs(): Promise<string[]> {
+    const institutions = await this.institutionModel.find({ status: { $in: ['active', 'trial'] } }).select('slug').lean();
+    return institutions.map((i: any) => i.slug).filter(Boolean);
+  }
+
+  private async repairOneSchool(schoolSlug: string, apply: boolean) {
+    const [grades, students] = await Promise.all([
+      this.gradeModel.find({ schoolSlug, isActive: true }).select('name sections').lean(),
+      this.studentModel.find({ schoolSlug }).select('firstName lastName currentGrade currentSection').lean(),
+    ]);
+    if (grades.length === 0) return { schoolSlug, fixedCount: 0, unresolvedCount: 0 };
+    const report = computeClassSectionRepair(
+      grades.map((g: any) => ({ name: g.name, sections: g.sections })),
+      students.map((s: any) => ({ id: String(s._id), name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), currentGrade: s.currentGrade, currentSection: s.currentSection })),
+    );
+    if (apply && report.fixes.length > 0) {
+      await this.studentModel.bulkWrite(report.fixes.map((f) => ({
+        updateOne: {
+          filter: { _id: f.studentId, schoolSlug },
+          update: { $set: { ...(f.newGrade ? { currentGrade: f.newGrade } : {}), ...(f.newSection ? { currentSection: f.newSection } : {}) } },
+        },
+      })));
+    }
+    return { schoolSlug, fixedCount: report.fixes.length, unresolvedCount: report.unresolved.length };
+  }
+
+  async previewClassSectionRepairAllSchools() {
+    const slugs = await this.activeSchoolSlugs();
+    const results: Array<{ schoolSlug: string; fixedCount: number; unresolvedCount: number }> = [];
+    for (const slug of slugs) results.push(await this.repairOneSchool(slug, false));
+    return {
+      schoolsChecked: results.length,
+      schoolsWithFixes: results.filter((r) => r.fixedCount > 0).length,
+      totalFixed: results.reduce((a, r) => a + r.fixedCount, 0),
+      totalUnresolved: results.reduce((a, r) => a + r.unresolvedCount, 0),
+      bySchool: results.filter((r) => r.fixedCount > 0 || r.unresolvedCount > 0),
+    };
+  }
+
+  async applyClassSectionRepairAllSchools() {
+    const slugs = await this.activeSchoolSlugs();
+    const results: Array<{ schoolSlug: string; fixedCount: number; unresolvedCount: number }> = [];
+    for (const slug of slugs) results.push(await this.repairOneSchool(slug, true));
+    return {
+      schoolsProcessed: results.length,
+      totalFixed: results.reduce((a, r) => a + r.fixedCount, 0),
+      totalUnresolved: results.reduce((a, r) => a + r.unresolvedCount, 0),
+      bySchool: results.filter((r) => r.fixedCount > 0 || r.unresolvedCount > 0),
     };
   }
 }
