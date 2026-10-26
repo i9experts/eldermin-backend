@@ -796,16 +796,25 @@ export class StudentsService {
    * checkboxes), and writes the EXACT grade/section strings from the
    * Institution Setup master (not free text) — the one entry point for
    * this field that can't drift, unlike CSV import or a raw API call. */
-  async bulkAssignClassSection(schoolSlug: string, studentIds: string[], grade: string, section?: string) {
-    if (!studentIds?.length) throw new BadRequestException('studentIds is required');
-    if (!grade) throw new BadRequestException('grade is required');
-
+  /** Throws unless `grade`/`section` are real, active entries in the
+   * school's Institution Setup Grade/Section master - shared by every
+   * bulk action that lets an admin type/pick a class, so none of them can
+   * reintroduce the free-text currentGrade/currentSection drift that
+   * getDistinctGradesSections had to be fixed for. */
+  private async validateGradeSection(schoolSlug: string, grade: string, section?: string) {
     const matchedGrade = await this.gradeModel.findOne({ schoolSlug, name: grade, isActive: true }).lean();
     if (!matchedGrade) throw new BadRequestException(`"${grade}" is not a class defined in Institution Setup → Classes & Sections`);
     if (section) {
       const hasSection = (matchedGrade.sections || []).some((s: any) => s.isActive !== false && s.name === section);
       if (!hasSection) throw new BadRequestException(`"${section}" is not a section of "${grade}" in Institution Setup → Classes & Sections`);
     }
+  }
+
+  async bulkAssignClassSection(schoolSlug: string, studentIds: string[], grade: string, section?: string) {
+    if (!studentIds?.length) throw new BadRequestException('studentIds is required');
+    if (!grade) throw new BadRequestException('grade is required');
+
+    await this.validateGradeSection(schoolSlug, grade, section);
 
     const set: any = { currentGrade: grade };
     if (section) set.currentSection = section;
@@ -814,6 +823,35 @@ export class StudentsService {
       { $set: set },
     );
     return { matched: result.matchedCount, updated: result.modifiedCount, grade, section };
+  }
+
+  /** Bulk program switch - the fast path for moving a whole Early Years
+   * cohort (PreK/KG) into K-12 at the start of a new academic year, in one
+   * action instead of editing Student 360 -> Academic one child at a
+   * time. Reassigning grade/section is optional here (an admin may want
+   * to flip programType first and assign classes separately via
+   * bulkAssignClassSection), but when given, is validated against the
+   * same Grade/Section master.
+   *
+   * Does NOT touch any ECE module data (care records, development
+   * profiles, portfolio entries, observations) - those stay keyed by
+   * studentId and remain fully accessible by record. They simply stop
+   * appearing on ECE rosters/dashboards once programType != 'early-years',
+   * since those read live off this same field (ece.service.ts). The
+   * frontend surfaces that as a one-time warning before this is applied. */
+  async bulkSwitchProgram(schoolSlug: string, studentIds: string[], programType: string, grade?: string, section?: string) {
+    if (!studentIds?.length) throw new BadRequestException('studentIds is required');
+    if (!['k12', 'early-years'].includes(programType)) throw new BadRequestException("programType must be 'k12' or 'early-years'");
+    if (grade) await this.validateGradeSection(schoolSlug, grade, section);
+
+    const set: any = { programType };
+    if (grade) set.currentGrade = grade;
+    if (grade && section) set.currentSection = section;
+    const result = await this.studentModel.updateMany(
+      { _id: { $in: studentIds }, schoolSlug },
+      { $set: set },
+    );
+    return { matched: result.matchedCount, updated: result.modifiedCount, programType, grade, section };
   }
 
   async uploadPhoto(id: string, schoolSlug: string, file: Express.Multer.File) {
