@@ -109,8 +109,7 @@ export class CreatePortfolioEntryDto {
 
 export class FamilyResponseDto {
   @IsString() text: string;
-  /** Ignored: the responder is taken from the authenticated user. Kept so existing clients still validate. */
-  @IsOptional() @IsString() respondedBy?: string;
+  @IsString() respondedBy: string;
 }
 
 // ── Learning Experience ─────────────────────────────────────

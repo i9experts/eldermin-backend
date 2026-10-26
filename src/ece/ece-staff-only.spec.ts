@@ -68,6 +68,8 @@ describe('EceController is staff-only', () => {
   const writes: Array<[string, string, string, any]> = [
     ['care-records', 'post', '/ece/care-records', { studentId: '507f1f77bcf86cd799439011', date: '2026-10-26', type: 'meal' }],
     ['profile tags', 'patch', '/ece/students/507f1f77bcf86cd799439011/profile/tags', { interests: ['blocks'] }],
+    ['respond', 'patch', '/ece/portfolio/p1/respond', { text: 'Thanks', respondedBy: 'A Parent' }],
+    ['safety-check', 'patch', '/ece/environment-areas/a1/safety-check', { checkedBy: 'A Parent' }],
     ['seed', 'post', '/ece/domains/seed-default', null],
     ['ai check-quality', 'post', '/ece/ai/check-quality', { narrative: 'x' }],
   ];
@@ -109,16 +111,16 @@ describe('EceController is staff-only', () => {
     await as(tok('teacher', { guardianOfStudentIds: ['s9'] }))(request(app.getHttpServer()).get('/ece/children')).expect(200);
   });
 
-  describe('actor comes from the token, not the body', () => {
-    it('portfolio respond stores the token user', async () => {
-      await as(teacher)(request(app.getHttpServer()).patch('/ece/portfolio/p1/respond').send({ text: 'Thanks', respondedBy: 'Someone Else' })).expect(200);
-      expect(service.respondToEntry).toHaveBeenCalledWith('demo-school', 'p1', 'Thanks', 'Token User');
+  describe('actor fields', () => {
+    it('portfolio respond keeps the caller-supplied respondedBy (staff enter the family member by design)', async () => {
+      await as(teacher)(request(app.getHttpServer()).patch('/ece/portfolio/p1/respond').send({ text: 'Thanks', respondedBy: 'Mrs Khan (mother)' })).expect(200);
+      expect(service.respondToEntry).toHaveBeenCalledWith('demo-school', 'p1', 'Thanks', 'Mrs Khan (mother)');
     });
-    it('portfolio respond still validates without respondedBy (optional)', async () => {
-      await as(teacher)(request(app.getHttpServer()).patch('/ece/portfolio/p1/respond').send({ text: 'Thanks' })).expect(200);
-      expect(service.respondToEntry).toHaveBeenCalledWith('demo-school', 'p1', 'Thanks', 'Token User');
+    it('portfolio respond still requires respondedBy (validation unchanged)', async () => {
+      await as(teacher)(request(app.getHttpServer()).patch('/ece/portfolio/p1/respond').send({ text: 'Thanks' })).expect(400);
+      expect(service.respondToEntry).not.toHaveBeenCalled();
     });
-    it('safety check stores the token user', async () => {
+    it('safety check stores the token user, not the body', async () => {
       await as(teacher)(request(app.getHttpServer()).patch('/ece/environment-areas/a1/safety-check').send({ checkedBy: 'Someone Else' })).expect(200);
       expect(service.logSafetyCheck).toHaveBeenCalledWith('demo-school', 'a1', 'Token User');
     });

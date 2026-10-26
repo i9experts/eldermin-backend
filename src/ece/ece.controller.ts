@@ -180,8 +180,9 @@ export class EceController {
 
   @Patch('portfolio/:id/respond')
   respondToEntry(@Request() req: any, @Param('id') id: string, @Body() dto: FamilyResponseDto) {
-    // Actor comes from the token; dto.respondedBy is accepted but ignored (backward compat).
-    return this.service.respondToEntry(this.ctx(req).schoolSlug, id, dto.text, this.ctx(req).userName);
+    // respondedBy is caller-supplied by design: staff record a family member's response on their
+    // behalf and enter that person's name (web ece.service.ts respondToEntry). Staff-only via the class guard.
+    return this.service.respondToEntry(this.ctx(req).schoolSlug, id, dto.text, dto.respondedBy);
   }
 
   // ── Learning Experiences ───────────────────────────────────
