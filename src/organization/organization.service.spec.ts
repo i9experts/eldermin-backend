@@ -30,6 +30,8 @@ function setup(opts: {
   allGrades: any[]; // what gradeModel.find({schoolSlug}).lean() resolves to - the source of truth AFTER the Step 1 write
   staffByUserId: Record<string, any>;
   profilesByStaffId?: Record<string, any>;
+  groupInstitutionDoc?: any; // what groupInstitutionModel.findOne({schoolSlug}).lean() resolves to
+  createShouldThrow?: any; // force teacherProfileModel.create() to reject, to test error handling
 }) {
   const gradeModel: any = {
     findOne: jest.fn().mockResolvedValue(opts.gradeDoc),
@@ -43,16 +45,21 @@ function setup(opts: {
   const teacherProfileModel: any = {
     findOne: jest.fn((q: any) => Promise.resolve(profilesByStaffId[String(q.staffId)] ?? null)),
     updateOne: jest.fn().mockResolvedValue({}),
-    create: jest.fn().mockResolvedValue({}),
+    create: opts.createShouldThrow
+      ? jest.fn().mockRejectedValue(opts.createShouldThrow)
+      : jest.fn().mockResolvedValue({}),
   };
   const studentModel: any = { updateMany: jest.fn().mockResolvedValue({}) };
+  const groupInstitutionModel: any = {
+    findOne: jest.fn().mockReturnValue({ select: () => lean(opts.groupInstitutionDoc ?? null) }),
+  };
   const noop: any = {};
 
   const service = new OrganizationService(
-    noop, noop, noop, gradeModel, noop, noop, noop, studentModel, noop, noop, noop,
+    noop, noop, noop, gradeModel, noop, noop, groupInstitutionModel, studentModel, noop, noop, noop,
     staffModel, teacherProfileModel, noop, noop, noop,
   );
-  return { service, gradeModel, staffModel, teacherProfileModel, studentModel };
+  return { service, gradeModel, staffModel, teacherProfileModel, studentModel, groupInstitutionModel };
 }
 
 describe('OrganizationService — class-teacher multi-section assignment', () => {
@@ -167,5 +174,82 @@ describe('OrganizationService — class-teacher multi-section assignment', () =>
     expect(update.$set.classTeacherAssignments).toHaveLength(2);
     const sectionNames = update.$set.classTeacherAssignments.map((a: any) => a.sectionName).sort();
     expect(sectionNames).toEqual(['Section 1', 'Section 2']);
+  });
+});
+
+describe('OrganizationService — assignClassTeacher: first-time TeacherProfile creation', () => {
+  // Pins the fix for "Internal server error" when assigning a brand-new
+  // class teacher: TeacherProfile.institutionId is required, but
+  // Staff.institutionId is only optional (not every school's Staff records
+  // have one set) - creating a first-ever TeacherProfile for such a staff
+  // member used to throw an uncaught Mongoose ValidationError here.
+  it('falls back to the school GroupInstitution when Staff has no institutionId', async () => {
+    const schoolSlug = 'demo';
+    const g1 = oid(); const s1 = oid();
+    const teacherUserId = oid();
+    const staffId = oid();
+    const institutionId = oid();
+
+    const { service, teacherProfileModel } = setup({
+      gradeDoc: grade(g1, 'PreK-2', [section(s1, 'Section A')]),
+      allGrades: [grade(g1, 'PreK-2', [section(s1, 'Section A', teacherUserId)])],
+      staffByUserId: { [String(teacherUserId)]: { _id: staffId, firstName: 'Ayesha', lastName: 'Khan', tenantId: oid() } }, // no institutionId
+      profilesByStaffId: {}, // no existing TeacherProfile - must be created
+      groupInstitutionDoc: { _id: institutionId },
+    });
+
+    await service.assignClassTeacher(String(g1), String(s1), String(teacherUserId), schoolSlug);
+
+    expect(teacherProfileModel.create).toHaveBeenCalledTimes(1);
+    const [created] = teacherProfileModel.create.mock.calls[0];
+    expect(String(created.institutionId)).toBe(String(institutionId));
+  });
+
+  it('skips TeacherProfile creation (without throwing) when no institutionId is resolvable anywhere', async () => {
+    const schoolSlug = 'demo';
+    const g1 = oid(); const s1 = oid();
+    const teacherUserId = oid();
+    const staffId = oid();
+
+    const { service, teacherProfileModel, studentModel } = setup({
+      gradeDoc: grade(g1, 'PreK-2', [section(s1, 'Section A')]),
+      allGrades: [grade(g1, 'PreK-2', [section(s1, 'Section A', teacherUserId)])],
+      staffByUserId: { [String(teacherUserId)]: { _id: staffId, firstName: 'Ayesha', lastName: 'Khan', tenantId: oid() } },
+      profilesByStaffId: {},
+      groupInstitutionDoc: null, // school has no GroupInstitution set up either
+    });
+
+    await expect(
+      service.assignClassTeacher(String(g1), String(s1), String(teacherUserId), schoolSlug),
+    ).resolves.toBeDefined();
+
+    expect(teacherProfileModel.create).not.toHaveBeenCalled();
+    // The primary action - assigning the section's teacher and denormalizing
+    // onto students - still goes through even though the profile couldn't be built.
+    expect(studentModel.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a clear 400 instead of a bare 500 if TeacherProfile creation still fails validation', async () => {
+    const schoolSlug = 'demo';
+    const g1 = oid(); const s1 = oid();
+    const teacherUserId = oid();
+    const staffId = oid();
+
+    const validationError: any = new Error('TeacherProfile validation failed');
+    validationError.name = 'ValidationError';
+    validationError.errors = { firstName: {} };
+
+    const { service } = setup({
+      gradeDoc: grade(g1, 'PreK-2', [section(s1, 'Section A')]),
+      allGrades: [grade(g1, 'PreK-2', [section(s1, 'Section A', teacherUserId)])],
+      staffByUserId: { [String(teacherUserId)]: { _id: staffId, tenantId: oid() } },
+      profilesByStaffId: {},
+      groupInstitutionDoc: { _id: oid() },
+      createShouldThrow: validationError,
+    });
+
+    await expect(
+      service.assignClassTeacher(String(g1), String(s1), String(teacherUserId), schoolSlug),
+    ).rejects.toThrow(/Could not create this teacher's profile/);
   });
 });
