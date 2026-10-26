@@ -13,7 +13,7 @@ import { Model, Types } from 'mongoose';
 import { Student, StudentDocument } from './schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
-import { Campus } from '../organization/schemas/organization.schema';
+import { Campus, Grade, GradeDocument } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { FeeStructure, FeeStructureDocument, StudentFeeAssignment, StudentFeeAssignmentDocument } from '../finance/schemas/finance.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
@@ -82,6 +82,7 @@ export class StudentsService {
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(Family.name) private familyModel: Model<FamilyDocument>,
     @InjectModel(Campus.name) private campusModel: Model<any>,
+    @InjectModel(Grade.name) private gradeModel: Model<GradeDocument>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
     @InjectModel(FeeStructure.name) private feeStructureModel: Model<FeeStructureDocument>,
     @InjectModel(StudentFeeAssignment.name) private studentFeeAssignmentModel: Model<StudentFeeAssignmentDocument>,
@@ -459,11 +460,32 @@ export class StudentsService {
   }
 
   async getDistinctGradesSections(schoolSlug: string) {
-    // The formal Organization-module Grade/Section entities may not exist
-    // for every school (e.g. one activated directly from a CRM lead skips
-    // the self-service wizard steps that create them) — but real students
-    // always carry their own grade/section as plain strings regardless.
-    // Deriving filter options from actual data means this always works.
+    // Source of truth is the Institution Setup Grade/Section master
+    // (same collection Classes & Sections and the Add/Edit-Student
+    // dropdowns read from) - NOT raw distinct values off Student
+    // documents. currentGrade/currentSection are free-text strings with
+    // no FK, so student-derived distincts picked up every typo/casing
+    // variant and grade+section mix-up ever saved (e.g. CSV import),
+    // showing e.g. 8 "classes" in this filter for a school with only 4
+    // real ones in Classes & Sections.
+    const masterGrades = await this.gradeModel.find({ schoolSlug, isActive: true }).sort({ displayOrder: 1, name: 1 }).lean();
+    if (masterGrades.length > 0) {
+      const sectionNames = new Set<string>();
+      for (const g of masterGrades) {
+        for (const s of g.sections || []) {
+          if ((s as any).isActive !== false && s.name) sectionNames.add(s.name);
+        }
+      }
+      return {
+        grades: masterGrades.map((g) => g.name).filter(Boolean),
+        sections: Array.from(sectionNames).sort(),
+      };
+    }
+    // Fallback only for a school with no Grade master set up yet (e.g.
+    // activated directly from a CRM lead, skipping the self-service
+    // wizard) - real students still carry grade/section as plain
+    // strings, so filtering is still possible even though nothing has
+    // been curated in Institution Setup yet.
     const grades: string[] = await this.studentModel.distinct('currentGrade', { schoolSlug });
     const sections: string[] = await this.studentModel.distinct('currentSection', { schoolSlug });
     return {
@@ -2423,6 +2445,43 @@ export class StudentsService {
     const byNameDob = new Map(existing.map((s: any) =>
       [`${(s.firstName || '').toLowerCase()}|${(s.lastName || '').toLowerCase()}|${s.dateOfBirth ? new Date(s.dateOfBirth).toISOString().slice(0,10) : ''}`, s]));
 
+    // Resolve each row's currentGrade/currentSection against the real
+    // Institution Setup Grade/Section master - a CSV cell is free text, so
+    // without this, every typo/casing variant ("Grade-1" vs "GRADE-1") and
+    // grade+section mix-up ("KG-B" typed into the grade column) gets
+    // persisted verbatim and leaks into the Student Directory's filters
+    // (see getDistinctGradesSections). Not a hard-blocking error, since a
+    // school may not have its Grade master set up yet - just silently
+    // normalized to the canonical name when a confident match exists, and
+    // flagged as a warning (not an error) otherwise so the row still imports.
+    const normalize = (s: string) => String(s || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    const masterGrades = await this.gradeModel.find({ schoolSlug, isActive: true }).lean();
+    const gradeByNorm = new Map<string, string>();
+    const sectionIndex = new Map<string, { gradeName: string; sectionName: string }>();
+    for (const g of masterGrades) {
+      gradeByNorm.set(normalize(g.name), g.name);
+      for (const s of g.sections || []) {
+        if ((s as any).isActive === false || !s.name) continue;
+        sectionIndex.set(normalize(s.name), { gradeName: g.name, sectionName: s.name });
+      }
+    }
+    const resolveGradeSection = (rawGrade: string, rawSection: string) => {
+      let grade = gradeByNorm.get(normalize(rawGrade));
+      let section: string | undefined;
+      if (grade) {
+        const g = masterGrades.find((m) => m.name === grade);
+        section = (g?.sections || []).find((s: any) => normalize(s.name) === normalize(rawSection))?.name;
+      } else {
+        const bySection = sectionIndex.get(normalize(rawGrade));
+        if (bySection) { grade = bySection.gradeName; section = bySection.sectionName; }
+      }
+      if (!section) {
+        const direct = sectionIndex.get(normalize(rawSection));
+        if (direct && (!grade || direct.gradeName === grade)) { grade = grade || direct.gradeName; section = direct.sectionName; }
+      }
+      return { grade, section, matched: !!grade };
+    };
+
     const preview: any[] = [];
     const duplicates: any[] = [];
     let validCount = 0;
@@ -2484,11 +2543,18 @@ export class StudentsService {
         if (byNameDob.has(key)) duplicateOf = byNameDob.get(key);
       }
 
+      const rawSection = get('currentSection');
+      const resolved = masterGrades.length > 0 ? resolveGradeSection(currentGrade, rawSection) : { grade: undefined, section: undefined, matched: true };
+      const warnings: string[] = [];
+      if (masterGrades.length > 0 && !resolved.matched) {
+        warnings.push(`currentGrade '${currentGrade}' does not match any class in Institution Setup → Classes & Sections — imported as-is`);
+      }
+
       const rowData = {
         firstName, lastName,
         dateOfBirth: dateOfBirth && !isNaN(dateOfBirth.getTime()) ? dateOfBirth.toISOString().slice(0,10) : dobRaw,
-        gender, currentGrade,
-        currentSection: get('currentSection'),
+        gender, currentGrade: resolved.grade || currentGrade,
+        currentSection: resolved.section || rawSection,
         currentRollNumber: get('currentRollNumber'),
         admissionNumber,
         personalEmail: email,
@@ -2517,7 +2583,7 @@ export class StudentsService {
         });
       }
 
-      preview.push({ row: rowNum, data: rowData, errors: [], isDuplicate: !!duplicateOf });
+      preview.push({ row: rowNum, data: rowData, errors: [], warnings, isDuplicate: !!duplicateOf });
     });
 
     return {

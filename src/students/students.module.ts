@@ -19,7 +19,7 @@ import { StudentDocumentRecord, StudentDocumentRecordSchema } from './schemas/st
 import { AcademicHistoryRecord, AcademicHistoryRecordSchema } from './schemas/academic-history-record.schema';
 import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-field.schema';
 import { UploadModule } from '../upload/upload.module';
-import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
+import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { FeeStructure, FeeStructureSchema, StudentFeeAssignment, StudentFeeAssignmentSchema } from '../finance/schemas/finance.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
@@ -44,6 +44,7 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       { name: 'School', schema: SchoolSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
+      { name: Grade.name, schema: GradeSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: FeeStructure.name, schema: FeeStructureSchema },
       { name: StudentFeeAssignment.name, schema: StudentFeeAssignmentSchema },
