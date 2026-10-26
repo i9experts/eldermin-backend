@@ -59,6 +59,7 @@ export interface ScopedUser {
   classTeacherOfGradeId?: string;
   classTeacherOfGradeName?: string;
   classTeacherOfSectionName?: string;
+  classTeacherAssignments?: Array<{ gradeId: string; gradeName: string; sectionId: string; sectionName: string; name: string }>;
   subjectsCanTeach?: string[];
   gradeLevelsCanTeach?: string[];
   staffId?: string;
@@ -178,34 +179,53 @@ export function resolveDepartmentScope(user: ScopedUser, requestedDepartment?: s
 
 /**
  * Scopes a class teacher's attendance access to their own assigned
- * grade+section only - the actual enforcement behind "class teacher
+ * class(es) only - the actual enforcement behind "class teacher
  * assignment" that all the schema wiring elsewhere exists to support.
  * Unlike campus/department scoping, this isn't role-based (a Principal
  * could theoretically also be assigned as a class teacher) - it applies
- * purely based on whether classTeacherOfGradeName is actually present on
- * the token, meaning this specific person has an actual, real
+ * purely based on whether the token carries a real class-teacher
  * assignment. Someone with no class-teacher assignment at all passes
  * their requested grade/section through unrestricted, exactly as before
  * this existed - their access is governed by the normal role/campus
  * rules elsewhere, not this check.
+ *
+ * A teacher can legitimately be class teacher of more than one section
+ * (common in Early Years, where one lead teacher often covers 2-3 small
+ * sections) - classTeacherAssignments on the token carries all of them.
+ * Without this, a second-section assignment would 403 here even though
+ * the teacher really does hold it, which was the actual enforcement gate
+ * behind "those students never show up for attendance". Falls back to
+ * the legacy singular fields for a token issued before that array
+ * existed.
  */
 export function resolveClassSectionScope(
   user: ScopedUser,
   requestedGrade?: string,
   requestedSection?: string,
 ): { grade?: string; section?: string } {
-  if (!user.classTeacherOfGradeName) {
+  const assignments: Array<{ grade: string; section?: string }> = user.classTeacherAssignments?.length
+    ? user.classTeacherAssignments.map((a) => ({ grade: a.gradeName, section: a.sectionName || undefined }))
+    : (user.classTeacherOfGradeName
+      ? [{ grade: user.classTeacherOfGradeName, section: user.classTeacherOfSectionName }] : []);
+
+  if (!assignments.length) {
     return { grade: requestedGrade, section: requestedSection };
   }
 
-  if (requestedGrade && !sameGrade(requestedGrade, user.classTeacherOfGradeName)) {
-    throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
-  }
-  if (requestedSection && user.classTeacherOfSectionName && !sameSection(requestedSection, user.classTeacherOfSectionName)) {
-    throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
+  if (!requestedGrade) {
+    // No explicit class requested - default to the first assignment, the
+    // same behaviour as before classTeacherAssignments existed. A teacher
+    // with more than one section should pass an explicit grade/section
+    // (the frontend offers a class picker whenever there is more than one).
+    return assignments[0];
   }
 
-  return { grade: user.classTeacherOfGradeName, section: user.classTeacherOfSectionName };
+  const match = assignments.find((a) => sameGrade(a.grade, requestedGrade)
+    && (!a.section || !requestedSection || sameSection(a.section, requestedSection)));
+  if (!match) {
+    throw new ForbiddenException('Access denied. You are the class teacher of your own assigned class only.');
+  }
+  return { grade: match.grade, section: requestedSection || match.section };
 }
 
 /**

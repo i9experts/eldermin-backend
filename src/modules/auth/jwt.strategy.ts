@@ -35,6 +35,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       classTeacherOfGradeId: payload.classTeacherOfGradeId,
       classTeacherOfGradeName: payload.classTeacherOfGradeName,
       classTeacherOfSectionName: payload.classTeacherOfSectionName,
+      classTeacherAssignments: payload.classTeacherAssignments,
       subjectsCanTeach: payload.subjectsCanTeach,
       gradeLevelsCanTeach: payload.gradeLevelsCanTeach,
       staffId: payload.staffId,

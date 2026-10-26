@@ -85,6 +85,12 @@ export class AuthService {
     let classTeacherOfGradeId: string | undefined;
     let classTeacherOfGradeName: string | undefined;
     let classTeacherOfSectionName: string | undefined;
+    // Every class-teacher section this teacher holds - a teacher can
+    // legitimately be class teacher of more than one section (common in
+    // Early Years, where one lead teacher often covers 2-3 small
+    // sections). classTeacherOfGradeName/SectionName above stay as the
+    // first one, for any caller not yet migrated to this array.
+    let classTeacherAssignments: Array<{ gradeId: string; gradeName: string; sectionId: string; sectionName: string; name: string }> | undefined;
     // Not just the isClassTeacher: true lookup above was ever run - a
     // teacher's own subjectsCanTeach/gradeLevelsCanTeach (admin-assigned
     // on their Teaching Profile) were never surfaced anywhere a teacher
@@ -99,12 +105,13 @@ export class AuthService {
     if (staffRecord) {
       const teacherProfile = await this.teacherProfileModel
         .findOne({ staffId: (staffRecord as any)._id })
-        .select('_id isClassTeacher classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName subjectsCanTeach gradeLevelsCanTeach')
+        .select('_id isClassTeacher classTeacherOfGradeId classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments subjectsCanTeach gradeLevelsCanTeach')
         .lean();
       if (teacherProfile?.isClassTeacher) {
         classTeacherOfGradeId = teacherProfile?.classTeacherOfGradeId || undefined;
         classTeacherOfGradeName = teacherProfile?.classTeacherOfGradeName || undefined;
         classTeacherOfSectionName = teacherProfile?.classTeacherOfSectionName || undefined;
+        classTeacherAssignments = teacherProfile?.classTeacherAssignments?.length ? teacherProfile.classTeacherAssignments : undefined;
       }
       subjectsCanTeach = teacherProfile?.subjectsCanTeach?.length ? teacherProfile.subjectsCanTeach : undefined;
       gradeLevelsCanTeach = teacherProfile?.gradeLevelsCanTeach?.length ? teacherProfile.gradeLevelsCanTeach : undefined;
@@ -120,7 +127,7 @@ export class AuthService {
 
     return {
       campusId, department, supervisedClusterIds, isBoardLevel,
-      classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName,
+      classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName, classTeacherAssignments,
       subjectsCanTeach, gradeLevelsCanTeach, staffId, teacherProfileId,
     };
   }
@@ -234,7 +241,7 @@ export class AuthService {
     const scopeFields = await this.resolveScopeFieldsForUser(user._id, schoolSlug);
     const {
       supervisedClusterIds, isBoardLevel, department,
-      classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName,
+      classTeacherOfGradeId, classTeacherOfGradeName, classTeacherOfSectionName, classTeacherAssignments,
       subjectsCanTeach, gradeLevelsCanTeach, staffId, teacherProfileId,
     } = scopeFields;
     const campusId = scopeFields.campusId;
@@ -255,6 +262,7 @@ export class AuthService {
       classTeacherOfGradeId,
       classTeacherOfGradeName,
       classTeacherOfSectionName,
+      classTeacherAssignments,
       // The subjects/grades an admin assigned this teacher on their
       // Teaching Profile - lets subject/grade pickers (Question Bank,
       // Syllabus) scope themselves to what was actually assigned,
@@ -300,6 +308,7 @@ export class AuthService {
         classTeacherOfGradeId,
         classTeacherOfGradeName,
         classTeacherOfSectionName,
+        classTeacherAssignments,
         subjectsCanTeach,
         gradeLevelsCanTeach,
         staffId,
