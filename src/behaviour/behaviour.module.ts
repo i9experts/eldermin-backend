@@ -4,6 +4,8 @@ import { BehaviourController } from './behaviour.controller';
 import { BehaviourService } from './behaviour.service';
 import { QaidaController } from './qaida.controller';
 import { QaidaService } from './qaida.service';
+import { NazraController } from './nazra.controller';
+import { NazraService } from './nazra.service';
 import {
   BehaviourRecord, BehaviourRecordSchema,
   TarbiyahAssessment, TarbiyahAssessmentSchema,
@@ -15,6 +17,7 @@ import {
   CharacterProgramSettings, CharacterProgramSettingsSchema,
 } from './schemas/character-program-settings.schema';
 import { QaidaProgress, QaidaProgressSchema } from './schemas/qaida-progress.schema';
+import { NazraProgress, NazraProgressSchema } from './schemas/nazra-progress.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 
 @Module({
@@ -27,11 +30,12 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
       { name: BehaviourContract.name, schema: BehaviourContractSchema },
       { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },
       { name: QaidaProgress.name, schema: QaidaProgressSchema },
+      { name: NazraProgress.name, schema: NazraProgressSchema },
       { name: Student.name, schema: StudentSchema },
     ]),
   ],
-  controllers: [BehaviourController, QaidaController],
-  providers: [BehaviourService, QaidaService],
-  exports: [BehaviourService, QaidaService],
+  controllers: [BehaviourController, QaidaController, NazraController],
+  providers: [BehaviourService, QaidaService, NazraService],
+  exports: [BehaviourService, QaidaService, NazraService],
 })
 export class BehaviourModule {}
