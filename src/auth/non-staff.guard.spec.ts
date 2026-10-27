@@ -22,6 +22,7 @@ import { EceController } from '../ece/ece.controller';
 import { AssessmentController } from '../assessments/assessment.controller';
 import { BehaviourController } from '../behaviour/behaviour.controller';
 import { ResellerPortalController } from '../resellers/reseller-portal.controller';
+import { OrganizationController } from '../organization/organization.controller';
 
 const reflector = new Reflector();
 const guard = new NonStaffGuard(reflector);
@@ -111,15 +112,13 @@ describe('decision order (synthetic controller)', () => {
     }
     expect(logged()).toHaveLength(8);
   });
-  it('resellers are non-staff: denied on any route without @AllowNonStaff, including their own portal', () => {
-    // reseller_admin / reseller_support are in NON_STAFF_ROLES (same members as NEVER_CUSTOM_ROLE), and
-    // ResellerPortalController (@Roles(RESELLER_*)) carries no @AllowNonStaff. The allow-list is explicit,
-    // so this is by design in this change; enforce needs an owner decision (see PR description).
+  it('a reseller is non-staff: denied on a plain route, allowed where @AllowNonStaff is set', () => {
     for (const r of ['reseller_admin', 'reseller_support']) {
       setMode(undefined);
-      expect(guard.canActivate(ctxFor(ResellerPortalController, 'dashboard', user(r, { resellerId: 'r1' })))).toBe(true);
+      expect(guard.canActivate(ctxFor(Ctrl, 'plain', user(r, { resellerId: 'r1' })))).toBe(true);
       setMode('enforce');
-      expect(() => guard.canActivate(ctxFor(ResellerPortalController, 'dashboard', user(r, { resellerId: 'r1' })))).toThrow(/staff only/);
+      expect(() => guard.canActivate(ctxFor(Ctrl, 'plain', user(r, { resellerId: 'r1' })))).toThrow(/staff only/);
+      expect(guard.canActivate(ctxFor(Ctrl, 'allowed', user(r, { resellerId: 'r1' })))).toBe(true);
     }
     expect(logged().filter((l) => l.decision === 'would_deny').map((l) => l.role)).toEqual(['reseller_admin', 'reseller_support']);
   });
@@ -201,6 +200,57 @@ describe('sample of UNSAFE routes from the Part A audit', () => {
   });
 });
 
+describe('resellers (non-staff roles with their own portal)', () => {
+  const resellerRoutes = routesOf(ResellerPortalController);
+  const reseller = (r = 'reseller_admin') => user(r, { resellerId: 'r1', schoolSlug: undefined });
+
+  it('ResellerPortalController is allowed at class level and is still @Roles(reseller) only', () => {
+    expect(reflector.get('allowNonStaff', ResellerPortalController)).toBe(true);
+    expect(reflector.get(ROLES_KEY, ResellerPortalController)).toEqual([UserRole.RESELLER_ADMIN, UserRole.RESELLER_SUPPORT]);
+  });
+  it('a reseller reaches every portal route in enforce mode, with no log line', () => {
+    setMode('enforce');
+    expect(resellerRoutes.length).toBeGreaterThan(0);
+    for (const r of resellerRoutes) {
+      for (const role of ['reseller_admin', 'reseller_support']) {
+        expect(guard.canActivate(ctxFor(ResellerPortalController, r.name, reseller(role)))).toBe(true);
+      }
+    }
+    expect(warn).not.toHaveBeenCalled();
+  });
+  it('the allow only relaxes NonStaffGuard: RolesGuard still rejects parent, student and teacher on the portal', () => {
+    setMode('enforce');
+    const rolesGuard = new RolesGuard(reflector);
+    for (const role of ['parent', 'student', 'teacher', 'admin']) {
+      const c = ctxFor(ResellerPortalController, resellerRoutes[0].name, user(role));
+      expect(() => rolesGuard.canActivate(c)).toThrow(/Required role/);
+    }
+    // a parent still passes NonStaffGuard here (allow-listed controller); the @Roles guard is what blocks it
+    expect(guard.canActivate(ctxFor(ResellerPortalController, resellerRoutes[0].name, parent))).toBe(true);
+  });
+  const schoolRoutes: Array<[string, any, string]> = [
+    ['GET /students/:id', StudentsController, 'getStudent'],
+    ['GET /students/:id/360', StudentsController, 'getStudent360'],
+    ['GET /finance/dashboard', FinanceController, 'getDashboard'],
+    ['DELETE /upload', UploadController, 'deleteFile'],
+    ['GET /complaints/:id', ComplaintsController, 'getById'],
+    ['GET /ece/children', EceController, 'getChildren'],
+    ['GET /assessments', AssessmentController, 'findAll'],
+    ['GET /behaviour/records/:id', BehaviourController, 'getRecord'],
+    ['GET /organization/class-section-repair/preview', OrganizationController, 'previewClassSectionRepair'],
+  ];
+  it.each(schoolRoutes)('a reseller is denied on school route %s (would_deny in log mode, 403 in enforce)', (_n, cls, h) => {
+    for (const role of ['reseller_admin', 'reseller_support']) {
+      setMode(undefined);
+      expect(guard.canActivate(ctxFor(cls, h, reseller(role)))).toBe(true);
+      setMode('enforce');
+      expect(() => guard.canActivate(ctxFor(cls, h, reseller(role)))).toThrow(/staff only/);
+    }
+    expect(logged().map((l) => l.decision)).toEqual(['would_deny', 'denied', 'would_deny', 'denied']);
+    expect(logged()[0]).toMatchObject({ role: 'reseller_admin', hasGuardianIds: false });
+  });
+});
+
 describe('guard order', () => {
   it('AppModule registers NonStaffGuard directly after JwtAuthGuard then RolesGuard', () => {
     const providers: any[] = Reflect.getMetadata('providers', AppModule);
@@ -230,8 +280,8 @@ describe('guard order', () => {
 });
 
 // ── ParentPortalController ──────────────────────────────────────────────────────
-const verb = (m: number) => ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'][m];
-const norm = (p: string) => p.replace(/:[A-Za-z]+/g, ':p');
+function verb(m: number) { return ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'][m]; }
+function norm(p: string) { return p.replace(/:[A-Za-z]+/g, ':p'); }
 function routesOf(cls: any) {
   return Object.getOwnPropertyNames(cls.prototype)
     .filter((n) => n !== 'constructor' && Reflect.getMetadata(METHOD_METADATA, cls.prototype[n]) !== undefined)
@@ -259,7 +309,7 @@ const APP_PARENT_PORTAL_CALLS = [
   'GET notifications', 'POST notifications/:id/read', 'POST notifications/read-all',
   'GET threads', 'POST threads', 'GET threads/:id/messages', 'POST threads/:id/messages',
 ];
-const STAFF_ONLY_HANDLERS = ['listConsentRequests', 'createConsentRequest', 'closeConsentRequest', 'linkGuardian', 'unlinkGuardian'];
+const STAFF_ONLY_HANDLERS = ['listConsentRequests', 'createConsentRequest', 'getConsentRequestResults', 'closeConsentRequest', 'linkGuardian', 'unlinkGuardian'];
 
 describe('ParentPortalController handler inventory', () => {
   const routes = routesOf(ParentPortalController);
@@ -272,7 +322,7 @@ describe('ParentPortalController handler inventory', () => {
     }).map((r) => `${r.name} (${r.key})`);
     expect(offenders).toEqual([]);
   });
-  it('the 5 staff-only handlers keep their own role guards and none is in the Parent app list', () => {
+  it('the 6 staff-only handlers keep their own role guards and none is in the Parent app list', () => {
     for (const h of STAFF_ONLY_HANDLERS) {
       const fn = ParentPortalController.prototype[h as keyof ParentPortalController] as any;
       expect(Reflect.getMetadata(ROLES_KEY, fn) || Reflect.getMetadata(ROLES_OR_MODULE_KEY, fn)).toBeTruthy();
@@ -281,7 +331,7 @@ describe('ParentPortalController handler inventory', () => {
   });
   it('RolesGuard still 403s a parent on the consent-admin handlers even though the class is @AllowNonStaff', () => {
     const rolesGuard = new RolesGuard(reflector);
-    for (const h of ['listConsentRequests', 'createConsentRequest', 'closeConsentRequest']) {
+    for (const h of ['listConsentRequests', 'createConsentRequest', 'getConsentRequestResults', 'closeConsentRequest']) {
       expect(() => rolesGuard.canActivate(ctxFor(ParentPortalController, h, parent))).toThrow(/Required role/);
     }
   });
