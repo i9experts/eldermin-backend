@@ -266,9 +266,9 @@ function makeService() {
   const resultModel: any = { find: jest.fn(() => chain([])) };
   const feeStructureModel: any = { find: jest.fn(() => chain([])) };
   const assignModel: any = { find: jest.fn(() => chain([])) };
-  const n: any = {};
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
   const svc = new StudentsService(studentModel, attendanceModel, feeModel, behaviourModel, resultModel, n, n, n, n, n,
-    feeStructureModel, assignModel, n, n, n, n, n, n, n, n, n);
+    feeStructureModel, assignModel, n, n, n, n, n, n, n, n, n, n, n);
   return { svc, sink, studentModel, feeModel, feeStructureModel, assignModel };
 }
 

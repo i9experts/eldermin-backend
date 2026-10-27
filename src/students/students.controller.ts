@@ -526,6 +526,18 @@ export class StudentsController {
     return projectForTeacher(requestingUser, await this.studentsService.getStudentAttendanceSummary(id, schoolSlug, month));
   }
 
+  /** GET /api/v1/students/attendance/check-day — lets the teacher marking
+   * screen find out *before* the teacher fills in a whole class's statuses
+   * whether the selected date is even a valid school day, so the UI can
+   * show a clear reason instead of a save that silently fails (or, worse,
+   * no feedback at all). Open to any authenticated staff role - a teacher
+   * needs this just as much as an admin does. */
+  @Get('attendance/check-day')
+  async checkAttendanceDay(@Request() req: any, @Query('date') date: string, @Query('grade') grade?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.checkSchoolDay(schoolSlug, date, grade);
+  }
+
   /** POST /api/v1/students/attendance */
   @RolesOrModuleManage('students', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('attendance')

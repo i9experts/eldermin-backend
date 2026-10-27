@@ -11,12 +11,9 @@ import { StudentsService } from './students.service';
 // already used for teacher-class scoping.
 
 function makeService(studentModel: any) {
-  const n: any = {};
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
   const emptyLeanFind: any = { find: () => ({ lean: () => Promise.resolve([]) }) };
-  return new StudentsService(
-    studentModel, n, n, n, n, n, n, n, n, n,
-    emptyLeanFind, emptyLeanFind, n, n, n, n, n, n, n, n, n,
-  );
+  return new StudentsService(studentModel, n, n, n, n, n, n, n, n, n, emptyLeanFind, emptyLeanFind, n, n, n, n, n, n, n, n, n, n, n);
 }
 
 function chainable(result: any[]) {

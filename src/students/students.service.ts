@@ -13,8 +13,9 @@ import { Model, Types } from 'mongoose';
 import { Student, StudentDocument } from './schemas/student.schema';
 import { UploadService } from '../upload/upload.service';
 import { Family, FamilyDocument } from '../families/schemas/family.schema';
-import { Campus, Grade, GradeDocument } from '../organization/schemas/organization.schema';
+import { Campus, Grade, GradeDocument, AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
+import { CalendarEvent, CalendarEventDocument } from '../school-calendar/schemas/calendar-event.schema';
 import { FeeStructure, FeeStructureDocument, StudentFeeAssignment, StudentFeeAssignmentDocument } from '../finance/schemas/finance.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
@@ -95,8 +96,66 @@ export class StudentsService {
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
     @InjectModel(QuizAttempt.name) private quizAttemptModel: Model<QuizAttemptDocument>,
+    @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
+    @InjectModel(CalendarEvent.name) private calendarEventModel: Model<CalendarEventDocument>,
     private uploadService: UploadService,
   ) {}
+
+  // ============================================================
+  // SCHOOL CALENDAR GATE — master "school days" setting
+  // ============================================================
+  // Index matches JS Date.getDay() (0 = Sunday ... 6 = Saturday), and the
+  // day codes stored in AcademicYear.workingDays.
+  private static readonly WEEKDAY_CODES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+  // Resolves whether a given date is a valid day for a teacher to mark
+  // attendance on: (1) its weekday must be in the school's configured
+  // AcademicYear.workingDays, and (2) it must not fall under an
+  // admin-published holiday/public_holiday CalendarEvent (School Calendar
+  // module). A school that has never configured workingDays (schema
+  // default stays, or genuinely has no AcademicYear record covering this
+  // date) is NOT gated - `configured: false` - so this feature only takes
+  // effect once an admin has deliberately set up their school calendar,
+  // never silently blocking an existing school that hasn't touched it yet.
+  async checkSchoolDay(schoolSlug: string, dateStr: string, grade?: string): Promise<{
+    valid: boolean; configured: boolean; reason?: string;
+  }> {
+    const date = new Date(dateStr);
+    date.setHours(0, 0, 0, 0);
+
+    const year = await this.academicYearModel.findOne({
+      schoolSlug, startDate: { $lte: date }, endDate: { $gte: date },
+    }).lean();
+
+    if (!year || !year.workingDays || year.workingDays.length === 0) {
+      return { valid: true, configured: false };
+    }
+
+    const code = StudentsService.WEEKDAY_CODES[date.getDay()];
+    if (!year.workingDays.includes(code)) {
+      return {
+        valid: false, configured: true,
+        reason: `${date.toDateString()} is a ${code === 'sun' || code === 'sat' ? 'weekend' : 'non-school'} day under this school's configured school days (${year.workingDays.join(', ')})`,
+      };
+    }
+
+    const holidayFilter: any = {
+      schoolSlug,
+      type: { $in: ['holiday', 'public_holiday'] },
+      startDate: { $lte: date },
+      endDate: { $gte: date },
+    };
+    // A holiday scoped to specific grade levels only blocks those grades;
+    // an unscoped one (gradeLevels: []) applies school-wide.
+    if (grade) holidayFilter.$or = [{ gradeLevels: { $size: 0 } }, { gradeLevels: grade }];
+    else holidayFilter.gradeLevels = { $size: 0 };
+    const holiday = await this.calendarEventModel.findOne(holidayFilter).lean();
+    if (holiday) {
+      return { valid: false, configured: true, reason: `${date.toDateString()} is a holiday: ${holiday.title}` };
+    }
+
+    return { valid: true, configured: true };
+  }
 
   // ============================================================
   // STUDENT CRUD
@@ -2005,6 +2064,9 @@ export class StudentsService {
   }
 
   async markAttendance(dto: MarkAttendanceDto) {
+    const dayStatus = await this.checkSchoolDay(dto.schoolSlug as string, dto.date, dto.grade);
+    if (!dayStatus.valid) throw new BadRequestException(`Cannot mark attendance: ${dayStatus.reason}`);
+
     const date = new Date(dto.date);
     date.setHours(0, 0, 0, 0);
 
@@ -2045,6 +2107,17 @@ export class StudentsService {
   }
 
   async bulkMarkAttendance(dto: BulkAttendanceDto) {
+    // Check each distinct (date, grade) pair in the batch once rather than
+    // once per student - a whole-class save is almost always one date/one
+    // grade, but a mixed-grade bulk save (e.g. a coordinator submitting
+    // several sections at once) is still validated per grade correctly.
+    const uniquePairs = new Map<string, { date: string; grade?: string }>();
+    for (const r of dto.records) uniquePairs.set(`${r.date}|${r.grade || ''}`, { date: r.date, grade: r.grade });
+    for (const { date, grade } of uniquePairs.values()) {
+      const dayStatus = await this.checkSchoolDay(dto.schoolSlug as string, date, grade);
+      if (!dayStatus.valid) throw new BadRequestException(`Cannot mark attendance: ${dayStatus.reason}`);
+    }
+
     const ops = dto.records.map(r => {
       const date = new Date(r.date);
       date.setHours(0, 0, 0, 0);

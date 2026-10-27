@@ -19,8 +19,12 @@ import { StudentDocumentRecord, StudentDocumentRecordSchema } from './schemas/st
 import { AcademicHistoryRecord, AcademicHistoryRecordSchema } from './schemas/academic-history-record.schema';
 import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-field.schema';
 import { UploadModule } from '../upload/upload.module';
-import { SchoolSchema, Campus, CampusSchema, Grade, GradeSchema } from '../organization/schemas/organization.schema';
+import {
+  SchoolSchema, Campus, CampusSchema, Grade, GradeSchema,
+  AcademicYear, AcademicYearSchema,
+} from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
+import { CalendarEvent, CalendarEventSchema } from '../school-calendar/schemas/calendar-event.schema';
 import { FeeStructure, FeeStructureSchema, StudentFeeAssignment, StudentFeeAssignmentSchema } from '../finance/schemas/finance.schema';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
@@ -45,6 +49,12 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
       { name: Grade.name, schema: GradeSchema },
+      // Master "school days" setting (AcademicYear.workingDays) and the
+      // admin-managed holiday calendar (CalendarEvent, type holiday/
+      // public_holiday) - both read-only here, for checkSchoolDay's gate
+      // on markAttendance/bulkMarkAttendance below.
+      { name: AcademicYear.name, schema: AcademicYearSchema },
+      { name: CalendarEvent.name, schema: CalendarEventSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: FeeStructure.name, schema: FeeStructureSchema },
       { name: StudentFeeAssignment.name, schema: StudentFeeAssignmentSchema },
