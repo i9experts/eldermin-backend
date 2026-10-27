@@ -19,7 +19,6 @@ import {
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
 import { MarketingLead } from '../leads/schemas/lead.schema';
-import { ParentLead, ParentLeadDocument, gradeBand } from '../leads/schemas/parent-lead.schema';
 import { Campus, Grade, AcademicYear } from '../organization/schemas/organization.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
@@ -87,7 +86,6 @@ export class SuperAdminService {
     @InjectModel(AcademicYear.name) private academicYearModel: Model<any>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
-    @InjectModel(ParentLead.name) private parentLeadModel: Model<ParentLeadDocument>,
     private modulesService: ModulesService,
     private jwtService: JwtService,
   ) {}
@@ -1088,126 +1086,6 @@ export class SuperAdminService {
       user: { id: String(user._id), name, email: user.email, role: user.primaryRole },
       institution: { name: inst.name, slug: inst.slug, plan: inst.plan, activeModules: tenant.activeModules || [] },
       message: 'Impersonation token valid for 30 minutes',
-    };
-  }
-
-  // ============================================================
-  // PARENT LEADS — self-serve SmartVan parent-app registrations,
-  // including parents whose school isn't an Eldermin customer yet.
-  // Built as real aggregation pipelines (group/bucket in Mongo), not
-  // pulled-to-JS, since this is meant to scale to thousands of signups.
-  // ============================================================
-
-  private buildParentLeadMatch(query: any) {
-    const match: any = {};
-    if (query.country) match['location.country'] = query.country;
-    if (query.city) match['location.city'] = query.city;
-    if (query.district) match['location.district'] = query.district;
-    if (query.schoolName) match.schoolNameRaw = new RegExp(query.schoolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    if (query.linked === 'true') match.matchedInstitutionId = { $ne: null };
-    if (query.linked === 'false') match.matchedInstitutionId = null;
-    if (query.grade) match['children.grade'] = query.grade;
-    if (query.dateFrom || query.dateTo) {
-      match.createdAt = {};
-      if (query.dateFrom) match.createdAt.$gte = new Date(query.dateFrom);
-      if (query.dateTo) match.createdAt.$lte = new Date(query.dateTo);
-    }
-    return match;
-  }
-
-  async getParentLeads(query: any) {
-    const match = this.buildParentLeadMatch(query);
-    const { page = 1, limit = 25 } = query;
-    const { skip, limit: lim } = paged(Number(page), Number(limit));
-
-    // 'primary'/'secondary' is bucketed from children[].grade in application
-    // code (gradeBand), not stored - filtering by band therefore needs an
-    // initial fetch-and-filter pass rather than a pure $match. Still scoped
-    // by every other filter first, so this only ever walks the already
-    // narrowed-down set, never the whole collection.
-    let docs = await this.parentLeadModel.find(match).sort({ createdAt: -1 }).lean();
-    if (query.gradeBand === 'primary' || query.gradeBand === 'secondary') {
-      docs = docs.filter((d: any) => (d.children || []).some((c: any) => gradeBand(c.grade) === query.gradeBand));
-    }
-
-    const total = docs.length;
-    const page_ = docs.slice(skip, skip + lim);
-    return {
-      leads: page_.map((d: any) => ({
-        id: d._id,
-        fullName: d.fullName,
-        email: d.email,
-        phone: d.phone,
-        schoolNameRaw: d.schoolNameRaw,
-        isLinked: !!d.matchedInstitutionId,
-        location: d.location,
-        children: d.children,
-        createdAt: d.createdAt,
-      })),
-      total,
-      page: Number(page),
-      limit: lim,
-    };
-  }
-
-  async getParentLeadFilterOptions() {
-    const [countries, cities, districts] = await Promise.all([
-      this.parentLeadModel.distinct('location.country'),
-      this.parentLeadModel.distinct('location.city'),
-      this.parentLeadModel.distinct('location.district'),
-    ]);
-    return {
-      countries: countries.filter(Boolean).sort(),
-      cities: cities.filter(Boolean).sort(),
-      districts: districts.filter(Boolean).sort(),
-    };
-  }
-
-  /** Charts + the "top schools parents are waiting on" leaderboard for the
-   * Super Admin Parent Leads tab. All real Mongo aggregations - this is
-   * meant to scale to a large lead volume. */
-  async getParentLeadInsights(query: any) {
-    const match = this.buildParentLeadMatch(query);
-
-    const [byLocation, trend, topUnlinkedSchools, totals] = await Promise.all([
-      this.parentLeadModel.aggregate([
-        { $match: match },
-        { $group: { _id: { country: '$location.country', city: '$location.city' }, count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 25 },
-        { $project: { _id: 0, country: '$_id.country', city: '$_id.city', count: 1 } },
-      ]),
-      this.parentLeadModel.aggregate([
-        { $match: match },
-        { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } }, count: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-        { $project: { _id: 0, month: '$_id', count: 1 } },
-      ]),
-      this.parentLeadModel.aggregate([
-        { $match: { ...match, matchedInstitutionId: null } },
-        { $group: { _id: '$schoolNameRaw', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 15 },
-        { $project: { _id: 0, schoolName: '$_id', count: 1 } },
-      ]),
-      this.parentLeadModel.aggregate([
-        { $match: match },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: 1 },
-            linked: { $sum: { $cond: [{ $ne: ['$matchedInstitutionId', null] }, 1, 0] } },
-          },
-        },
-      ]),
-    ]);
-
-    const totalsRow = totals[0] || { total: 0, linked: 0 };
-    return {
-      totals: { total: totalsRow.total, linked: totalsRow.linked, unlinked: totalsRow.total - totalsRow.linked },
-      byLocation,
-      registrationTrend: trend,
-      topUnlinkedSchools,
     };
   }
 
