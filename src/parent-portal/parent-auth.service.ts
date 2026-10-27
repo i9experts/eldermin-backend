@@ -1,5 +1,5 @@
 import { SCHOOL_SUSPENDED_MESSAGE } from '../common/constants/school-suspended';
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { JwtService } from '@nestjs/jwt';
@@ -8,12 +8,8 @@ import { PhoneOtp, PhoneOtpDocument } from './schemas/phone-otp.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
-import { InstitutionDocument } from '../modules/organization/schemas/institution.schema';
-import { ParentLead, ParentLeadDocument } from '../leads/schemas/parent-lead.schema';
 import { WhatsAppService } from '../email/whatsapp.service';
 import { normalizePhone, phoneMatchRegex } from '../common/utils/phone.util';
-import { GeocodingService } from '../leads/geocoding.service';
-import { RegisterParentLeadDto, LoginParentLeadDto } from './dto/parent-lead-auth.dto';
 import { UsageLog, UsageLogDocument } from '../super-admin/schemas/super-admin.schema';
 import { recordLoginUsage } from '../common/utils/usage-log.util';
 
@@ -37,12 +33,9 @@ export class ParentAuthService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
-    @InjectModel('OrgInstitution') private institutionModel: Model<InstitutionDocument>,
-    @InjectModel(ParentLead.name) private parentLeadModel: Model<ParentLeadDocument>,
     @InjectModel(UsageLog.name) private usageLogModel: Model<UsageLogDocument>,
     private jwtService: JwtService,
     private whatsAppService: WhatsAppService,
-    private geocodingService: GeocodingService,
   ) {}
 
   private async resolveSchoolForPhone(phone: string): Promise<{ schoolSlug: string; existingUser: UserDocument | null }> {
@@ -196,100 +189,5 @@ export class ParentAuthService {
         role: 'parent', guardianOfStudentIds: payload.guardianOfStudentIds,
       },
     };
-  }
-
-  // ── Parent Leads (self-serve signup, school not necessarily onboarded) ──
-  //
-  // A ParentLead is NOT a tenant-scoped User/Guardian - it's a prospective
-  // parent who may belong to no Eldermin school at all yet. It therefore
-  // carries its own lightweight JWT (role: 'parent_lead', sub: lead id) that
-  // is verified directly by ParentLeadAuthGuard rather than going through
-  // the main JwtStrategy/AuthStateService pipeline, which hard-requires a
-  // matching User document and would reject every lead token outright.
-
-  /** Best-effort match against a real Institution by name - exact,
-   * case-insensitive, whitespace-trimmed. Deliberately NOT fuzzy: a
-   * wrong auto-link would show a parent fake "your school is on Eldermin"
-   * data, which is worse than leaving a close-but-not-exact name unlinked. */
-  private async matchInstitution(schoolNameRaw: string): Promise<Types.ObjectId | null> {
-    const trimmed = schoolNameRaw.trim();
-    if (!trimmed) return null;
-    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = await this.institutionModel
-      .findOne({ name: new RegExp(`^${escaped}$`, 'i') })
-      .select('_id')
-      .lean();
-    return match ? (match as any)._id : null;
-  }
-
-  private signLeadToken(lead: ParentLeadDocument) {
-    return this.jwtService.sign({
-      sub: (lead._id as any).toString(),
-      role: 'parent_lead',
-      email: lead.email,
-    });
-  }
-
-  private serializeLead(lead: ParentLeadDocument) {
-    return {
-      id: lead._id,
-      fullName: lead.fullName,
-      email: lead.email,
-      phone: lead.phone,
-      schoolNameRaw: lead.schoolNameRaw,
-      isSchoolOnboarded: !!lead.matchedInstitutionId,
-      location: lead.location,
-      children: lead.children,
-    };
-  }
-
-  async registerLead(dto: RegisterParentLeadDto) {
-    const email = dto.email.trim().toLowerCase();
-    const existing = await this.parentLeadModel.findOne({ email }).lean();
-    if (existing) throw new ConflictException('An account with this email already exists. Please sign in instead.');
-
-    const [passwordHash, matchedInstitutionId, geo] = await Promise.all([
-      bcrypt.hash(dto.password, 10),
-      this.matchInstitution(dto.schoolName),
-      (dto.lat !== undefined && dto.lng !== undefined)
-        ? this.geocodingService.reverseGeocode(dto.lat, dto.lng)
-        : Promise.resolve({}),
-    ]);
-
-    const lead = await this.parentLeadModel.create({
-      fullName: dto.fullName.trim(),
-      email,
-      phone: dto.phone ? normalizePhone(dto.phone) : undefined,
-      passwordHash,
-      schoolNameRaw: dto.schoolName.trim(),
-      matchedInstitutionId,
-      location: {
-        lat: dto.lat, lng: dto.lng,
-        country: (geo as any).country, city: (geo as any).city, district: (geo as any).district,
-      },
-      children: dto.children || [],
-      source: 'parent-app-signup',
-    });
-
-    this.logger.log(`Parent lead registered: ${email} (school: "${dto.schoolName}", matched: ${matchedInstitutionId ? 'yes' : 'no'})`);
-
-    return { accessToken: this.signLeadToken(lead), user: this.serializeLead(lead) };
-  }
-
-  async loginLead(dto: LoginParentLeadDto) {
-    const email = dto.email.trim().toLowerCase();
-    const lead = await this.parentLeadModel.findOne({ email });
-    // Same generic message whether the email doesn't exist or the password
-    // is wrong, so a login attempt can't be used to enumerate registered emails.
-    const genericError = () => new UnauthorizedException('Incorrect email or password.');
-    if (!lead) throw genericError();
-
-    const valid = await bcrypt.compare(dto.password, lead.passwordHash);
-    if (!valid) throw genericError();
-
-    lead.lastLoginAt = new Date();
-    await lead.save();
-
-    return { accessToken: this.signLeadToken(lead), user: this.serializeLead(lead) };
   }
 }
