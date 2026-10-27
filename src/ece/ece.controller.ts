@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Request, Res, HttpCode, HttpStatus,
+  Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, Request, Res, HttpCode, HttpStatus, UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { EceService } from './ece.service';
@@ -17,7 +17,11 @@ import {
 } from './dto/ece.dto';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { StaffOnlyGuard } from '../auth/staff-only.guard';
 
+// Staff-only: parent/student tokens share the staff JwtStrategy and secret, and most
+// routes below carry no @Roles, so without this a parent could read/write any child.
+@UseGuards(StaffOnlyGuard)
 @Controller('ece')
 export class EceController {
   constructor(private readonly service: EceService) {}
@@ -176,6 +180,8 @@ export class EceController {
 
   @Patch('portfolio/:id/respond')
   respondToEntry(@Request() req: any, @Param('id') id: string, @Body() dto: FamilyResponseDto) {
+    // respondedBy is caller-supplied by design: staff record a family member's response on their
+    // behalf and enter that person's name (web ece.service.ts respondToEntry). Staff-only via the class guard.
     return this.service.respondToEntry(this.ctx(req).schoolSlug, id, dto.text, dto.respondedBy);
   }
 
@@ -242,7 +248,8 @@ export class EceController {
 
   @Patch('environment-areas/:id/safety-check')
   logSafetyCheck(@Request() req: any, @Param('id') id: string, @Body() dto: LogSafetyCheckDto) {
-    return this.service.logSafetyCheck(this.ctx(req).schoolSlug, id, dto.checkedBy);
+    // Actor comes from the token; dto.checkedBy is accepted but ignored (backward compat).
+    return this.service.logSafetyCheck(this.ctx(req).schoolSlug, id, this.ctx(req).userName);
   }
 
   @Patch('environment-areas/:id/observation')

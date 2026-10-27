@@ -171,7 +171,8 @@ export class UpdateEnvironmentAreaDto {
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 export class LogSafetyCheckDto {
-  @IsString() checkedBy: string;
+  /** Ignored: the checker is taken from the authenticated user. Kept so existing clients still validate. */
+  @IsOptional() @IsString() checkedBy?: string;
 }
 export class AddObservationNoteDto {
   @IsString() note: string;
