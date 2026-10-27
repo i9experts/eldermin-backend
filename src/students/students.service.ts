@@ -2156,8 +2156,17 @@ export class StudentsService {
 
     const filter: any = { schoolSlug };
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
-    if (grade) filter.grade = grade;
-    if (section) filter.section = section;
+    // gradeMatcher/sectionMatcher, not exact equality - the grade/section
+    // on an attendance record is a free-text snapshot taken from the
+    // marking teacher's own class assignment at save time (e.g. "Grade 3"
+    // or "GRADE-3" or "3" depending on how/when that assignment was set
+    // up), while an admin filtering this report picks the canonical name
+    // from the Grade master. An exact-string filter silently returned zero
+    // rows for real, correctly-saved records whenever those two spellings
+    // didn't match byte-for-byte - the same bug class already fixed for
+    // getStudents (Assessments' Enter Marks / Student Directory).
+    if (grade) filter.grade = gradeMatcher(grade);
+    if (section) filter.section = sectionMatcher(section);
     if (status) filter.status = status;
     // Unfiltered in subject-wise mode returns every subject's record for
     // the day (one per subject) - the caller decides whether to group by
@@ -2213,8 +2222,12 @@ export class StudentsService {
   ) {
     const filter: any = { schoolSlug };
     if (filters.studentId) filter.studentId = new Types.ObjectId(filters.studentId);
-    if (filters.grade) filter.grade = filters.grade;
-    if (filters.section) filter.section = filters.section;
+    // See the matching comment in getAttendance above - same free-text
+    // grade/section drift, same gradeMatcher/sectionMatcher fix. This is
+    // the admin-facing Attendance Report, so the bug this fixes is exactly
+    // "teacher marked attendance for months, admin's report shows nothing".
+    if (filters.grade) filter.grade = gradeMatcher(filters.grade);
+    if (filters.section) filter.section = sectionMatcher(filters.section);
     if (filters.from || filters.to) {
       filter.date = {};
       if (filters.from) filter.date.$gte = new Date(filters.from);
