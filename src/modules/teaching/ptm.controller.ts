@@ -6,21 +6,25 @@ import { PTMService } from './ptm.service';
 import { STAFF_WRITE_ROLES } from '../../auth/role-sets';
 import { projectForTeacher } from '../../students/teacher-student-projection.util';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
+import { RequireModuleAccess } from '../../roles/decorators/require-module-access.decorator';
 
 @Controller('teaching/ptm')
 export class PTMController {
   constructor(private readonly service: PTMService) {}
 
+  @RequireModuleAccess('teaching', 'ptm', 'view')
   @Get('dashboard')
   async getDashboard(@Request() req: any) {
     return this.service.getDashboardStats(req.user.tenantId);
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'view')
   @Get()
   async getMeetings(@Request() req: any, @Query() query: any) {
     return projectForTeacher(req.user, await this.service.getMeetings(req.user.tenantId, query, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'view')
   @Get('upcoming/mine')
   async getMyUpcoming(@Query('teacherId') teacherId: string, @Request() req: any) {
     // Meetings are keyed by Staff._id - req.user's own staffId isn't
@@ -29,40 +33,47 @@ export class PTMController {
     return projectForTeacher(req.user, await this.service.getUpcomingForTeacher(teacherId, req.user.tenantId, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'view')
   @Get('student/:studentId/history')
   async getStudentHistory(@Param('studentId') studentId: string, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.getStudentHistory(studentId, req.user.tenantId));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'view')
   @Get(':id')
   async getById(@Param('id') id: string, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.getMeetingById(id, req.user.tenantId, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post()
   async create(@Body() dto: any, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.createMeeting(req.user.tenantId, req.user.institutionId, dto, req.user.name, req.user.userId, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/confirm')
   async confirm(@Param('id') id: string, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.confirmMeeting(id, req.user.tenantId, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/reschedule')
   async reschedule(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.reschedule(id, req.user.tenantId, dto, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/outcome')
   async recordOutcome(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.recordOutcome(id, req.user.tenantId, dto, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/action-items/:actionItemId')
   async updateActionItem(
@@ -72,6 +83,7 @@ export class PTMController {
     return projectForTeacher(req.user, await this.service.updateActionItem(id, actionItemId, req.user.tenantId, dto.status, req.user));
   }
 
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/cancel')
   async cancel(@Param('id') id: string, @Body() dto: { reason: string }, @Request() req: any) {
