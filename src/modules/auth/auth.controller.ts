@@ -2,7 +2,7 @@ import { Controller, Post, Get, Body, Request, HttpCode, HttpStatus, UseIntercep
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
 import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
-import { Public } from '../../auth/decorators';
+import { Public, AllowNonStaff } from '../../auth/decorators';
 
 class LoginDto {
   @IsEmail() email: string;
@@ -46,6 +46,7 @@ export class AuthController {
     return this.authService.resetPassword(dto.token, dto.newPassword);
   }
 
+  @AllowNonStaff()
   @Get('me')
   getMe(@Request() req) {
     return this.authService.getMe(req.user.userId, req.user.tenantId);
@@ -58,6 +59,7 @@ export class AuthController {
   }
 
   /** Authenticated: ends ALL sessions of the caller (tokenVersion bump). The old @Public logout stays a no-op. */
+  @AllowNonStaff()
   @Post('logout-all')
   @HttpCode(HttpStatus.OK)
   logoutAll(@Request() req) {

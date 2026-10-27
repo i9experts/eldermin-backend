@@ -2,7 +2,7 @@ import {
   Controller, Get, Post, Param, Body, Query, Request, Res, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { Roles } from '../auth/decorators';
+import { Roles, AllowNonStaff } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { STUDENTS_WRITE_ROLES } from '../auth/admin-role-sets';
@@ -16,6 +16,9 @@ import { ParentPortalService } from './parent-portal.service';
 import { HomeTasksService } from '../home-tasks/home-tasks.service';
 import { CompleteHomeTaskDto } from '../home-tasks/dto/home-task.dto';
 
+// The Parent app's API. Opens NonStaffGuard only; the staff-only handlers below keep their own
+// @Roles / @RolesOrModuleManage, and student routes rely on assertStudentAccess in the service.
+@AllowNonStaff()
 @Controller('parent-portal')
 @UseInterceptors(GuardianRefreshInterceptor)
 export class ParentPortalController {
