@@ -3,7 +3,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as puppeteer from 'puppeteer';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import { IsString, IsOptional, IsMongoId } from 'class-validator';
+import { IsString, IsOptional, IsMongoId, IsInt, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules/report-templates/procurement-report-sections';
 import { FinanceService } from '../finance/finance.service';
@@ -300,6 +301,11 @@ export class BulkReportCardDto {
 
 export class GenerateQaidaReportDto {
   @IsMongoId() studentId: string;
+  // Lets the admin print only up to a specific Takhti instead of always
+  // all 16 - a student who has only started Takhti 1-2 produces a report
+  // that's mostly 14 "Not Started" rows otherwise, which the school
+  // raised as making the report look odd/unfinished.
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(QAIDA_TAKHTI_COUNT) upToTakhti?: number;
 }
 
 export class GenerateTarbiyahReportDto {
@@ -546,7 +552,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
     <div class="summary-card"><div class="summary-num" style="font-size:16px;text-transform:capitalize">${(data.overallStatus || '').replace(/_/g, ' ')}</div><div class="summary-label">Status</div></div>
   </div>
 
-  <div class="section-title">The Learning Journey — All ${data.totalTakhtis} Takhtis</div>
+  <div class="section-title">${data.journeyHeading}</div>
   <div class="journey-grid">
     ${data.takhtis.map((t: any) => {
       const style = QAIDA_STATUS_STYLE[t.status] || QAIDA_STATUS_STYLE.not_started;
@@ -1262,6 +1268,16 @@ export class PdfService implements OnModuleDestroy {
     return school;
   }
 
+  /** School.address is a structured sub-object ({street, city, province,
+   * country, postalCode}), not a string - several report templates below
+   * used to interpolate it directly (`${data.schoolAddress}`), which
+   * stringified the object as the literal text "[object Object]" printed
+   * right under the school name on the actual PDF. */
+  private formatSchoolAddress(school: any): string {
+    const a = school?.address || {};
+    return [a.street, a.city].filter(Boolean).join(', ');
+  }
+
   /**
    * Resolves the correct branding (name + logo) for a document tied to a
    * specific campus - not just the tenant's single top-level School
@@ -1354,7 +1370,7 @@ export class PdfService implements OnModuleDestroy {
 
     const data = {
       schoolName: (school as any).name,
-      schoolAddress: (school as any).address || '',
+      schoolAddress: this.formatSchoolAddress(school),
       academicYear: dto.academicYear,
       term: dto.term || '',
       studentName: studentFullName(student as any),
@@ -1453,9 +1469,20 @@ export class PdfService implements OnModuleDestroy {
       .sort((a, b) => b[1] - a[1])
       .map(([error, count]) => ({ error, count }));
 
+    // Printing all 16 takhtis for a student who has only just started
+    // (e.g. Takhti 1-2) means a dozen-plus "Not Started" rows - the school
+    // flagged this as making the report look odd. The overview stats
+    // above (mastered count, overall %) always stay against the true
+    // 16-takhti total; only the journey grid/table listing is narrowed.
+    const upToTakhti = dto.upToTakhti;
+    const shownTakhtis = upToTakhti ? takhtis.filter((t) => t.number <= upToTakhti) : takhtis;
+    const journeyHeading = upToTakhti
+      ? `The Learning Journey — Takhtis 1–${upToTakhti} of ${QAIDA_TAKHTI_COUNT}`
+      : `The Learning Journey — All ${QAIDA_TAKHTI_COUNT} Takhtis`;
+
     const data = {
       schoolName: (school as any).name,
-      schoolAddress: (school as any).address || '',
+      schoolAddress: this.formatSchoolAddress(school),
       studentName: progress.studentName,
       grade: progress.grade,
       section: progress.section,
@@ -1466,7 +1493,8 @@ export class PdfService implements OnModuleDestroy {
       masteredCount,
       totalTakhtis: QAIDA_TAKHTI_COUNT,
       masteryPct: Math.round((masteredCount / QAIDA_TAKHTI_COUNT) * 100),
-      takhtis,
+      journeyHeading,
+      takhtis: shownTakhtis,
       commonErrors,
     };
 
@@ -1572,7 +1600,7 @@ export class PdfService implements OnModuleDestroy {
 
     const data = {
       schoolName: brandName,
-      schoolAddress: (school as any).address || '',
+      schoolAddress: this.formatSchoolAddress(school),
       schoolLogo,
       moduleDisplayName,
       studentName: assessment.studentName,
@@ -1764,7 +1792,7 @@ export class PdfService implements OnModuleDestroy {
     const classLabel = `${dto.grade}${dto.section ? ' ' + dto.section : ''}`;
     const data = {
       schoolName: branding.name,
-      schoolAddress: school?.address || '',
+      schoolAddress: this.formatSchoolAddress(school),
       schoolLogo,
       moduleDisplayName: report.moduleDisplayName,
       reportTitle: `Class Report — ${classLabel}`,
@@ -1805,7 +1833,7 @@ export class PdfService implements OnModuleDestroy {
 
     const data = {
       schoolName: branding.name,
-      schoolAddress: school?.address || '',
+      schoolAddress: this.formatSchoolAddress(school),
       schoolLogo,
       moduleDisplayName: report.moduleDisplayName,
       reportTitle: 'School-Wide Report',
