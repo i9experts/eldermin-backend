@@ -37,6 +37,7 @@ import { QuizAttempt, QuizAttemptDocument } from '../assessments/schemas/quiz-at
 import {
   computeAttendanceRate, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES,
   isBelowThreshold, DEFAULT_MIN_STUDENT_ATTENDANCE_PERCENT,
+  computeWeekdayAbsencePattern, computeAttendanceStreaks,
 } from '../compliance/attendance-compliance.util';
 
 import {
@@ -2205,6 +2206,99 @@ export class StudentsService {
     ]);
   }
 
+  /** Comprehensive, multi-category attendance INSIGHTS for one student -
+   * the Student 360 Attendance tab's own endpoint, loaded only when that
+   * tab is opened (same "don't cost every tab" convention as the Learning
+   * tab's getStudentLearning, not folded into getStudent360's payload).
+   * Categories: an overview (rate + status breakdown + below-threshold
+   * flag), a monthly trend (last 12 months with data), a day-of-week
+   * absence pattern, current/longest attendance streaks, and how this
+   * student's rate compares to their own class's average over the same
+   * marked period. Lifetime-to-date, not filtered by academicYear - same
+   * reason as getStudent360 (see the comment there). */
+  async getStudentAttendanceInsights(studentId: string, schoolSlug: string) {
+    assertValidObjectId(studentId, 'student');
+    const sid = new Types.ObjectId(studentId);
+
+    const records = await this.attendanceModel.find({ studentId: sid, schoolSlug })
+      .sort({ date: 1 }).lean();
+
+    const countable = (records as any[]).filter((r) => !STUDENT_NON_SCHOOL_DAY_STATUSES.has(r.status));
+    const statuses = countable.map((r) => r.status);
+
+    const counts: Record<string, number> = {};
+    for (const s of statuses) counts[s] = (counts[s] || 0) + 1;
+    const presentCount = counts.present || 0;
+    const lateCount = counts.late || 0;
+    const absentCount = counts.absent || 0;
+    const halfDayCount = (counts.half_day_am || 0) + (counts.half_day_pm || 0) + (counts.half_day || 0);
+    const onLeaveCount = (counts.on_leave || 0) + (counts.medical || 0) + (counts.excused || 0);
+    const ratePercent = computeAttendanceRate(statuses, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES);
+    const thresholdPercent = DEFAULT_MIN_STUDENT_ATTENDANCE_PERCENT;
+
+    const overview = {
+      ratePercent, totalDays: countable.length,
+      presentCount, lateCount, absentCount, halfDayCount, onLeaveCount,
+      belowThreshold: isBelowThreshold(ratePercent, thresholdPercent), thresholdPercent,
+    };
+
+    // Monthly trend - every calendar month that has marked data, capped
+    // to the most recent 12 so a long-enrolled student's chart stays
+    // readable rather than growing unbounded.
+    const byMonth = new Map<string, string[]>();
+    for (const r of countable) {
+      const key = new Date(r.date).toISOString().slice(0, 7); // YYYY-MM
+      if (!byMonth.has(key)) byMonth.set(key, []);
+      byMonth.get(key)!.push(r.status);
+    }
+    const monthlyTrend = Array.from(byMonth.entries())
+      .map(([month, monthStatuses]) => ({
+        month,
+        ratePercent: computeAttendanceRate(monthStatuses, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES),
+        presentCount: monthStatuses.filter((s) => s === 'present' || s === 'late').length,
+        absentCount: monthStatuses.filter((s) => s === 'absent').length,
+        totalDays: monthStatuses.length,
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .slice(-12);
+
+    const weekdayPattern = computeWeekdayAbsencePattern(countable);
+    const streaks = computeAttendanceStreaks(countable);
+
+    // Class comparison - this student's rate vs. their current class's
+    // average rate over the same marked records. gradeMatcher/
+    // sectionMatcher, not exact equality - same fix as the Attendance
+    // Report (eldermin-backend#229) so a class/section spelling drift
+    // never silently shows "no data" here either.
+    let classComparison: { classRatePercent: number | null; studentRatePercent: number | null; classSize: number } | null = null;
+    const latest = records[records.length - 1] as any;
+    if (latest?.grade) {
+      const classFilter: any = { schoolSlug, grade: gradeMatcher(latest.grade) };
+      if (latest.section) classFilter.section = sectionMatcher(latest.section);
+      const classRecords = await this.attendanceModel.find(classFilter).lean();
+      const classByStudent = new Map<string, string[]>();
+      for (const r of classRecords as any[]) {
+        const key = String(r.studentId);
+        const arr = classByStudent.get(key) || [];
+        arr.push(r.status);
+        classByStudent.set(key, arr);
+      }
+      const classRates = Array.from(classByStudent.values())
+        .map((s) => computeAttendanceRate(s, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES))
+        .filter((r): r is number => r !== null);
+      const classRatePercent = classRates.length
+        ? Math.round((classRates.reduce((a, b) => a + b, 0) / classRates.length) * 10) / 10
+        : null;
+      classComparison = { classRatePercent, studentRatePercent: ratePercent, classSize: classByStudent.size };
+    }
+
+    return {
+      overview, monthlyTrend, weekdayPattern, streaks, classComparison,
+      firstRecordDate: records[0]?.date ?? null,
+      lastRecordDate: records[records.length - 1]?.date ?? null,
+    };
+  }
+
   /** Comprehensive student attendance REPORT: one row per student over a
    * date range (attendance %, present/late/absent/half-day/on-leave
    * breakdown), a daily attendance-rate trend across the filtered group,
@@ -2252,8 +2346,6 @@ export class StudentsService {
       byStudent.get(sid)!.records.push(r);
     }
 
-    const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
     const rows = Array.from(byStudent.entries()).map(([studentId, g]) => {
       const statuses = g.records.map((r) => r.status);
       const counts: Record<string, number> = {};
@@ -2265,25 +2357,9 @@ export class StudentsService {
       const onLeaveCount = (counts.on_leave || 0) + (counts.medical || 0) + (counts.excused || 0);
       const attendanceRate = computeAttendanceRate(statuses, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES);
 
-      // Same-weekday absence pattern: 3+ absences with at least half of
-      // them falling on one weekday is worth flagging even if the raw
-      // rate itself is still above threshold.
-      const weekdayAbsences: Record<number, number> = {};
-      let totalAbsences = 0;
-      for (const r of g.records) {
-        if (studentDayWeight(r.status) === 0 && !STUDENT_NON_SCHOOL_DAY_STATUSES.has(r.status)) {
-          const wd = new Date(r.date).getDay();
-          weekdayAbsences[wd] = (weekdayAbsences[wd] || 0) + 1;
-          totalAbsences++;
-        }
-      }
-      let patternFlag: string | null = null;
-      if (totalAbsences >= 3) {
-        const [topDay, topCount] = Object.entries(weekdayAbsences).sort((a, b) => b[1] - a[1])[0] || [];
-        if (topDay !== undefined && (topCount as number) >= 3 && (topCount as number) / totalAbsences >= 0.5) {
-          patternFlag = `Frequently absent on ${WEEKDAY_NAMES[Number(topDay)]}s`;
-        }
-      }
+      // Same-weekday absence pattern - shared with Student 360's
+      // attendance insights (computeWeekdayAbsencePattern).
+      const { patternFlag } = computeWeekdayAbsencePattern(g.records);
 
       return {
         studentId, studentName: g.studentName, grade: g.grade, section: g.section || '—',

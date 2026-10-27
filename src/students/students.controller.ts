@@ -526,6 +526,17 @@ export class StudentsController {
     return projectForTeacher(requestingUser, await this.studentsService.getStudentAttendanceSummary(id, schoolSlug, month));
   }
 
+  /** GET /api/v1/students/:id/attendance/insights — comprehensive,
+   * multi-category attendance insights for the Student 360 Attendance
+   * tab (overview, monthly trend, day-of-week pattern, streaks, class
+   * comparison). Its own route rather than folded into /360, same
+   * lazy-load convention as /:id/learning. */
+  @Get(':id/attendance/insights')
+  async getAttendanceInsights(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudentAttendanceInsights(id, schoolSlug));
+  }
+
   /** GET /api/v1/students/attendance/check-day — lets the teacher marking
    * screen find out *before* the teacher fills in a whole class's statuses
    * whether the selected date is even a valid school day, so the UI can
