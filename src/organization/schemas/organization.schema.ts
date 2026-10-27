@@ -191,6 +191,17 @@ export class AcademicYear {
   @Prop({ type: [TermSchema], default: [] }) terms: Term[];
   @Prop({ default: false }) isCurrent: boolean;
   @Prop() totalWorkingDays: number;
+  // Which days of the week count as school days - the master setting a
+  // school admin sets once here, which both the teacher attendance screen
+  // and the attendance write path (StudentsService.checkSchoolDay) read to
+  // decide which dates a teacher may mark attendance on. Day codes match
+  // JS Date.getDay() via WEEKDAY_CODES in students.service.ts. Defaults to
+  // Mon-Fri, same default already used for staff leave day-counting in
+  // modules/hr/schemas/attendance-settings.schema.ts, so an existing
+  // school that never touches this setting sees unchanged behavior until
+  // an admin deliberately opts into a narrower/wider week.
+  @Prop({ type: [String], default: ['mon', 'tue', 'wed', 'thu', 'fri'] })
+  workingDays: string[];
   @Prop() remarks: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
   // Optional scope narrowing — mirrors Campus.institutionId / Grade.campusId.

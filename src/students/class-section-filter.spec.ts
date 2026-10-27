@@ -13,10 +13,8 @@ function chain(result: any) {
 }
 
 function makeService(gradeModel: any, studentModel?: any) {
-  const n: any = {};
-  return new StudentsService(
-    studentModel || n, n, n, n, n, n, n, n, gradeModel, n, n, n, n, n, n, n, n, n, n, n, n,
-  );
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
+  return new StudentsService(studentModel || n, n, n, n, n, n, n, n, gradeModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
 }
 
 describe('StudentsService.getDistinctGradesSections', () => {

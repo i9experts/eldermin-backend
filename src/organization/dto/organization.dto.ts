@@ -1,6 +1,6 @@
 import {
   IsString, IsOptional, IsEnum, IsBoolean, IsNumber,
-  IsArray, IsDateString, IsMongoId, ValidateNested,
+  IsArray, IsDateString, IsMongoId, ValidateNested, IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
@@ -58,6 +58,11 @@ export class CreateAcademicYearDto {
   @IsDateString() endDate: string;
   @IsOptional() @IsBoolean() isCurrent?: boolean;
   @IsOptional() @IsNumber() totalWorkingDays?: number;
+  // The master "which weekdays are school days" setting - gates teacher
+  // attendance marking (see StudentsService.checkSchoolDay). Omitted means
+  // "leave as whatever the schema default/existing value already is".
+  @IsOptional() @IsArray() @IsIn(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'], { each: true })
+  workingDays?: string[];
   @IsOptional() @IsString() remarks?: string;
   @IsOptional() terms?: { name: string; startDate: string; endDate: string }[];
   @IsOptional() @IsString() institutionId?: string;

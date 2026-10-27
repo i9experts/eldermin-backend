@@ -22,9 +22,9 @@ function makeAttendanceModel({ findOneAndUpdateImpl, bulkWriteImpl }: {
 }
 
 function makeService(attendanceModel: any) {
-  const n: any = {};
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
   // Constructor order: studentModel, attendanceModel, feeModel, ... (21 args total).
-  return new StudentsService(n, attendanceModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
+  return new StudentsService(n, attendanceModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
 }
 
 function mongoDuplicateKeyError() {

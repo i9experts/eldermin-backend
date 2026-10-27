@@ -84,8 +84,8 @@ describe('malformed id -> 400 on teacher-app routes', () => {
 
   it('students by id (360, detail, attendance summary)', async () => {
     const studentModel: any = { findOne: jest.fn() };
-    const n: any = {};
-    const svc = new StudentsService(studentModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
+    const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
+    const svc = new StudentsService(studentModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
     await expect(svc.getStudentById('bad', 's')).rejects.toThrow('Invalid student id');
     await expect(svc.getStudent360('bad', 's', teacher)).rejects.toThrow('Invalid student id');
     await expect(svc.getStudentAttendanceSummary('bad', 's')).rejects.toThrow('Invalid student id');

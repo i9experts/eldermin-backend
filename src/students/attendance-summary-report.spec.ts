@@ -18,8 +18,8 @@ function makeAttendanceModel(records: any[]) {
 }
 
 function makeService(studentModel: any, attendanceModel: any) {
-  const n: any = {};
-  return new StudentsService(studentModel, attendanceModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
+  return new StudentsService(studentModel, attendanceModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
 }
 
 function rec(overrides: Partial<any> = {}) {
