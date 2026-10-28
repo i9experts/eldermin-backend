@@ -2160,11 +2160,28 @@ export class StudentsService {
     // has (Mongo treats "field absent" and "field is null" the same way
     // for an equality match), so daily mode's one-record-per-day
     // behavior is unchanged.
+    //
+    // The match filter is deliberately {studentId, date, subject} ONLY -
+    // exactly the unique index's own fields, NOT also schoolSlug. A
+    // teacher reported this save deterministically 409ing on the SAME
+    // single request every time (confirmed via the browser network tab -
+    // one request, not a race between two) - caused by schoolSlug being
+    // in the match filter despite not being part of the unique index: if
+    // an existing record's stored schoolSlug ever drifted from what the
+    // current request carries (a stale/cached auth claim, a campus-slug
+    // change, etc.), the filter found no match, the upsert tried to
+    // INSERT a new document, and that insert collided with the unique
+    // index's (studentId, date, subject) key that the existing record
+    // already held - a genuine, deterministic structural mismatch, not a
+    // timing race, and retrying the identical op would just fail the
+    // identical way forever. schoolSlug is still written on every save
+    // (via $set below), so this also self-heals any already-drifted
+    // record back to the caller's current, correct schoolSlug.
     let saved;
     try {
       saved = await this.attendanceModel.findOneAndUpdate(
-        { studentId: new Types.ObjectId(dto.studentId), date, schoolSlug: dto.schoolSlug, subject: dto.subject || null },
-        { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), subject: dto.subject || null } },
+        { studentId: new Types.ObjectId(dto.studentId), date, subject: dto.subject || null },
+        { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), schoolSlug: dto.schoolSlug, subject: dto.subject || null } },
         { upsert: true, new: true },
       );
     } catch (err: any) {
@@ -2204,9 +2221,14 @@ export class StudentsService {
       const date = new Date(r.date);
       date.setHours(0, 0, 0, 0);
       return {
-        // subject in the filter too - see the comment in markAttendance
-        // above for why this is safe for existing daily-mode records.
-        filter: { studentId: new Types.ObjectId(r.studentId), date, schoolSlug: dto.schoolSlug, subject: r.subject || null },
+        // Matches ONLY the unique index's own fields (studentId, date,
+        // subject) - NOT also schoolSlug - see the comment on this same
+        // fix in markAttendance above for why including schoolSlug in the
+        // match filter caused a deterministic (not race-based) 409 on
+        // every single save for a record whose stored schoolSlug had
+        // drifted from the current request's. schoolSlug is still
+        // written on every save, healing any drift.
+        filter: { studentId: new Types.ObjectId(r.studentId), date, subject: r.subject || null },
         update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
         upsert: true,
       };
