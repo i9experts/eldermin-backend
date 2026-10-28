@@ -4,6 +4,7 @@ import { APP_GUARD, Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { NonStaffGuard, nonStaffGuardMode } from './non-staff.guard';
+import { ResellerScopeGuard } from './reseller-scope.guard';
 import { RolesGuard } from './roles.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { AllowNonStaff, Public, ROLES_KEY } from './decorators';
@@ -252,10 +253,10 @@ describe('resellers (non-staff roles with their own portal)', () => {
 });
 
 describe('guard order', () => {
-  it('AppModule registers NonStaffGuard directly after JwtAuthGuard then RolesGuard', () => {
+  it('AppModule registers NonStaffGuard directly after JwtAuthGuard then RolesGuard, then ResellerScopeGuard', () => {
     const providers: any[] = Reflect.getMetadata('providers', AppModule);
     const order = providers.filter((p) => p?.provide === APP_GUARD).map((p) => p.useClass);
-    expect(order).toEqual([JwtAuthGuard, RolesGuard, NonStaffGuard]);
+    expect(order).toEqual([JwtAuthGuard, RolesGuard, NonStaffGuard, ResellerScopeGuard]);
   });
 
   it('at runtime NonStaffGuard sees req.user set by the preceding auth guard', async () => {

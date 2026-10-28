@@ -15,8 +15,8 @@ const proto: any = ParentPortalController.prototype;
 const routeNames = (): string[] =>
   Object.getOwnPropertyNames(proto).filter((n) => n !== 'constructor' && typeof proto[n] === 'function' && Reflect.getMetadata('path', proto[n]) !== undefined);
 
-// The five school-side routes: they keep their own method-level @Roles.
-const CONSENT = ['listConsentRequests', 'createConsentRequest', 'closeConsentRequest'];
+// The six school-side routes (five when the branch was cut; getConsentRequestResults was added on main since): they keep their own method-level @Roles.
+const CONSENT = ['listConsentRequests', 'createConsentRequest', 'closeConsentRequest', 'getConsentRequestResults'];
 const LINK = ['linkGuardian', 'unlinkGuardian'];
 const STAFF_ROUTES = [...CONSENT, ...LINK];
 
@@ -35,7 +35,7 @@ describe('parent-portal: parent-only by default', () => {
     expect(Reflect.getMetadata(ROLES_KEY, ParentPortalController)).toEqual([UserRole.PARENT]);
   });
 
-  it('exactly the five school-side routes carry their own method-level @Roles; every other route inherits the class default', () => {
+  it('exactly the six school-side routes carry their own method-level @Roles; every other route inherits the class default', () => {
     const own = routeNames().filter((n) => Reflect.getMetadata(ROLES_KEY, proto[n]) !== undefined).sort();
     expect(own).toEqual([...STAFF_ROUTES].sort());
     expect(routeNames().length).toBeGreaterThanOrEqual(40);
