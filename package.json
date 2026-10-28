@@ -29,7 +29,8 @@
     "fix:class-teacher-assignments": "ts-node -r tsconfig-paths/register src/scripts/fix-class-teacher-assignments.ts",
     "dedupe:grade-sections": "ts-node -r tsconfig-paths/register src/scripts/dedupe-grade-sections.ts",
     "fix:student-class-section-names": "ts-node -r tsconfig-paths/register src/scripts/fix-student-class-section-names.ts",
-    "audit:duplicate-staff": "ts-node -r tsconfig-paths/register src/scripts/audit-duplicate-staff.ts"
+    "audit:duplicate-staff": "ts-node -r tsconfig-paths/register src/scripts/audit-duplicate-staff.ts",
+    "dedupe:attendance": "ts-node -r tsconfig-paths/register src/scripts/dedupe-attendance.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",

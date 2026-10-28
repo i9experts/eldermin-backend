@@ -288,6 +288,15 @@ export class AttendanceQueryDto extends PaginationDto {
   @IsOptional() @IsMongoId() studentId?: string;
   @IsOptional() @IsString() grade?: string;
   @IsOptional() @IsString() section?: string;
+  // Exact single calendar day — what the daily marking register (and its
+  // save-confirmation banner) actually filters by. Was missing from this
+  // DTO entirely, so the global ValidationPipe's whitelist (main.ts) was
+  // silently stripping `?date=...` off every request before it reached
+  // the controller: getAttendance() received no date/from/to/month at
+  // all, applied no date filter, and just returned the most recently
+  // marked records overall — identical regardless of which date the
+  // teacher picked in the UI.
+  @IsOptional() @IsDateString() date?: string;
   @IsOptional() @IsDateString() from?: string;
   @IsOptional() @IsDateString() to?: string;
   @IsOptional() @IsString() status?: string;

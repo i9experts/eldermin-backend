@@ -576,6 +576,16 @@ export class StudentsController {
     return this.studentsService.bulkMarkAttendance({ ...dto, schoolSlug, academicYear });
   }
 
+  /** DELETE /api/v1/students/attendance/:id — revert a wrongly-marked
+   * record back to "Not marked" so a teacher (or admin) can re-mark it
+   * correctly, instead of being stuck with no way to undo a mistake. */
+  @RolesOrModuleManage('students', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Delete('attendance/:id')
+  async revertAttendance(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.studentsService.revertAttendance(id, schoolSlug, requestingUser);
+  }
+
   // ============================================================
   // FEE MANAGEMENT
   // ============================================================
