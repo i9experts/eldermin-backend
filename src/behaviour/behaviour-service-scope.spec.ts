@@ -71,8 +71,10 @@ describe('getRecords: teacher narrowing', () => {
     expect(or).toHaveLength(1);
     expect(or[0].grade.test('5')).toBe(true);          // tolerant: '5' == 'Grade 5'
     expect(or[0].grade.test('Grade 6')).toBe(false);
-    expect(or[0].section.test('A')).toBe(true);
-    expect(or[0].section.test('B')).toBe(false);
+    const [bySection, noSection] = or[0].$or;
+    expect(bySection.section.test('A')).toBe(true);
+    expect(bySection.section.test('B')).toBe(false);
+    expect(noSection.section.$in.slice(0, 2)).toEqual([null, '']);  // record with no section: class-only match
   });
 
   it('enforce: a teacher with no classes sees nothing (impossible filter), not everything', async () => {

@@ -2,20 +2,29 @@
 // teacher's classes lives in BehaviourService (same source as the assessments
 // module: Staff.userId -> TeacherProfile class-teacher + currentAssignments).
 
-import { gradeMatcher, sameGrade, sectionMatcher, sameSection } from '../common/utils/class-match.util';
+import { gradeMatcher, normalizeSectionName, sameGrade, sectionMatcher, sameSection } from '../common/utils/class-match.util';
 import { TeacherClassRef } from '../staff-portal/teacher-identity.util';
 
-/** True when (grade, section) is one of the teacher's classes. A class without a section covers every section of that grade. */
+/**
+ * True when (grade, section) is one of the teacher's classes. A class without a
+ * section covers every section of that grade. A RECORD without a section (blank
+ * or missing) matches by class only: the teacher is assigned to that grade in
+ * some section, and the record cannot say which, so it is not hidden from them.
+ */
 export function classIncludes(classes: TeacherClassRef[], grade: unknown, section: unknown): boolean {
-  return classes.some(c => sameGrade(c.grade, grade) && (!c.section || sameSection(c.section, section)));
+  const recordHasSection = normalizeSectionName(section) !== '';
+  return classes.some(c => sameGrade(c.grade, grade) && (!c.section || !recordHasSection || sameSection(c.section, section)));
 }
+
+/** Mongo equivalent of "record has no section": missing, null, '' or whitespace only. */
+const NO_SECTION = [null, '', /^\s*$/];
 
 /** Mongo filter matching records whose grade/section fall in the teacher's classes; no classes -> matches nothing. */
 export function classScopeFilter(classes: TeacherClassRef[]): any {
   if (!classes.length) return { _id: { $in: [] } };
   return {
     $or: classes.map(c => (c.section
-      ? { grade: gradeMatcher(c.grade), section: sectionMatcher(c.section) }
+      ? { grade: gradeMatcher(c.grade), $or: [{ section: sectionMatcher(c.section) }, { section: { $in: NO_SECTION } }] }
       : { grade: gradeMatcher(c.grade) })),
   };
 }
@@ -39,8 +48,12 @@ export function isOwnByAuthor(
   return a !== '' && a === b;
 }
 
-/** Fields no behaviour PUT may ever change (a raw $set of these could move a record to another school or re-attribute it). */
-export const PROTECTED_UPDATE_FIELDS = ['_id', 'schoolSlug', 'campusId', 'createdAt', 'updatedAt'];
+/**
+ * Fields no behaviour PUT may ever change (a raw $set of these could move a record to another school or
+ * re-attribute it). They are silently STRIPPED, never rejected with 400, so a web edit form that sends the
+ * whole object back keeps working (the value just does not change).
+ */
+export const PROTECTED_UPDATE_FIELDS = ['_id', '__v', 'schoolSlug', 'campusId', 'createdAt', 'updatedAt'];
 
 export function stripProtectedFields<T extends Record<string, any>>(data: T, extra: string[] = []): T {
   const out: any = { ...(data || {}) };
