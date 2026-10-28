@@ -1,4 +1,6 @@
 import { schoolSlugOf } from '../common/utils/school-slug.util';
+import { assertStaffAccount } from '../behaviour/behaviour-access';
+import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import {
   Controller, Get, Post, Body, Res, Query,
   UseGuards, Request, HttpStatus,
@@ -57,12 +59,14 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('qaida-report')
   async generateQaidaReport(
     @Body() dto: GenerateQaidaReportDto,
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate the Qaida report
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateQaidaReport(schoolSlug, dto, req.user.userId);
     res.set({
@@ -73,12 +77,14 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('tarbiyah-report')
   async generateTarbiyahReport(
     @Body() dto: GenerateTarbiyahReportDto,
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate behaviour/Tarbiyah reports
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTarbiyahReport(schoolSlug, dto, req.user.userId);
     res.set({
@@ -89,12 +95,14 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('tarbiyah-class-report')
   async generateTarbiyahClassReport(
     @Body() dto: GenerateTarbiyahClassReportDto,
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate behaviour/Tarbiyah reports
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTarbiyahClassReport(schoolSlug, dto, req.user.userId);
     res.set({
@@ -105,12 +113,14 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('tarbiyah-school-report')
   async generateTarbiyahSchoolReport(
     @Body() dto: GenerateTarbiyahSchoolReportDto,
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate behaviour/Tarbiyah reports
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTarbiyahSchoolReport(schoolSlug, dto, req.user.userId);
     res.set({

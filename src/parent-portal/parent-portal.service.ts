@@ -11,6 +11,7 @@ import { StudentAttendance, StudentAttendanceDocument } from '../students/schema
 import { Invoice, InvoiceDocument } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntryDocument, ReportCard, ReportCardDocument } from '../assessments/schemas/assessment.schema';
 import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahAssessmentDocument } from '../behaviour/schemas/behaviour.schema';
+import { PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf } from './parent-behaviour.projection';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { AssignmentSubmission, AssignmentSubmissionDocument } from '../modules/teaching/schemas/assignment-submission.schema';
@@ -478,16 +479,20 @@ export class ParentPortalService {
     const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
     if (access.suspended) return { suspended: true, feature: 'tarbiyah_report', reason: access.reason || null };
     const sid = new Types.ObjectId(studentId);
+    // Tenant check: the guardian link above is by id only; the child must also belong to this school.
+    if (!(await this.studentModel.exists({ _id: sid, schoolSlug }))) throw new NotFoundException('Student not found');
     const db = this.reportCardModel.db;
     const [records, notes, tarbiyah, settings]: any[] = await Promise.all([
-      this.behaviourModel.find({ studentId: sid, schoolSlug }).sort({ date: -1 }).limit(50).lean(),
+      // Explicit allowlist (parent-behaviour.projection.ts): staff-only fields (witnesses, follow-up/resolution
+      // notes, reporter ids, attachments, severity, consequence...) are never selected, never sent.
+      this.behaviourModel.find({ studentId: sid, schoolSlug }).select(selectOf(PARENT_BEHAVIOUR_RECORD_FIELDS)).sort({ date: -1 }).limit(50).lean(),
       // Teacher notes from the web's Teaching > Behaviour tab (a separate
       // collection from behaviour_records) - only ones the teacher flagged
       // as notified to the parent.
       db.collection('behaviourNotes').find({ studentId: sid, parentNotified: true }).sort({ incidentDate: -1 }).limit(50).toArray(),
       // Only assessments the school explicitly shared with parents.
       this.tarbiyahModel.find({ studentId: sid, schoolSlug, parentShared: true })
-        .select('-assessedById -schoolSlug -campusId').sort({ assessmentDate: -1 }).limit(20).lean(),
+        .select(selectOf(PARENT_TARBIYAH_FIELDS)).sort({ assessmentDate: -1 }).limit(20).lean(),
       db.collection('character_program_settings').findOne({ schoolSlug }),
     ]);
 
@@ -495,7 +500,7 @@ export class ParentPortalService {
     const max = settings?.ratingScale?.max ?? 5;
     const names = new Map<string, string>((settings?.characteristics || []).map((c: any) => [c.key, c.nameEn]));
     const pct = (score: number) => Math.round(Math.max(0, Math.min(100, ((score - min) / ((max - min) || 1)) * 100)));
-    const assessments = tarbiyah.map((a: any) => ({
+    const assessments = tarbiyah.map(projectParentTarbiyahAssessment).map((a: any) => ({
       ...a,
       ratingScale: { min, max },
       programName: settings?.moduleDisplayName || 'Tarbiyah',
@@ -508,7 +513,7 @@ export class ParentPortalService {
       type: n.type === 'positive' ? 'positive' : n.type === 'resolved' ? 'neutral' : 'negative',
       points: n.type === 'positive' ? 1 : n.type === 'resolved' ? 0 : -1,
     }));
-    const behaviourRecords = [...records, ...noteRecords]
+    const behaviourRecords = [...records.map(projectParentBehaviourRecord), ...noteRecords]
       .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
     return { behaviourRecords, tarbiyahAssessments: assessments };
   }

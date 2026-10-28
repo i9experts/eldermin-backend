@@ -116,7 +116,7 @@ describe('StudentsService.getStudentAttendanceSummaryReport', () => {
     await svc.getStudentAttendanceSummaryReport('demo-school', { campusId: 'campus-1' });
 
     expect(studentModel.find).toHaveBeenCalledWith({ schoolSlug: 'demo-school', campusId: 'campus-1' });
-    const attFilter = attendanceModel.find.mock.calls[0][0];
+    const attFilter = (attendanceModel.find.mock.calls as any[][])[0][0];
     expect(attFilter.studentId).toEqual({ $in: ['6adb0cb2cc237fa999a1de70'] });
   });
 

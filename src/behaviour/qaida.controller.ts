@@ -4,14 +4,17 @@
 // ============================================================
 
 import {
-  Controller, Get, Post, Patch, Body, Param, Query, Request,
+  Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards,
 } from '@nestjs/common';
 import { QaidaService } from './qaida.service';
 import { InitQaidaProgressDto, RecordTakhtiAttemptDto, UpdateTakhtiStatusDto } from './dto/qaida.dto';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
 
+// B0.2: parent / student / reseller tokens are denied on every route (both guard modes); staff access unchanged.
 @Controller('behaviour/qaida')
+@UseGuards(BehaviourStaffOnlyGuard)
 export class QaidaController {
   constructor(private readonly service: QaidaService) {}
 

@@ -21,6 +21,12 @@ import {
   CharacterProgramSettings, CharacterProgramSettingsDocument,
 } from './schemas/character-program-settings.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
+import { resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
+import { BehaviourAccessContext, denyOrLog, logBehaviourGuard } from './behaviour-access';
+import { classIncludes, classScopeFilter, isOwnByAuthor, stripProtectedFields } from './behaviour-teacher-scope';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -46,7 +52,63 @@ export class BehaviourService {
     @InjectModel(Intervention.name) private interventionModel: Model<InterventionDocument>,
     @InjectModel(BehaviourContract.name) private contractModel: Model<BehaviourContractDocument>,
     @InjectModel(CharacterProgramSettings.name) private characterSettingsModel: Model<CharacterProgramSettingsDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
   ) {}
+
+  // ============================================================
+  // TEACHER CLASS SCOPING (B0, BEHAVIOUR_GUARD_MODE)
+  // A TEACHER sees/acts on records of the classes they teach (class-teacher
+  // sections + currentAssignments, resolved from the DB, never the JWT).
+  // enforce: lists are narrowed, single records outside the scope 403.
+  // log (default): nothing changes, a would-deny/would-narrow event is logged.
+  // Other roles are never scoped here (campus scoping is unchanged).
+  // ============================================================
+  private async teacherClassScope(user: ScopedUser | undefined, access?: BehaviourAccessContext): Promise<TeacherClassRef[] | null> {
+    if (!access?.isTeacher || !user) return null;
+    try {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user);
+      const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+        .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments currentAssignments').lean();
+      return teacherClassesOf(profile);
+    } catch (err) {
+      if (access.enforce) throw err;
+      denyOrLog(access, user, 'teacher_identity_unresolved', 'No staff profile is linked to this account.');
+      return [];
+    }
+  }
+
+  private checkTeacherClass(user: ScopedUser | undefined, access: BehaviourAccessContext | undefined, classes: TeacherClassRef[] | null, grade: unknown, section: unknown, reason: string): void {
+    if (!classes || !access) return;
+    if (classIncludes(classes, grade, section)) return;
+    denyOrLog(access, user, reason, 'Access denied. This student is not in one of your classes.');
+  }
+
+  /** Log mode only: how many returned rows a teacher would NOT have seen under enforce. */
+  private logWouldNarrow(user: ScopedUser | undefined, access: BehaviourAccessContext | undefined, classes: TeacherClassRef[] | null, rows: any[]): void {
+    if (!classes || !access || access.enforce) return;
+    const outside = rows.filter(r => !classIncludes(classes, r.grade, r.section)).length;
+    if (outside > 0) {
+      logBehaviourGuard({
+        mode: access.mode, decision: 'would_deny', reason: `teacher_scope_would_narrow:${outside}/${rows.length}`,
+        role: access.role, method: access.method, route: access.route, user,
+      });
+    }
+  }
+
+  private async studentClassOf(studentId: any, schoolSlug: string): Promise<{ grade?: string; section?: string } | null> {
+    if (!studentId || !Types.ObjectId.isValid(String(studentId))) return null;
+    const s: any = await this.studentModel.findOne({ _id: new Types.ObjectId(String(studentId)), schoolSlug }).select('currentGrade currentSection').lean();
+    return s ? { grade: s.currentGrade, section: s.currentSection } : null;
+  }
+
+  private async checkTeacherStudent(user: ScopedUser | undefined, access: BehaviourAccessContext | undefined, classes: TeacherClassRef[] | null, studentId: any, schoolSlug: string): Promise<void> {
+    if (!classes || !access) return;
+    const c = await this.studentClassOf(studentId, schoolSlug);
+    if (!c) return denyOrLog(access, user, 'teacher_unknown_student', 'Access denied. This student is not in one of your classes.');
+    this.checkTeacherClass(user, access, classes, c.grade, c.section, 'teacher_student_outside_classes');
+  }
 
   // ============================================================
   // DASHBOARD
@@ -158,7 +220,9 @@ export class BehaviourService {
   // ============================================================
   // BEHAVIOUR RECORDS
   // ============================================================
-  async createRecord(data: any, requestingUser?: ScopedUser) {
+  async createRecord(data: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
+    await this.checkTeacherStudent(requestingUser, access, classes, data.studentId, data.schoolSlug);
     const record = new this.recordModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
@@ -177,7 +241,8 @@ export class BehaviourService {
     return saved;
   }
 
-  async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+  async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
     const { page = 1, limit = 20, type, category, severity, grade, studentId,
       resolved, from, to, followUpOverdue, campusId } = query;
     const { skip } = paged(page, limit);
@@ -209,27 +274,46 @@ export class BehaviourService {
       ];
     }
 
+    if (classes && access?.enforce) filter.$and = [...(filter.$and || []), classScopeFilter(classes)];
+
     const [data, total] = await Promise.all([
       this.recordModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
       this.recordModel.countDocuments(filter),
     ]);
+    this.logWouldNarrow(requestingUser, access, classes, data);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
-  async getRecordById(id: string, schoolSlug: string) {
+  async getRecordById(id: string, schoolSlug: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
     const r = await this.recordModel.findOne({ _id: id, schoolSlug });
     if (!r) throw new NotFoundException('Record not found');
+    const classes = await this.teacherClassScope(requestingUser, access);
+    this.checkTeacherClass(requestingUser, access, classes, r.grade, r.section, 'teacher_record_outside_classes');
     return r;
   }
 
-  async updateRecord(id: string, schoolSlug: string, data: any) {
+  async updateRecord(id: string, schoolSlug: string, data: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
-    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    if (access?.isTeacher) {
+      const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).select('reportedById reportedBy').lean();
+      if (existing && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
+        denyOrLog(access, requestingUser, 'teacher_edits_other_record', 'You can only edit behaviour records you logged yourself.');
+      }
+    }
+    // A raw $set of schoolSlug/campusId would move a record to another school/campus.
+    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: stripProtectedFields(data) }, { new: true });
   }
 
-  async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string) {
+  async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
+    if (access?.isTeacher) {
+      const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).select('grade section').lean();
+      if (existing) {
+        const classes = await this.teacherClassScope(requestingUser, access);
+        this.checkTeacherClass(requestingUser, access, classes, existing.grade, existing.section, 'teacher_record_outside_classes');
+      }
+    }
     return this.recordModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { resolved: true, resolvedDate: new Date(), resolvedNote: note, verifiedBy: resolvedBy } },
@@ -237,8 +321,10 @@ export class BehaviourService {
     );
   }
 
-  async getStudentBehaviourProfile(studentId: string, schoolSlug: string, academicYear?: string) {
+  async getStudentBehaviourProfile(studentId: string, schoolSlug: string, academicYear?: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(studentId, 'student');
+    const classes = await this.teacherClassScope(requestingUser, access);
+    await this.checkTeacherStudent(requestingUser, access, classes, studentId, schoolSlug);
     const filter: any = { studentId: new Types.ObjectId(studentId), schoolSlug };
     if (academicYear) filter.academicYear = academicYear;
 
@@ -293,7 +379,7 @@ export class BehaviourService {
   async updateCharacterSettings(schoolSlug: string, dto: any) {
     return this.characterSettingsModel.findOneAndUpdate(
       { schoolSlug },
-      { $set: dto },
+      { $set: stripProtectedFields(dto) },
       { upsert: true, new: true },
     );
   }
@@ -301,7 +387,11 @@ export class BehaviourService {
   // ============================================================
   // TARBIYAH ASSESSMENTS
   // ============================================================
-  async createTarbiyahAssessment(schoolSlug: string, data: any, requestingUser?: ScopedUser) {
+  async createTarbiyahAssessment(schoolSlug: string, data: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
+    await this.checkTeacherStudent(requestingUser, access, classes, data.studentId, schoolSlug);
+    // Authorship comes from the token, never the body (needed for "author or admin" edits).
+    if (requestingUser?.userId && Types.ObjectId.isValid(String(requestingUser.userId))) data = { ...data, assessedById: String(requestingUser.userId) };
     const settings = await this.getCharacterSettings(schoolSlug);
     const { min, max } = settings.ratingScale;
     const traits = data.traits || [];
@@ -330,7 +420,8 @@ export class BehaviourService {
     return assessment.save();
   }
 
-  async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+  async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
     const { page = 1, limit = 20, grade, studentId, period, periodType, campusId } = query;
     const { skip } = paged(page, limit);
 
@@ -342,10 +433,13 @@ export class BehaviourService {
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
 
+    if (classes && access?.enforce) filter.$and = [...(filter.$and || []), classScopeFilter(classes)];
+
     const [data, total] = await Promise.all([
       this.tarbiyahModel.find(filter).sort({ assessmentDate: -1 }).skip(skip).limit(limit),
       this.tarbiyahModel.countDocuments(filter),
     ]);
+    this.logWouldNarrow(requestingUser, access, classes, data);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
@@ -507,7 +601,15 @@ export class BehaviourService {
     };
   }
 
-  async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any) {
+  async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'tarbiyah assessment');
+    // Never re-home or re-attribute an assessment through a raw $set; only admins may rewrite the display name.
+    data = stripProtectedFields(data, ['studentId', 'assessedById', ...(access?.elevated === false ? ['assessedBy'] : [])]);
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared').lean();
+    // Author or admin: a non-author teacher/coordinator may not edit someone else's assessment.
+    if (access && !access.elevated && existing && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
+      denyOrLog(access, requestingUser, 'tarbiyah_edit_not_author_or_admin', 'Only the author of this assessment or an administrator can edit it.');
+    }
     if (data.traits) {
       const settings = await this.getCharacterSettings(schoolSlug);
       const { min, max } = settings.ratingScale;
@@ -525,7 +627,7 @@ export class BehaviourService {
       data.overallRating = getTarbiyahRating(overallPercentage);
     }
     if (data.parentShared === true) data.parentSharedDate = new Date();
-    const before: any = data.parentShared === true ? await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('parentShared').lean() : null;
+    const before: any = data.parentShared === true ? existing : null;
     const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
     if (updated && data.parentShared === true && !before?.parentShared) {
       await notifyGuardiansOfStudents(this.tarbiyahModel.db, [updated.studentId], {
@@ -575,7 +677,7 @@ export class BehaviourService {
   }
 
   async updateCounsellingSession(id: string, schoolSlug: string, data: any) {
-    return this.counsellingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    return this.counsellingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: stripProtectedFields(data) }, { new: true });
   }
 
   async completeCounsellingSession(id: string, schoolSlug: string, completionData: any) {
@@ -635,7 +737,7 @@ export class BehaviourService {
   }
 
   async updateIntervention(id: string, schoolSlug: string, data: any) {
-    return this.interventionModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    return this.interventionModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: stripProtectedFields(data) }, { new: true });
   }
 
   async addProgressNote(id: string, schoolSlug: string, note: string, addedBy: string) {
@@ -690,6 +792,7 @@ export class BehaviourService {
   }
 
   async signContract(id: string, schoolSlug: string, signedBy: 'student' | 'parent' | 'teacher') {
+    if (!['student', 'parent', 'teacher'].includes(signedBy)) throw new BadRequestException('signedBy must be student, parent or teacher');
     const update: any = {};
     update[`${signedBy}Signed`] = true;
     update[`${signedBy}SignedDate`] = new Date();
