@@ -75,7 +75,10 @@ function makeController(result: any) {
     'getStudentLearning', 'getAttendance', 'getStudentAttendanceSummary', 'getAllGuardians', 'getFees', 'getFeeStatement']) {
     svc[m] = jest.fn(async () => result);
   }
-  return { ctrl: new StudentsController(svc as StudentsService), svc };
+  // getFeeStatement now reads real invoices via FinanceService instead of
+  // the dead StudentFee collection - see students.controller.ts.
+  const finance: any = { getInvoices: jest.fn(async () => ({ data: [] })) };
+  return { ctrl: new StudentsController(svc as StudentsService, finance), svc, finance };
 }
 const reqOf = (user: any) => ({ user, headers: {} });
 
@@ -165,7 +168,9 @@ describe('B5 StudentsController: teacher projection per endpoint', () => {
     await expect(ctrl.getFeeStatement(sid.toString(), reqOf(teacherU))).rejects.toThrow(/not available to the teacher/);
     for (const role of OTHER_ROLES) {
       await expect(ctrl.getFees(reqOf({ role, schoolSlug: 's' }), {} as any)).resolves.toEqual({ fees: [] });
-      await expect(ctrl.getFeeStatement(sid.toString(), reqOf({ role, schoolSlug: 's' }))).resolves.toEqual({ fees: [] });
+      await expect(ctrl.getFeeStatement(sid.toString(), reqOf({ role, schoolSlug: 's' }))).resolves.toEqual({
+        invoices: [], summary: { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
+      });
     }
   });
 

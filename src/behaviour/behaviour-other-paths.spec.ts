@@ -16,7 +16,7 @@ function studentsController() {
     updateBehaviour: jest.fn(async () => ({})),
     getStudent360: jest.fn(async () => ({ student: { _id: SID }, behaviour: { totalPoints: 1, recent: [] } })),
   };
-  return { ctl: new StudentsController(service), service };
+  return { ctl: new StudentsController(service, {} as any), service };
 }
 
 describe('legacy /students behaviour routes (store C)', () => {
