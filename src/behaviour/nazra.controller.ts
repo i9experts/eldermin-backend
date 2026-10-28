@@ -4,14 +4,17 @@
 // ============================================================
 
 import {
-  Controller, Get, Post, Patch, Body, Param, Query, Request,
+  Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards,
 } from '@nestjs/common';
 import { NazraService } from './nazra.service';
 import { InitNazraProgressDto, RecordNazraDiaryDto, UpdateParaStatusDto } from './dto/nazra.dto';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
 
+// B0.2: parent / student / reseller tokens are denied on every route (both guard modes); staff access unchanged.
 @Controller('behaviour/nazra')
+@UseGuards(BehaviourStaffOnlyGuard)
 export class NazraController {
   constructor(private readonly service: NazraService) {}
 

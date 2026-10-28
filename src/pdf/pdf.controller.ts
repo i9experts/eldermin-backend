@@ -64,6 +64,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate the Qaida report
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateQaidaReport(schoolSlug, dto, req.user.userId);
     res.set({

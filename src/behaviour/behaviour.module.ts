@@ -24,6 +24,7 @@ import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schema
 import { Role, RoleSchema } from '../roles/schemas/role.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { BehaviourAccessGuard } from './guards/behaviour-access.guard';
+import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
 
 @Module({
   imports: [
@@ -45,7 +46,7 @@ import { BehaviourAccessGuard } from './guards/behaviour-access.guard';
     ]),
   ],
   controllers: [BehaviourController, QaidaController, NazraController],
-  providers: [BehaviourService, QaidaService, NazraService, BehaviourAccessGuard],
+  providers: [BehaviourService, QaidaService, NazraService, BehaviourAccessGuard, BehaviourStaffOnlyGuard],
   exports: [BehaviourService, QaidaService, NazraService],
 })
 export class BehaviourModule {}
