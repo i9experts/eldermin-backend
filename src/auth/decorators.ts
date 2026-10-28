@@ -15,3 +15,12 @@ export const RequirePermission = (permission: Permission) =>
 
 /** Mark a handler or controller as publicly accessible (no JWT required) */
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+
+export const ALLOW_NON_STAFF_KEY = 'allowNonStaff';
+
+/**
+ * Lets non-staff roles (parent, student, reseller_*) past NonStaffGuard on a handler or
+ * controller. It only relaxes that guard: @Roles, @RequirePermission, @RolesOrModuleManage
+ * and ownership checks in the service still apply. Never grants access on its own.
+ */
+export const AllowNonStaff = () => SetMetadata(ALLOW_NON_STAFF_KEY, true);

@@ -23,10 +23,13 @@ import {
   Request,
 } from '@nestjs/common';
 import { ResellersService } from './resellers.service';
-import { Roles } from '../auth/decorators';
+import { Roles, AllowNonStaff } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { resolveResellerScope } from '../auth/scope.util';
 
+// Resellers are non-staff (NON_STAFF_ROLES). @AllowNonStaff only relaxes NonStaffGuard; the @Roles below
+// still limits every route to reseller roles (teachers, parents etc. are rejected by RolesGuard).
+@AllowNonStaff()
 @Roles(UserRole.RESELLER_ADMIN, UserRole.RESELLER_SUPPORT)
 @Controller('reseller-portal')
 export class ResellerPortalController {
