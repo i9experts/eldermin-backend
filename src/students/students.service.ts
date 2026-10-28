@@ -6,9 +6,11 @@
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { idForms } from '../common/utils/id-forms.util';
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
+  Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Optional,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { BehaviourRecord, BehaviourRecordDocument } from '../behaviour/schemas/behaviour.schema';
+import { mergeBehaviour360 } from './student-360-behaviour.util';
 import { Model, Types } from 'mongoose';
 
 import { Student, StudentDocument } from './schemas/student.schema';
@@ -144,6 +146,9 @@ export class StudentsService {
     @InjectModel(AcademicYear.name) private academicYearModel: Model<AcademicYearDocument>,
     @InjectModel(CalendarEvent.name) private calendarEventModel: Model<CalendarEventDocument>,
     private uploadService: UploadService,
+    // B1: the Student 360 behaviour block is a union of behaviour_records (the Behaviour module / parent app store) and the
+    // legacy student_behaviour. Optional so older constructions (specs) keep working: without it the block is legacy-only.
+    @Optional() @InjectModel(BehaviourRecord.name) private behaviourRecordModel?: Model<BehaviourRecordDocument>,
   ) {}
 
   // ============================================================
@@ -1864,10 +1869,27 @@ export class StudentsService {
       a[s._id] = { count: s.count, total: s.total }; return a;
     }, {} as any);
 
-    // Compute behaviour points
-    const behaviourMap = behaviourSummary.reduce((a: any, s: any) => {
-      a[s._id] = { count: s.count, points: s.totalPoints }; return a;
-    }, {} as any);
+    // B1: union of the legacy student_behaviour (above) and behaviour_records (the Behaviour module / parent app store).
+    // Same response fields as before; each recent item also carries `source` ('legacy' | 'records'). No migration, no deletes.
+    const viewerRole = String(requestingUser?.role || requestingUser?.primaryRole || '');
+    const [recordsSummary, recordsRecent]: [any[], any[]] = this.behaviourRecordModel
+      ? await Promise.all([
+        this.behaviourRecordModel.aggregate([
+          { $match: { studentId: sid, schoolSlug, academicYear: currentYear } },
+          { $group: { _id: '$type', count: { $sum: 1 }, totalPoints: { $sum: '$points' } } },
+        ]),
+        this.behaviourRecordModel.find({ studentId: sid, schoolSlug }).sort({ date: -1 }).limit(10).lean(),
+      ]) as any
+      : [[], []];
+    // Mongoose keeps ONE model per name per connection and pdf.module.ts registers the name 'Behaviour' with BehaviourRecordSchema, so
+    // depending on module load order `behaviourModel` can already BE behaviour_records. Never count / list the same collection twice.
+    const sameStore = !!this.behaviourRecordModel && (this.behaviourModel as any)?.collection?.name !== undefined
+      && (this.behaviourModel as any).collection.name === (this.behaviourRecordModel as any)?.collection?.name;
+    const merged = mergeBehaviour360({
+      legacySummary: sameStore ? [] : behaviourSummary, recordsSummary, legacyRecent: sameStore ? [] : recentBehaviour, recordsRecent,
+      guardianView: viewerRole === 'parent' || viewerRole === 'student',
+    });
+    const behaviourMap = merged.summary;
 
     return {
       student,
@@ -1884,9 +1906,8 @@ export class StudentsService {
       },
       behaviour: {
         summary: behaviourMap,
-        totalPoints: (behaviourMap['positive']?.points || 0) -
-                     (behaviourMap['negative']?.points || 0),
-        recent: recentBehaviour,
+        totalPoints: merged.totalPoints,
+        recent: merged.recent,
       },
       assessments: {
         recent: recentResults,
