@@ -51,6 +51,7 @@ import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
 import { normalizePhone } from '../common/utils/phone.util';
 import { gradeMatcher, sectionMatcher } from '../common/utils/class-match.util';
+import { resolveClassSectionScope } from '../auth/scope.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHER_STUDENT_SELECT, stripTeacherSensitive } from './teacher-student-projection.util';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
@@ -71,6 +72,21 @@ const percentToGrade = (pct: number): string => {
   if (pct >= 40) return 'D';
   return 'F';
 };
+
+/** Local-midnight day boundaries for an attendance calendar-day filter,
+ * normalized the exact same way markAttendance/bulkMarkAttendance
+ * normalize the `date` they write (`new Date(str); setHours(0,0,0,0)`).
+ * Read-side filters used to parse `from`/`to` as raw UTC midnight with no
+ * such normalization, so on a server not running in UTC a write and a
+ * same-day read could land on different instants near the day boundary —
+ * this keeps both sides using one definition of "what day is this". */
+function dayBounds(dateStr: string): { start: Date; end: Date } {
+  const start = new Date(dateStr);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start, end };
+}
 
 @Injectable()
 export class StudentsService {
@@ -2151,8 +2167,24 @@ export class StudentsService {
     return result;
   }
 
+  /** Revert a wrongly-marked attendance record back to "Not marked" so it
+   * can be re-marked correctly. Hard-deletes the one record (the global
+   * AuditLogInterceptor already captures who/when/what for this DELETE,
+   * so the undo itself stays auditable without a bespoke trail here). */
+  async revertAttendance(id: string, schoolSlug: string, requestingUser: any) {
+    assertValidObjectId(id, 'attendance record');
+    const record = await this.attendanceModel.findOne({ _id: id, schoolSlug });
+    if (!record) throw new NotFoundException('Attendance record not found');
+    // Same class-section scoping a class teacher is already held to when
+    // marking - they can only revert attendance for their own class(es),
+    // never reach into another teacher's.
+    resolveClassSectionScope(requestingUser, record.grade, record.section);
+    await record.deleteOne();
+    return { success: true, studentId: record.studentId, date: record.date };
+  }
+
   async getAttendance(schoolSlug: string, query: AttendanceQueryDto) {
-    const { page, limit, studentId, grade, section, from, to, status, month, subject } = query;
+    const { page, limit, studentId, grade, section, date, from, to, status, month, subject } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -2173,7 +2205,16 @@ export class StudentsService {
     // the day (one per subject) - the caller decides whether to group by
     // subject or narrow with this.
     if (subject) filter.subject = subject;
-    if (month) {
+    // `date` (exact single day) takes priority — it's what the daily
+    // marking register actually sends. dayBounds() normalizes the same
+    // way markAttendance/bulkMarkAttendance do (local-midnight start,
+    // exclusive next-day end), so a day picked in the register always
+    // matches exactly what was written for that day, regardless of
+    // server timezone.
+    if (date) {
+      const { start, end } = dayBounds(date);
+      filter.date = { $gte: start, $lt: end };
+    } else if (month) {
       const [y, m] = month.split('-').map(Number);
       filter.date = {
         $gte: new Date(y, m - 1, 1),
@@ -2181,8 +2222,8 @@ export class StudentsService {
       };
     } else if (from || to) {
       filter.date = {};
-      if (from) filter.date.$gte = new Date(from);
-      if (to) filter.date.$lte = new Date(to);
+      if (from) filter.date.$gte = dayBounds(from).start;
+      if (to) filter.date.$lt = dayBounds(to).end;
     }
 
     const [data, total] = await Promise.all([
@@ -2324,8 +2365,8 @@ export class StudentsService {
     if (filters.section) filter.section = sectionMatcher(filters.section);
     if (filters.from || filters.to) {
       filter.date = {};
-      if (filters.from) filter.date.$gte = new Date(filters.from);
-      if (filters.to) filter.date.$lte = new Date(filters.to);
+      if (filters.from) filter.date.$gte = dayBounds(filters.from).start;
+      if (filters.to) filter.date.$lt = dayBounds(filters.to).end;
     }
 
     // Campus isn't stored on StudentAttendance itself (only on the
@@ -2337,7 +2378,25 @@ export class StudentsService {
     }
 
     const threshold = filters.threshold ?? DEFAULT_MIN_STUDENT_ATTENDANCE_PERCENT;
-    const records = await this.attendanceModel.find(filter).sort({ date: 1 }).lean();
+    const rawRecords = await this.attendanceModel.find(filter).sort({ date: 1 }).lean();
+
+    // One record per student per calendar day, keeping the most recently
+    // updated one. Without this, a subject-wise school's several
+    // per-subject records for the same day (or any leftover duplicate
+    // document from before the unique index below included `subject`)
+    // each counted as a separate "day" of present/absent - this is why a
+    // single-day report filter could show a student "Present: 2" and
+    // report different absentees than the teacher's own daily register
+    // for that same date.
+    const latestPerDay = new Map<string, any>();
+    for (const r of rawRecords as any[]) {
+      const key = `${r.studentId}|${new Date(r.date).toISOString().slice(0, 10)}`;
+      const existing = latestPerDay.get(key);
+      if (!existing || new Date(r.updatedAt || r.createdAt || r.date) > new Date(existing.updatedAt || existing.createdAt || existing.date)) {
+        latestPerDay.set(key, r);
+      }
+    }
+    const records = Array.from(latestPerDay.values()).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     const byStudent = new Map<string, { studentName: string; grade: string; section: string; records: any[] }>();
     for (const r of records as any[]) {
