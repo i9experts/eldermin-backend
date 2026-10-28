@@ -27,8 +27,19 @@ import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/sche
 import { resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
 import { BehaviourAccessContext, denyOrLog, logBehaviourGuard } from './behaviour-access';
 import { classIncludes, classScopeFilter, isOwnByAuthor, stripProtectedFields } from './behaviour-teacher-scope';
+import { sectionMatcher } from '../common/utils/class-match.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
+
+/** B1: page / limit from a query string (page >= 1; limit 1..MAX_PAGE_SIZE, junk or non-positive -> default 20). */
+export const MAX_PAGE_SIZE = 500;
+export function pageParams(page: any, limit: any): { page: number; limit: number; skip: number } {
+  const p0 = parseInt(String(page), 10);
+  const l0 = parseInt(String(limit), 10);
+  const p = p0 > 0 ? p0 : 1;
+  const l = l0 > 0 ? Math.min(MAX_PAGE_SIZE, l0) : 20; // junk / non-positive -> the default, absurd -> the cap
+  return { page: p, limit: l, skip: (p - 1) * l };
+}
 
 // Percentage-based rather than a raw 1-5 average, so this works
 // correctly regardless of a school's actual configured rating scale.
@@ -243,15 +254,29 @@ export class BehaviourService {
 
   async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     const classes = await this.teacherClassScope(requestingUser, access);
-    const { page = 1, limit = 20, type, category, severity, grade, studentId,
+    const { type, category, severity, grade, section, mine, studentId,
       resolved, from, to, followUpOverdue, campusId } = query;
-    const { skip } = paged(page, limit);
+    const { page, limit, skip } = pageParams(query.page, query.limit);
 
     const filter: any = { schoolSlug };
     if (type) filter.type = type;
     if (category) filter.category = category;
     if (severity) filter.severity = severity;
     if (grade) filter.grade = grade;
+    // B1: per-class paging (the teacher app used to fetch a whole grade and re-scope client-side).
+    if (section) filter.section = sectionMatcher(section);
+    // B1: "My entries" server-side. By user id; a legacy record with no reportedById falls back to the display name.
+    if (mine === 'true' && requestingUser?.userId) {
+      const myName = (requestingUser as any).name;
+      const nameRe = myName
+        ? new RegExp(`^\\s*${String(myName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i') : null;
+      filter.$and = [...(filter.$and || []), {
+        $or: [
+          { reportedById: new Types.ObjectId(String(requestingUser.userId)) },
+          ...(nameRe ? [{ reportedById: null, reportedBy: nameRe }] : []),
+        ],
+      }];
+    }
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (resolved !== undefined) filter.resolved = resolved === 'true';
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
@@ -277,7 +302,7 @@ export class BehaviourService {
     if (classes && access?.enforce) filter.$and = [...(filter.$and || []), classScopeFilter(classes)];
 
     const [data, total] = await Promise.all([
-      this.recordModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
+      this.recordModel.find(filter).sort({ date: -1, _id: -1 }).skip(skip).limit(limit),
       this.recordModel.countDocuments(filter),
     ]);
     this.logWouldNarrow(requestingUser, access, classes, data);
@@ -422,11 +447,12 @@ export class BehaviourService {
 
   async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     const classes = await this.teacherClassScope(requestingUser, access);
-    const { page = 1, limit = 20, grade, studentId, period, periodType, campusId } = query;
-    const { skip } = paged(page, limit);
+    const { grade, section, studentId, period, periodType, campusId } = query;
+    const { page, limit, skip } = pageParams(query.page, query.limit);
 
     const filter: any = { schoolSlug };
     if (grade) filter.grade = grade;
+    if (section) filter.section = sectionMatcher(section);
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (period) filter.period = period;
     if (periodType) filter.periodType = periodType;

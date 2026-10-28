@@ -13,6 +13,7 @@ import {
   Behaviour, BehaviourSchema,
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
+import { BehaviourRecord, BehaviourRecordSchema } from '../behaviour/schemas/behaviour.schema';
 import { MedicalRecord, MedicalRecordSchema } from './schemas/medical-record.schema';
 import { StudentNote, StudentNoteSchema } from './schemas/student-note.schema';
 import { StudentDocumentRecord, StudentDocumentRecordSchema } from './schemas/student-document-record.schema';
@@ -39,6 +40,7 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       { name: StudentAttendance.name, schema: StudentAttendanceSchema },
       { name: StudentFee.name, schema: StudentFeeSchema },
       { name: Behaviour.name, schema: BehaviourSchema },
+      { name: BehaviourRecord.name, schema: BehaviourRecordSchema }, // Student 360 behaviour union (B1)
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
       { name: MedicalRecord.name, schema: MedicalRecordSchema },
       { name: StudentNote.name, schema: StudentNoteSchema },
