@@ -5,7 +5,7 @@
 
 import {
   Controller, Get, Post, Put, Patch, Delete, Body, Param,
-  Query, Request, HttpCode, HttpStatus, BadRequestException,
+  Query, Request, HttpCode, HttpStatus, BadRequestException, UseGuards,
 } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { UseInterceptors, UploadedFile, Res } from '@nestjs/common';
@@ -19,6 +19,7 @@ import {
 } from './dto/student.dto';
 import { resolveClassSectionScope, assertStudentAccess } from '../auth/scope.util';
 import { assertStaffAccount } from '../behaviour/behaviour-access';
+import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
@@ -625,6 +626,8 @@ export class StudentsController {
   // ============================================================
 
   /** GET /api/v1/students/behaviour */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Get('behaviour/list')
   async getBehaviour(@Request() req: any, @Query() query: BehaviourQueryDto) {
     assertStaffAccount(req?.user); // parent/student tokens never read the legacy behaviour store
@@ -633,6 +636,8 @@ export class StudentsController {
   }
 
   /** GET /api/v1/students/:id/behaviour */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Get(':id/behaviour')
   async getStudentBehaviour(
     @Param('id') id: string,
@@ -645,6 +650,8 @@ export class StudentsController {
   }
 
   /** POST /api/v1/students/behaviour */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Post('behaviour')
   @HttpCode(HttpStatus.CREATED)
   async createBehaviour(@Body() dto: CreateBehaviourDto, @Request() req: any) {
@@ -656,6 +663,8 @@ export class StudentsController {
   }
 
   /** PUT /api/v1/students/behaviour/:id */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Put('behaviour/:id')
   async updateBehaviour(
     @Param('id') id: string,

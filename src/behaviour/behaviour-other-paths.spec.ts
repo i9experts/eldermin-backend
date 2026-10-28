@@ -81,3 +81,16 @@ describe('Tarbiyah PDF reports', () => {
     expect(pdfService.generateTarbiyahReport).toHaveBeenCalledTimes(1);
   });
 });
+
+// Found by the live smoke test: with only an in-handler check, DTO validation (400) ran BEFORE the 403 for a
+// parent/student token with an invalid body. The denial must be a guard so it precedes the pipes.
+describe('parent/student denial runs as a guard (before body validation)', () => {
+  const guardsOf = (fn: any) => Reflect.getMetadata('__guards__', fn) || [];
+  const { BehaviourStaffOnlyGuard } = require('./guards/behaviour-staff-only.guard');
+  it.each(['getBehaviour', 'getStudentBehaviour', 'createBehaviour', 'updateBehaviour'])('StudentsController.%s', (h) => {
+    expect(guardsOf((StudentsController.prototype as any)[h])).toContain(BehaviourStaffOnlyGuard);
+  });
+  it.each(['generateQaidaReport', 'generateTarbiyahReport', 'generateTarbiyahClassReport', 'generateTarbiyahSchoolReport'])('PdfController.%s', (h) => {
+    expect(guardsOf((PdfController.prototype as any)[h])).toContain(BehaviourStaffOnlyGuard);
+  });
+});

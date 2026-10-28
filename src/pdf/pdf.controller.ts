@@ -1,5 +1,6 @@
 import { schoolSlugOf } from '../common/utils/school-slug.util';
 import { assertStaffAccount } from '../behaviour/behaviour-access';
+import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import {
   Controller, Get, Post, Body, Res, Query,
   UseGuards, Request, HttpStatus,
@@ -58,6 +59,7 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('qaida-report')
   async generateQaidaReport(
     @Body() dto: GenerateQaidaReportDto,
@@ -75,6 +77,7 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('tarbiyah-report')
   async generateTarbiyahReport(
     @Body() dto: GenerateTarbiyahReportDto,
@@ -92,6 +95,7 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('tarbiyah-class-report')
   async generateTarbiyahClassReport(
     @Body() dto: GenerateTarbiyahClassReportDto,
@@ -109,6 +113,7 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('tarbiyah-school-report')
   async generateTarbiyahSchoolReport(
     @Body() dto: GenerateTarbiyahSchoolReportDto,
