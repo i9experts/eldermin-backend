@@ -4,6 +4,7 @@
 // ============================================================
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
+import { idForms } from '../common/utils/id-forms.util';
 import {
   Injectable, NotFoundException, BadRequestException, ConflictException, Logger,
 } from '@nestjs/common';
@@ -2403,7 +2404,8 @@ export class StudentsService {
 
   async getStudentAttendanceSummary(studentId: string, schoolSlug: string, month?: string) {
     assertValidObjectId(studentId, 'student');
-    const filter: any = { studentId: new Types.ObjectId(studentId), schoolSlug };
+    // both id forms: records written through the bulk route carry a string studentId (aggregate() bypasses the id-match plugin)
+    const filter: any = { studentId: idForms(studentId), schoolSlug };
     if (month) {
       const [y, m] = month.split('-').map(Number);
       filter.date = { $gte: new Date(y, m - 1, 1), $lt: new Date(y, m, 1) };

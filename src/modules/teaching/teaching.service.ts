@@ -21,7 +21,7 @@ import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.s
 import { ElectiveGroup, ElectiveGroupDocument } from './schemas/elective-group.schema';
 import { DutyRoster, DutyRosterDocument } from './schemas/duty-roster.schema';
 import { ClassDiaryEntry, ClassDiaryEntryDocument } from './schemas/class-diary.schema';
-import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
+import { ClassAttendanceSettings, ClassAttendanceSettingsDocument } from './schemas/class-attendance-settings.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
@@ -51,7 +51,7 @@ export class TeachingService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
-    @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
+    @InjectModel(ClassAttendanceSettings.name) private attendanceSettingsModel: Model<ClassAttendanceSettingsDocument>,
     private readonly pdfService: PdfService,
     private readonly configService: ConfigService,
     @Optional() private readonly staffNotifier?: StaffNotifier,
