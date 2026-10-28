@@ -30,7 +30,8 @@
     "dedupe:grade-sections": "ts-node -r tsconfig-paths/register src/scripts/dedupe-grade-sections.ts",
     "fix:student-class-section-names": "ts-node -r tsconfig-paths/register src/scripts/fix-student-class-section-names.ts",
     "audit:duplicate-staff": "ts-node -r tsconfig-paths/register src/scripts/audit-duplicate-staff.ts",
-    "dedupe:attendance": "ts-node -r tsconfig-paths/register src/scripts/dedupe-attendance.ts"
+    "dedupe:attendance": "ts-node -r tsconfig-paths/register src/scripts/dedupe-attendance.ts",
+    "fix:drop-stale-attendance-index": "ts-node -r tsconfig-paths/register src/scripts/drop-stale-attendance-index.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1068.0",
