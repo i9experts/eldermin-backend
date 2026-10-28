@@ -8,6 +8,7 @@ import {
   Query, Request, HttpCode, HttpStatus, BadRequestException, UseGuards,
 } from '@nestjs/common';
 import { StudentsService } from './students.service';
+import { FinanceService } from '../finance/finance.service';
 import { UseInterceptors, UploadedFile, Res } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -30,7 +31,10 @@ import { ForbiddenException } from '@nestjs/common';
 
 @Controller('students')
 export class StudentsController {
-  constructor(private readonly studentsService: StudentsService) {}
+  constructor(
+    private readonly studentsService: StudentsService,
+    private readonly financeService: FinanceService,
+  ) {}
 
   private ctx(req: any) {
     return {
@@ -602,12 +606,28 @@ export class StudentsController {
     return this.studentsService.getFees(schoolSlug, query);
   }
 
-  /** GET /api/v1/students/:id/fees/statement */
+  /** GET /api/v1/students/:id/fees/statement — Student 360's Fee Ledger.
+   * Reads real Invoice records from the Finance module (the same data
+   * Finance's own Receivables view shows), not the Students module's own
+   * StudentFee collection - nothing in the normal fee-assignment flow
+   * (FeeStructure -> assignFeeStructure -> generateInvoices) ever wrote to
+   * StudentFee, so every student's Fee Ledger here was unconditionally
+   * empty regardless of how much they actually owed or had paid. */
   @Get(':id/fees/statement')
   async getFeeStatement(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     if (isTeacherCaller(requestingUser)) throw new ForbiddenException(TEACHER_NO_FINANCE_MESSAGE);
-    return this.studentsService.getFeeStatement(id, schoolSlug);
+    const { data: invoices } = await this.financeService.getInvoices(schoolSlug, { studentId: id, limit: 1000 });
+    const summary = (invoices as any[]).reduce(
+      (acc, inv) => {
+        acc.totalBilled += inv.totalAmount || 0;
+        acc.totalPaid += inv.paidAmount || 0;
+        acc.totalBalance += inv.balanceDue || 0;
+        return acc;
+      },
+      { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
+    );
+    return { invoices, summary };
   }
 
   /** POST /api/v1/students/fees */
@@ -618,16 +638,28 @@ export class StudentsController {
     return this.studentsService.createFee({ ...dto, schoolSlug });
   }
 
-  /** PATCH /api/v1/students/fees/:id/collect */
+  /** PATCH /api/v1/students/fees/:id/collect — Student 360's "Collect"
+   * action against a real invoice. Delegates to Finance's own
+   * recordPayment (the same path Finance's Collect Fee modal uses), which
+   * creates the Payment receipt, updates the invoice's paid/balance/
+   * status, and posts the ledger journal entry - instead of silently
+   * updating the dead StudentFee collection, which never affected any
+   * real balance anywhere. `id` here is the invoice's own id. */
   @Patch('fees/:id/collect')
   async collectFee(
     @Param('id') id: string,
     @Body() dto: CollectFeeDto,
     @Request() req: any,
   ) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.studentsService.collectFee(id, schoolSlug, {
-      ...dto, collectedBy: dto.collectedBy || userName,
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    if (isTeacherCaller(requestingUser)) throw new ForbiddenException(TEACHER_NO_FINANCE_MESSAGE);
+    return this.financeService.recordPayment(id, schoolSlug, {
+      amount: dto.paidAmount,
+      paymentMethod: dto.paymentMethod,
+      transactionId: dto.receiptNumber,
+      chequeNumber: dto.paymentMethod === 'cheque' ? dto.receiptNumber : undefined,
+      notes: dto.remarks,
+      collectedBy: dto.collectedBy || userName,
     });
   }
 

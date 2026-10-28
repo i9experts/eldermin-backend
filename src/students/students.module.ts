@@ -26,6 +26,7 @@ import {
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { CalendarEvent, CalendarEventSchema } from '../school-calendar/schemas/calendar-event.schema';
 import { FeeStructure, FeeStructureSchema, StudentFeeAssignment, StudentFeeAssignmentSchema } from '../finance/schemas/finance.schema';
+import { FinanceModule } from '../finance/finance.module';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
@@ -34,6 +35,11 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
 @Module({
   imports: [
     UploadModule,
+    // Student 360's Fee Ledger/Collect action reads and writes real
+    // invoices/payments through FinanceService (recordPayment etc.)
+    // instead of the Students module's own, never-populated StudentFee
+    // collection - see getFeeStatement/collectFee in students.controller.ts.
+    FinanceModule,
     MongooseModule.forFeature([
       { name: Student.name, schema: StudentSchema },
       { name: StudentAttendance.name, schema: StudentAttendanceSchema },
