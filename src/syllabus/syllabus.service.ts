@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, BadGatewayException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, BadGatewayException, ForbiddenException } from '@nestjs/common';
+import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
@@ -33,6 +34,21 @@ export class SyllabusService {
   /** TEACHER callers only: who am I, from the DB (Staff.userId), never from the JWT claims. 403 when no Staff record. */
   private teacherIdentity(user: ScopedUser): Promise<TeacherIdentity> {
     return resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user as any);
+  }
+
+  /**
+   * D12 (same pattern as lesson plans): approval belongs to PATCH :id/approve (admin set). Create and the raw-$set PUT
+   * must not let a non-admin caller (a teacher, or a custom-role user whose base role is not an admin role) set
+   * status 'approved' or write the approver-owned fields. Other statuses (draft/active/archived) stay writable.
+   */
+  private sanitizeApprovalFields(data: any, requestingUser?: ScopedUser): void {
+    if (!requestingUser) return;
+    const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+    if (TEACHING_ADMIN_ROLES.includes(role)) return;
+    if (data.status === 'approved') {
+      throw new ForbiddenException('Only an administrator can approve a syllabus.');
+    }
+    delete data.approvedBy; delete data.approvedAt;
   }
 
   /** For a TEACHER caller, 403s unless the given syllabus is their own; a no-op for every other role. */
@@ -98,6 +114,7 @@ export class SyllabusService {
   }
 
   async create(tenantId: string, institutionId: string, createdBy: string, createdByName: string, dto: CreateSyllabusDto, requestingUser?: ScopedUser) {
+    this.sanitizeApprovalFields(dto as any, requestingUser);
     const rollup = this.computeRollup(dto.units || []);
     const payload: any = {
       ...dto,
@@ -169,6 +186,7 @@ export class SyllabusService {
       }
     }
 
+    this.sanitizeApprovalFields(dto as any, requestingUser);
     const update: any = { ...dto };
     if (dto.units) {
       // Preserve existing tracking state per topic when the design is

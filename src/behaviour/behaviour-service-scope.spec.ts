@@ -182,9 +182,9 @@ describe('writes: create / edit / resolve', () => {
     await expect(build({ records: [legacyOther] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
   });
 
-  it('updateRecord: log mode lets a teacher edit another teacher\'s record but logs it; admin can edit any record', async () => {
+  it('updateRecord: log mode still refuses a teacher editing another teacher\'s record (D7) and logs it; admin can edit any record', async () => {
     const other = rec({ reportedById: new Types.ObjectId(), reportedBy: 'Mr Khan' });
-    await expect(build({ records: [other] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, TEACHER_USER as any, logMode())).resolves.toBeDefined();
+    await expect(build({ records: [other] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, TEACHER_USER as any, logMode())).rejects.toThrow(ForbiddenException); // D7 (security-followups): author-or-admin is always enforced, the log still records it
     expect(logEvents()[0]).toMatchObject({ decision: 'would_deny', reason: 'teacher_edits_other_record' });
     await expect(build({ records: [other] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, ADMIN_USER as any, adminAccess())).resolves.toBeDefined();
   });
@@ -211,7 +211,7 @@ describe('Tarbiyah: author or admin', () => {
   it('author may edit; a non-author teacher/coordinator is 403 in enforce and only logged in log mode', async () => {
     await expect(build({ tarbiyah: [mineT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, access())).resolves.toBeDefined();
     await expect(build({ tarbiyah: [otherT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
-    await expect(build({ tarbiyah: [otherT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, logMode())).resolves.toBeDefined();
+    await expect(build({ tarbiyah: [otherT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, logMode())).rejects.toThrow(ForbiddenException); // D7: always enforced, the log still records it
     expect(logEvents()[0]).toMatchObject({ decision: 'would_deny', reason: 'tarbiyah_edit_not_author_or_admin' });
   });
 

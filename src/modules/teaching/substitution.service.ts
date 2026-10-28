@@ -1,4 +1,4 @@
-import { Optional, BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Optional, BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Substitution, SubstitutionDocument } from './schemas/substitution.schema';
@@ -10,6 +10,7 @@ import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { EmailService } from '../../email/email.service';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
 import { assertValidObjectId } from '../../common/utils/object-id.util';
+import { isOverrideRole } from '../../common/utils/approval-guards.util';
 import { isTeacherCaller, resolveTeacherIdentity, isOwnTeacherRef } from '../../staff-portal/teacher-identity.util';
 
 @Injectable()
@@ -155,10 +156,21 @@ export class SubstitutionService {
     return busy;
   }
 
-  async assignSubstitute(fixtureId: string, tenantId: string, substituteTeacherId: string, assignedBy: string) {
+  async assignSubstitute(fixtureId: string, tenantId: string, substituteTeacherId: string, assignedBy: string, actor?: ScopedUser) {
+    assertValidObjectId(fixtureId, 'fixture');
+    assertValidObjectId(substituteTeacherId, 'substitute teacher');
     const tid = this.tid(tenantId);
     const fixture = await this.substitutionModel.findOne({ _id: fixtureId, tenantId: tid });
     if (!fixture) throw new NotFoundException('Fixture not found');
+    // No self-approval: the absent teacher cannot arrange (assign or pick) their own cover. Only a caller with a Staff record can be the absent
+    // teacher; the owner / super_admin are exempt like everywhere else.
+    if (actor && !isOverrideRole(actor)) {
+      let me: any = null;
+      try { me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, actor as any); } catch { me = null; }
+      if (me && isOwnTeacherRef(me, (fixture as any).originalTeacherId)) {
+        throw new ForbiddenException('You cannot assign cover for your own absence.');
+      }
+    }
     if (fixture.status !== 'open') throw new BadRequestException(`This fixture is already ${fixture.status}`);
 
     // Re-check availability at assignment time, not just at suggestion
@@ -214,11 +226,16 @@ export class SubstitutionService {
   }
 
   async cancelFixture(fixtureId: string, tenantId: string) {
+    assertValidObjectId(fixtureId, 'fixture');
     const fixture = await this.substitutionModel.findOneAndUpdate(
-      { _id: fixtureId, tenantId: this.tid(tenantId) },
+      { _id: fixtureId, tenantId: this.tid(tenantId), status: { $in: ['open', 'assigned'] } },
       { $set: { status: 'cancelled' } }, { new: true },
     );
-    if (!fixture) throw new NotFoundException('Fixture not found');
+    if (!fixture) {
+      const exists: any = await this.substitutionModel.findOne({ _id: fixtureId, tenantId: this.tid(tenantId) }).select('status').lean();
+      if (exists) throw new ConflictException(`This fixture is already ${exists.status}.`);
+      throw new NotFoundException('Fixture not found');
+    }
     return fixture;
   }
 

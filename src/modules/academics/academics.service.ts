@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { idForms } from '../../common/utils/id-forms.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -833,9 +834,13 @@ export class AcademicsService {
    * frontend, this looks up by _id alone (mirrors ConsentRecord.subjectRef
    * in compliance.service.ts: `Types.ObjectId, refPath` + trust the id).
    */
-  private async resolveBorrower(borrowerType: string, borrowerId: string) {
+  private async resolveBorrower(borrowerType: string, borrowerId: string, tenantId: string, schoolSlug?: string) {
+    // The borrower must belong to the caller's own school (it used to be looked up by _id alone, so a staff member of school A could
+    // issue a book to, or reserve one for, a student or staff member of school B). Student is keyed by schoolSlug, Staff by tenantId.
+    if (!Types.ObjectId.isValid(String(borrowerId ?? ''))) throw new BadRequestException('borrowerId is not a valid id');
     if (borrowerType === 'student') {
-      const student = await this.studentModel.findById(borrowerId).lean();
+      if (!schoolSlug) throw new ForbiddenException('No school in your session: cannot verify the borrower.');
+      const student = await this.studentModel.findOne({ _id: borrowerId, schoolSlug }).lean();
       if (!student) throw new NotFoundException('Student not found');
       return {
         borrowerName: `${student.firstName} ${student.lastName}`.trim(),
@@ -844,7 +849,7 @@ export class AcademicsService {
       };
     }
     if (borrowerType === 'staff') {
-      const staff = await this.staffModel.findById(borrowerId).lean();
+      const staff = await this.staffModel.findOne({ _id: borrowerId, tenantId: idForms(tenantId) }).lean();
       if (!staff) throw new NotFoundException('Staff member not found');
       return {
         borrowerName: `${staff.firstName} ${staff.lastName}`.trim(),
@@ -883,7 +888,7 @@ export class AcademicsService {
     if (!data.borrowerType || !data.borrowerId) {
       throw new BadRequestException('borrowerType and borrowerId are required');
     }
-    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId);
+    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId, tenantId, (requestingUser as any)?.schoolSlug);
 
     const settings = await this.getLibrarySettings(tenantId);
     const activeIssueCount = await this.issueModel.countDocuments({
@@ -1161,7 +1166,7 @@ export class AcademicsService {
     if (!data.borrowerType || !data.borrowerId) {
       throw new BadRequestException('borrowerType and borrowerId are required');
     }
-    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId);
+    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId, tenantId, (requestingUser as any)?.schoolSlug);
 
     const duplicate = await this.reservationModel.findOne({
       tenantId: this.tid(tenantId),

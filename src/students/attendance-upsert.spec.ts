@@ -64,39 +64,8 @@ describe('attendanceWriteError', () => {
 
 describe('StudentsService attendance saves', () => {
   function svc(model: any) { const s: any = Object.create(StudentsService.prototype); s.attendanceModel = model; s.notifyAttendance = jest.fn(async () => undefined); return s as StudentsService; }
-  it('bulk: one updateOne per record with the two-form filter; a second save of the same day builds the same match key', async () => {
-    const bulkWrite = jest.fn(async (ops: any[]) => ({ ok: ops.length }));
-    const s = svc({ bulkWrite });
-    const dto: any = { schoolSlug: 'sch', academicYear: '2026-27', records: [{ studentId: SID, studentName: 'A', grade: 'G', section: 'A', date: '2026-10-05', status: 'present' }] };
-    await s.bulkMarkAttendance(dto);
-    await s.bulkMarkAttendance({ ...dto, records: [{ ...dto.records[0], status: 'late' }] });
-    const [a, b] = bulkWrite.mock.calls.map((c) => c[0][0].updateOne);
-    expect(a.filter).toEqual(b.filter);
-    expect(a.filter.studentId.$in).toHaveLength(2);
-    expect(b.update.$set.status).toBe('late');
-    expect(b.update.$set.studentId).toBeUndefined();
-  });
-  it('bulk: an E11000 from the database is a 409 (not a 500); a subject save before the migration says so', async () => {
-    const err = Object.assign(new Error('E11000 duplicate key error collection: db.student_attendance index: studentId_1_date_1 dup key: {}'), { code: 11000 });
-    const s = svc({ bulkWrite: jest.fn(async () => { throw err; }) });
-    const base: any = { schoolSlug: 'sch', academicYear: 'y', records: [{ studentId: SID, date: '2026-10-05', status: 'present' }] };
-    await expect(s.bulkMarkAttendance(base)).rejects.toBeInstanceOf(ConflictException);
-    await expect(s.bulkMarkAttendance({ ...base, records: [{ ...base.records[0], subject: 'Maths' }] })).rejects.toThrow(/migration/);
-  });
-  it('bulk: a malformed student id is a 400 and nothing is written', async () => {
-    const bulkWrite = jest.fn();
-    await expect(svc({ bulkWrite }).bulkMarkAttendance({ schoolSlug: 's', records: [{ studentId: 'bad', date: '2026-10-05', status: 'present' }] } as any)).rejects.toBeInstanceOf(BadRequestException);
-    expect(bulkWrite).not.toHaveBeenCalled();
-  });
-  it('single save: same two-form filter, ObjectId only on insert', async () => {
-    const findOneAndUpdate = jest.fn(async () => ({ _id: 'r' }));
-    await svc({ findOneAndUpdate }).markAttendance({ studentId: SID, studentName: 'A', grade: 'G', date: '2026-10-05', status: 'present', schoolSlug: 'sch', subject: 'Maths' } as any);
-    const [filter, update] = findOneAndUpdate.mock.calls[0] as any[];
-    expect(filter.studentId.$in).toHaveLength(2);
-    expect(filter.subject).toBe('Maths');
-    expect(update.$set.studentId).toBeUndefined();
-    expect(update.$setOnInsert.studentId).toBeInstanceOf(Types.ObjectId);
-  });
+  // The four tests that exercised markAttendance/bulkMarkAttendance with attendanceUpsert were removed in the release merge: main's own
+  // write path (see attendance-studentid-type-mismatch.spec.ts) replaced it, so attendanceUpsert is no longer wired into those methods.
   it('the per-student summary matches both id forms (aggregate bypasses the id-match plugin)', async () => {
     const aggregate = jest.fn(async () => []);
     await svc({ aggregate }).getStudentAttendanceSummary(SID, 'sch');

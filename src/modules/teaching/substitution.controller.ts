@@ -3,7 +3,7 @@ import {
   Body, Param, Query, Request,
 } from '@nestjs/common';
 import { SubstitutionService } from './substitution.service';
-import { STAFF_WRITE_ROLES } from '../../auth/role-sets';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../../auth/role-sets';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { RequireModuleAccess } from '../../roles/decorators/require-module-access.decorator';
 
@@ -12,6 +12,7 @@ export class SubstitutionController {
   constructor(private readonly service: SubstitutionService) {}
 
   @RequireModuleAccess('teaching', 'fixtures', 'manage')
+  @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES)
   @Post('generate-for-absence')
   async generateForAbsence(@Body() dto: { teacherId: string; date: string; reason?: string; leaveApplicationId?: string }, @Request() req: any) {
     return this.service.generateFixturesForAbsence(
@@ -21,18 +22,21 @@ export class SubstitutionController {
   }
 
   @RequireModuleAccess('teaching', 'fixtures', 'view')
+  @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES, { level: 'view' })
   @Get(':id/suggestions')
   async suggestSubstitutes(@Param('id') id: string, @Request() req: any) {
     return this.service.suggestSubstitutes(id, req.user.tenantId);
   }
 
   @RequireModuleAccess('teaching', 'fixtures', 'manage')
+  @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES)
   @Post(':id/assign')
   async assign(@Param('id') id: string, @Body() dto: { substituteTeacherId: string }, @Request() req: any) {
-    return this.service.assignSubstitute(id, req.user.tenantId, dto.substituteTeacherId, req.user.name);
+    return this.service.assignSubstitute(id, req.user.tenantId, dto.substituteTeacherId, req.user.name, req.user);
   }
 
   @RequireModuleAccess('teaching', 'fixtures', 'manage')
+  @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES)
   @Patch(':id/cancel')
   async cancel(@Param('id') id: string, @Request() req: any) {
     return this.service.cancelFixture(id, req.user.tenantId);

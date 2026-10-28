@@ -4,6 +4,7 @@
 
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
+import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -1446,7 +1447,21 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return a;
   }
 
-  async updateStatus(id: string, schoolSlug: string, status: string) {
+  static readonly ASSESSMENT_STATUSES = ['draft', 'scheduled', 'ongoing', 'completed', 'result_published', 'cancelled'];
+
+  async updateStatus(id: string, schoolSlug: string, status: string, requestingUser?: any) {
+    assertValidObjectId(id, 'assessment');
+    if (!AssessmentService.ASSESSMENT_STATUSES.includes(status)) {
+      throw new BadRequestException(`status must be one of: ${AssessmentService.ASSESSMENT_STATUSES.join(', ')}`);
+    }
+    const existing: any = await this.assessmentModel.findOne({ _id: id, schoolSlug }).select('status').lean();
+    if (!existing) throw new NotFoundException('Assessment not found');
+    if (requestingUser) {
+      const role = requestingUser.role || requestingUser.primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && (status === 'result_published' || existing.status === 'result_published')) {
+        throw new ForbiddenException('Only an administrator can publish or withdraw published results.');
+      }
+    }
     return this.assessmentModel.findOneAndUpdate(
       { _id: id, schoolSlug }, { $set: { status } }, { new: true },
     );

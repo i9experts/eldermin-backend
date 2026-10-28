@@ -10,10 +10,17 @@ import {
 import { BehaviourService } from './behaviour.service';
 import { TARBIYAH_TRAITS } from './schemas/behaviour.schema';
 import { isTeacherCaller, applyTeacherAuthorship } from '../staff-portal/teacher-identity.util';
-import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { BehaviourAccessGuard } from './guards/behaviour-access.guard';
 import { BehaviourAccess } from './behaviour-access';
+
+// Counselling sessions and interventions are confidential pastoral records: admin roles, or a custom role with a grant on exactly that
+// sub-module (behaviour -> counselling / interventions). A teacher (or the stock module-wide Teacher custom role) is NOT authorised.
+const COUNSELLING_READ = () => RolesOrModuleManage('behaviour', TEACHING_ADMIN_ROLES, { level: 'view', subModuleKey: 'counselling' });
+const COUNSELLING_WRITE = () => RolesOrModuleManage('behaviour', TEACHING_ADMIN_ROLES, { level: 'manage', subModuleKey: 'counselling' });
+const INTERVENTIONS_READ = () => RolesOrModuleManage('behaviour', TEACHING_ADMIN_ROLES, { level: 'view', subModuleKey: 'interventions' });
+const INTERVENTIONS_WRITE = () => RolesOrModuleManage('behaviour', TEACHING_ADMIN_ROLES, { level: 'manage', subModuleKey: 'interventions' });
 
 // ── CONTROLLER ────────────────────────────────────────────────
 // Every handler carries exactly one @BehaviourAccess policy, evaluated by
@@ -92,6 +99,9 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('record_write', 'records')
+  // D7: was unguarded (any token, parents and students included). Same guard as create / edit; the web's
+  // Resolve button is shown to every role with the Behaviour page and keeps working for them.
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('records/:id/resolve')
   async resolveRecord(
     @Param('id') id: string,
@@ -99,7 +109,7 @@ export class BehaviourController {
     @Request() req: any,
   ) {
     const { schoolSlug, userName, requestingUser, access } = this.ctx(req);
-    return this.service.resolveRecord(id, schoolSlug, dto.note, userName, requestingUser, access);
+    return this.service.resolveRecord(id, schoolSlug, dto?.note, userName, requestingUser, access);
   }
 
   @BehaviourAccess('staff_read', 'records')
@@ -147,11 +157,15 @@ export class BehaviourController {
   @HttpCode(HttpStatus.CREATED)
   async createTarbiyah(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, academicYear, userName, requestingUser, access } = this.ctx(req);
-    return this.service.createTarbiyahAssessment(schoolSlug, {
-      ...dto, schoolSlug,
-      academicYear: dto.academicYear || academicYear,
-      assessedBy: dto.assessedBy || userName,
-    }, requestingUser, access);
+    const body: any = { ...dto, schoolSlug, academicYear: dto.academicYear || academicYear, assessedBy: dto.assessedBy || userName };
+    // Authorship is derived server-side so the author-or-admin rule on PUT has something to check: admin roles may name an author,
+    // everyone else is always recorded as themselves.
+    const role = requestingUser?.role || requestingUser?.primaryRole;
+    if (!TEACHING_ADMIN_ROLES.includes(role as any) || !body.assessedById) {
+      body.assessedById = requestingUser?.userId;
+      if (!TEACHING_ADMIN_ROLES.includes(role as any)) body.assessedBy = userName;
+    }
+    return this.service.createTarbiyahAssessment(schoolSlug, body, requestingUser, access);
   }
 
   @BehaviourAccess('meta_read', 'tarbiyah')
@@ -178,6 +192,7 @@ export class BehaviourController {
 
   // ── Counselling ───────────────────────────────────────────────
   @BehaviourAccess('confidential_read', 'counselling')
+  @COUNSELLING_READ()
   @Get('counselling')
   async getCounselling(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
@@ -185,6 +200,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'counselling')
+  @COUNSELLING_WRITE()
   @Post('counselling')
   @HttpCode(HttpStatus.CREATED)
   async createCounselling(@Body() dto: any, @Request() req: any) {
@@ -197,6 +213,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'counselling')
+  @COUNSELLING_WRITE()
   @Put('counselling/:id')
   async updateCounselling(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -204,6 +221,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'counselling')
+  @COUNSELLING_WRITE()
   @Patch('counselling/:id/complete')
   async completeCounselling(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -212,6 +230,7 @@ export class BehaviourController {
 
   // ── Interventions ─────────────────────────────────────────────
   @BehaviourAccess('confidential_read', 'interventions')
+  @INTERVENTIONS_READ()
   @Get('interventions')
   async getInterventions(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
@@ -219,6 +238,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'interventions')
+  @INTERVENTIONS_WRITE()
   @Post('interventions')
   @HttpCode(HttpStatus.CREATED)
   async createIntervention(@Body() dto: any, @Request() req: any) {
@@ -231,6 +251,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'interventions')
+  @INTERVENTIONS_WRITE()
   @Put('interventions/:id')
   async updateIntervention(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -238,6 +259,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'interventions')
+  @INTERVENTIONS_WRITE()
   @Post('interventions/:id/progress')
   async addProgress(@Param('id') id: string, @Body() dto: { note: string }, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
@@ -245,6 +267,7 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('confidential_write', 'interventions')
+  @INTERVENTIONS_WRITE()
   @Patch('interventions/:id/action/:actionId')
   async updateAction(
     @Param('id') id: string,
