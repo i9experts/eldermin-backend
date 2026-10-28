@@ -1,4 +1,5 @@
 import { schoolSlugOf } from '../common/utils/school-slug.util';
+import { assertStaffAccount } from '../behaviour/behaviour-access';
 import {
   Controller, Get, Post, Body, Res, Query,
   UseGuards, Request, HttpStatus,
@@ -79,6 +80,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate behaviour/Tarbiyah reports
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTarbiyahReport(schoolSlug, dto, req.user.userId);
     res.set({
@@ -95,6 +97,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate behaviour/Tarbiyah reports
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTarbiyahClassReport(schoolSlug, dto, req.user.userId);
     res.set({
@@ -111,6 +114,7 @@ export class PdfController {
     @Request() req: any,
     @Res() res: Response,
   ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate behaviour/Tarbiyah reports
     const schoolSlug = schoolSlugOf(req);
     const pdf = await this.pdfService.generateTarbiyahSchoolReport(schoolSlug, dto, req.user.userId);
     res.set({

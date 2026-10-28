@@ -17,7 +17,8 @@ import {
   CreateBehaviourDto, UpdateBehaviourDto, BehaviourQueryDto,
   CreateAssessmentResultDto,
 } from './dto/student.dto';
-import { resolveClassSectionScope } from '../auth/scope.util';
+import { resolveClassSectionScope, assertStudentAccess } from '../auth/scope.util';
+import { assertStaffAccount } from '../behaviour/behaviour-access';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
@@ -159,6 +160,8 @@ export class StudentsController {
   @Get(':id/360')
   async getStudent360(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
+    // The 360 carries behaviour history: a parent/student token only reaches its own linked student(s).
+    assertStudentAccess(requestingUser, id);
     return projectForTeacher(requestingUser, await this.studentsService.getStudent360(id, schoolSlug, requestingUser));
   }
 
@@ -624,6 +627,7 @@ export class StudentsController {
   /** GET /api/v1/students/behaviour */
   @Get('behaviour/list')
   async getBehaviour(@Request() req: any, @Query() query: BehaviourQueryDto) {
+    assertStaffAccount(req?.user); // parent/student tokens never read the legacy behaviour store
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getBehaviour(schoolSlug, query);
   }
@@ -635,6 +639,7 @@ export class StudentsController {
     @Request() req: any,
     @Query() query: BehaviourQueryDto,
   ) {
+    assertStaffAccount(req?.user);
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getBehaviour(schoolSlug, { ...query, studentId: id });
   }
@@ -643,6 +648,7 @@ export class StudentsController {
   @Post('behaviour')
   @HttpCode(HttpStatus.CREATED)
   async createBehaviour(@Body() dto: CreateBehaviourDto, @Request() req: any) {
+    assertStaffAccount(req?.user);
     const { schoolSlug, academicYear, userName } = this.ctx(req);
     return this.studentsService.createBehaviour({
       ...dto, schoolSlug, academicYear, reportedBy: dto.reportedBy || userName,
@@ -656,6 +662,7 @@ export class StudentsController {
     @Body() dto: UpdateBehaviourDto,
     @Request() req: any,
   ) {
+    assertStaffAccount(req?.user);
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.updateBehaviour(id, schoolSlug, dto);
   }

@@ -19,6 +19,11 @@ import {
 import { QaidaProgress, QaidaProgressSchema } from './schemas/qaida-progress.schema';
 import { NazraProgress, NazraProgressSchema } from './schemas/nazra-progress.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
+import { Role, RoleSchema } from '../roles/schemas/role.schema';
+import { User, UserSchema } from '../modules/organization/schemas/user.schema';
+import { BehaviourAccessGuard } from './guards/behaviour-access.guard';
 
 @Module({
   imports: [
@@ -32,10 +37,15 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
       { name: QaidaProgress.name, schema: QaidaProgressSchema },
       { name: NazraProgress.name, schema: NazraProgressSchema },
       { name: Student.name, schema: StudentSchema },
+      // BehaviourAccessGuard (custom-role lookup) + teacher class scoping.
+      { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
+      { name: Role.name, schema: RoleSchema },
+      { name: User.name, schema: UserSchema },
     ]),
   ],
   controllers: [BehaviourController, QaidaController, NazraController],
-  providers: [BehaviourService, QaidaService, NazraService],
+  providers: [BehaviourService, QaidaService, NazraService, BehaviourAccessGuard],
   exports: [BehaviourService, QaidaService, NazraService],
 })
 export class BehaviourModule {}

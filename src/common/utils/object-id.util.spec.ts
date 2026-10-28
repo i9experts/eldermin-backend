@@ -73,7 +73,7 @@ describe('malformed id -> 400 on teacher-app routes', () => {
 
   it('behaviour records (controller service)', async () => {
     const recordModel: any = { findOne: jest.fn(), findOneAndUpdate: jest.fn(), aggregate: jest.fn() };
-    const svc = new BehaviourService(recordModel, noop, noop, noop, noop, noop);
+    const svc = new BehaviourService(recordModel, noop, noop, noop, noop, noop, noop, noop, noop);
     await expect(svc.getRecordById('bad', 's')).rejects.toThrow('Invalid behaviour record id');
     await expect(svc.updateRecord('bad', 's', {})).rejects.toThrow('Invalid behaviour record id');
     await expect(svc.resolveRecord('bad', 's', 'n', 'u')).rejects.toThrow('Invalid behaviour record id');

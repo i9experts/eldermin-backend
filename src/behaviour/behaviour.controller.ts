@@ -5,16 +5,23 @@
 
 import {
   Controller, Get, Post, Put, Patch, Delete,
-  Body, Param, Query, Request, HttpCode, HttpStatus,
+  Body, Param, Query, Request, HttpCode, HttpStatus, UseGuards,
 } from '@nestjs/common';
 import { BehaviourService } from './behaviour.service';
 import { TARBIYAH_TRAITS } from './schemas/behaviour.schema';
 import { isTeacherCaller, applyTeacherAuthorship } from '../staff-portal/teacher-identity.util';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { BehaviourAccessGuard } from './guards/behaviour-access.guard';
+import { BehaviourAccess } from './behaviour-access';
 
 // ── CONTROLLER ────────────────────────────────────────────────
+// Every handler carries exactly one @BehaviourAccess policy, evaluated by
+// BehaviourAccessGuard (BEHAVIOUR_GUARD_MODE=log|enforce; parent/student tokens
+// are denied in both modes). The pre-existing @RolesOrModuleManage on the
+// record/tarbiyah writes is unchanged and still enforced immediately.
 @Controller('behaviour')
+@UseGuards(BehaviourAccessGuard)
 export class BehaviourController {
   constructor(private readonly service: BehaviourService) {}
 
@@ -24,10 +31,12 @@ export class BehaviourController {
       academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
+      access: req?.behaviourAccess,
     };
   }
 
   // ── Dashboard ────────────────────────────────────────────────
+  @BehaviourAccess('aggregate_read', 'dashboard')
   @Get('dashboard')
   async getDashboard(@Request() req: any, @Query('academicYear') ay?: string) {
     const { schoolSlug } = this.ctx(req);
@@ -35,75 +44,84 @@ export class BehaviourController {
   }
 
   // ── Tarbiyah Traits List (static) ────────────────────────────
+  @BehaviourAccess('meta_read', 'tarbiyah')
   @Get('tarbiyah-traits')
   getTarbiyahTraits() {
     return { traits: TARBIYAH_TRAITS };
   }
 
   // ── Behaviour Records ─────────────────────────────────────────
+  @BehaviourAccess('staff_read', 'records')
   @Get('records')
   async getRecords(@Request() req: any, @Query() query: any) {
-    const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.service.getRecords(schoolSlug, query, requestingUser);
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.getRecords(schoolSlug, query, requestingUser, access);
   }
 
+  @BehaviourAccess('staff_read', 'records')
   @Get('records/:id')
   async getRecord(@Param('id') id: string, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getRecordById(id, schoolSlug);
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.getRecordById(id, schoolSlug, requestingUser, access);
   }
 
+  @BehaviourAccess('record_write', 'records')
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('records')
   @HttpCode(HttpStatus.CREATED)
   async createRecord(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser, access } = this.ctx(req);
     const body = { ...dto, schoolSlug, academicYear: dto.academicYear || academicYear, reportedBy: dto.reportedBy || userName };
     // TEACHER callers: authorship is derived server-side. The display name
     // is overridden from the token; reportedById must be me (or absent) else 403.
     if (isTeacherCaller(requestingUser)) applyTeacherAuthorship(body, requestingUser, userName);
-    return this.service.createRecord(body, requestingUser);
+    return this.service.createRecord(body, requestingUser, access);
   }
 
+  @BehaviourAccess('record_write', 'records')
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('records/:id')
   async updateRecord(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    const { schoolSlug, requestingUser } = this.ctx(req);
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
     // A teacher cannot re-attribute a record to someone else (or tenancy fields) via PUT.
     if (isTeacherCaller(requestingUser)) {
       dto = { ...dto };
       delete dto.reportedBy; delete dto.reportedById; delete dto.schoolSlug; delete dto.campusId; delete dto.verifiedBy;
     }
-    return this.service.updateRecord(id, schoolSlug, dto);
+    return this.service.updateRecord(id, schoolSlug, dto, requestingUser, access);
   }
 
+  @BehaviourAccess('record_write', 'records')
   @Patch('records/:id/resolve')
   async resolveRecord(
     @Param('id') id: string,
     @Body() dto: { note: string },
     @Request() req: any,
   ) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.resolveRecord(id, schoolSlug, dto.note, userName);
+    const { schoolSlug, userName, requestingUser, access } = this.ctx(req);
+    return this.service.resolveRecord(id, schoolSlug, dto.note, userName, requestingUser, access);
   }
 
+  @BehaviourAccess('staff_read', 'records')
   @Get('students/:studentId/profile')
   async getStudentProfile(
     @Param('studentId') studentId: string,
     @Request() req: any,
     @Query('academicYear') ay?: string,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.getStudentBehaviourProfile(studentId, schoolSlug, ay);
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.getStudentBehaviourProfile(studentId, schoolSlug, ay, requestingUser, access);
   }
 
   // ── Tarbiyah Assessments ──────────────────────────────────────
+  @BehaviourAccess('staff_read', 'tarbiyah')
   @Get('tarbiyah')
   async getTarbiyah(@Request() req: any, @Query() query: any) {
-    const { schoolSlug, requestingUser } = this.ctx(req);
-    return this.service.getTarbiyahAssessments(schoolSlug, query, requestingUser);
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.getTarbiyahAssessments(schoolSlug, query, requestingUser, access);
   }
 
+  @BehaviourAccess('aggregate_read', 'tarbiyah')
   @Get('tarbiyah/analytics')
   async getTarbiyahAnalytics(
     @Request() req: any,
@@ -116,50 +134,57 @@ export class BehaviourController {
 
   // Class-wise / school-wide / consolidated leaderboard behind the
   // Tarbiyah "Reports" tab - see BehaviourService.getTarbiyahReportData.
+  @BehaviourAccess('aggregate_read', 'tarbiyah')
   @Get('tarbiyah/report')
   async getTarbiyahReport(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getTarbiyahReportData(schoolSlug, query, requestingUser);
   }
 
+  @BehaviourAccess('record_write', 'tarbiyah')
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('tarbiyah')
   @HttpCode(HttpStatus.CREATED)
   async createTarbiyah(@Body() dto: any, @Request() req: any) {
-    const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
+    const { schoolSlug, academicYear, userName, requestingUser, access } = this.ctx(req);
     return this.service.createTarbiyahAssessment(schoolSlug, {
       ...dto, schoolSlug,
       academicYear: dto.academicYear || academicYear,
       assessedBy: dto.assessedBy || userName,
-    }, requestingUser);
+    }, requestingUser, access);
   }
 
+  @BehaviourAccess('meta_read', 'tarbiyah')
   @Get('character-settings')
   async getCharacterSettings(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getCharacterSettings(schoolSlug);
   }
 
+  @BehaviourAccess('settings_write', 'tarbiyah')
   @Put('character-settings')
   async updateCharacterSettings(@Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateCharacterSettings(schoolSlug, dto);
   }
 
+  @BehaviourAccess('record_write', 'tarbiyah')
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('tarbiyah/:id')
   async updateTarbiyah(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateTarbiyahAssessment(id, schoolSlug, dto);
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.updateTarbiyahAssessment(id, schoolSlug, dto, requestingUser, access);
   }
 
   // ── Counselling ───────────────────────────────────────────────
+  @BehaviourAccess('confidential_read', 'counselling')
   @Get('counselling')
   async getCounselling(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getCounsellingSessions(schoolSlug, query, requestingUser);
   }
 
+  @BehaviourAccess('confidential_write', 'counselling')
   @Post('counselling')
   @HttpCode(HttpStatus.CREATED)
   async createCounselling(@Body() dto: any, @Request() req: any) {
@@ -171,12 +196,14 @@ export class BehaviourController {
     }, requestingUser);
   }
 
+  @BehaviourAccess('confidential_write', 'counselling')
   @Put('counselling/:id')
   async updateCounselling(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateCounsellingSession(id, schoolSlug, dto);
   }
 
+  @BehaviourAccess('confidential_write', 'counselling')
   @Patch('counselling/:id/complete')
   async completeCounselling(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -184,12 +211,14 @@ export class BehaviourController {
   }
 
   // ── Interventions ─────────────────────────────────────────────
+  @BehaviourAccess('confidential_read', 'interventions')
   @Get('interventions')
   async getInterventions(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getInterventions(schoolSlug, query, requestingUser);
   }
 
+  @BehaviourAccess('confidential_write', 'interventions')
   @Post('interventions')
   @HttpCode(HttpStatus.CREATED)
   async createIntervention(@Body() dto: any, @Request() req: any) {
@@ -201,18 +230,21 @@ export class BehaviourController {
     }, requestingUser);
   }
 
+  @BehaviourAccess('confidential_write', 'interventions')
   @Put('interventions/:id')
   async updateIntervention(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateIntervention(id, schoolSlug, dto);
   }
 
+  @BehaviourAccess('confidential_write', 'interventions')
   @Post('interventions/:id/progress')
   async addProgress(@Param('id') id: string, @Body() dto: { note: string }, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.addProgressNote(id, schoolSlug, dto.note, userName);
   }
 
+  @BehaviourAccess('confidential_write', 'interventions')
   @Patch('interventions/:id/action/:actionId')
   async updateAction(
     @Param('id') id: string,
@@ -225,12 +257,14 @@ export class BehaviourController {
   }
 
   // ── Behaviour Contracts ───────────────────────────────────────
+  @BehaviourAccess('confidential_read', 'interventions')
   @Get('contracts')
   async getContracts(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getContracts(schoolSlug, query, requestingUser);
   }
 
+  @BehaviourAccess('confidential_write', 'interventions')
   @Post('contracts')
   @HttpCode(HttpStatus.CREATED)
   async createContract(@Body() dto: any, @Request() req: any) {
@@ -242,6 +276,7 @@ export class BehaviourController {
     }, requestingUser);
   }
 
+  @BehaviourAccess('confidential_write', 'interventions')
   @Patch('contracts/:id/sign')
   async signContract(
     @Param('id') id: string,
@@ -253,6 +288,7 @@ export class BehaviourController {
   }
 
   // ── Reports ───────────────────────────────────────────────────
+  @BehaviourAccess('aggregate_read', 'reports')
   @Get('reports')
   async getReport(
     @Request() req: any,
