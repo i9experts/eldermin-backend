@@ -1,6 +1,7 @@
 import { Optional, Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { assertValidObjectId } from '../../common/utils/object-id.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
+import { sanitizeRichText } from '../../common/utils/rich-text.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -33,6 +34,21 @@ import { GradeSubmissionDto } from './dto/assignment.dto';
 import {
   isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
 } from '../../staff-portal/teacher-identity.util';
+
+/** description/classworkDescription/homeworkDescription arrive from the
+ * frontend's rich-text editor as HTML - sanitized here (not just trusted
+ * from the request body) since this content is later rendered as real
+ * HTML, unescaped, both in the downloaded Class Diary PDF and anywhere a
+ * shared entry is shown to parents/other staff. */
+function sanitizeDiaryPeriods(periods: any): any {
+  if (!Array.isArray(periods)) return periods;
+  return periods.map((p: any) => (p && typeof p === 'object') ? {
+    ...p,
+    description: sanitizeRichText(p.description),
+    classworkDescription: sanitizeRichText(p.classworkDescription),
+    homeworkDescription: sanitizeRichText(p.homeworkDescription),
+  } : p);
+}
 
 @Injectable()
 export class TeachingService {
@@ -1495,6 +1511,7 @@ Rules:
     const { teacherId, ...rest } = data;
     const payload: any = {
       ...rest,
+      periods: sanitizeDiaryPeriods(rest.periods),
       // Required on the schema but never set here before - the client
       // correctly never sends this (tenant/school scoping must come from
       // the authenticated request, not the body), but nothing filled it
@@ -1534,6 +1551,7 @@ Rules:
     // after the fact - require explicit re-share for a parent to see
     // edits made once it's already gone out.
     const { shared, sharedAt, sharedBy, notifiedGuardianCount, teacherId, ...editable } = data;
+    if (editable.periods) editable.periods = sanitizeDiaryPeriods(editable.periods);
     Object.assign(existing, editable);
     if (isTeacherCaller(requestingUser) && 'teacherId' in data) {
       const me = await this.teacherIdentity(requestingUser!);

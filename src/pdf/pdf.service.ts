@@ -10,6 +10,7 @@ import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules
 import { FinanceService } from '../finance/finance.service';
 import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
+import { escapeHtml, renderRichTextField, urduFontFaceCss } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
 import { TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
@@ -3202,37 +3203,48 @@ ${css}
     const diaryDate = diary.diaryDate ? new Date(diary.diaryDate) : new Date();
     const dateStr = diaryDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
-    const sections = (diary.periods || []).map((p: any) => `
+    const sections = (diary.periods || []).map((p: any) => {
+      // Subject/title are plain short fields, never rich text - escaped,
+      // with an automatic rtl wrap when the subject/title itself is
+      // written in Urdu (e.g. "اردو"), same as the diary body fields below.
+      const subjectTitle = escapeHtml((p.subject || '').toUpperCase()) + (p.title ? ` — ${escapeHtml(p.title)}` : '');
+      const description = renderRichTextField(p.description);
+      const classwork = renderRichTextField(p.classworkDescription);
+      const homework = renderRichTextField(p.homeworkDescription);
+      return `
       <div class="section">
-        <div class="section-head">${(p.subject || '').toUpperCase()}${p.title ? ` — ${p.title}` : ''}</div>
+        <div class="section-head">${subjectTitle}</div>
         <table class="fields">
-          ${p.description ? `<tr><td class="label">Description</td><td>${p.description}</td></tr>` : ''}
-          ${p.classworkDescription ? `<tr><td class="label">Classwork</td><td>${p.classworkDescription}</td></tr>` : ''}
-          ${p.homeworkDescription ? `<tr><td class="label">Homework</td><td>${p.homeworkDescription}</td></tr>` : ''}
+          ${description ? `<tr><td class="label">Description</td><td>${description}</td></tr>` : ''}
+          ${classwork ? `<tr><td class="label">Classwork</td><td>${classwork}</td></tr>` : ''}
+          ${homework ? `<tr><td class="label">Homework</td><td>${homework}</td></tr>` : ''}
         </table>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <style>
+  ${urduFontFaceCss()}
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; margin: 0; padding: 18mm 14mm; }
+  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; margin: 0; padding: 18mm 14mm; }
   h1 { font-size: 18px; margin: 18px 0 2px; color: ${primaryColor}; }
   .sub { font-size: 12px; color: #6B7A90; margin-bottom: 16px; }
   .section { border: 1px solid #E2E8F0; border-radius: 6px; margin-bottom: 10px; overflow: hidden; page-break-inside: avoid; }
   .section-head { background: ${primaryColor}; color: #fff; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 7px 10px; }
   table.fields { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  table.fields td { padding: 7px 10px; vertical-align: top; border-top: 1px solid #F1F5F9; }
-  table.fields td.label { width: 110px; font-weight: 600; color: ${accentColor}; }
+  table.fields td { padding: 7px 10px; vertical-align: top; border-top: 1px solid #F1F5F9; white-space: pre-wrap; }
+  table.fields td.label { width: 110px; font-weight: 600; color: ${accentColor}; white-space: normal; }
+  table.fields ul, table.fields ol { margin: 2px 0; padding-inline-start: 18px; }
   .foot { margin-top: 16px; font-size: 9.5px; color: #94A3B8; }
 </style>
 </head>
 <body>
   ${letterheadHtml}
-  <h1>Class Diary — ${diary.gradeLevel}${diary.sectionName ? ` (${diary.sectionName})` : ''}</h1>
-  <p class="sub">Date: ${dateStr}${diary.teacherName ? ` &nbsp;|&nbsp; Teacher: ${diary.teacherName}` : ''}</p>
+  <h1>Class Diary — ${escapeHtml(diary.gradeLevel)}${diary.sectionName ? ` (${escapeHtml(diary.sectionName)})` : ''}</h1>
+  <p class="sub">Date: ${dateStr}${diary.teacherName ? ` &nbsp;|&nbsp; Teacher: ${escapeHtml(diary.teacherName)}` : ''}</p>
   ${sections}
   <p class="foot">Generated ${new Date().toLocaleDateString('en-GB')}</p>
 </body>
