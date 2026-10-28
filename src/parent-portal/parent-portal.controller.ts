@@ -5,12 +5,16 @@ import type { Response } from 'express';
 import { Roles, AllowNonStaff } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
-import { STUDENTS_WRITE_ROLES } from '../auth/admin-role-sets';
+import { STUDENTS_WRITE_ROLES, NON_STAFF_ROLES } from '../auth/admin-role-sets';
+import { assertStudentAccess } from '../auth/scope.util';
 
 const CONSENT_ADMIN_ROLES = [
   UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
   UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.ACADEMIC_COORDINATOR,
 ];
+// Every role except parent/student/reseller. Only used as the method-level @Roles on the two link/unlink routes so they override the
+// class-level PARENT default (RolesGuard reads the handler's roles first); the real decision there stays with RolesOrModuleManage.
+export const PARENT_PORTAL_STAFF_ROLES: UserRole[] = Object.values(UserRole).filter((r) => !NON_STAFF_ROLES.includes(r));
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentPortalService } from './parent-portal.service';
 import { HomeTasksService } from '../home-tasks/home-tasks.service';
@@ -19,6 +23,10 @@ import { CompleteHomeTaskDto } from '../home-tasks/dto/home-task.dto';
 // The Parent app's API. Opens NonStaffGuard only; the staff-only handlers below keep their own
 // @Roles / @RolesOrModuleManage, and student routes rely on assertStudentAccess in the service.
 @AllowNonStaff()
+// Parent-only by default: every route below needs the parent role, and (for student routes) a guardian link to that student, checked in the
+// service with assertStudentAccess. The five school-side routes (consent-requests x3, link-guardian, unlink-guardian) carry their own method-level
+// @Roles, which replaces this class-level default. Student, reseller and every staff token are refused on the parent routes.
+@Roles(UserRole.PARENT)
 @Controller('parent-portal')
 @UseInterceptors(GuardianRefreshInterceptor)
 export class ParentPortalController {
@@ -71,6 +79,7 @@ export class ParentPortalController {
 
   // Staff with students:write only (no web / parent-app / teacher-app caller
   // exists). Parent and student tokens can never pass, even with a custom role.
+  @Roles(...PARENT_PORTAL_STAFF_ROLES)
   @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
   @Post('link-guardian')
   @HttpCode(HttpStatus.CREATED)
@@ -79,6 +88,7 @@ export class ParentPortalController {
     return this.service.linkGuardianToStudents(schoolSlug, tenantId, institutionId, dto.email, dto.studentIds);
   }
 
+  @Roles(...PARENT_PORTAL_STAFF_ROLES)
   @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
   @Post('unlink-guardian')
   async unlinkGuardian(@Body() dto: { email: string; studentId: string }, @Request() req: any) {
@@ -163,6 +173,8 @@ export class ParentPortalController {
     @Request() req: any, @Res() res: Response,
   ) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    // Ownership first: the feature-suspended answer below must not be readable for a child that is not this parent's.
+    assertStudentAccess(requestingUser, studentId);
     const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'school_diary');
     if (access.suspended) {
       res.status(HttpStatus.OK).json({ suspended: true, feature: 'school_diary', reason: access.reason || null });
