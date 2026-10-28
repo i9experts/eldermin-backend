@@ -63,6 +63,33 @@ const GRADE_MAP: Record<string, number> = {
   'C+': 2.3, 'C': 2.0, 'D': 1.0, 'F': 0,
 };
 
+/** Pure word-wrap used by generateGrRegisterPdf's row layout (exported so
+ * it's directly unit-testable without a real pdf-lib font). Splits `text`
+ * into the lines it would actually take at `size` within `maxWidth`,
+ * using `measure(text, size)` for each candidate line's rendered width -
+ * callers pass a pdf-lib font's widthOfTextAtSize (with a fallback font
+ * for glyphs the primary font can't encode, e.g. Arabic names). Knowing
+ * the real line count up front - not just drawing with pdf-lib's own
+ * `maxWidth` auto-wrap and hoping - is what lets the caller size each
+ * row to fit instead of overlapping the next one. */
+export function wrapTextLines(text: string, size: number, maxWidth: number, measure: (t: string, s: number) => number): string[] {
+  const t = (text ?? '').toString().trim() || '—';
+  const words = t.split(/\s+/);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (current && measure(candidate, size) > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : ['—'];
+}
+
 const percentToGrade = (pct: number): string => {
   if (pct >= 90) return 'A+';
   if (pct >= 80) return 'A';
@@ -1585,6 +1612,20 @@ export class StudentsService {
       try { targetPage.drawText(text, opts); } catch { targetPage.drawText(text, { ...opts, font: arabicFont }); }
     };
 
+    // pdf-lib's own `maxWidth` option on drawText DOES auto-wrap long
+    // text, but it never reports back how many lines it produced - this
+    // table's row height was a fixed 20pt regardless, so any address (or
+    // other long field) that wrapped to 2+ lines via pdf-lib's own
+    // wrapping bled straight past that fixed boundary and overlapped the
+    // next row's text (reported as "address is overwriting"). wrapLines
+    // (via wrapTextLines above) wraps ourselves first so the real line
+    // count is known up front, and the row height can grow to fit it.
+    const wrapLines = (text: string, f: any, size: number, maxWidth: number): string[] =>
+      wrapTextLines(text, size, maxWidth, (t, s) => { try { return f.widthOfTextAtSize(t, s); } catch { return arabicFont.widthOfTextAtSize(t, s); } });
+    const drawLines = (targetPage: any, lines: string[], opts: any, lineHeight: number) => {
+      lines.forEach((line, i) => drawTextSafe(targetPage, line, { ...opts, y: opts.y - i * lineHeight }));
+    };
+
     const navy = rgb(0.047, 0.267, 0.486);
     const amber = rgb(0.937, 0.624, 0.153);
     const black = rgb(0.1, 0.1, 0.1);
@@ -1672,7 +1713,17 @@ export class StudentsService {
       groupStudents.forEach((s, idx) => {
         const father = (s.guardians || []).find((g: any) => g.relation === 'father');
         const contactNumbers = (s.guardians || []).map((g: any) => g.phone).filter(Boolean).join(', ') || '—';
-        const rowHeight = 20;
+
+        // Every column that can realistically run long gets wrapped up
+        // front, so the row's real height - not a guessed fixed one - is
+        // known before anything is drawn or the next row's y is decided.
+        const lineHeight = 8.5;
+        const nameLines = wrapLines(`${s.firstName || ''} ${s.lastName || ''}`.trim(), bold, 7.5, cols[3].width - 10);
+        const fatherLines = wrapLines(father?.name || '—', font, 7.5, cols[4].width - 10);
+        const contactLines = wrapLines(contactNumbers, font, 7, cols[5].width - 10);
+        const addressLines = wrapLines(s.address || '—', font, 7, cols[8].width - 10);
+        const maxLines = Math.max(1, nameLines.length, fatherLines.length, contactLines.length, addressLines.length);
+        const rowHeight = Math.max(20, 14 + maxLines * lineHeight);
 
         ensureSpace(rowHeight, groupKey, groupStudents.length);
         if (idx % 2 === 1) {
@@ -1684,12 +1735,12 @@ export class StudentsService {
         drawTextSafe(page, s.grNo || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[0].width - 10 }); x += cols[0].width;
         drawTextSafe(page, s.admissionNumber || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[1].width - 10 }); x += cols[1].width;
         drawTextSafe(page, s.familyCode || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[2].width - 10 }); x += cols[2].width;
-        drawTextSafe(page, `${s.firstName || ''} ${s.lastName || ''}`.trim(), { x: x + 5, y: rowY, size: 7.5, font: bold, color: black, maxWidth: cols[3].width - 10 }); x += cols[3].width;
-        drawTextSafe(page, father?.name || '—', { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[4].width - 10 }); x += cols[4].width;
-        drawTextSafe(page, contactNumbers, { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[5].width - 10 }); x += cols[5].width;
+        drawLines(page, nameLines, { x: x + 5, y: rowY, size: 7.5, font: bold, color: black }, lineHeight); x += cols[3].width;
+        drawLines(page, fatherLines, { x: x + 5, y: rowY, size: 7.5, font, color: black }, lineHeight); x += cols[4].width;
+        drawLines(page, contactLines, { x: x + 5, y: rowY, size: 7, font, color: black }, lineHeight); x += cols[5].width;
         page.drawText(fmtDate(s.dateOfBirth), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[6].width - 10 }); x += cols[6].width;
         page.drawText(fmtDate(s.admissionDate), { x: x + 5, y: rowY, size: 7.5, font, color: black, maxWidth: cols[7].width - 10 }); x += cols[7].width;
-        drawTextSafe(page, s.address || '—', { x: x + 5, y: rowY, size: 7, font, color: black, maxWidth: cols[8].width - 10 });
+        drawLines(page, addressLines, { x: x + 5, y: rowY, size: 7, font, color: black }, lineHeight);
 
         y -= rowHeight;
       });
