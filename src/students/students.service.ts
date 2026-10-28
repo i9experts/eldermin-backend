@@ -2131,6 +2131,20 @@ export class StudentsService {
     return typeof err.message === 'string' && err.message.includes('E11000');
   }
 
+  /** A short, loggable summary of a bulkWrite failure - name, message, and
+   * the writeErrors array (whichever of the shapes it actually came in
+   * under) - so a duplicate-key error this code couldn't pin down to a
+   * specific record is at least fully visible in the logs next time,
+   * instead of being a complete guess. */
+  private describeBulkWriteError(err: any): string {
+    try {
+      const writeErrors = err?.writeErrors || err?.result?.result?.writeErrors || err?.result?.writeErrors;
+      return JSON.stringify({ name: err?.name, code: err?.code, message: err?.message, writeErrors });
+    } catch {
+      return String(err?.message || err);
+    }
+  }
+
   async markAttendance(dto: MarkAttendanceDto) {
     const dayStatus = await this.checkSchoolDay(dto.schoolSlug as string, dto.date, dto.grade);
     if (!dayStatus.valid) throw new BadRequestException(`Cannot mark attendance: ${dayStatus.reason}`);
@@ -2228,22 +2242,38 @@ export class StudentsService {
       // never actually in conflict.
       const writeErrors = err.writeErrors || err.result?.result?.writeErrors || err.result?.writeErrors || [];
       const failedIndexes = [...new Set((writeErrors as any[]).map((e: any) => e?.index).filter((i: any) => typeof i === 'number'))];
+
+      // Prefer retrying just the specific record(s) the driver pinned
+      // down - but if that shape isn't recognized (a different Mongo
+      // driver/Mongoose version can wrap a bulk-write error differently
+      // than expected here), fall back to retrying the WHOLE original
+      // batch rather than giving up immediately: every op in it is a
+      // plain upsert of the teacher's own just-submitted data, so
+      // re-running it is always safe and idempotent - an op that already
+      // succeeded just updates itself again to the same value, and an op
+      // that lost the insert race now finds the document the other
+      // request just created and updates it instead of trying to insert
+      // again. This is what actually closes the race in every case,
+      // independent of whether the per-record indexes could be parsed.
+      const retryOps = failedIndexes.length > 0
+        ? failedIndexes.map(i => ({ updateOne: buildOp(dto.records[i]) }))
+        : ops;
       if (failedIndexes.length === 0) {
-        // Duplicate-key error, but not in a shape we can pin to specific
-        // records - don't guess which ones to retry.
-        throw new ConflictException('Some attendance records in this batch were just saved by another request - please refresh and try again.');
+        this.logger.warn(`bulkMarkAttendance: duplicate-key error with no parseable per-record index - retrying the full ${dto.records.length}-record batch. Raw error: ${this.describeBulkWriteError(err)}`);
       }
 
-      const retryOps = failedIndexes.map(i => ({ updateOne: buildOp(dto.records[i]) }));
       try {
         await this.attendanceModel.bulkWrite(retryOps as any, { ordered: false });
       } catch (retryErr: any) {
         if (!this.isDuplicateKeyError(retryErr)) throw retryErr;
+        this.logger.warn(`bulkMarkAttendance: retry still conflicted for ${failedIndexes.length || dto.records.length} of ${dto.records.length} record(s). Raw retry error: ${this.describeBulkWriteError(retryErr)}`);
         throw new ConflictException(
-          `${failedIndexes.length} of ${dto.records.length} attendance record(s) in this batch were just saved by another request and could not be reconciled automatically - please refresh and try again.`,
+          failedIndexes.length > 0
+            ? `${failedIndexes.length} of ${dto.records.length} attendance record(s) in this batch were just saved by another request and could not be reconciled automatically - please refresh and try again.`
+            : 'Some attendance records in this batch were just saved by another request - please refresh and try again.',
         );
       }
-      result = { acknowledged: true, reconciledConflicts: failedIndexes.length };
+      result = { acknowledged: true, reconciledConflicts: failedIndexes.length || dto.records.length };
     }
     await this.notifyAttendance(dto.schoolSlug as string, dto.records.map((r: any) => ({ studentId: r.studentId, status: r.status, date: new Date(r.date) })));
     return result;
