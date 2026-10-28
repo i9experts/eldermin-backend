@@ -2177,10 +2177,28 @@ export class StudentsService {
     // identical way forever. schoolSlug is still written on every save
     // (via $set below), so this also self-heals any already-drifted
     // record back to the caller's current, correct schoolSlug.
+    //
+    // studentId is matched as EITHER a string or an ObjectId for the same
+    // reason: this collection has years of records written with
+    // studentId stored as a plain string (bulkWrite/raw driver writes
+    // bypass Mongoose's schema casting), alongside newer ones stored as a
+    // real ObjectId. Confirmed directly from production data - e.g. a
+    // student with an existing string-typed studentId record for a given
+    // date, whose filter here used ONLY the ObjectId form, found no
+    // match, attempted an insert, and that insert's own $set (which
+    // included dto.studentId's string form) ended up with the exact same
+    // (studentId, date, subject) key the string-typed record already
+    // held - a duplicate-key error on every single attempt, forever,
+    // since nothing about the mismatch ever changes on retry. Matching
+    // both forms here, while always WRITING the canonical ObjectId form
+    // below, self-heals every record to the correct type going forward.
+    const studentIdMatch = Types.ObjectId.isValid(dto.studentId)
+      ? { $in: [dto.studentId, new Types.ObjectId(dto.studentId)] }
+      : dto.studentId;
     let saved;
     try {
       saved = await this.attendanceModel.findOneAndUpdate(
-        { studentId: new Types.ObjectId(dto.studentId), date, subject: dto.subject || null },
+        { studentId: studentIdMatch, date, subject: dto.subject || null },
         { $set: { ...dto, date, studentId: new Types.ObjectId(dto.studentId), schoolSlug: dto.schoolSlug, subject: dto.subject || null } },
         { upsert: true, new: true },
       );
@@ -2220,16 +2238,31 @@ export class StudentsService {
     const buildOp = (r: any) => {
       const date = new Date(r.date);
       date.setHours(0, 0, 0, 0);
+      // Matches ONLY the unique index's own fields (studentId, date,
+      // subject) - NOT also schoolSlug - see the comment on this same fix
+      // in markAttendance above for why including schoolSlug in the match
+      // filter caused a deterministic (not race-based) 409 on every
+      // single save for a record whose stored schoolSlug had drifted from
+      // the current request's. schoolSlug is still written on every save,
+      // healing any drift.
+      //
+      // studentId is matched as EITHER a string or an ObjectId - same fix
+      // as markAttendance, for the same confirmed-in-production reason:
+      // years of this collection's records have studentId stored as a
+      // plain string (raw bulkWrite ops bypass Mongoose's schema
+      // casting), so an ObjectId-only filter found zero matches for those
+      // records, attempted an insert, and that insert's own $set (which
+      // used to spread the string-typed r.studentId straight through)
+      // collided with the exact (studentId, date, subject) key the
+      // string-typed record already held - deterministically, every
+      // time, for the exact same students. Always WRITING the canonical
+      // ObjectId form below self-heals every record to the correct type.
+      const studentIdMatch = Types.ObjectId.isValid(r.studentId)
+        ? { $in: [r.studentId, new Types.ObjectId(r.studentId)] }
+        : r.studentId;
       return {
-        // Matches ONLY the unique index's own fields (studentId, date,
-        // subject) - NOT also schoolSlug - see the comment on this same
-        // fix in markAttendance above for why including schoolSlug in the
-        // match filter caused a deterministic (not race-based) 409 on
-        // every single save for a record whose stored schoolSlug had
-        // drifted from the current request's. schoolSlug is still
-        // written on every save, healing any drift.
-        filter: { studentId: new Types.ObjectId(r.studentId), date, subject: r.subject || null },
-        update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
+        filter: { studentId: studentIdMatch, date, subject: r.subject || null },
+        update: { $set: { ...r, date, studentId: new Types.ObjectId(r.studentId), schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
         upsert: true,
       };
     };
