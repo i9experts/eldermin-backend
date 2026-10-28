@@ -34,7 +34,9 @@ export function mergeBehaviour360(i: Behaviour360Input): {
     totalPoints += signed(k, s.totalPoints);
   }
   const tag = (rows: any[], source: Source) => (rows || []).map((r) => ({ ...r, source }));
-  const items = [...tag(i.legacyRecent, 'legacy'), ...tag(i.recordsRecent, 'records')]
+  // a document that appears in both lists (same collection reached through two models) is shown once, as 'records'
+  const recordIds = new Set((i.recordsRecent || []).map((r) => String(r._id)));
+  const items = [...tag((i.legacyRecent || []).filter((r) => !recordIds.has(String(r._id))), 'legacy'), ...tag(i.recordsRecent, 'records')]
     .sort((a, b) => ts(b.date) - ts(a.date) || String(b._id).localeCompare(String(a._id)))
     .slice(0, i.limit ?? 10);
   const recent = i.guardianView ? items.map((r) => ({ ...projectParentBehaviourRecord(r), source: r.source })) : items;

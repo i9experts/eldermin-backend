@@ -53,6 +53,11 @@ describe('mergeBehaviour360', () => {
     expect(legacyOnly.totalPoints).toBe(3);
   });
 
+  it('the same document in both lists is shown once (as records)', () => {
+    const { recent } = mergeBehaviour360({ legacySummary: [], recordsSummary: [], legacyRecent: [{ _id: 'X', date: d('2026-09-01') }, { _id: 'L', date: d('2026-08-01') }], recordsRecent: [{ _id: 'X', date: d('2026-09-01') }] });
+    expect(recent.map((r) => `${r.source}:${r._id}`)).toEqual(['records:X', 'legacy:L']);
+  });
+
   it('missing / empty inputs and bad dates never throw', () => {
     expect(mergeBehaviour360({ legacySummary: undefined as any, recordsSummary: undefined as any, legacyRecent: undefined as any, recordsRecent: undefined as any })).toEqual({ summary: {}, totalPoints: 0, recent: [] });
     expect(() => mergeBehaviour360({ legacySummary: [], recordsSummary: [], legacyRecent: [{ _id: 'x', date: 'not a date' }], recordsRecent: [{ _id: 'y' }] })).not.toThrow();
@@ -72,13 +77,14 @@ const chain = (v: any) => {
   const c: any = { select: () => c, sort: () => c, skip: () => c, limit: () => c, lean: () => Promise.resolve(v), then: (r: any, j: any) => Promise.resolve(v).then(r, j) };
   return c;
 };
-function makeService(withRecords = true, legacy: any = {}, records: any = {}) {
+function makeService(withRecords = true, legacy: any = {}, records: any = {}, sameCollection = false) {
   const studentModel: any = { findOne: jest.fn(() => chain({ _id: sid, currentAcademicYear: '2026-27', schoolSlug: 's' })) };
   const empty: any = { aggregate: jest.fn(async () => []), find: jest.fn(() => chain([])) };
   const behaviourModel: any = { aggregate: jest.fn(async () => legacy.summary || []), find: jest.fn(() => chain(legacy.recent || [])) };
   const recordModel: any = { aggregate: jest.fn(async () => records.summary || []), find: jest.fn(() => chain(records.recent || [])) };
   const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
   const args: any[] = [studentModel, empty, empty, behaviourModel, { find: jest.fn(() => chain([])) }, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n];
+  if (sameCollection) { (behaviourModel as any).collection = { name: 'behaviour_records' }; (recordModel as any).collection = { name: 'behaviour_records' }; }
   const svc = new (StudentsService as any)(...args, ...(withRecords ? [recordModel] : []));
   return { svc, recordModel, behaviourModel };
 }
@@ -114,6 +120,16 @@ describe('StudentsService.getStudent360 behaviour union', () => {
     const res: any = await svc.getStudent360(String(sid), 's', teacher as any);
     expect(res.behaviour.recent.map((r: any) => r.source)).toEqual(['legacy']);
     expect(res.behaviour.totalPoints).toBe(2);
+  });
+
+  it('when both models are bound to the SAME collection (pdf.module registers "Behaviour" with the record schema) nothing is counted twice', async () => {
+    const both = { summary: [{ _id: 'negative', count: 1, totalPoints: -3 }], recent: [{ _id: 'R1', type: 'negative', date: d('2026-09-05'), points: -3, title: 'rec' }] };
+    const { svc } = makeService(true, both, both, true);
+    const res: any = await svc.getStudent360(String(sid), 's', teacher as any);
+    expect(res.behaviour.recent).toHaveLength(1);
+    expect(res.behaviour.recent[0].source).toBe('records');
+    expect(res.behaviour.summary).toEqual({ negative: { count: 1, points: -3 } });
+    expect(res.behaviour.totalPoints).toBe(-3);
   });
 
   it('no data in either store: empty block, no throw', async () => {

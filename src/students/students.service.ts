@@ -1829,8 +1829,12 @@ export class StudentsService {
         this.behaviourRecordModel.find({ studentId: sid, schoolSlug }).sort({ date: -1 }).limit(10).lean(),
       ]) as any
       : [[], []];
+    // Mongoose keeps ONE model per name per connection and pdf.module.ts registers the name 'Behaviour' with BehaviourRecordSchema, so
+    // depending on module load order `behaviourModel` can already BE behaviour_records. Never count / list the same collection twice.
+    const sameStore = !!this.behaviourRecordModel && (this.behaviourModel as any)?.collection?.name !== undefined
+      && (this.behaviourModel as any).collection.name === (this.behaviourRecordModel as any)?.collection?.name;
     const merged = mergeBehaviour360({
-      legacySummary: behaviourSummary, recordsSummary, legacyRecent: recentBehaviour, recordsRecent,
+      legacySummary: sameStore ? [] : behaviourSummary, recordsSummary, legacyRecent: sameStore ? [] : recentBehaviour, recordsRecent,
       guardianView: viewerRole === 'parent' || viewerRole === 'student',
     });
     const behaviourMap = merged.summary;
