@@ -2186,19 +2186,19 @@ export class StudentsService {
       if (!dayStatus.valid) throw new BadRequestException(`Cannot mark attendance: ${dayStatus.reason}`);
     }
 
-    const ops = dto.records.map(r => {
+    const buildOp = (r: any) => {
       const date = new Date(r.date);
       date.setHours(0, 0, 0, 0);
       return {
-        updateOne: {
-          // subject in the filter too - see the comment in markAttendance
-          // above for why this is safe for existing daily-mode records.
-          filter: { studentId: new Types.ObjectId(r.studentId), date, schoolSlug: dto.schoolSlug, subject: r.subject || null },
-          update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
-          upsert: true,
-        },
+        // subject in the filter too - see the comment in markAttendance
+        // above for why this is safe for existing daily-mode records.
+        filter: { studentId: new Types.ObjectId(r.studentId), date, schoolSlug: dto.schoolSlug, subject: r.subject || null },
+        update: { $set: { ...r, date, schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, subject: r.subject || null } },
+        upsert: true,
       };
-    });
+    };
+    const ops = dto.records.map(r => ({ updateOne: buildOp(r) }));
+
     let result;
     try {
       // ordered: false so one student's duplicate-key race doesn't abort
@@ -2209,10 +2209,41 @@ export class StudentsService {
       // unmarked" symptom this bug produced).
       result = await this.attendanceModel.bulkWrite(ops as any, { ordered: false });
     } catch (err: any) {
-      if (this.isDuplicateKeyError(err)) {
+      if (!this.isDuplicateKeyError(err)) throw err;
+
+      // A duplicate-key hit here almost always means another concurrent
+      // request's upsert already INSERTED the very same brand-new
+      // (studentId, date, subject) document a moment earlier - this can
+      // only happen the first time a class's attendance is ever saved
+      // for that date, since an update to an already-existing record
+      // never races this way. It isn't a real conflict in what's being
+      // saved (this request's own data is exactly what the teacher just
+      // submitted) - it only ever used to LOOK like one, because the old
+      // code threw a blanket error for the whole class the instant ANY
+      // one student in the batch hit this, even though ordered:false had
+      // already saved every other student fine. Retrying just the
+      // handful that actually collided - now as a plain update against
+      // the document the other request just created - finishes the
+      // batch instead of making the teacher re-save students who were
+      // never actually in conflict.
+      const writeErrors = err.writeErrors || err.result?.result?.writeErrors || err.result?.writeErrors || [];
+      const failedIndexes = [...new Set((writeErrors as any[]).map((e: any) => e?.index).filter((i: any) => typeof i === 'number'))];
+      if (failedIndexes.length === 0) {
+        // Duplicate-key error, but not in a shape we can pin to specific
+        // records - don't guess which ones to retry.
         throw new ConflictException('Some attendance records in this batch were just saved by another request - please refresh and try again.');
       }
-      throw err;
+
+      const retryOps = failedIndexes.map(i => ({ updateOne: buildOp(dto.records[i]) }));
+      try {
+        await this.attendanceModel.bulkWrite(retryOps as any, { ordered: false });
+      } catch (retryErr: any) {
+        if (!this.isDuplicateKeyError(retryErr)) throw retryErr;
+        throw new ConflictException(
+          `${failedIndexes.length} of ${dto.records.length} attendance record(s) in this batch were just saved by another request and could not be reconciled automatically - please refresh and try again.`,
+        );
+      }
+      result = { acknowledged: true, reconciledConflicts: failedIndexes.length };
     }
     await this.notifyAttendance(dto.schoolSlug as string, dto.records.map((r: any) => ({ studentId: r.studentId, status: r.status, date: new Date(r.date) })));
     return result;
