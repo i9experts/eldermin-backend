@@ -166,7 +166,30 @@ describe('StudentsService.bulkMarkAttendance: duplicate-key handling', () => {
     } as any)).rejects.toThrow(/1 of 2 attendance record/);
   });
 
-  it('falls back to a blanket 409 when the duplicate-key error carries no recognizable per-record index', async () => {
+  it('self-heals by retrying the WHOLE batch when the duplicate-key error has no parseable per-record index - the exact gap that let the original "17 of 18 unsaved" bug resurface even after the index-based fix shipped, if a MongoDB driver version ever wraps the error differently than expected', async () => {
+    let call = 0;
+    const model = makeAttendanceModel({
+      bulkWriteImpl: async (ops: any[]) => {
+        call++;
+        if (call === 1) {
+          const err: any = new Error('E11000 duplicate key error collection: eldermin.student_attendance');
+          err.code = 11000; // no writeErrors[].index to pin down which record
+          throw err;
+        }
+        // Retry: the FULL original batch is re-sent, not just a guessed subset.
+        expect(ops).toHaveLength(records.length);
+        return { modifiedCount: 2, upsertedCount: 0 };
+      },
+    });
+    const svc = makeService(model);
+
+    const result = await svc.bulkMarkAttendance({ records, schoolSlug: 's', academicYear: '2026-27' } as any);
+
+    expect(result).toBeDefined();
+    expect(model.bulkWrite).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to a blanket 409 only when even a full-batch retry still conflicts and no index was parseable', async () => {
     const model = makeAttendanceModel({
       bulkWriteImpl: async () => {
         const err: any = new Error('E11000 duplicate key error collection: eldermin.student_attendance');
@@ -181,6 +204,7 @@ describe('StudentsService.bulkMarkAttendance: duplicate-key handling', () => {
       schoolSlug: 's',
       academicYear: '2026-27',
     } as any)).rejects.toBeInstanceOf(ConflictException);
+    expect(model.bulkWrite).toHaveBeenCalledTimes(2);
   });
 
   it('re-throws a non-duplicate-key bulkWrite error unchanged', async () => {
