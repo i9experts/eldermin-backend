@@ -35,6 +35,7 @@ export function makeAssessmentService(o: FakeOpts = {}) {
   const markModel: any = {
     find: jest.fn(() => chain(o.existingMarks ?? [])),
     findOne: jest.fn(() => chain(o.existingMarkEntry ?? null)),
+    findOneAndDelete: jest.fn(async () => o.existingMarkEntry ?? null),
     bulkWrite: jest.fn(async () => ({})),
     updateOne: jest.fn(async () => ({})),
   };
