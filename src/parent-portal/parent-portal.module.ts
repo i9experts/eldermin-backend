@@ -56,6 +56,7 @@ import { ECEObservation, ECEObservationSchema } from '../ece/schemas/observation
 import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from '../ece/schemas/portfolio-entry.schema';
 import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
+import { GamificationModule } from '../gamification/gamification.module';
 
 @Module({
   imports: [
@@ -110,6 +111,7 @@ import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organi
     SyllabusModule,
     UploadModule,
     PdfModule,
+    GamificationModule,
     HomeTasksModule,
     ParentAccessControlModule,
   ],

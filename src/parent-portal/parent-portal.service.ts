@@ -47,6 +47,7 @@ import { CertificatesService } from '../modules/certificates/certificates.servic
 import { PdfService } from '../pdf/pdf.service';
 import { ParentAccessControlService } from '../parent-access-control/parent-access-control.service';
 import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
+import { GamificationService } from '../gamification/gamification.service';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
 export const MAX_DEVICES_PER_PARENT = 10;
@@ -88,6 +89,7 @@ export class ParentPortalService {
     private pdfService: PdfService,
     private parentAccess: ParentAccessControlService,
     private forumService: ForumService,
+    private gamificationService: GamificationService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -501,6 +503,20 @@ export class ParentPortalService {
     return this.forumService.deleteReply(tenantId, replyId, { author: { type: 'student', id: studentId, name: '' } });
   }
 
+  // ── LMS Phase 5: gamification (parent/student's own view) ────
+  async getMyGamificationSummary(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.gamificationService.getStudentSummary(schoolSlug, studentId);
+  }
+
+  async getMyClassLeaderboard(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId }).select('currentGrade currentSection').lean();
+    return this.gamificationService.getLeaderboard(schoolSlug, {
+      grade: (student as any)?.currentGrade, section: (student as any)?.currentSection,
+    });
+  }
+
   async markLessonProgress(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string }) {
     assertStudentAccess(requestingUser, studentId);
     if (!['not_started', 'in_progress', 'completed'].includes(dto.status)) {
@@ -555,11 +571,13 @@ export class ParentPortalService {
       const totalLessons = (syllabus.units || []).reduce(
         (sum: number, u: any) => sum + (u.topics || []).reduce((s2: number, t: any) => s2 + (t.lessons || []).length, 0), 0,
       );
+      let courseJustCompleted = false;
       if (totalLessons > 0) {
         const completedCount = await this.lessonProgressModel.countDocuments({
           studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), status: 'completed',
         });
-        if (completedCount >= totalLessons) {
+        courseJustCompleted = completedCount >= totalLessons;
+        if (courseJustCompleted) {
           try {
             await this.certificatesService.autoIssueCourseCompletion(
               schoolSlug, studentId, syllabus.subjectName, syllabus._id, 'System (course completion)',
@@ -571,6 +589,33 @@ export class ParentPortalService {
             // not the other way around.
           }
         }
+      }
+
+      // LMS Phase 5 (gamification) - same non-blocking convention as the
+      // certificate call just above. "First Step" is awarded the first
+      // time this student has EVER completed a lesson, across every
+      // course, not per-course - checked by a global count rather than a
+      // per-syllabus one.
+      try {
+        await this.gamificationService.awardPoints(
+          schoolSlug, studentId, 10, `Completed: ${lesson.title}`,
+          'lesson_completion', `${dto.syllabusId}:${dto.unitNo}:${dto.topicNo}:${dto.lessonNo}`, { tenantId },
+        );
+        const everCompletedCount = await this.lessonProgressModel.countDocuments({ studentId: new Types.ObjectId(studentId), status: 'completed' });
+        if (everCompletedCount === 1) {
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'first_lesson', { tenantId });
+        }
+        if (courseJustCompleted) {
+          await this.gamificationService.awardPoints(
+            schoolSlug, studentId, 50, `Completed course: ${syllabus.subjectName}`,
+            'course_completion', String(syllabus._id), { tenantId },
+          );
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'course_complete', {
+            tenantId, sourceType: 'course_completion', sourceId: String(syllabus._id),
+          });
+        }
+      } catch {
+        // never let a gamification hiccup block the student's own progress from saving
       }
     }
     return updated;

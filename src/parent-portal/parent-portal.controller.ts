@@ -259,6 +259,19 @@ export class ParentPortalController {
     return this.service.deleteCourseForumReply(studentId, requestingUser, tenantId, replyId);
   }
 
+  // ── LMS Phase 5: gamification ─────────────────────────────────
+  @Get('students/:studentId/gamification/summary')
+  async getMyGamificationSummary(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyGamificationSummary(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/gamification/leaderboard')
+  async getMyClassLeaderboard(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyClassLeaderboard(studentId, requestingUser, schoolSlug);
+  }
+
   @Post('students/:studentId/lessons/progress')
   @HttpCode(HttpStatus.OK)
   async markLessonProgress(

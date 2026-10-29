@@ -7,7 +7,7 @@ import { mayTeacherAccessClassSubject } from '../staff-portal/teacher-class-acce
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
-import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -16,6 +16,7 @@ import * as bwipjs from 'bwip-js';
 import * as fs from 'fs';
 import { randomBytes } from 'crypto';
 import { PdfService } from '../pdf/pdf.service';
+import { GamificationService } from '../gamification/gamification.service';
 
 // Base64-encoded once at module load, not per-request - the file is read
 // and re-encoded on every PDF generation otherwise, for a font that never
@@ -120,6 +121,11 @@ export class AssessmentService {
     private configService: ConfigService,
     private pdfService: PdfService,
     private uploadService: UploadService,
+    // LMS Phase 5 (gamification) - appended at the end and optional, same
+    // convention as StudentsService.behaviourRecordModel, so the existing
+    // strictly-typed `new AssessmentService(...)` test construction
+    // (exam-paper-error-handling.spec.ts) keeps compiling unchanged.
+    @Optional() private gamificationService?: GamificationService,
   ) {}
 
   /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
@@ -2179,6 +2185,27 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       },
       { upsert: true },
     );
+
+    // LMS Phase 5 (gamification) - a non-blocking side effect, same
+    // reasoning as CertificatesService.autoIssueCourseCompletion's own
+    // call site: a points/badge hiccup must never fail the student's
+    // actual quiz result from saving. Points scale with score (0-20);
+    // 90%+ also earns the one-time "Quiz Ace" badge.
+    if (this.gamificationService) {
+      try {
+        await this.gamificationService.awardPoints(
+          attempt.schoolSlug, String(attempt.studentId), Math.round(percentage / 5), `Quiz: ${attempt.assessmentTitle}`,
+          'quiz_attempt', String(attempt._id),
+        );
+        if (percentage >= 90) {
+          await this.gamificationService.awardBadge(attempt.schoolSlug, String(attempt.studentId), 'quiz_ace', {
+            sourceType: 'quiz_attempt', sourceId: String(attempt._id),
+          });
+        }
+      } catch {
+        // never let a gamification hiccup block the student's own quiz result from saving
+      }
+    }
   }
 
   /** Student-facing list: every self-paced subject available to this
