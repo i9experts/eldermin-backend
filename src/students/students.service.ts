@@ -2721,8 +2721,17 @@ export class StudentsService {
   // ============================================================
   // BEHAVIOUR
   // ============================================================
+  /**
+   * Legacy student_behaviour store (web Student Profile "Log Behaviour", POST /students/behaviour). The student is looked up by id IN THE CALLER'S SCHOOL
+   * and the stored name always comes from that record (the client's name is never trusted, and the web does not send one); a missing category becomes
+   * 'general'. Unknown / other-school student -> 404, nothing written.
+   */
   async createBehaviour(dto: CreateBehaviourDto) {
-    const behaviour = new this.behaviourModel(dto);
+    if (!dto.schoolSlug) throw new BadRequestException('A school context is required.');
+    const student: any = await this.studentModel.findOne({ _id: dto.studentId, schoolSlug: dto.schoolSlug }).select('firstName lastName').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    const studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim() || 'Student';
+    const behaviour = new this.behaviourModel({ ...dto, studentName, category: dto.category || 'general' });
     return behaviour.save();
   }
 

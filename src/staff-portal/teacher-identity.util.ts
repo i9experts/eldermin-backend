@@ -64,6 +64,21 @@ export function isOwnTeacherRef(me: TeacherIdentity, id: any): boolean {
 }
 
 /**
+ * List filter matching BOTH of my ids (BB2). Teacher-keyed documents hold a Staff._id when a teacher created them (normaliseTeacherIdForWrite)
+ * but a TeacherProfile._id when an admin/coordinator created them through the web (the web's TeacherDropdown lists TeacherProfile rows:
+ * HomeworkTab.tsx:117-123, LessonPlansTab.tsx:528,654, ClassDiaryTab.tsx:70, SyllabusTab.tsx:67). A list filtered on the Staff id alone hid those
+ * rows from the teacher they belong to. Both ids come from the DB (resolveTeacherIdentity), never from the request, and are matched in both
+ * stored forms (ObjectId and string, B0_ID_TYPING.md) so the filter is also correct inside aggregations that bypass the id-match plugin.
+ */
+export function teacherIdsMatch(me: TeacherIdentity): { $in: Array<Types.ObjectId | string> } {
+  const out: Array<Types.ObjectId | string> = [];
+  for (const id of [me.staffId, me.teacherProfileId]) {
+    if (id && Types.ObjectId.isValid(String(id))) out.push(new Types.ObjectId(String(id)), String(id));
+  }
+  return { $in: out };
+}
+
+/**
  * Create rule: absent -> my Staff._id; mine (either id) -> normalised to my
  * Staff._id; anything else -> 403.
  */

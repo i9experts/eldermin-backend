@@ -16,7 +16,7 @@ import {
 } from './dto/syllabus.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import {
-  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+  isTeacherCaller, teacherIdsMatch, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
 } from '../staff-portal/teacher-identity.util';
 
 @Injectable()
@@ -160,7 +160,7 @@ export class SyllabusService {
     // the teacher's behalf, which shouldn't hide it from that teacher).
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.syllabusModel.find(filter).sort({ gradeLevel: 1, subjectName: 1 }).lean();
   }
@@ -375,8 +375,18 @@ export class SyllabusService {
   // can be on different academic years/terms), grouped by subject/class
   // so a teacher sees their whole week in one place rather than
   // checking each class's syllabus separately.
-  async getTeacherWeeklyPlanner(tenantId: string, schoolSlug: string, teacherId: string) {
-    const syllabi = await this.syllabusModel.find({ tenantId, teacherId: new Types.ObjectId(teacherId), status: { $in: ['active', 'approved'] } }).lean();
+  async getTeacherWeeklyPlanner(tenantId: string, schoolSlug: string, teacherId: string, requestingUser?: ScopedUser) {
+    // A TEACHER caller always gets their OWN planner (both ids); the query param is ignored for them (it used to read any teacher's, and a
+    // malformed id was a 500). Other roles keep the param.
+    let teacherFilter: any;
+    if (isTeacherCaller(requestingUser)) teacherFilter = teacherIdsMatch(await this.teacherIdentity(requestingUser!));
+    else {
+      // no teacher chosen (the web only sends one once a teacher is picked): nothing to plan, as before (an absent id used to match nobody)
+      if (teacherId === undefined || teacherId === null || teacherId === '') return [];
+      if (!Types.ObjectId.isValid(String(teacherId))) throw new BadRequestException('teacherId must be a valid id');
+      teacherFilter = new Types.ObjectId(teacherId);
+    }
+    const syllabi = await this.syllabusModel.find({ tenantId, teacherId: teacherFilter, status: { $in: ['active', 'approved'] } }).lean();
 
     const results: any[] = [];
     for (const s of syllabi) {

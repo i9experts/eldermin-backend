@@ -12,7 +12,7 @@ import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
 import { escapeHtml, renderRichTextField, urduFontFaceCss } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
-import { TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
+import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
@@ -1122,7 +1122,7 @@ export class PdfService implements OnModuleDestroy {
     @InjectModel('Invoice') private invoiceModel: Model<any>,
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel('Assessment') private assessmentModel: Model<any>,
-    @InjectModel('Behaviour') private behaviourModel: Model<any>,
+    @InjectModel(BehaviourRecord.name) private behaviourModel: Model<any>,
     @InjectModel('ReportTemplate') private reportTemplateModel: Model<any>,
     @InjectModel('Payment') private paymentModel: Model<any>,
     @InjectModel('Expense') private expenseModel: Model<any>,

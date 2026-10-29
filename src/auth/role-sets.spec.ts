@@ -2,7 +2,7 @@ import { PERMISSION_KEY } from './decorators';
 import { ROLES_OR_MODULE_KEY } from '../roles/decorators/roles-or-module-manage.decorator';
 import { ROLES_KEY } from './decorators';
 import { UserRole } from './roles.enum';
-import { TEACHING_ADMIN_ROLES, HR_LEAVE_ADMIN_ROLES, MODULES_ADMIN_ROLES, STAFF_WRITE_ROLES } from './role-sets';
+import { TEACHING_ADMIN_ROLES, HR_LEAVE_ADMIN_ROLES, MODULES_ADMIN_ROLES, STAFF_WRITE_ROLES, SCHOOL_STAFF_ROLES } from './role-sets';
 import { AssessmentController } from '../assessments/assessment.controller';
 import { BehaviourController } from '../behaviour/behaviour.controller';
 import { EceController } from '../ece/ece.controller';
@@ -119,7 +119,10 @@ describe('role-sets', () => {
 
     it('carries the expected @RolesOrModuleManage set and no legacy @Roles', () => {
       expect(meta).toBeDefined();
-      expect(Reflect.getMetadata(ROLES_KEY, Ctrl.prototype[fn])).toBeUndefined();
+      // no legacy role LIST that could lock a custom-role holder out; the one allowed exception is the staff-only floor (every role except
+      // parent/student/reseller) that keeps non-staff tokens off a route (homework submissions, R2)
+      const legacy = Reflect.getMetadata(ROLES_KEY, Ctrl.prototype[fn]);
+      if (legacy !== undefined) expect([...(legacy as UserRole[])].sort()).toEqual([...SCHOOL_STAFF_ROLES].sort());
       expect(roles).toBeDefined();
       expect([...(roles as UserRole[])].sort()).toEqual([...SETS[setName]].sort());
     });

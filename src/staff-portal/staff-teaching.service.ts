@@ -1,7 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
+import { teacherIdsMatch } from './teacher-identity.util';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { PortalUser } from './staff-portal.service';
@@ -23,7 +25,14 @@ export class StaffTeachingService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(Timetable.name) private timetableModel: Model<TimetableDocument>,
+    @Optional() @InjectModel(TeacherProfile.name) private profileModel?: Model<TeacherProfileDocument>,
   ) {}
+
+  /** BB2: the assignments of this teacher carry my Staff._id (teacher-created) or my TeacherProfile._id (admin-created through the web). */
+  private async teacherIdsOf(staff: StaffDocument) {
+    const profile: any = this.profileModel ? await this.profileModel.findOne({ staffId: staff._id }).select('_id').lean() : null;
+    return teacherIdsMatch({ userId: '', name: '', staffId: String(staff._id), teacherProfileId: profile?._id ? String(profile._id) : null });
+  }
 
   private slugOf(user: PortalUser): string {
     if (!user.schoolSlug) throw new ForbiddenException('No school context on this account.');
@@ -61,7 +70,7 @@ export class StaffTeachingService {
     const limit = this.parseLimit(q?.limit);
 
     const rows: any[] = await this.assignmentModel.aggregate([
-      { $match: { tenantId: staff.tenantId, teacherId: staff._id, status: { $ne: 'draft' } } },
+      { $match: { tenantId: staff.tenantId, teacherId: await this.teacherIdsOf(staff), status: { $ne: 'draft' } } },
       {
         $lookup: {
           from: 'assignmentSubmissions',

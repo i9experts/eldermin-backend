@@ -1,16 +1,14 @@
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { resolveTeacherIdentity, TeacherClassRef } from '../staff-portal/teacher-identity.util';
 import { classIncludes } from '../behaviour/behaviour-teacher-scope';
+import { teacherScopeVerdict } from '../auth/teacher-scope-verdict';
 
-export type TeacherScopeMode = 'log' | 'enforce';
-/** TEACHER_SCOPE_GUARD_MODE=enforce makes a would-deny a 403; anything else (default) only writes the structured `teacher_scope_guard` line. */
-export function teacherScopeGuardMode(): TeacherScopeMode {
-  return String(process.env.TEACHER_SCOPE_GUARD_MODE || '').trim().toLowerCase() === 'enforce' ? 'enforce' : 'log';
-}
+export { teacherScopeGuardMode } from '../auth/teacher-scope-verdict';
+export type { TeacherScopeMode } from '../auth/teacher-scope-verdict';
 
 /** Does the token carry class-teacher claims? (same two shapes resolveClassSectionScope reads) */
 export function hasClassTeacherClaims(user: any): boolean {
@@ -40,8 +38,6 @@ export function classTeacherClassesOf(profile: any): TeacherClassRef[] {
  */
 @Injectable()
 export class TeacherAttendanceScopeService {
-  private readonly logger = new Logger('TeacherScopeGuard');
-
   constructor(
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private profileModel: Model<TeacherProfileDocument>,
@@ -60,12 +56,7 @@ export class TeacherAttendanceScopeService {
   }
 
   private verdict(user: any, route: string, reason: string, message: string): void {
-    const mode = teacherScopeGuardMode();
-    this.logger.warn(JSON.stringify({
-      event: 'teacher_scope_guard', mode, decision: mode === 'enforce' ? 'denied' : 'would_deny', reason, role: 'teacher', route,
-      user: { userId: user?.userId, tenantId: user?.tenantId, schoolSlug: user?.schoolSlug },
-    }));
-    if (mode === 'enforce') throw new ForbiddenException(message);
+    teacherScopeVerdict(user, route, reason, message);
   }
 
   /** records: the (grade, section) pairs being marked. Empty = only "is a class teacher" is checked (revert by id). */

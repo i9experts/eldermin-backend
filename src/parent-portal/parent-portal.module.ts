@@ -29,6 +29,7 @@ import {
   Message, MessageSchema,
 } from './schemas/notification-and-message.schema';
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
+import { ParentDevice, ParentDeviceSchema } from './schemas/parent-device.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
@@ -47,6 +48,12 @@ import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
 import { HomeTasksModule } from '../home-tasks/home-tasks.module';
 import { ParentAccessControlModule } from '../parent-access-control/parent-access-control.module';
+import { ParentEarlyYearsController } from './parent-early-years.controller';
+import { ParentEarlyYearsService } from './parent-early-years.service';
+import { ECEObservation, ECEObservationSchema } from '../ece/schemas/observation.schema';
+import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from '../ece/schemas/portfolio-entry.schema';
+import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
+import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 
 @Module({
   imports: [
@@ -76,6 +83,7 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
       { name: MessageThread.name, schema: MessageThreadSchema },
       { name: Message.name, schema: MessageSchema },
       { name: PhoneOtp.name, schema: PhoneOtpSchema },
+      { name: ParentDevice.name, schema: ParentDeviceSchema },
       { name: Tenant.name, schema: TenantSchema },
       // Registered as 'OrgInstitution', not Institution.name - the literal
       // class name "Institution" is already taken by the (unrelated)
@@ -86,6 +94,11 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
       { name: UsageLog.name, schema: UsageLogSchema },
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
+      // Read-only, for the parent Early Years view (ParentEarlyYearsService)
+      { name: ECEObservation.name, schema: ECEObservationSchema },
+      { name: ECEPortfolioEntry.name, schema: ECEPortfolioEntrySchema },
+      { name: ECESkill.name, schema: ECESkillSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
     ]),
     EmailModule,
     AuthModule,
@@ -96,8 +109,8 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
     HomeTasksModule,
     ParentAccessControlModule,
   ],
-  controllers: [ParentPortalController, ParentAuthController],
-  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor, GeocodingService],
+  controllers: [ParentPortalController, ParentAuthController, ParentEarlyYearsController],
+  providers: [ParentPortalService, ParentAuthService, ParentEarlyYearsService, GuardianRefreshInterceptor, GeocodingService],
   exports: [ParentPortalService, ParentAuthService],
 })
 export class ParentPortalModule {}

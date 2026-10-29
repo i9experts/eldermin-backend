@@ -37,11 +37,15 @@ import {
 } from './schemas/notification-and-message.schema';
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { ParentDevice, ParentDeviceDocument } from './schemas/parent-device.schema';
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
 import { PdfService } from '../pdf/pdf.service';
 import { ParentAccessControlService } from '../parent-access-control/parent-access-control.service';
 import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
+
+/** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
+export const MAX_DEVICES_PER_PARENT = 10;
 
 @Injectable()
 export class ParentPortalService {
@@ -72,12 +76,47 @@ export class ParentPortalService {
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
+    @InjectModel(ParentDevice.name) private deviceModel: Model<ParentDeviceDocument>,
     private assessmentService: AssessmentService,
     private certificatesService: CertificatesService,
     private uploadService: UploadService,
     private pdfService: PdfService,
     private parentAccess: ParentAccessControlService,
   ) {}
+
+  // ── Device ping: a real "this parent has the app open" signal ──────
+  // Called on every login and every app cold-start. Upserts by
+  // (userId, deviceId) so re-pinging the same device just advances
+  // lastSeenAt instead of creating duplicates - the count of distinct
+  // documents per user is the honest "how many devices this parent
+  // actually uses the app on" number.
+  async recordDevicePing(userId: string, tenantId: string, dto: { deviceId: string; platform: string; appVersion?: string }) {
+    // Input is client-controlled: bounded and shaped here (the body is not DTO-validated), so a parent cannot store arbitrary blobs.
+    const deviceId = typeof dto?.deviceId === 'string' ? dto.deviceId.trim() : '';
+    if (!deviceId) throw new BadRequestException('deviceId is required');
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(deviceId)) throw new BadRequestException('deviceId is not valid');
+    if (!['android', 'ios'].includes(dto.platform)) throw new BadRequestException('platform must be android or ios');
+    const appVersion = typeof dto.appVersion === 'string' ? dto.appVersion.trim().slice(0, 32) : undefined;
+    if (!Types.ObjectId.isValid(String(userId)) || !Types.ObjectId.isValid(String(tenantId))) throw new BadRequestException('Invalid account context');
+    const uid = new Types.ObjectId(String(userId));
+
+    // One row per device of THIS parent in THIS school (both come from the signed token, never from the body). A parent can hold a handful
+    // of devices; beyond the cap a new device id is acknowledged but not stored, so the collection cannot be grown without bound.
+    const existing = await this.deviceModel.exists({ userId: uid, deviceId });
+    if (!existing) {
+      const count = await this.deviceModel.countDocuments({ userId: uid });
+      if (count >= MAX_DEVICES_PER_PARENT) return { ok: true };
+    }
+    await this.deviceModel.findOneAndUpdate(
+      { userId: uid, deviceId },
+      {
+        $set: { tenantId: new Types.ObjectId(String(tenantId)), platform: dto.platform, appVersion, lastSeenAt: new Date() },
+        $setOnInsert: { firstSeenAt: new Date() },
+      },
+      { upsert: true, new: true },
+    );
+    return { ok: true };
+  }
 
   // ── Admin: link a guardian's login to their child/children ─────
   // This is the foundational step - without it, a parent account has

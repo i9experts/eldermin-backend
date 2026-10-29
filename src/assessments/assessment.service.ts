@@ -2,6 +2,8 @@
 // ASSESSMENT SERVICE — Eldermin ERP | NestJS
 // ============================================================
 
+import { teacherScopeVerdict } from '../auth/teacher-scope-verdict';
+import { mayTeacherAccessClassSubject } from '../staff-portal/teacher-class-access.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
@@ -1728,6 +1730,19 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     }
   }
 
+  /**
+   * BB6: marks are entered / edited for the teacher's own class + subject only (a class teacher: every subject of their class; a subject teacher: their
+   * (class, subject) pairs; the web's assessment carries grade/section and subjects[].subject). An assessment without a section covers the whole grade and
+   * is matched by class only (a teacher of section A enters their own students' marks). TEACHER_SCOPE_GUARD_MODE: log = would_deny line, enforce = 403.
+   * Used by the bulk entry AND the single-mark edit of the Mark Sheet (PATCH marks/:id); the delete is admin-only at the controller.
+   */
+  private async assertTeacherMarksScope(user: any, assessment: any, subject: string, route: string): Promise<void> {
+    const scope = await this.teacherContext(user);
+    if (!mayTeacherAccessClassSubject(scope, { grade: assessment?.grade, section: assessment?.section, subject })) {
+      teacherScopeVerdict(user, route, 'teacher_marks_outside_assignment', 'You can only enter marks for your own class and subject.');
+    }
+  }
+
   async bulkEnterMarks(dto: BulkMarkEntryDto, requestingUser?: ScopedUser) {
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
@@ -1740,6 +1755,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // row is out of bounds or already verified (locked).
     const teacher = isTeacherCaller(requestingUser);
     if (teacher) {
+      await this.assertTeacherMarksScope(requestingUser, assessment, dto.subject, 'POST /assessments/marks/bulk');
       this.assertTeacherMarksNotLocked(assessment);
       const bad: string[] = [];
       for (const m of dto.marks) {
@@ -1859,6 +1875,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // (admin, principal, etc.) keep today's overwrite behaviour.
     if (isTeacherCaller(requestingUser)) {
       const assessment = await this.assessmentModel.findById(mark.assessmentId);
+      await this.assertTeacherMarksScope(requestingUser, assessment, mark.subject, 'PATCH /assessments/marks/:id');
       this.assertTeacherMarksNotLocked(assessment);
       if (mark.verified) {
         throw new ConflictException(`Marks for ${mark.studentName || mark.studentId}${mark.rollNumber ? ` (roll ${mark.rollNumber})` : ''} are verified and locked.`);

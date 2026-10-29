@@ -4,6 +4,9 @@ import { Model, Types } from 'mongoose';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Tenant, TenantDocument } from '../organization/schemas/tenant.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
+import { Campus, CampusDocument } from '../../organization/schemas/organization.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teacher-profile.schema';
+import { getScopeLevel, ScopeLevel } from '../../auth/scope.util';
 import { UserRole } from '../../auth/roles.enum';
 import { SCHOOL_SUSPENDED_TOKEN_MESSAGE, schoolSuspendedException } from '../../common/constants/school-suspended';
 import { NON_STAFF_ROLES } from '../../auth/admin-role-sets';
@@ -43,7 +46,7 @@ export function cacheTtlMs(): number {
   return Number.isFinite(v) && v >= 0 ? Math.min(v, CACHE_TTL_MS_CAP) : CACHE_TTL_MS_CAP;
 }
 
-interface Entry { isActive: boolean; tv: number; suspended: boolean; staffInactive: boolean; expires: number }
+interface Entry { isActive: boolean; tv: number; suspended: boolean; staffInactive: boolean; campusId?: string; expires: number }
 
 @Injectable()
 export class AuthStateService {
@@ -56,6 +59,8 @@ export class AuthStateService {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @Optional() @InjectModel(Tenant.name) private tenantModel?: Model<TenantDocument>,
     @Optional() @InjectModel(Staff.name) private staffModel?: Model<StaffDocument>,
+    @Optional() @InjectModel(Campus.name) private campusModel?: Model<CampusDocument>,
+    @Optional() @InjectModel(TeacherProfile.name) private profileModel?: Model<TeacherProfileDocument>,
   ) {
     // counters go to the log only (no public endpoint); default every 60 s, only when there was activity
     const every = Number(process.env.AUTH_STATE_STATS_INTERVAL_MS) || 60_000;
@@ -77,8 +82,20 @@ export class AuthStateService {
   clear() { this.cache.clear(); }
 
   /** Throws 401 / 503 when the token must not be accepted. Returns void when it may proceed. */
-  async assertTokenValid(payload: { sub?: string; tv?: any; role?: any; tenantId?: any }): Promise<void> {
-    if (!authStateCheckEnabled()) return;
+  async assertTokenValid(payload: { sub?: string; tv?: any; role?: any; tenantId?: any; schoolSlug?: any }): Promise<void> {
+    await this.check(payload);
+  }
+
+  /**
+   * assertTokenValid plus BB11: the campus this staff account belongs to when the TOKEN carries none. A campus-scoped teacher/staff token without
+   * `campusId` is refused by resolveCampusScope on every campus-scoped screen ("no campus assigned"). The token is minted at login from
+   * Staff.campusId, or the school's single campus; it stays campus-less when the campus was assigned AFTER sign-in, and `/auth/me` never applies
+   * the single-campus fallback. Derived here (cached with the rest of the account state, <= 30 s): Staff.campusId, else the teacher profile's,
+   * else the school's single active campus. Nothing is written; a multi-campus school with no campus on the staff row stays campus-less (the
+   * web has no rule for it either: it sends no campus and the same 403 applies). The token's own campusId always wins.
+   */
+  async check(payload: { sub?: string; tv?: any; role?: any; tenantId?: any; schoolSlug?: any }): Promise<{ campusId?: string }> {
+    if (!authStateCheckEnabled()) return {};
     const sub = String(payload?.sub ?? '');
     if (!Types.ObjectId.isValid(sub)) throw new UnauthorizedException('Your session is no longer valid. Please sign in again.');
     const tokenTv = Number.isInteger(payload.tv) ? (payload.tv as number) : 0;
@@ -101,15 +118,17 @@ export class AuthStateService {
     if (entry!.tv !== tokenTv) { this.stats.rejected++; throw new UnauthorizedException('Your session has ended. Please sign in again.'); }
     if (entry!.suspended) { this.stats.rejected++; throw schoolSuspendedException(SCHOOL_SUSPENDED_TOKEN_MESSAGE); }
     if (entry!.staffInactive) { this.stats.rejected++; throw new UnauthorizedException('This account is no longer active.'); }
+    return entry!.campusId ? { campusId: entry!.campusId } : {};
   }
 
   /** School suspended / Staff row deactivated for this token's user. Never throws for "not applicable"; DB failure -> 503. */
-  private async loadExtras(sub: string, payload: { role?: any; tenantId?: any }): Promise<{ suspended: boolean; staffInactive: boolean }> {
+  private async loadExtras(sub: string, payload: { role?: any; tenantId?: any; schoolSlug?: any }): Promise<{ suspended: boolean; staffInactive: boolean; campusId?: string }> {
     const role = String(payload?.role ?? '');
     // platform accounts carry no school: never refused on school status, no Staff row to check
     if (role === UserRole.SUPER_ADMIN || role === UserRole.RESELLER_ADMIN || role === UserRole.RESELLER_SUPPORT) return { suspended: false, staffInactive: false };
     let suspended = false;
     let staffInactive = false;
+    let campusId: string | undefined;
     try {
       const tid = payload?.tenantId;
       if (this.tenantModel && tid && Types.ObjectId.isValid(String(tid))) {
@@ -117,18 +136,31 @@ export class AuthStateService {
         suspended = t?.status === 'suspended';
       }
       if (this.staffModel && role && !NON_STAFF_ROLES.includes(role as UserRole)) {
-        const rows: any[] = await this.staffModel.find({ userId: idForms(sub) }).select('isActive').lean();
+        const rows: any[] = await this.staffModel.find({ userId: idForms(sub) }).select('isActive campusId').lean();
         staffInactive = rows.length > 0 && rows.every((r) => r.isActive === false);
+        const scope = getScopeLevel(role);
+        if (!staffInactive && (scope === ScopeLevel.CAMPUS || scope === ScopeLevel.DEPARTMENT)) {
+          const live = rows.filter((r) => r.isActive !== false);
+          campusId = live.find((r) => r.campusId)?.campusId ? String(live.find((r) => r.campusId)!.campusId) : undefined;
+          if (!campusId && this.profileModel && live.length) {
+            const prof: any = await this.profileModel.findOne({ staffId: { $in: live.map((r) => r._id) }, campusId: { $ne: null } }).select('campusId').lean();
+            if (prof?.campusId) campusId = String(prof.campusId);
+          }
+          if (!campusId && this.campusModel && payload?.schoolSlug) {
+            const campuses: any[] = await this.campusModel.find({ schoolSlug: payload.schoolSlug, isActive: true }).select('_id').limit(2).lean();
+            if (campuses.length === 1) campusId = String(campuses[0]._id);
+          }
+        }
       }
     } catch (err) {
       this.stats.errors++;
       this.logger.error(`Account state lookup failed (503, not failing open): ${(err as Error)?.message}`);
       throw new ServiceUnavailableException('Service temporarily unavailable. Please try again.');
     }
-    return { suspended, staffInactive };
+    return { suspended, staffInactive, campusId };
   }
 
-  private async load(sub: string, now: number, payload: { role?: any; tenantId?: any } = {}): Promise<Entry> {
+  private async load(sub: string, now: number, payload: { role?: any; tenantId?: any; schoolSlug?: any } = {}): Promise<Entry> {
     let doc: any;
     try {
       doc = await this.userModel.findOne({ _id: sub }).select('isActive tokenVersion').lean();
@@ -138,7 +170,7 @@ export class AuthStateService {
       throw new ServiceUnavailableException('Service temporarily unavailable. Please try again.');
     }
     if (!doc) { this.cache.delete(sub); this.stats.rejected++; throw new UnauthorizedException('Your session is no longer valid. Please sign in again.'); }
-    const extras = doc.isActive !== false ? await this.loadExtras(sub, payload) : { suspended: false, staffInactive: false };
+    const extras: { suspended: boolean; staffInactive: boolean; campusId?: string } = doc.isActive !== false ? await this.loadExtras(sub, payload) : { suspended: false, staffInactive: false };
     const entry: Entry = { isActive: doc.isActive !== false, tv: Number.isInteger(doc.tokenVersion) ? doc.tokenVersion : 0, ...extras, expires: now + cacheTtlMs() };
     if (cacheTtlMs() > 0) {
       if (this.cache.size >= MAX_ENTRIES) this.evict(now);

@@ -338,12 +338,14 @@ export class FeeQueryDto extends PaginationDto {
 // ── Behaviour ─────────────────────────────────────────────────
 export class CreateBehaviourDto {
   @IsMongoId() studentId: string;
-  @IsString() studentName: string;
+  // Ignored when sent: the server derives the name from studentId (a client-supplied name is never trusted). Optional because the web's Student Profile never sends it.
+  @IsOptional() @IsString() studentName?: string;
   @IsString() grade: string;
   @IsOptional() @IsString() section?: string;
   @IsDateString() date: string;
   @IsEnum(['positive', 'negative', 'neutral']) type: string;
-  @IsString() category: string;
+  // Defaults to 'general' when missing (the web's Student Profile form has no category).
+  @IsOptional() @IsString() category?: string;
   @IsString() description: string;
   @IsOptional() @IsEnum(['low', 'medium', 'high', 'critical']) severity?: string;
   @IsOptional() @IsString() actionTaken?: string;
