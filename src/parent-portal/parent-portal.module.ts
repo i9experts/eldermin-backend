@@ -37,6 +37,7 @@ import { UsageLog, UsageLogSchema } from '../super-admin/schemas/super-admin.sch
 import { GeocodingService } from '../leads/geocoding.service';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentSchema } from '../syllabus/schemas/course-enrollment.schema';
 import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { AssessmentModule } from '../assessments/assessment.module';
@@ -94,6 +95,7 @@ import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organi
       { name: UsageLog.name, schema: UsageLogSchema },
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
+      { name: CourseEnrollment.name, schema: CourseEnrollmentSchema },
       // Read-only, for the parent Early Years view (ParentEarlyYearsService)
       { name: ECEObservation.name, schema: ECEObservationSchema },
       { name: ECEPortfolioEntry.name, schema: ECEPortfolioEntrySchema },

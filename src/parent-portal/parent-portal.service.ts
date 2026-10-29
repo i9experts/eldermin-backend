@@ -37,6 +37,8 @@ import {
 } from './schemas/notification-and-message.schema';
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentDocument } from '../syllabus/schemas/course-enrollment.schema';
+import { computeLessonLock } from '../syllabus/lesson-lock.util';
 import { ParentDevice, ParentDeviceDocument } from './schemas/parent-device.schema';
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
@@ -76,6 +78,7 @@ export class ParentPortalService {
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
+    @InjectModel(CourseEnrollment.name) private enrollmentModel: Model<CourseEnrollmentDocument>,
     @InjectModel(ParentDevice.name) private deviceModel: Model<ParentDeviceDocument>,
     private assessmentService: AssessmentService,
     private certificatesService: CertificatesService,
@@ -367,8 +370,14 @@ export class ParentPortalService {
     const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
     if (!student) throw new NotFoundException('Student not found');
 
-    const filter: any = {
+    // LMS Phase 1: an 'auto_by_class' syllabus (the default - every
+    // syllabus that existed before enrollmentMode was added) keeps being
+    // matched by grade/section/campus exactly as before. A 'manual'
+    // syllabus (elective/opt-in) is matched purely by having an active
+    // CourseEnrollment row instead - its own gradeLevel is irrelevant.
+    const autoFilter: any = {
       tenantId, gradeLevel: gradeMatcher((student as any).currentGrade), publishedToStudents: true,
+      enrollmentMode: { $ne: 'manual' },
       $and: [
         { $or: [{ sectionName: sectionMatcher((student as any).currentSection) }, { sectionName: { $exists: false } }, { sectionName: null }] },
       ],
@@ -376,9 +385,14 @@ export class ParentPortalService {
     // Same campus-scoping rule as getHomework - a student's own campusId
     // decides this, not the syllabus's, so a matching grade/section name
     // at a different campus never leaks in.
-    if ((student as any).campusId) filter.$and.push({ $or: [{ campusId: new Types.ObjectId((student as any).campusId) }, { campusId: null }] });
+    if ((student as any).campusId) autoFilter.$and.push({ $or: [{ campusId: new Types.ObjectId((student as any).campusId) }, { campusId: null }] });
 
-    const syllabi = await this.syllabusModel.find(filter).sort({ subjectName: 1 }).lean();
+    const enrolledSyllabusIds = await this.enrollmentModel
+      .find({ tenantId, studentId: new Types.ObjectId(studentId), status: 'active' })
+      .distinct('syllabusId');
+    const manualFilter = { tenantId, publishedToStudents: true, enrollmentMode: 'manual', _id: { $in: enrolledSyllabusIds } };
+
+    const syllabi = await this.syllabusModel.find({ $or: [autoFilter, manualFilter] }).sort({ subjectName: 1 }).lean();
     if (syllabi.length === 0) return [];
 
     const progressRows = await this.lessonProgressModel.find({
@@ -392,21 +406,27 @@ export class ParentPortalService {
       const units = (s.units || []).map((u: any) => ({
         unitNo: u.unitNo,
         unitName: u.unitName,
-        topics: (u.topics || []).map((t: any) => ({
-          topicNo: t.topicNo,
-          topicName: t.topicName,
-          lessons: (t.lessons || []).slice().sort((a: any, b: any) => a.order - b.order).map((l: any) => {
-            const progress = progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`);
-            const status = progress?.status || 'not_started';
-            totalLessons += 1;
-            if (status === 'completed') completedLessons += 1;
-            return {
-              lessonNo: l.lessonNo, title: l.title, description: l.description,
-              type: l.type, url: l.url, fileUrl: l.fileUrl, fileName: l.fileName,
-              status,
-            };
-          }),
-        })).filter((t: any) => t.lessons.length > 0),
+        topics: (u.topics || []).map((t: any) => {
+          const sortedLessons = (t.lessons || []).slice().sort((a: any, b: any) => a.order - b.order);
+          const isCompleted = (lessonNo: number) =>
+            progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${lessonNo}`)?.status === 'completed';
+          return {
+            topicNo: t.topicNo,
+            topicName: t.topicName,
+            lessons: sortedLessons.map((l: any, idx: number) => {
+              const progress = progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`);
+              const status = progress?.status || 'not_started';
+              totalLessons += 1;
+              if (status === 'completed') completedLessons += 1;
+              const lock = computeLessonLock(l, sortedLessons.slice(0, idx), t.sequentialLessons, isCompleted);
+              return {
+                lessonNo: l.lessonNo, title: l.title, description: l.description,
+                type: l.type, url: l.url, fileUrl: l.fileUrl, fileName: l.fileName,
+                status, locked: lock.locked, lockReason: lock.reason,
+              };
+            }),
+          };
+        }).filter((t: any) => t.lessons.length > 0),
       })).filter((u: any) => u.topics.length > 0);
 
       return {
@@ -444,10 +464,33 @@ export class ParentPortalService {
     }
     const syllabus = await this.syllabusModel.findOne({ _id: dto.syllabusId, tenantId, publishedToStudents: true }).lean();
     if (!syllabus) throw new NotFoundException('Course not found');
+    // LMS Phase 1: a 'manual' (elective) course can't be progressed by a
+    // student who isn't actually enrolled in it, even if they somehow know
+    // its syllabusId - this is the same gate getMyCourses applies to what
+    // it lists, enforced again here against direct API calls.
+    if ((syllabus as any).enrollmentMode === 'manual') {
+      const enrolled = await this.enrollmentModel.exists({
+        syllabusId: new Types.ObjectId(dto.syllabusId), studentId: new Types.ObjectId(studentId), status: 'active',
+      });
+      if (!enrolled) throw new NotFoundException('Course not found');
+    }
     const unit = (syllabus.units || []).find((u: any) => u.unitNo === dto.unitNo);
     const topic = unit?.topics?.find((t: any) => t.topicNo === dto.topicNo);
     const lesson = topic?.lessons?.find((l: any) => l.lessonNo === dto.lessonNo);
     if (!lesson) throw new NotFoundException('Lesson not found');
+
+    // LMS Phase 1: a locked lesson (future releaseDate, or an earlier
+    // lesson in a sequentialLessons topic not yet completed) can't be
+    // progressed - this is what actually enforces pacing; getMyCourses
+    // merely reflects it for display.
+    const sortedLessons = ((topic as any).lessons || []).slice().sort((a: any, b: any) => a.order - b.order);
+    const lessonIdx = sortedLessons.findIndex((l: any) => l.lessonNo === dto.lessonNo);
+    const priorProgress = await this.lessonProgressModel.find({
+      studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), unitNo: dto.unitNo, topicNo: dto.topicNo,
+    }).lean();
+    const isCompleted = (lessonNo: number) => priorProgress.some((p: any) => p.lessonNo === lessonNo && p.status === 'completed');
+    const lock = computeLessonLock(lesson, sortedLessons.slice(0, lessonIdx), (topic as any).sequentialLessons, isCompleted);
+    if (lock.locked) throw new BadRequestException(lock.reason || 'This lesson is locked.');
 
     const updated = await this.lessonProgressModel.findOneAndUpdate(
       { studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), unitNo: dto.unitNo, topicNo: dto.topicNo, lessonNo: dto.lessonNo },

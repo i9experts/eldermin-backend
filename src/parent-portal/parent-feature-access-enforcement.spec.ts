@@ -8,12 +8,12 @@ import { ParentPortalService } from './parent-portal.service';
 
 function stubModel() { return {} as any; }
 
-// ParentPortalService takes 26 positional model injections, then 4 service
-// injections, then ParentAccessControlService - rather than hand-count 31
+// ParentPortalService takes 27 positional model injections, then 4 service
+// injections, then ParentAccessControlService - rather than hand-count 32
 // positional args (fragile against constructor reordering), build the
 // model list, slot the one model this test actually needs in at the
 // reportCardModel position, and spread everything through `new`.
-const MODEL_COUNT = 27;
+const MODEL_COUNT = 28;
 const REPORT_CARD_MODEL_INDEX = 4; // 0-based: studentModel, attendanceModel, invoiceModel, markModel, reportCardModel, ...
 
 function buildService(parentAccess: any) {

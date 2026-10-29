@@ -27,6 +27,9 @@ export class SyllabusTopicDto {
   @ValidateNested({ each: true })
   @Type(() => SyllabusSubTopicDto)
   subTopics?: SyllabusSubTopicDto[];
+  // LMS Phase 1: instructor-paced option - lessons in this topic unlock in
+  // `order` one at a time instead of all being available at once.
+  @IsOptional() @IsBoolean() sequentialLessons?: boolean;
 }
 
 export class SyllabusUnitDto {
@@ -123,6 +126,9 @@ export class CreateLessonDto {
   @IsOptional() @IsString() fileName?: string;
   @IsOptional() @IsNumber() order?: number;
   @IsOptional() @IsDateString() dueDate?: string;
+  // LMS Phase 1: calendar-based pacing - a future releaseDate keeps this
+  // lesson locked regardless of publishedToStudents.
+  @IsOptional() @IsDateString() releaseDate?: string;
 }
 
 export class UpdateLessonDto {
@@ -137,6 +143,7 @@ export class UpdateLessonDto {
   @IsOptional() @IsString() fileName?: string;
   @IsOptional() @IsNumber() order?: number;
   @IsOptional() @IsDateString() dueDate?: string;
+  @IsOptional() @IsDateString() releaseDate?: string;
 }
 
 export class DeleteLessonDto {
@@ -147,6 +154,14 @@ export class DeleteLessonDto {
 
 export class SetPublishedDto {
   @IsBoolean() published: boolean;
+}
+
+export class SetEnrollmentModeDto {
+  @IsEnum(['auto_by_class', 'manual']) enrollmentMode: string;
+}
+
+export class EnrollStudentsDto {
+  @IsArray() @IsMongoId({ each: true }) studentIds: string[];
 }
 
 export class SyllabusQueryDto {

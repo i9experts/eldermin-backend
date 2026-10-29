@@ -34,6 +34,7 @@ import { FinanceModule } from '../finance/finance.module';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentSchema } from '../syllabus/schemas/course-enrollment.schema';
 import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-attempt.schema';
 
 @Module({
@@ -78,6 +79,7 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       // above.
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
+      { name: CourseEnrollment.name, schema: CourseEnrollmentSchema },
       { name: QuizAttempt.name, schema: QuizAttemptSchema },
     ]),
   ],
