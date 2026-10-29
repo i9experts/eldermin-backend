@@ -7,6 +7,8 @@ import { ROLES_OR_MODULE_KEY } from '../roles/decorators/roles-or-module-manage.
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { UserRole } from '../auth/roles.enum';
 
+const omitStamp = (o: any) => { const { updatedBy, updatedById, ...rest } = o || {}; return rest; };
+
 const REC = new Types.ObjectId().toHexString();
 const ME = new Types.ObjectId().toHexString();
 const OTHER = new Types.ObjectId().toHexString();
@@ -52,7 +54,7 @@ describe('PUT /behaviour/records/:id ownership (D7)', () => {
     for (const stored of [new Types.ObjectId(ME), ME]) {
       const { svc, calls } = svcWith({ _id: REC, reportedById: stored });
       await svc.updateRecord(REC, 's', { title: 'x', reportedBy: 'evil', reportedById: OTHER, schoolSlug: 'other', campusId: 'c', verifiedBy: 'me', verified: true, resolved: true, resolvedNote: 'n' }, teacher() as any);
-      expect(calls[0].u.$set).toEqual({ title: 'x' });
+      expect(omitStamp(calls[0].u.$set)).toEqual({ title: 'x' });
     }
   });
   it("teacher cannot edit someone else's record (403) and nothing is written", async () => {
@@ -72,7 +74,7 @@ describe('PUT /behaviour/records/:id ownership (D7)', () => {
   it.each(['principal', 'admin', 'vice_principal', 'academic_coordinator', 'institution_owner', 'super_admin'])('%s keeps full edit (any record, all fields): today\'s behaviour', async (role) => {
     const { svc, calls } = svcWith({ _id: REC, reportedById: OTHER });
     await svc.updateRecord(REC, 's', { title: 'x', resolved: true }, { role, userId: ME } as any);
-    expect(calls[0].u.$set).toEqual({ title: 'x', resolved: true });
+    expect(omitStamp(calls[0].u.$set)).toEqual({ title: 'x', resolved: true });
   });
   it('unknown record -> 404; malformed id -> 400 (never 500)', async () => {
     await expect(svcWith(null).svc.updateRecord(REC, 's', {}, teacher() as any)).rejects.toBeInstanceOf(NotFoundException);

@@ -80,7 +80,7 @@ export class BehaviourAccessGuard implements CanActivate {
     }
 
     let elevated = BEHAVIOUR_ADMIN_ROLES.includes(role as UserRole);
-    if (!elevated && policy?.customRoles && role !== UserRole.TEACHER) {
+    if (!elevated && policy?.customRoles) {
       access = access ?? await this.customRoleAccess(user.userId);
       elevated = customRoleIsElevated(access, policy.subModule);
     }

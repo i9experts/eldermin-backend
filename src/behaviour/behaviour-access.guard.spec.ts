@@ -213,7 +213,7 @@ describe('BehaviourAccessGuard: custom roles', () => {
     expect(sub.__req.behaviourAccess.elevated).toBe(true);
     const wide = ctx('updateTarbiyah', user(UserRole.SUPPORT_STAFF));
     await guard(models([{ moduleKey: 'behaviour', level: 'manage' }])).canActivate(wide);
-    expect(wide.__req.behaviourAccess.elevated).toBe(false);
+    expect(wide.__req.behaviourAccess.elevated).toBe(true);   // R1 decision 3: a module-wide behaviour MANAGE grant counts like admin
   });
 
   it('a grant on another module (e.g. hr) opens nothing; lookup failure fails closed', async () => {

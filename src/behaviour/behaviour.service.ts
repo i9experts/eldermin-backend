@@ -7,6 +7,7 @@ import { assertValidObjectId } from '../common/utils/object-id.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { UserRole } from '../auth/roles.enum';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -54,6 +55,15 @@ const getTarbiyahRating = (pct: number): string => {
   if (pct >= 30) return 'needs_improvement';
   return 'critical';
 };
+
+/** Who edited a behaviour record / Tarbiyah assessment last (the author fields are never rewritten). */
+function stampUpdate(user: any): { updatedBy?: string; updatedById?: any } {
+  // updatedAt is stamped by the schema's `timestamps: true` on findOneAndUpdate
+  const out: any = {};
+  if (user?.name) out.updatedBy = String(user.name);
+  if (user?.userId && Types.ObjectId.isValid(String(user.userId))) out.updatedById = new Types.ObjectId(String(user.userId));
+  return out;
+}
 
 @Injectable()
 export class BehaviourService {
@@ -351,13 +361,14 @@ export class BehaviourService {
     assertValidObjectId(id, 'behaviour record');
     const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).lean();
     if (!existing) throw new NotFoundException('Record not found');
-    if (access?.isTeacher && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
+    if (access?.isTeacher && !access.elevated && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
       denyOrLog(access, requestingUser, 'teacher_edits_other_record', 'You can only edit behaviour records you logged yourself.');
     }
     let body = data;
     if (requestingUser) {
       const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
-      if (!TEACHING_ADMIN_ROLES.includes(role)) {
+      // admin roles, or a custom role holding the behaviour MANAGE grant (access.elevated), may edit any record
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated) {
         // always enforced (independent of BEHAVIOUR_GUARD_MODE); id match, or the display name for legacy records without reportedById
         if (!isOwnByAuthor(requestingUser as any, existing, 'reportedById', 'reportedBy')) {
           throw new ForbiddenException('You can only edit behaviour records you logged yourself');
@@ -366,8 +377,8 @@ export class BehaviourService {
         for (const f of BehaviourService.ADMIN_ONLY_RECORD_FIELDS) delete body[f];
       }
     }
-    // A raw $set of schoolSlug/campusId would move a record to another school/campus.
-    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: stripProtectedFields(body) }, { new: true });
+    // A raw $set of schoolSlug/campusId would move a record to another school/campus. Who edited it last is stamped.
+    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { ...stripProtectedFields(body), ...stampUpdate(requestingUser) } }, { new: true });
   }
 
   async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
@@ -680,15 +691,25 @@ export class BehaviourService {
     assertValidObjectId(id, 'tarbiyah assessment');
     // Never re-home or re-attribute an assessment through a raw $set; only admins may rewrite the display name.
     data = stripProtectedFields(data, ['studentId', 'assessedById', ...(access?.elevated === false ? ['assessedBy'] : [])]);
-    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared').lean();
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared campusId').lean();
     if (!existing) throw new NotFoundException('Assessment not found');
-    // Author or admin: a non-author teacher/coordinator may not edit someone else's assessment.
-    if (access && !access.elevated && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
+    // D2: an academic coordinator may edit ANY Tarbiyah assessment of their school; with a campus on both sides, only their own campus.
+    const callerRole = (requestingUser as any)?.role || (requestingUser as any)?.primaryRole;
+    let coordinatorMayEdit = false;
+    if (callerRole === UserRole.ACADEMIC_COORDINATOR) {
+      const mine = (requestingUser as any)?.campusId ? String((requestingUser as any).campusId) : '';
+      if (mine && existing.campusId && String(existing.campusId) !== mine) {
+        throw new ForbiddenException('This assessment belongs to another campus.');
+      }
+      coordinatorMayEdit = true;
+    }
+    // Author or admin: a non-author teacher may not edit someone else's assessment.
+    if (access && !access.elevated && !coordinatorMayEdit && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
       denyOrLog(access, requestingUser, 'tarbiyah_edit_not_author_or_admin', 'Only the author of this assessment or an administrator can edit it.');
     }
     if (requestingUser) {
       const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
-      if (!TEACHING_ADMIN_ROLES.includes(role)) {
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated) {
         // always enforced (independent of BEHAVIOUR_GUARD_MODE); id match, or the display name for legacy assessments without assessedById
         if (!isOwnByAuthor(requestingUser as any, existing, 'assessedById', 'assessedBy')) {
           throw new ForbiddenException('You can only edit Tarbiyah assessments you recorded yourself');
@@ -715,7 +736,7 @@ export class BehaviourService {
     }
     if (data.parentShared === true) data.parentSharedDate = new Date();
     const before: any = data.parentShared === true ? existing : null;
-    const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { ...data, ...stampUpdate(requestingUser) } }, { new: true });
     if (updated && data.parentShared === true && !before?.parentShared) {
       await notifyGuardiansOfStudents(this.tarbiyahModel.db, [updated.studentId], {
         schoolSlug, type: 'behaviour', title: 'New character development report',

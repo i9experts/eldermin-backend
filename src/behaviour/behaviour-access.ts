@@ -113,9 +113,14 @@ export function customRoleSatisfies(access: ModuleAccessEntry[] | null | undefin
   return satisfiesRequiredLevel(resolveAccessLevel(access, 'behaviour', policy.subModule), policy.level);
 }
 
-/** Sub-module-specific manage grant (the custom-role equivalent of an admin for that tab). */
+/**
+ * A custom role that holds the behaviour MANAGE grant for this sub-module (a sub-module-specific entry, or a module-wide
+ * behaviour entry which covers every sub-module, per resolveAccessLevel) is treated like an admin for that tab: it may act on
+ * any record. Without that grant the holder stays author-only. (R1 decision 3; the stock Teacher custom role carries
+ * behaviour:manage module-wide and therefore qualifies.)
+ */
 export function customRoleIsElevated(access: ModuleAccessEntry[] | null | undefined, subModule: string): boolean {
-  return Array.isArray(access) && access.some(m => m && m.moduleKey === 'behaviour' && m.subModuleKey === subModule && m.level === 'manage');
+  return Array.isArray(access) && satisfiesRequiredLevel(resolveAccessLevel(access, 'behaviour', subModule), 'manage');
 }
 
 const guardLogger = new Logger('BehaviourGuard');

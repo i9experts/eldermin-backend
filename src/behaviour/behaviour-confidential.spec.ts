@@ -9,6 +9,8 @@ import { ROLES_OR_MODULE_KEY } from '../roles/decorators/roles-or-module-manage.
 import { customRoleGrants } from '../roles/module-access.util';
 import { TEACHING_ADMIN_ROLES, STAFF_WRITE_ROLES } from '../auth/role-sets';
 
+const omitStamp = (o: any) => { const { updatedBy, updatedById, ...rest } = o || {}; return rest; };
+
 const PROTO: any = BehaviourController.prototype;
 const COUNSELLING: Array<[string, 'view' | 'manage']> = [['getCounselling', 'view'], ['createCounselling', 'manage'], ['updateCounselling', 'manage'], ['completeCounselling', 'manage']];
 const INTERVENTIONS: Array<[string, 'view' | 'manage']> = [['getInterventions', 'view'], ['createIntervention', 'manage'], ['updateIntervention', 'manage'], ['addProgress', 'manage'], ['updateAction', 'manage']];
@@ -92,7 +94,7 @@ describe('Tarbiyah PUT: author or admin only (round 2)', () => {
   it('the author edits their own assessment; ownership/tenancy fields are dropped, the parent-share toggle and traits still work', async () => {
     const { s, calls } = svc({ assessedById: new Types.ObjectId(ME) });
     await s.updateTarbiyahAssessment(ID, 'sch', { teacherObservations: 'x', assessedBy: 'evil', assessedById: OTHER, schoolSlug: 'other', studentId: OTHER, parentShared: false }, user('teacher'));
-    expect(calls[0]).toEqual({ teacherObservations: 'x', parentShared: false });
+    expect(omitStamp(calls[0])).toEqual({ teacherObservations: 'x', parentShared: false });
   });
   it("another teacher's assessment and a legacy one without an author are 403, nothing written", async () => {
     for (const existing of [{ assessedById: new Types.ObjectId(OTHER) }, {}]) {
@@ -104,7 +106,7 @@ describe('Tarbiyah PUT: author or admin only (round 2)', () => {
   it.each(['principal', 'admin', 'vice_principal', 'academic_coordinator', 'institution_owner', 'super_admin'])('%s keeps full edit of any assessment', async (role) => {
     const { s, calls } = svc({ assessedById: new Types.ObjectId(OTHER) });
     await s.updateTarbiyahAssessment(ID, 'sch', { assessedBy: 'new', teacherObservations: 'y' }, user(role));
-    expect(calls[0]).toEqual({ assessedBy: 'new', teacherObservations: 'y' });
+    expect(omitStamp(calls[0])).toEqual({ assessedBy: 'new', teacherObservations: 'y' });
   });
   it('unknown id -> 404, malformed id -> 400', async () => {
     await expect(svc(null).s.updateTarbiyahAssessment(ID, 'sch', {}, user('teacher'))).rejects.toBeInstanceOf(NotFoundException);
