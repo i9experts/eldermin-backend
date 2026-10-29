@@ -81,6 +81,20 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
 export const TEACHER_MARKS_LOCKED_MESSAGE =
   'Results for this assessment are published (or the assessment is cancelled): marks can no longer be changed. Contact an administrator.';
 
+// Shared by bulkEnterMarks and updateMarkEntry so a single mark edited from
+// the Mark Sheet (admin's "Edit" action) is scored exactly the same way a
+// freshly bulk-entered one is - same percentage rounding, grade scale and
+// pass/fail cutoff, no drift between the two entry points.
+function computeMarkOutcome(obtainedMarks: number | undefined, isAbsent: boolean | undefined, isExempt: boolean | undefined, totalMarks: number, passingMarks: number) {
+  if (isAbsent) return { percentage: undefined, grade_result: undefined, gpa: undefined, result: 'absent' };
+  if (isExempt) return { percentage: undefined, grade_result: undefined, gpa: undefined, result: 'exempt' };
+  if (obtainedMarks === undefined || obtainedMarks === null) return { percentage: undefined, grade_result: undefined, gpa: undefined, result: undefined };
+  const percentage = parseFloat(((obtainedMarks / totalMarks) * 100).toFixed(1));
+  const { grade, gpa } = getGrade(percentage);
+  const result = percentage >= ((passingMarks / totalMarks) * 100) ? 'pass' : 'fail';
+  return { percentage, grade_result: grade, gpa, result };
+}
+
 @Injectable()
 export class AssessmentService {
   private readonly logger = new Logger(AssessmentService.name);
@@ -1751,23 +1765,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     }
 
     const ops = dto.marks.map(m => {
-      let percentage: number | undefined;
-      let grade_result: string | undefined;
-      let gpa: number | undefined;
-      let result: string | undefined;
-
-      if (m.isAbsent) {
-        result = 'absent';
-      } else if (m.isExempt) {
-        result = 'exempt';
-      } else if (m.obtainedMarks !== undefined) {
-        percentage = parseFloat(((m.obtainedMarks / subjectConfig.totalMarks) * 100).toFixed(1));
-        const gradeInfo = getGrade(percentage);
-        grade_result = gradeInfo.grade;
-        gpa = gradeInfo.gpa;
-        result = percentage >= ((subjectConfig.passingMarks / subjectConfig.totalMarks) * 100)
-          ? 'pass' : 'fail';
-      }
+      const { percentage, grade_result, gpa, result } = computeMarkOutcome(
+        m.obtainedMarks, m.isAbsent, m.isExempt, subjectConfig.totalMarks, subjectConfig.passingMarks,
+      );
 
       return {
         updateOne: {
@@ -1838,6 +1838,65 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       },
       { $set: { verified: true, verifiedBy: dto.verifiedBy } },
     );
+  }
+
+  /** Edits one already-saved mark from the Mark Sheet - the gap that made
+   * "enter marks" effectively write-once: the only other entry point,
+   * bulkEnterMarks, always seeds blank rows from the class roster rather
+   * than loading what's already saved, so there was no way to correct a
+   * single student's mark short of re-running the whole subject's entry.
+   * Recomputes percentage/grade/gpa/result with the exact same formula
+   * bulkEnterMarks uses (computeMarkOutcome), off the mark's own stored
+   * totalMarks/passingMarks rather than re-reading the assessment - keeps
+   * the edit consistent with whatever was already on screen even if the
+   * assessment's subject config has since changed. */
+  async updateMarkEntry(id: string, schoolSlug: string, dto: { obtainedMarks?: number; isAbsent?: boolean; isExempt?: boolean; remarks?: string }, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'mark entry');
+    const mark: any = await this.markModel.findOne({ _id: id, schoolSlug });
+    if (!mark) throw new NotFoundException('Mark entry not found');
+
+    // Same teacher-only lock bulkEnterMarks enforces - other roles
+    // (admin, principal, etc.) keep today's overwrite behaviour.
+    if (isTeacherCaller(requestingUser)) {
+      const assessment = await this.assessmentModel.findById(mark.assessmentId);
+      this.assertTeacherMarksNotLocked(assessment);
+      if (mark.verified) {
+        throw new ConflictException(`Marks for ${mark.studentName || mark.studentId}${mark.rollNumber ? ` (roll ${mark.rollNumber})` : ''} are verified and locked.`);
+      }
+    }
+
+    const isAbsent = dto.isAbsent ?? mark.isAbsent ?? false;
+    const isExempt = dto.isExempt ?? mark.isExempt ?? false;
+    const obtainedMarks = (isAbsent || isExempt) ? undefined : (dto.obtainedMarks ?? mark.obtainedMarks);
+    if (!isAbsent && !isExempt && obtainedMarks !== undefined) {
+      if (typeof obtainedMarks !== 'number' || !Number.isFinite(obtainedMarks) || obtainedMarks < 0 || obtainedMarks > mark.totalMarks) {
+        throw new BadRequestException(`Marks must be between 0 and ${mark.totalMarks}.`);
+      }
+    }
+    const { percentage, grade_result, gpa, result } = computeMarkOutcome(obtainedMarks, isAbsent, isExempt, mark.totalMarks, mark.passingMarks);
+
+    mark.obtainedMarks = obtainedMarks;
+    mark.isAbsent = isAbsent;
+    mark.isExempt = isExempt;
+    mark.percentage = percentage ?? null;
+    mark.grade_result = grade_result ?? null;
+    mark.gpa = gpa ?? null;
+    mark.result = result;
+    if (dto.remarks !== undefined) mark.remarks = dto.remarks;
+    await mark.save();
+    return mark;
+  }
+
+  /** Deletes one mark entry - e.g. a student added to the roster by mistake,
+   * or a row that needs to be re-entered from scratch. Gated at the
+   * controller level to admin-type roles only (TEACHING_ADMIN_ROLES) -
+   * stricter than editing, since removing a result entirely (rather than
+   * correcting it) is the more consequential action. */
+  async deleteMarkEntry(id: string, schoolSlug: string) {
+    assertValidObjectId(id, 'mark entry');
+    const mark = await this.markModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!mark) throw new NotFoundException('Mark entry not found');
+    return { success: true };
   }
 
   // ============================================================
