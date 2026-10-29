@@ -19,6 +19,7 @@ import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustmen
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
 import { canResyncInvoiceDiscount, discountActuallyChanged } from './discount-resync.util';
 import { studentFullName } from '../common/utils/student-name.util';
+import { sameGrade, sameSection } from '../common/utils/class-match.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -4149,8 +4150,12 @@ export class FinanceService {
 
     let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, skippedAmbiguousMatch = 0, discountsSynced = 0;
     const errors: string[] = [];
-    const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
-    const gradesWithAmbiguousMatch = new Map<string, number>(); // grade/section -> count of students affected
+    // Keyed by the same display string as `key` below, but carrying the raw
+    // grade/section too - so the frontend can offer a one-click "reassign a
+    // Fee Structure to this class" action instead of just a count with
+    // nothing actionable about it.
+    const gradesWithNoMatch = new Map<string, { grade: string; section: string; count: number }>();
+    const gradesWithAmbiguousMatch = new Map<string, { grade: string; section: string; count: number }>();
 
     for (const student of students) {
       try {
@@ -4201,15 +4206,23 @@ export class FinanceService {
           // ties, by specificity/recency. A genuine unresolved tie is never
           // silently summed into one invoice - it's reported below so the
           // school can deactivate the stale structure(s).
+          // sameGrade/sameSection (not strict ===) - a Grade/Section
+          // rename in Organization Setup never cascades to the FeeStructure's
+          // own grade/section snapshot (confirmed: no rename-cascade exists
+          // anywhere), so an exact-string match broke the moment a class was
+          // renamed, even though the "same" class/fee structure still exist.
+          // This tolerates the case/format drift (not a true rename to a
+          // different name) that's the overwhelming majority of that drift.
           const gradeSectionCampusMatch = feeStructures.filter((fs: any) =>
-            fs.grade === (student as any).currentGrade &&
-            (!fs.section || fs.section === (student as any).currentSection) &&
+            sameGrade(fs.grade, (student as any).currentGrade) &&
+            (!fs.section || sameSection(fs.section, (student as any).currentSection)) &&
             (!fs.campus || fs.campus === studentCampusName)
           );
           applicableStructures = pickApplicableFeeStructures(gradeSectionCampusMatch, billingMonthAnchor);
           if (applicableStructures.length > 1) {
             skippedAmbiguousMatch++;
-            gradesWithAmbiguousMatch.set(key, (gradesWithAmbiguousMatch.get(key) || 0) + 1);
+            const prevAmb = gradesWithAmbiguousMatch.get(key);
+            gradesWithAmbiguousMatch.set(key, { grade: (student as any).currentGrade || 'Unknown', section: (student as any).currentSection || '', count: (prevAmb?.count || 0) + 1 });
             const structureNames = applicableStructures.map((fs: any) => `"${fs.name}"`).join(', ');
             errors.push(`${studentDisplayName}: ${applicableStructures.length} equally-specific active fee structures match ${key} for this billing month (${structureNames}) - deactivate the stale one(s) in Fee Structures, or assign this student a fee structure explicitly.`);
             skippedStudents.push({
@@ -4221,7 +4234,8 @@ export class FinanceService {
         }
         if (applicableStructures.length === 0) {
           skippedNoMatch++;
-          gradesWithNoMatch.set(key, (gradesWithNoMatch.get(key) || 0) + 1);
+          const prevNoMatch = gradesWithNoMatch.get(key);
+          gradesWithNoMatch.set(key, { grade: (student as any).currentGrade || 'Unknown', section: (student as any).currentSection || '', count: (prevNoMatch?.count || 0) + 1 });
           skippedStudents.push({
             name: studentDisplayName, grade: studentDisplayGrade, reason: 'no_match',
             detail: `No active Fee Structure defined for ${key}.`,
@@ -4460,9 +4474,14 @@ export class FinanceService {
       skippedStudents,
       skippedAlreadyBilled,
       skippedNoMatch,
-      noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, count]) => ({ grade, count })),
+      // `grade` stays the existing display string (e.g. "GRADE-1 - Grade 1B")
+      // for backward compatibility; `rawGrade`/`rawSection` are the actual
+      // field values, added so the frontend can offer a one-click
+      // "reassign a Fee Structure to this class" action instead of just a
+      // count with nothing actionable about it.
+      noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, v]) => ({ grade, count: v.count, rawGrade: v.grade, rawSection: v.section })),
       skippedAmbiguousMatch,
-      ambiguousMatchBreakdown: Array.from(gradesWithAmbiguousMatch.entries()).map(([grade, count]) => ({ grade, count })),
+      ambiguousMatchBreakdown: Array.from(gradesWithAmbiguousMatch.entries()).map(([grade, v]) => ({ grade, count: v.count, rawGrade: v.grade, rawSection: v.section })),
       errors,
       totalStudents: students.length,
     };
