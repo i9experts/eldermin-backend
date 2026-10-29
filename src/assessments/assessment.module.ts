@@ -19,11 +19,13 @@ import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
 import { PdfModule } from '../pdf/pdf.module';
 import { UploadModule } from '../upload/upload.module';
+import { GamificationModule } from '../gamification/gamification.module';
 
 @Module({
   imports: [
     PdfModule,
     UploadModule,
+    GamificationModule,
     MongooseModule.forFeature([
       { name: Assessment.name, schema: AssessmentSchema },
       { name: Question.name, schema: QuestionSchema },

@@ -53,6 +53,7 @@ import { AccountingIntegrationsModule } from './modules/accounting-integrations/
 import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
 import { LmsModule } from './lms/lms.module';
+import { GamificationModule } from './gamification/gamification.module';
 
 import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-match.selftest';
 @Module({
@@ -125,6 +126,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     IdCardsModule,
     CertificatesModule,
     LmsModule,
+    GamificationModule,
   ],
   controllers: [AppController],
   providers: [

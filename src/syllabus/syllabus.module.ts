@@ -13,9 +13,11 @@ import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
 import { SyllabusService } from './syllabus.service';
 import { SyllabusController } from './syllabus.controller';
+import { GamificationModule } from '../gamification/gamification.module';
 
 @Module({
   imports: [
+    GamificationModule,
     MongooseModule.forFeature([
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: SloTemplate.name, schema: SloTemplateSchema },

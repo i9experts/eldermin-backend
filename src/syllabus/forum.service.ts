@@ -9,6 +9,7 @@ import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/sche
 import { ScopedUser } from '../auth/scope.util';
 import { isTeacherCaller, resolveTeacherIdentity, assertOwnsTeacherDoc } from '../staff-portal/teacher-identity.util';
 import { sanitizeRichText } from '../common/utils/rich-text.util';
+import { GamificationService } from '../gamification/gamification.service';
 
 export interface ForumAuthor { type: 'staff' | 'student'; id: string; name: string; }
 
@@ -33,6 +34,7 @@ export class ForumService {
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    private gamificationService: GamificationService,
   ) {}
 
   private async getSyllabusOrThrow(syllabusId: string, tenantId: string) {
@@ -64,11 +66,13 @@ export class ForumService {
     await this.getSyllabusOrThrow(syllabusId, tenantId);
     if (!title?.trim()) throw new BadRequestException('A thread needs a title.');
     if (!body?.trim()) throw new BadRequestException('A thread needs a message.');
-    return this.threadModel.create({
+    const thread = await this.threadModel.create({
       tenantId, schoolSlug, syllabusId,
       title: title.trim(), body: sanitizeRichText(body),
       authorType: author.type, authorId: author.id, authorName: author.name,
     });
+    if (author.type === 'student') await this.awardForumPost(schoolSlug, tenantId, author.id, 'thread', String(thread._id));
+    return thread;
   }
 
   async createReply(tenantId: string, schoolSlug: string, threadId: string, author: ForumAuthor, body: string) {
@@ -83,7 +87,19 @@ export class ForumService {
     thread.replyCount = (thread.replyCount || 0) + 1;
     thread.lastReplyAt = new Date();
     await thread.save();
+    if (author.type === 'student') await this.awardForumPost(schoolSlug, tenantId, author.id, 'reply', String(reply._id));
     return reply;
+  }
+
+  /** LMS Phase 5 (gamification) - small points + a one-time "forum_contributor" badge for a student's first-ever post. Never blocks the post itself from saving. */
+  private async awardForumPost(schoolSlug: string, tenantId: string, studentId: string, kind: 'thread' | 'reply', sourceId: string) {
+    try {
+      await this.gamificationService.awardPoints(
+        schoolSlug, studentId, 5, kind === 'thread' ? 'Started a forum discussion' : 'Replied in a forum discussion',
+        'forum_post', `${kind}:${sourceId}`, { tenantId },
+      );
+      await this.gamificationService.awardBadge(schoolSlug, studentId, 'forum_contributor', { tenantId, sourceType: 'forum_post', sourceId: `${kind}:${sourceId}` });
+    } catch { /* never let a gamification hiccup block the student's own post from saving */ }
   }
 
   /** Staff only - pin/unpin or lock/unlock a thread. */
