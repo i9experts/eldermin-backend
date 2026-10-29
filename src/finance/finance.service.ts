@@ -3779,20 +3779,35 @@ export class FinanceService {
    * once (a whole class, a filtered selection, etc - see FEE-02). Runs each
    * student through the same single-assignment conflict logic rather than
    * a raw insertMany, so a student who already has a conflicting
-   * assignment is reported, not silently overwritten or silently skipped. */
+   * assignment is reported, not silently overwritten or silently skipped.
+   *
+   * Each student is independent, so this runs them concurrently rather than
+   * one at a time in a for-loop: a "Multiple Students"/"Whole Class" pick of
+   * 20-30+ students run sequentially could push the request past the
+   * frontend's timeout, which then reported a flat "Failed to assign fee
+   * structure" to the admin even though the backend kept going and was
+   * still creating assignments behind the scenes - a confusing partial
+   * state. Each student's outcome is also caught individually now, so one
+   * bad id (e.g. a student since transferred/deleted) no longer aborts the
+   * whole batch - it's reported per-student instead, the same way
+   * bulkImportFeeAssignments already reports per-row. */
   async bulkAssignFeeStructure(schoolSlug: string, data: {
     studentIds: string[]; feeStructureId: string; academicYear: string;
     effectiveFrom: string | Date; effectiveTo?: string | Date | null;
     assignedBy?: string; notes?: string; replace?: boolean;
   }) {
-    const results: { studentId: string; conflict: boolean; message?: string }[] = [];
-    for (const studentId of data.studentIds) {
-      const result = await this.assignFeeStructure(schoolSlug, { ...data, studentId });
-      results.push({ studentId, conflict: !!result.conflict, message: result.conflict ? result.message : undefined });
-    }
+    const results = await Promise.all(data.studentIds.map(async (studentId) => {
+      try {
+        const result = await this.assignFeeStructure(schoolSlug, { ...data, studentId });
+        return { studentId, conflict: !!result.conflict, error: false, message: result.conflict ? result.message : undefined };
+      } catch (err: any) {
+        return { studentId, conflict: false, error: true, message: err?.message || 'Failed to assign.' };
+      }
+    }));
     return {
-      assigned: results.filter(r => !r.conflict).length,
+      assigned: results.filter(r => !r.conflict && !r.error).length,
       conflicts: results.filter(r => r.conflict),
+      errors: results.filter(r => r.error),
     };
   }
 
