@@ -3,7 +3,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Syllabus, SyllabusSchema } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateSchema } from './schemas/slo-template.schema';
 import { CourseEnrollment, CourseEnrollmentSchema } from './schemas/course-enrollment.schema';
+import { ForumThread, ForumThreadSchema } from './schemas/forum-thread.schema';
+import { ForumReply, ForumReplySchema } from './schemas/forum-reply.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
+import { ForumService } from './forum.service';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
@@ -37,10 +40,12 @@ import { SyllabusController } from './syllabus.controller';
       // the enrollment row - same minimal-registration reasoning as Staff/
       // TeacherProfile above, not the whole Students module's graph.
       { name: Student.name, schema: StudentSchema },
+      { name: ForumThread.name, schema: ForumThreadSchema },
+      { name: ForumReply.name, schema: ForumReplySchema },
     ]),
   ],
   controllers: [SyllabusController],
-  providers: [SyllabusService],
-  exports: [SyllabusService],
+  providers: [SyllabusService, ForumService],
+  exports: [SyllabusService, ForumService],
 })
 export class SyllabusModule {}

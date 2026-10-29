@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Param, Body, Query, Request, Res, HttpCode, HttpStatus, UseInterceptors,
+  Controller, Get, Post, Delete, Param, Body, Query, Request, Res, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Roles, AllowNonStaff } from '../auth/decorators';
@@ -211,6 +211,52 @@ export class ParentPortalController {
   async getMyCourses(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
     return this.service.getMyCourses(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
+  // ── LMS Phase 4: course discussion forum ─────────────────────
+  @Get('students/:studentId/courses/:syllabusId/forum/threads')
+  async listCourseForumThreads(@Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.listCourseForumThreads(studentId, requestingUser, tenantId, schoolSlug, syllabusId);
+  }
+
+  @Get('students/:studentId/courses/:syllabusId/forum/threads/:threadId')
+  async getCourseForumThread(
+    @Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Param('threadId') threadId: string, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getCourseForumThread(studentId, requestingUser, tenantId, schoolSlug, syllabusId, threadId);
+  }
+
+  @Post('students/:studentId/courses/:syllabusId/forum/threads')
+  @HttpCode(HttpStatus.CREATED)
+  async createCourseForumThread(
+    @Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Body() dto: { title: string; body: string }, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.createCourseForumThread(studentId, requestingUser, tenantId, schoolSlug, syllabusId, dto);
+  }
+
+  @Post('students/:studentId/courses/:syllabusId/forum/threads/:threadId/replies')
+  @HttpCode(HttpStatus.CREATED)
+  async createCourseForumReply(
+    @Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Param('threadId') threadId: string,
+    @Body() dto: { body: string }, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.createCourseForumReply(studentId, requestingUser, tenantId, schoolSlug, syllabusId, threadId, dto);
+  }
+
+  @Delete('students/:studentId/forum/threads/:threadId')
+  async deleteCourseForumThread(@Param('studentId') studentId: string, @Param('threadId') threadId: string, @Request() req: any) {
+    const { requestingUser, tenantId } = this.ctx(req);
+    return this.service.deleteCourseForumThread(studentId, requestingUser, tenantId, threadId);
+  }
+
+  @Delete('students/:studentId/forum/replies/:replyId')
+  async deleteCourseForumReply(@Param('studentId') studentId: string, @Param('replyId') replyId: string, @Request() req: any) {
+    const { requestingUser, tenantId } = this.ctx(req);
+    return this.service.deleteCourseForumReply(studentId, requestingUser, tenantId, replyId);
   }
 
   @Post('students/:studentId/lessons/progress')

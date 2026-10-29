@@ -39,6 +39,8 @@ import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema'
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
 import { CourseEnrollment, CourseEnrollmentDocument } from '../syllabus/schemas/course-enrollment.schema';
 import { computeLessonLock } from '../syllabus/lesson-lock.util';
+import { buildCourseVisibilityFilter } from '../syllabus/course-visibility.util';
+import { ForumService } from '../syllabus/forum.service';
 import { ParentDevice, ParentDeviceDocument } from './schemas/parent-device.schema';
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
@@ -85,6 +87,7 @@ export class ParentPortalService {
     private uploadService: UploadService,
     private pdfService: PdfService,
     private parentAccess: ParentAccessControlService,
+    private forumService: ForumService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -370,29 +373,12 @@ export class ParentPortalService {
     const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
     if (!student) throw new NotFoundException('Student not found');
 
-    // LMS Phase 1: an 'auto_by_class' syllabus (the default - every
-    // syllabus that existed before enrollmentMode was added) keeps being
-    // matched by grade/section/campus exactly as before. A 'manual'
-    // syllabus (elective/opt-in) is matched purely by having an active
-    // CourseEnrollment row instead - its own gradeLevel is irrelevant.
-    const autoFilter: any = {
-      tenantId, gradeLevel: gradeMatcher((student as any).currentGrade), publishedToStudents: true,
-      enrollmentMode: { $ne: 'manual' },
-      $and: [
-        { $or: [{ sectionName: sectionMatcher((student as any).currentSection) }, { sectionName: { $exists: false } }, { sectionName: null }] },
-      ],
-    };
-    // Same campus-scoping rule as getHomework - a student's own campusId
-    // decides this, not the syllabus's, so a matching grade/section name
-    // at a different campus never leaks in.
-    if ((student as any).campusId) autoFilter.$and.push({ $or: [{ campusId: new Types.ObjectId((student as any).campusId) }, { campusId: null }] });
-
     const enrolledSyllabusIds = await this.enrollmentModel
       .find({ tenantId, studentId: new Types.ObjectId(studentId), status: 'active' })
       .distinct('syllabusId');
-    const manualFilter = { tenantId, publishedToStudents: true, enrollmentMode: 'manual', _id: { $in: enrolledSyllabusIds } };
+    const visibilityFilter = buildCourseVisibilityFilter(tenantId, student as any, enrolledSyllabusIds);
 
-    const syllabi = await this.syllabusModel.find({ $or: [autoFilter, manualFilter] }).sort({ subjectName: 1 }).lean();
+    const syllabi = await this.syllabusModel.find(visibilityFilter).sort({ subjectName: 1 }).lean();
     if (syllabi.length === 0) return [];
 
     const progressRows = await this.lessonProgressModel.find({
@@ -455,6 +441,64 @@ export class ParentPortalService {
       this.certificatesService.getIssuedForStudent(schoolSlug, studentId),
     ]);
     return { courses, assignments, quizzes, certificates };
+  }
+
+  // ── LMS Phase 4: course discussion forum (student/parent side) ──────
+  // Gated by the same course-visibility rule as getMyCourses (grade/
+  // section match, or an active CourseEnrollment for a 'manual'/elective
+  // course) - a student can't read or post into a course's forum they
+  // couldn't even see as a course. ForumService itself stays agnostic of
+  // this check, same reasoning as its own file header explains.
+  private async assertStudentCanAccessCourse(studentId: string, tenantId: string, schoolSlug: string, syllabusId: string) {
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    const enrolledSyllabusIds = await this.enrollmentModel
+      .find({ tenantId, studentId: new Types.ObjectId(studentId), status: 'active' })
+      .distinct('syllabusId');
+    const visibilityFilter = buildCourseVisibilityFilter(tenantId, student as any, enrolledSyllabusIds);
+    const syllabus = await this.syllabusModel.findOne({ _id: syllabusId, ...visibilityFilter }).select('_id').lean();
+    if (!syllabus) throw new NotFoundException('Course not found');
+  }
+
+  private async studentDisplayName(studentId: string): Promise<string> {
+    const student = await this.studentModel.findOne({ _id: studentId }).select('firstName lastName').lean();
+    return `${(student as any)?.firstName || ''} ${(student as any)?.lastName || ''}`.trim() || 'Student';
+  }
+
+  async listCourseForumThreads(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    return this.forumService.listThreads(tenantId, syllabusId);
+  }
+
+  async getCourseForumThread(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string, threadId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    return this.forumService.getThread(tenantId, threadId);
+  }
+
+  async createCourseForumThread(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string, dto: { title: string; body: string }) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    const name = await this.studentDisplayName(studentId);
+    return this.forumService.createThread(tenantId, schoolSlug, syllabusId, { type: 'student', id: studentId, name }, dto.title, dto.body);
+  }
+
+  async createCourseForumReply(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string, threadId: string, dto: { body: string }) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    const name = await this.studentDisplayName(studentId);
+    return this.forumService.createReply(tenantId, schoolSlug, threadId, { type: 'student', id: studentId, name }, dto.body);
+  }
+
+  async deleteCourseForumThread(studentId: string, requestingUser: ScopedUser, tenantId: string, threadId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.forumService.deleteThread(tenantId, threadId, { author: { type: 'student', id: studentId, name: '' } });
+  }
+
+  async deleteCourseForumReply(studentId: string, requestingUser: ScopedUser, tenantId: string, replyId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.forumService.deleteReply(tenantId, replyId, { author: { type: 'student', id: studentId, name: '' } });
   }
 
   async markLessonProgress(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string }) {
