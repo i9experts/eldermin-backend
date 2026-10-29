@@ -207,13 +207,31 @@ describe('BehaviourAccessGuard: custom roles', () => {
     await expect(guard(manage()).canActivate(ctx('getInterventions', user(UserRole.SUPPORT_STAFF)))).rejects.toThrow(ForbiddenException);
   });
 
-  it('a sub-module manage grant is "elevated" (may edit others\' Tarbiyah); a module-wide one is not', async () => {
+  it('non-teacher base role + behaviour MANAGE grant (sub-module or module-wide) is "elevated"; a view grant is not', async () => {
     const sub = ctx('updateTarbiyah', user(UserRole.SUPPORT_STAFF));
     await guard(models([{ moduleKey: 'behaviour', subModuleKey: 'tarbiyah', level: 'manage' }])).canActivate(sub);
     expect(sub.__req.behaviourAccess.elevated).toBe(true);
     const wide = ctx('updateTarbiyah', user(UserRole.SUPPORT_STAFF));
     await guard(models([{ moduleKey: 'behaviour', level: 'manage' }])).canActivate(wide);
-    expect(wide.__req.behaviourAccess.elevated).toBe(true);   // R1 decision 3: a module-wide behaviour MANAGE grant counts like admin
+    expect(wide.__req.behaviourAccess.elevated).toBe(true);
+    const viewOnly = ctx('getRecords', user(UserRole.SUPPORT_STAFF));
+    await guard(models([{ moduleKey: 'behaviour', level: 'view' }])).canActivate(viewOnly);
+    expect(viewOnly.__req.behaviourAccess.elevated).toBe(false);
+  });
+
+  it('a custom role whose BASE role is teacher is NEVER elevated, whatever behaviour grant it holds (stock Teacher role = module-wide manage)', async () => {
+    for (const access of [
+      [{ moduleKey: 'behaviour', level: 'manage' }],                                         // the stock Teacher role
+      [{ moduleKey: 'behaviour', subModuleKey: 'tarbiyah', level: 'manage' }],
+      [{ moduleKey: 'behaviour', subModuleKey: 'records', level: 'manage' }, { moduleKey: 'behaviour', level: 'manage' }],
+    ]) {
+      for (const h of ['updateTarbiyah', 'updateRecord', 'resolveRecord']) {
+        const c = ctx(h, user(UserRole.TEACHER));
+        await guard(models(access)).canActivate(c);
+        expect(c.__req.behaviourAccess.elevated).toBe(false);
+        expect(c.__req.behaviourAccess.isTeacher).toBe(true);
+      }
+    }
   });
 
   it('a grant on another module (e.g. hr) opens nothing; lookup failure fails closed', async () => {

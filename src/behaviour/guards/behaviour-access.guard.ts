@@ -80,7 +80,9 @@ export class BehaviourAccessGuard implements CanActivate {
     }
 
     let elevated = BEHAVIOUR_ADMIN_ROLES.includes(role as UserRole);
-    if (!elevated && policy?.customRoles) {
+    // A custom role whose BASE role is teacher is never elevated (author-only, resolve within own classes), whatever behaviour grant it holds,
+    // the stock Teacher role included. Only a non-teacher base role (e.g. a "Discipline Head") holding the behaviour MANAGE grant is.
+    if (!elevated && policy?.customRoles && role !== UserRole.TEACHER) {
       access = access ?? await this.customRoleAccess(user.userId);
       elevated = customRoleIsElevated(access, policy.subModule);
     }

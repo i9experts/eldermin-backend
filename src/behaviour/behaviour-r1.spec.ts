@@ -63,7 +63,7 @@ describe('D2: academic coordinator edits any Tarbiyah assessment of their school
   });
 });
 
-describe('custom role with the behaviour MANAGE grant edits others\' records; without it, author-only', () => {
+describe('behaviour MANAGE grant: non-teacher base roles edit others\' records, a teacher base role never', () => {
   it('customRoleIsElevated: manage (sub-module or module-wide) yes; view, other module, other sub-module only no', () => {
     expect(customRoleIsElevated([{ moduleKey: 'behaviour', level: 'manage' }], 'records')).toBe(true);
     expect(customRoleIsElevated([{ moduleKey: 'behaviour', level: 'manage', subModuleKey: 'records' }], 'records')).toBe(true);
@@ -73,13 +73,22 @@ describe('custom role with the behaviour MANAGE grant edits others\' records; wi
     expect(customRoleIsElevated([{ moduleKey: 'behaviour', level: 'manage' }, { moduleKey: 'behaviour', level: 'view', subModuleKey: 'records' }], 'records')).toBe(false);   // the sub-specific entry wins
     expect(customRoleIsElevated(null, 'records')).toBe(false);
   });
-  it('elevated teacher-base custom-role user edits another author\'s behaviour record and Tarbiyah (always-enforced D7 rule is skipped), stamped', async () => {
+  it('an elevated NON-teacher base role (a Discipline Head) edits another author\'s behaviour record and Tarbiyah (the always-enforced D7 rule is skipped), stamped', async () => {
+    const head = { role: 'support_staff', userId: ME, name: 'Discipline Head' } as any;
+    const acc = enforce({ role: 'support_staff', isTeacher: false, elevated: true });
     const rec = recordSvc({ reportedById: new Types.ObjectId(OTHER), reportedBy: 'Mr Khan' });
-    await rec.s.updateRecord(ID, 'sch', { title: 'x' }, teacher, enforce({ elevated: true }));
-    expect(rec.sets[0]).toMatchObject({ title: 'x', updatedBy: 'Mr Teacher' });
+    await rec.s.updateRecord(ID, 'sch', { title: 'x' }, head, acc);
+    expect(rec.sets[0]).toMatchObject({ title: 'x', updatedBy: 'Discipline Head' });
     const t = tarbiyahSvc({ assessedById: new Types.ObjectId(OTHER) });
-    await t.s.updateTarbiyahAssessment(ID, 'sch', { teacherObservations: 'x' }, teacher, enforce({ elevated: true }));
+    await t.s.updateTarbiyahAssessment(ID, 'sch', { teacherObservations: 'x' }, head, acc);
     expect(t.sets).toHaveLength(1);
+  });
+  it('a teacher-base user stays author-only (the guard reports elevated:false for the stock Teacher role): 403 on another author\'s record and Tarbiyah', async () => {
+    const rec = recordSvc({ reportedById: new Types.ObjectId(OTHER), reportedBy: 'Mr Khan' });
+    await expect(rec.s.updateRecord(ID, 'sch', { title: 'x' }, teacher, enforce({ elevated: false }))).rejects.toBeInstanceOf(ForbiddenException);
+    const t = tarbiyahSvc({ assessedById: new Types.ObjectId(OTHER) });
+    await expect(t.s.updateTarbiyahAssessment(ID, 'sch', { teacherObservations: 'x' }, teacher, enforce({ elevated: false }))).rejects.toBeInstanceOf(ForbiddenException);
+    expect(rec.sets).toHaveLength(0); expect(t.sets).toHaveLength(0);
   });
   it('NOT elevated (no manage grant): author-only, 403 on another author\'s record, in enforce AND log mode', async () => {
     for (const mode of ['enforce', 'log']) {
@@ -88,9 +97,9 @@ describe('custom role with the behaviour MANAGE grant edits others\' records; wi
       expect(rec.sets).toHaveLength(0);
     }
   });
-  it('an elevated user still cannot move a record to another school (protected fields are stripped for everyone)', async () => {
+  it('an elevated (non-teacher) user still cannot move a record to another school (protected fields are stripped for everyone)', async () => {
     const rec = recordSvc({ reportedById: new Types.ObjectId(OTHER), reportedBy: 'Mr Khan' });
-    await rec.s.updateRecord(ID, 'sch', { title: 'x', schoolSlug: 'evil', campusId: 'evil' }, teacher, enforce({ elevated: true }));
+    await rec.s.updateRecord(ID, 'sch', { title: 'x', schoolSlug: 'evil', campusId: 'evil' }, { role: 'support_staff', userId: ME, name: 'Head' } as any, enforce({ role: 'support_staff', isTeacher: false, elevated: true }));
     expect(rec.sets[0]).not.toHaveProperty('schoolSlug');
     expect(rec.sets[0]).not.toHaveProperty('campusId');
   });
