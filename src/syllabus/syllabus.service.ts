@@ -6,6 +6,8 @@ import { Model, Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
+import { CourseEnrollment, CourseEnrollmentDocument } from './schemas/course-enrollment.schema';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
@@ -28,6 +30,8 @@ export class SyllabusService {
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    @InjectModel(CourseEnrollment.name) private enrollmentModel: Model<CourseEnrollmentDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private configService: ConfigService,
   ) {}
 
@@ -245,6 +249,7 @@ export class SyllabusService {
       type: dto.type, url: dto.url, fileUrl: dto.fileUrl, fileName: dto.fileName,
       order: dto.order ?? topic.lessons.length, addedBy, addedAt: new Date(),
       dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+      releaseDate: dto.releaseDate ? new Date(dto.releaseDate) : undefined,
     };
     topic.lessons.push(lesson);
     syllabus.markModified('units');
@@ -268,6 +273,7 @@ export class SyllabusService {
     if (dto.fileName != null) lesson.fileName = dto.fileName;
     if (dto.order != null) lesson.order = dto.order;
     if (dto.dueDate !== undefined) lesson.dueDate = dto.dueDate ? new Date(dto.dueDate) : undefined;
+    if (dto.releaseDate !== undefined) lesson.releaseDate = dto.releaseDate ? new Date(dto.releaseDate) : undefined;
     syllabus.markModified('units');
     await syllabus.save();
     await this.syncLessonAssignment(syllabus, dto.unitNo, dto.topicNo, lesson);
@@ -306,6 +312,78 @@ export class SyllabusService {
     );
     if (!syllabus) throw new NotFoundException('Syllabus not found');
     return syllabus;
+  }
+
+  // ── LMS Phase 1: explicit enrollment ────────────────────────────
+  // Switching a syllabus to 'manual' doesn't touch any existing
+  // CourseEnrollment rows or drop any student currently seeing it via
+  // grade/section match - a teacher flips it, then uses enrollStudents
+  // below to actually build the roster. Switching back to
+  // 'auto_by_class' makes any CourseEnrollment rows irrelevant again
+  // (not deleted - a later switch back to 'manual' would see the same
+  // roster) since visibility reverts to grade/section match.
+  async setEnrollmentMode(tenantId: string, id: string, enrollmentMode: string, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const existing = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+      if (!existing) throw new NotFoundException('Syllabus not found');
+      await this.assertSyllabusOwnership(existing as any, requestingUser);
+    }
+    const syllabus = await this.syllabusModel.findOneAndUpdate(
+      { _id: id, tenantId },
+      { $set: { enrollmentMode } },
+      { new: true },
+    );
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    return syllabus;
+  }
+
+  async enrollStudents(tenantId: string, schoolSlug: string, id: string, studentIds: string[], enrolledBy: string, requestingUser?: ScopedUser) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId enrollmentMode').lean();
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus as any, requestingUser);
+    if ((syllabus as any).enrollmentMode !== 'manual') {
+      throw new BadRequestException('This course auto-enrolls by class - switch it to manual enrollment first.');
+    }
+    const students = await this.studentModel.find({ _id: { $in: studentIds }, schoolSlug }).select('firstName lastName').lean();
+    if (students.length !== studentIds.length) {
+      throw new BadRequestException('One or more students could not be found at this school.');
+    }
+    const tenantObjectId = new Types.ObjectId(tenantId);
+    const ops = students.map((s: any) => ({
+      updateOne: {
+        filter: { syllabusId: new Types.ObjectId(id), studentId: s._id },
+        update: {
+          $set: {
+            tenantId: tenantObjectId, schoolSlug, studentName: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+            status: 'active', enrolledBy, enrolledAt: new Date(),
+          },
+          $unset: { droppedAt: '' },
+        },
+        upsert: true,
+      },
+    }));
+    await this.enrollmentModel.bulkWrite(ops as any);
+    return this.listEnrollments(tenantId, id, requestingUser);
+  }
+
+  async unenrollStudent(tenantId: string, id: string, studentId: string, requestingUser?: ScopedUser) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus as any, requestingUser);
+    const result = await this.enrollmentModel.findOneAndUpdate(
+      { syllabusId: id, studentId, tenantId },
+      { $set: { status: 'dropped', droppedAt: new Date() } },
+      { new: true },
+    );
+    if (!result) throw new NotFoundException('Enrollment not found');
+    return { message: 'Student unenrolled' };
+  }
+
+  async listEnrollments(tenantId: string, id: string, requestingUser?: ScopedUser) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus as any, requestingUser);
+    return this.enrollmentModel.find({ syllabusId: id, tenantId, status: 'active' }).sort({ studentName: 1 }).lean();
   }
 
   async approve(tenantId: string, id: string, approverName: string) {

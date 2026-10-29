@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Syllabus, SyllabusSchema } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateSchema } from './schemas/slo-template.schema';
+import { CourseEnrollment, CourseEnrollmentSchema } from './schemas/course-enrollment.schema';
+import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
@@ -29,6 +31,12 @@ import { SyllabusController } from './syllabus.controller';
       // same resolveTeacherIdentity() pattern the Teaching module uses.
       { name: Staff.name, schema: StaffSchema },
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
+      { name: CourseEnrollment.name, schema: CourseEnrollmentSchema },
+      // Only needed to validate a student id exists (and belongs to this
+      // school) before enrolling them, and to denormalize their name onto
+      // the enrollment row - same minimal-registration reasoning as Staff/
+      // TeacherProfile above, not the whole Students module's graph.
+      { name: Student.name, schema: StudentSchema },
     ]),
   ],
   controllers: [SyllabusController],

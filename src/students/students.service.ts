@@ -36,6 +36,8 @@ import { AcademicHistoryRecord, AcademicHistoryRecordDocument } from './schemas/
 import { EnrollmentField, EnrollmentFieldDocument } from './schemas/enrollment-field.schema';
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentDocument } from '../syllabus/schemas/course-enrollment.schema';
+import { computeLessonLock } from '../syllabus/lesson-lock.util';
 import { QuizAttempt, QuizAttemptDocument } from '../assessments/schemas/quiz-attempt.schema';
 import {
   computeAttendanceRate, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES,
@@ -149,6 +151,12 @@ export class StudentsService {
     // B1: the Student 360 behaviour block is a union of behaviour_records (the Behaviour module / parent app store) and the
     // legacy student_behaviour. Optional so older constructions (specs) keep working: without it the block is legacy-only.
     @Optional() @InjectModel(BehaviourRecord.name) private behaviourRecordModel?: Model<BehaviourRecordDocument>,
+    // LMS Phase 1: appended at the end and optional, same reasoning as
+    // behaviourRecordModel above - every existing typed `new
+    // StudentsService(...)` test construction keeps compiling unchanged.
+    // Without it, getStudentLearning falls back to grade/section match
+    // only (no 'manual'/elective course support in that one admin view).
+    @Optional() @InjectModel(CourseEnrollment.name) private enrollmentModel?: Model<CourseEnrollmentDocument>,
   ) {}
 
   // ============================================================
@@ -1930,16 +1938,26 @@ export class StudentsService {
     if (!student) throw new NotFoundException('Student not found');
     if (!tenantId) return { courses: [], quizzes: { attempted: 0, graded: 0, avgPercentage: null, recent: [] } };
 
-    const filter: any = {
+    // LMS Phase 1: same two-source match as Parent Portal's getMyCourses -
+    // 'auto_by_class' syllabi by grade/section/campus, 'manual' (elective)
+    // syllabi only via an active CourseEnrollment row, so this admin
+    // summary doesn't show (or miscount lessons from) an elective this
+    // student was never actually enrolled in.
+    const autoFilter: any = {
       tenantId, gradeLevel: (student as any).currentGrade, publishedToStudents: true,
+      enrollmentMode: { $ne: 'manual' },
       $or: [{ sectionName: (student as any).currentSection }, { sectionName: { $exists: false } }, { sectionName: null }],
     };
-    if ((student as any).campusId) filter.campusId = new Types.ObjectId((student as any).campusId);
+    if ((student as any).campusId) autoFilter.campusId = new Types.ObjectId((student as any).campusId);
 
-    const [syllabi, quizAttempts] = await Promise.all([
-      this.syllabusModel.find(filter).sort({ subjectName: 1 }).lean(),
+    const [enrolledSyllabusIds, quizAttempts] = await Promise.all([
+      this.enrollmentModel
+        ? this.enrollmentModel.find({ tenantId, studentId: new Types.ObjectId(id), status: 'active' }).distinct('syllabusId')
+        : Promise.resolve([]),
       this.quizAttemptModel.find({ studentId: new Types.ObjectId(id), schoolSlug }).sort({ submittedAt: -1 }).limit(20).lean(),
     ]);
+    const manualFilter = { tenantId, publishedToStudents: true, enrollmentMode: 'manual', _id: { $in: enrolledSyllabusIds } };
+    const syllabi = await this.syllabusModel.find({ $or: [autoFilter, manualFilter] }).sort({ subjectName: 1 }).lean();
 
     let courses: any[] = [];
     if (syllabi.length > 0) {
@@ -1951,17 +1969,21 @@ export class StudentsService {
       courses = syllabi.map((s: any) => {
         let totalLessons = 0;
         let completedLessons = 0;
+        let availableLessons = 0;
         for (const u of s.units || []) {
           for (const t of u.topics || []) {
-            for (const l of t.lessons || []) {
+            const sortedLessons = (t.lessons || []).slice().sort((a: any, b: any) => a.order - b.order);
+            const isCompleted = (lessonNo: number) => progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${lessonNo}`)?.status === 'completed';
+            sortedLessons.forEach((l: any, idx: number) => {
               totalLessons += 1;
-              if (progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`)?.status === 'completed') completedLessons += 1;
-            }
+              if (isCompleted(l.lessonNo)) completedLessons += 1;
+              if (!computeLessonLock(l, sortedLessons.slice(0, idx), t.sequentialLessons, isCompleted).locked) availableLessons += 1;
+            });
           }
         }
         return {
           syllabusId: s._id, subjectName: s.subjectName, teacherName: s.teacherName,
-          totalLessons, completedLessons,
+          totalLessons, completedLessons, availableLessons,
           completionPct: totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0,
         };
       }).filter((c: any) => c.totalLessons > 0);

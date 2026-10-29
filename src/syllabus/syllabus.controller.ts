@@ -10,6 +10,7 @@ import { SyllabusService } from './syllabus.service';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, CreateSloTemplateDto, SyllabusQueryDto,
   CreateLessonDto, UpdateLessonDto, DeleteLessonDto, SetPublishedDto,
+  SetEnrollmentModeDto, EnrollStudentsDto,
 } from './dto/syllabus.dto';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
@@ -177,5 +178,31 @@ export class SyllabusController {
   @Patch(':id/publish')
   setPublished(@Request() req: any, @Param('id') id: string, @Body() dto: SetPublishedDto) {
     return this.service.setPublished(req.user.tenantId, id, dto.published, req.user.name, req.user);
+  }
+
+  // ── LMS Phase 1: explicit enrollment ────────────────────────────
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch(':id/enrollment-mode')
+  setEnrollmentMode(@Request() req: any, @Param('id') id: string, @Body() dto: SetEnrollmentModeDto) {
+    return this.service.setEnrollmentMode(req.user.tenantId, id, dto.enrollmentMode, req.user);
+  }
+
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Get(':id/enrollments')
+  listEnrollments(@Request() req: any, @Param('id') id: string) {
+    return this.service.listEnrollments(req.user.tenantId, id, req.user);
+  }
+
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Post(':id/enrollments')
+  @HttpCode(HttpStatus.CREATED)
+  enrollStudents(@Request() req: any, @Param('id') id: string, @Body() dto: EnrollStudentsDto) {
+    return this.service.enrollStudents(req.user.tenantId, req.user.schoolSlug, id, dto.studentIds, req.user.name, req.user);
+  }
+
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Delete(':id/enrollments/:studentId')
+  unenrollStudent(@Request() req: any, @Param('id') id: string, @Param('studentId') studentId: string) {
+    return this.service.unenrollStudent(req.user.tenantId, id, studentId, req.user);
   }
 }
