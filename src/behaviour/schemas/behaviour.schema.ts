@@ -95,6 +95,9 @@ export class BehaviourRecord {
   // Staff
   @Prop({ required: true }) reportedBy: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) reportedById: Types.ObjectId;
+  // last editor (the author fields above never change)
+  @Prop() updatedBy: string;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) updatedById: Types.ObjectId;
   @Prop() verifiedBy: string;
   @Prop({ default: false }) verified: boolean;
 
@@ -183,6 +186,10 @@ export class TarbiyahAssessment {
 
   @Prop({ required: true }) assessedBy: string;
   @Prop({ type: Types.ObjectId, ref: 'User' }) assessedById: Types.ObjectId;
+
+  // last editor (D2: coordinators may edit any assessment of their school; the author fields above never change)
+  @Prop() updatedBy: string;
+  @Prop({ type: Types.ObjectId, ref: 'User' }) updatedById: Types.ObjectId;
 
   @Prop({ default: false }) parentShared: boolean;
   @Prop() parentSharedDate: Date;

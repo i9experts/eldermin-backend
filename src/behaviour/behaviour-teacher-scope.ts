@@ -3,7 +3,8 @@
 // module: Staff.userId -> TeacherProfile class-teacher + currentAssignments).
 
 import { gradeMatcher, normalizeSectionName, sameGrade, sectionMatcher, sameSection } from '../common/utils/class-match.util';
-import { TeacherClassRef } from '../staff-portal/teacher-identity.util';
+import { Types } from 'mongoose';
+import { resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
 
 /**
  * True when (grade, section) is one of the teacher's classes. A class without a
@@ -59,4 +60,14 @@ export function stripProtectedFields<T extends Record<string, any>>(data: T, ext
   const out: any = { ...(data || {}) };
   for (const f of [...PROTECTED_UPDATE_FIELDS, ...extra]) delete out[f];
   return out;
+}
+
+/** The classes a TEACHER teaches (class-teacher sections + currentAssignments), from the DB, never the JWT. 403 when no Staff record. */
+export async function loadTeacherClasses(
+  staffModel: any, teacherProfileModel: any, user: { userId?: string; name?: string },
+): Promise<TeacherClassRef[]> {
+  const me = await resolveTeacherIdentity(staffModel, teacherProfileModel, user);
+  const profile: any = await teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+    .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments currentAssignments').lean();
+  return teacherClassesOf(profile);
 }

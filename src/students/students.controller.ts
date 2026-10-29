@@ -28,12 +28,14 @@ import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.
 import { projectForTeacher, TEACHER_NO_FINANCE_MESSAGE } from './teacher-student-projection.util';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 import { ForbiddenException } from '@nestjs/common';
+import { TeacherAttendanceScopeService } from './teacher-attendance-scope.service';
 
 @Controller('students')
 export class StudentsController {
   constructor(
     private readonly studentsService: StudentsService,
     private readonly financeService: FinanceService,
+    private readonly teacherScope: TeacherAttendanceScopeService,
   ) {}
 
   private ctx(req: any) {
@@ -564,6 +566,7 @@ export class StudentsController {
   async markAttendance(@Body() dto: MarkAttendanceDto, @Request() req: any) {
     const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     resolveClassSectionScope(requestingUser, dto.grade, dto.section);
+    await this.teacherScope.assertMayMark(requestingUser, [{ grade: dto.grade, section: dto.section }], 'POST /students/attendance');
     return this.studentsService.markAttendance({
       ...dto, schoolSlug, academicYear, markedBy: userName,
     });
@@ -581,6 +584,7 @@ export class StudentsController {
     for (const record of dto.records) {
       resolveClassSectionScope(requestingUser, record.grade, record.section);
     }
+    await this.teacherScope.assertMayMark(requestingUser, dto.records.map((r) => ({ grade: r.grade, section: r.section })), 'POST /students/attendance/bulk');
     return this.studentsService.bulkMarkAttendance({ ...dto, schoolSlug, academicYear });
   }
 
@@ -591,6 +595,7 @@ export class StudentsController {
   @Delete('attendance/:id')
   async revertAttendance(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
+    await this.teacherScope.assertMayMark(requestingUser, [], 'DELETE /students/attendance/:id');
     return this.studentsService.revertAttendance(id, schoolSlug, requestingUser);
   }
 

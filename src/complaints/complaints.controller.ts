@@ -3,6 +3,7 @@ import {
   Body, Param, Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ComplaintsService } from './complaints.service';
+import { AllowNonStaff } from '../auth/decorators';
 
 @Controller('complaints')
 export class ComplaintsController {
@@ -53,6 +54,8 @@ export class ComplaintsController {
     return this.service.getCaseById(id, schoolSlug);
   }
 
+  // Parent app feedback (parent_api_service.dart). Only this POST is open to parents, not the reads.
+  @AllowNonStaff()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async createCase(@Body() dto: any, @Request() req: any) {

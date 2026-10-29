@@ -36,6 +36,8 @@ import { SupportModule } from './support/support.module';
 import { RolesModule } from './roles/roles.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { NonStaffGuard } from './auth/non-staff.guard';
+import { ResellerScopeGuard } from './auth/reseller-scope.guard';
 import { AuditLogModule } from './common/audit-log.module';
 import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
@@ -128,6 +130,10 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     IdMatchSelfTest,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    // Must stay directly after JwtAuthGuard/RolesGuard: it reads req.user set by JwtAuthGuard.
+    { provide: APP_GUARD, useClass: NonStaffGuard },
+    // Must stay AFTER JwtAuthGuard (it reads req.user). Partner accounts are limited to /reseller-portal and the auth routes.
+    { provide: APP_GUARD, useClass: ResellerScopeGuard },
   ],
 })
 export class AppModule {}

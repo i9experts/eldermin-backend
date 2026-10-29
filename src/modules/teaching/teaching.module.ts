@@ -17,7 +17,7 @@ import { DutyRoster, DutyRosterSchema } from './schemas/duty-roster.schema';
 import { TimetableVariant, TimetableVariantSchema } from './schemas/timetable-variant.schema';
 import { ExamSession, ExamSessionSchema } from './schemas/exam-session.schema';
 import { ClassDiaryEntry, ClassDiaryEntrySchema } from './schemas/class-diary.schema';
-import { AttendanceSettings, AttendanceSettingsSchema } from './schemas/attendance-settings.schema';
+import { ClassAttendanceSettings, ClassAttendanceSettingsSchema } from './schemas/class-attendance-settings.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { User, UserSchema } from '../organization/schemas/user.schema';
@@ -59,7 +59,7 @@ import { StaffPortalModule } from '../../staff-portal/staff-portal.module';
       { name: Student.name, schema: StudentSchema },
       { name: User.name, schema: UserSchema },
       { name: Notification.name, schema: NotificationSchema },
-      { name: AttendanceSettings.name, schema: AttendanceSettingsSchema },
+      { name: ClassAttendanceSettings.name, schema: ClassAttendanceSettingsSchema },
     ]),
     EmailModule,
     PdfModule,

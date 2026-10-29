@@ -12,7 +12,9 @@ import { GovernanceRollupService } from './governance-rollup.service';
 // on the same app-wide "any authenticated staff member" model every other
 // module uses) by the dedicated safeguarding:read/write permission, granted
 // only to designated-safeguarding-lead roles (see permissions.matrix.ts).
-import { RequirePermission } from '../auth/decorators';
+import { RequirePermission, Roles } from '../auth/decorators';
+import { SCHOOL_STAFF_ROLES, APPROVAL_DECIDER_ROLES } from '../auth/role-sets';
+import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { hasPermission } from '../auth/permissions.matrix';
 import { UserRole } from '../auth/roles.enum';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
@@ -78,28 +80,34 @@ export class ComplianceController {
     return this.service.getPolicyAcknowledgements(id, schoolSlug);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Get('approvals')
   async getApprovals(@Request() req: any, @Query() query: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getApprovals(schoolSlug, query, requestingUser);
   }
 
+  @Roles(...SCHOOL_STAFF_ROLES)
   @Post('approvals') @HttpCode(HttpStatus.CREATED)
   async createApproval(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, userName, requestingUser } = this.ctx(req);
     return this.service.createApproval(schoolSlug, dto.requestedBy || userName, dto, requestingUser);
   }
 
+  // Editing a request (not deciding it): deciders only; the decision fields cannot be written here (see the service).
+  @RolesOrModuleManage('institution', APPROVAL_DECIDER_ROLES, { subModuleKey: 'approvals', allowModuleWide: true })
   @Put('approvals/:id')
   async updateApproval(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateApproval(id, schoolSlug, dto);
   }
 
+  // Deciding a stage was open to ANY token (parents included) and had no self-approval rule.
+  @RolesOrModuleManage('institution', APPROVAL_DECIDER_ROLES, { subModuleKey: 'approvals', allowModuleWide: true })
   @Post('approvals/:id/decide')
   async decideApproval(@Param('id') id: string, @Body() dto: { decision: 'approved' | 'rejected'; comments?: string }, @Request() req: any) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.service.decideApprovalStage(id, schoolSlug, dto.decision, dto.comments || '', userName);
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    return this.service.decideApprovalStage(id, schoolSlug, dto?.decision as any, dto?.comments || '', userName, requestingUser);
   }
 
   @RequirePermission('safeguarding:read')

@@ -1,4 +1,4 @@
-import { SCHOOL_SUSPENDED_MESSAGE } from '../common/constants/school-suspended';
+import { schoolSuspendedException } from '../common/constants/school-suspended';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -74,7 +74,7 @@ export class ParentAuthService {
   private async assertSchoolNotSuspended(schoolSlug?: string) {
     if (!schoolSlug) return;
     const tenant: any = await this.tenantModel.findOne({ slug: schoolSlug }).select('status').lean();
-    if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+    if (tenant?.status === 'suspended') throw schoolSuspendedException();
   }
 
   async requestOtp(rawPhone: string) {
@@ -143,7 +143,7 @@ export class ParentAuthService {
     const schoolSlug = (matchingStudents[0] as any).schoolSlug;
     const tenant = await this.tenantModel.findOne({ slug: schoolSlug }).lean();
     if (!tenant) throw new NotFoundException('School configuration not found for this number.');
-    if ((tenant as any).status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+    if ((tenant as any).status === 'suspended') throw schoolSuspendedException();
 
     const studentIds = matchingStudents.map((s: any) => s._id);
     let user = await this.userModel.findOne({ phone });

@@ -78,7 +78,7 @@ function makeController(result: any) {
   // getFeeStatement now reads real invoices via FinanceService instead of
   // the dead StudentFee collection - see students.controller.ts.
   const finance: any = { getInvoices: jest.fn(async () => ({ data: [] })) };
-  return { ctrl: new StudentsController(svc as StudentsService, finance), svc, finance };
+  return { ctrl: new StudentsController(svc as StudentsService, finance, { assertMayMark: async () => undefined } as any), svc, finance };
 }
 const reqOf = (user: any) => ({ user, headers: {} });
 

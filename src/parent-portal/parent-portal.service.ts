@@ -5,6 +5,8 @@ import * as bcrypt from 'bcryptjs';
 import { assertStudentAccess, getGuardianStudentIds, ScopedUser } from '../auth/scope.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { sameGrade, sameSection, gradeMatcher, sectionMatcher } from '../common/utils/class-match.util';
+import { idForms } from '../common/utils/id-forms.util';
+import { UserRole } from '../auth/roles.enum';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
@@ -930,31 +932,59 @@ export class ParentPortalService {
       campusId: (student as any).campusId ? (() => { try { return new Types.ObjectId((student as any).campusId); } catch { return null; } })() : null,
     });
 
-    // Tell the child's class teacher (the same person who reviews it in the staff app).
+    // Tell the child's class teacher (the same person who reviews it in the staff app) - of THIS school only; with no class teacher the
+    // school's own admins hear about it instead. Never another school.
     try {
-      const profiles: any[] = await this.reportCardModel.db.collection('teacherProfiles')
-        .find({ isClassTeacher: true }).toArray();
-      // A teacher can legitimately be class teacher of more than one
-      // section (common in Early Years) - classTeacherAssignments holds
-      // all of them; falls back to the legacy singular fields for a
-      // profile that predates that array and hasn't been touched since.
-      const match = profiles.find((p) => {
-        const assignments = p.classTeacherAssignments?.length
-          ? p.classTeacherAssignments
-          : (p.classTeacherOfGradeName ? [{ gradeName: p.classTeacherOfGradeName, sectionName: p.classTeacherOfSectionName }] : []);
-        return assignments.some((a: any) => sameGrade(a.gradeName, (student as any).currentGrade)
-          && (!a.sectionName || sameSection(a.sectionName, (student as any).currentSection)));
-      });
-      const staff: any = match ? await this.staffModel.findById(match.staffId).select('userId').lean() : null;
-      if (staff?.userId) {
-        await this.notificationModel.create({
-          recipientUserId: staff.userId, type: 'leave_status', title: 'New leave request',
-          body: `${leave.studentName}: ${new Date(data.fromDate).toDateString()} - ${new Date(data.toDate).toDateString()}. ${data.reason || ''}`.trim(),
-          relatedEntityId: String(leave._id), schoolSlug,
-        });
-      }
+      await this.notifyLeaveRecipients(student, leave, schoolSlug, data, requestingUser);
     } catch { /* never fail the request over a notification */ }
     return leave;
+  }
+
+  /**
+   * Who is told about a new student leave (R1). The class-teacher lookup is scoped to the student's own school (tenant) and, when both
+   * sides carry a campus, to the student's campus; only an ACTIVE staff member of that school can be chosen. If the class has no class
+   * teacher there, the school's principal / vice principal / admin / owner users are notified instead. If the school cannot be
+   * determined nobody is notified (never guess across schools).
+   */
+  async notifyLeaveRecipients(student: any, leave: any, schoolSlug: string, data: any, requestingUser?: ScopedUser) {
+    const tenantId = student?.tenantId ?? (requestingUser as any)?.tenantId;
+    if (!tenantId || !Types.ObjectId.isValid(String(tenantId))) return;
+    const profiles: any[] = await this.reportCardModel.db.collection('teacherProfiles')
+      .find({ isClassTeacher: true, tenantId: idForms(tenantId) }).toArray();
+    const studentCampus = student?.campusId ? String(student.campusId) : '';
+    // A teacher can legitimately be class teacher of more than one section (common in Early Years) - classTeacherAssignments holds
+    // all of them; falls back to the legacy singular fields for a profile that predates that array.
+    const candidates = profiles.filter((p) => {
+      if (studentCampus && p.campusId && String(p.campusId) !== studentCampus) return false;
+      const assignments = p.classTeacherAssignments?.length
+        ? p.classTeacherAssignments
+        : (p.classTeacherOfGradeName ? [{ gradeName: p.classTeacherOfGradeName, sectionName: p.classTeacherOfSectionName }] : []);
+      return assignments.some((a: any) => sameGrade(a.gradeName, student.currentGrade)
+        && (!a.sectionName || sameSection(a.sectionName, student.currentSection)));
+    });
+    const when = `${new Date(data.fromDate).toDateString()} - ${new Date(data.toDate).toDateString()}`;
+    for (const p of candidates) {
+      const staff: any = await this.staffModel.findOne({ _id: p.staffId, tenantId: idForms(tenantId), isActive: { $ne: false } }).select('userId').lean();
+      if (!staff?.userId) continue;
+      await this.notificationModel.create({
+        recipientUserId: staff.userId, type: 'leave_status', title: 'New leave request',
+        body: `${leave.studentName}: ${when}. ${data.reason || ''}`.trim(),
+        relatedEntityId: String(leave._id), schoolSlug,
+      });
+      return;
+    }
+    // no class teacher in this school for this class: this school's leadership only
+    const admins: any[] = await this.userModel.find({
+      tenantId: idForms(tenantId), isActive: { $ne: false },
+      primaryRole: { $in: [UserRole.PRINCIPAL, UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.INSTITUTION_OWNER] },
+    }).select('_id').limit(20).lean();
+    for (const u of admins) {
+      await this.notificationModel.create({
+        recipientUserId: u._id, type: 'leave_status', title: 'New leave request (no class teacher assigned)',
+        body: `${leave.studentName} (${student.currentGrade || ''} ${student.currentSection || ''}): ${when}. ${data.reason || ''}`.trim(),
+        relatedEntityId: String(leave._id), schoolSlug,
+      });
+    }
   }
 
   async getStudentLeaves(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {

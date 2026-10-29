@@ -23,12 +23,16 @@ import {
   GradeQuizAttemptDto,
 } from './dto/assessment.dto';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { NON_STAFF_ROLES } from '../auth/admin-role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
 // Read-only routes stay open to any authenticated role (matches the rest of
-// this codebase's convention of broad-permissive backend access).
+// this codebase's convention of broad-permissive backend access), EXCEPT a
+// single exam paper and its PDF, which carry the answer key: those are
+// staff-only (every role except parent, student and the reseller roles).
 const QUESTION_BANK_EDITOR_ROLES = STAFF_WRITE_ROLES;
+export const EXAM_PAPER_READ_ROLES: UserRole[] = Object.values(UserRole).filter((r) => !NON_STAFF_ROLES.includes(r));
 
 @Controller('assessments')
 export class AssessmentController {
@@ -237,14 +241,17 @@ export class AssessmentController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  // Was open to any token and accepted any string. Now staff only (same guard as marks entry), the value must be a real status, and the
+  // publish / unpublish transition (result_published) belongs to the admin roles, exactly like report-card publish (TEACHING_ADMIN_ROLES).
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/status')
   async updateStatus(
     @Param('id') id: string,
     @Body('status') status: string,
     @Request() req: any,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateStatus(id, schoolSlug, status);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateStatus(id, schoolSlug, status, requestingUser);
   }
 
   @Post('questions')
@@ -283,7 +290,7 @@ export class AssessmentController {
   }
 
   // ── Exam Papers (continued) ───────────────────────────────────
-  @Get('papers/:id') async getExamPaperById(@Param('id') id: string, @Request() req: any) {
+  @Get('papers/:id') @Roles(...EXAM_PAPER_READ_ROLES) async getExamPaperById(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getExamPaperById(id, schoolSlug);
   }
@@ -306,6 +313,7 @@ export class AssessmentController {
   }
 
   @Get('papers/:id/pdf')
+  @Roles(...EXAM_PAPER_READ_ROLES)
   async downloadExamPaperPdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
     const { schoolSlug } = this.ctx(req);
     const pdf = await this.service.generateExamPaperPdf(id, schoolSlug);

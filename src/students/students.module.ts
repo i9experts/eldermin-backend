@@ -13,11 +13,15 @@ import {
   Behaviour, BehaviourSchema,
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
+import { BehaviourRecord, BehaviourRecordSchema } from '../behaviour/schemas/behaviour.schema';
 import { MedicalRecord, MedicalRecordSchema } from './schemas/medical-record.schema';
 import { StudentNote, StudentNoteSchema } from './schemas/student-note.schema';
 import { StudentDocumentRecord, StudentDocumentRecordSchema } from './schemas/student-document-record.schema';
 import { AcademicHistoryRecord, AcademicHistoryRecordSchema } from './schemas/academic-history-record.schema';
 import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-field.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
+import { TeacherAttendanceScopeService } from './teacher-attendance-scope.service';
 import { UploadModule } from '../upload/upload.module';
 import {
   SchoolSchema, Campus, CampusSchema, Grade, GradeSchema,
@@ -42,9 +46,12 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
     FinanceModule,
     MongooseModule.forFeature([
       { name: Student.name, schema: StudentSchema },
+      { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: StudentAttendance.name, schema: StudentAttendanceSchema },
       { name: StudentFee.name, schema: StudentFeeSchema },
       { name: Behaviour.name, schema: BehaviourSchema },
+      { name: BehaviourRecord.name, schema: BehaviourRecordSchema }, // Student 360 behaviour union (B1)
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
       { name: MedicalRecord.name, schema: MedicalRecordSchema },
       { name: StudentNote.name, schema: StudentNoteSchema },
@@ -75,7 +82,7 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
     ]),
   ],
   controllers: [StudentsController],
-  providers: [StudentsService],
+  providers: [StudentsService, TeacherAttendanceScopeService],
   exports: [StudentsService],   // ← exported so AdmissionsModule can call createFromEnrollment
 })
 export class StudentsModule {}

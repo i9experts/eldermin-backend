@@ -54,24 +54,14 @@ export const StudentAttendanceSchema = SchemaFactory.createForClass(StudentAtten
 StudentAttendanceSchema.index({ studentId: 1, date: -1 });
 StudentAttendanceSchema.index({ schoolSlug: 1, date: -1 });
 StudentAttendanceSchema.index({ schoolSlug: 1, grade: 1, date: -1 });
-// Includes `subject` so a subject-wise school's per-subject records for
-// the same student/day don't collide with each other - this index used
-// to be { studentId, date } only, which predates the `subject` field and
-// caused a genuine E11000 duplicate-key error (surfaced to the user as a
-// generic "Internal server error") the moment two different-subject
-// records existed for the same student on the same day. `subject` is
-// `null` for every daily-mode record (see the field's own comment above),
-// so this still enforces exactly one record per student per day for
-// daily-mode schools, which is the index's original intent.
-// DEPLOYMENT NOTE: Mongoose does not drop a replaced index on its own -
-// the old `{ studentId: 1, date: 1 }` unique index must be dropped
-// manually in production (e.g. `db.student_attendance.dropIndex(...)`)
-// before this new one can be created; otherwise the two coexist, the
-// old one still rejects legitimate different-subject records, and the
-// bug persists.
+// One record per student, day AND subject (subject is null for daily-mode records). Replaces the old unique {studentId, date}, which
+// made a second subject on the same day a duplicate-key error. The old index is dropped by
+// scripts/migrate-student-attendance-index.ts (create-new-first); until then both exist and the code works either way
+// (a subject save that hits the old index answers 409 via isDuplicateKeyError in students.service.ts).
+// scripts/drop-stale-attendance-index.ts (already on main) drops the same stale index; either script may be used.
 StudentAttendanceSchema.index(
   { studentId: 1, date: 1, subject: 1 },
-  { unique: true }
+  { unique: true, name: 'studentId_1_date_1_subject_1' }
 );
 
 // ============================================================

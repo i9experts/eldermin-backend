@@ -5,6 +5,8 @@ import { Types } from 'mongoose';
 import { BehaviourService } from './behaviour.service';
 import { BehaviourAccessContext } from './behaviour-access';
 
+const omitStamp = (o: any) => { const { updatedBy, updatedById, ...rest } = o || {}; return rest; };
+
 const CAMPUS = new Types.ObjectId().toString();
 const TEACHER_USER = { userId: new Types.ObjectId().toString(), name: 'Ms Noor', role: 'teacher', schoolSlug: 'demo', tenantId: 't1', campusId: CAMPUS };
 const ADMIN_USER = { userId: new Types.ObjectId().toString(), name: 'Principal', role: 'principal', schoolSlug: 'demo', tenantId: 't1', campusId: CAMPUS };
@@ -182,9 +184,9 @@ describe('writes: create / edit / resolve', () => {
     await expect(build({ records: [legacyOther] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
   });
 
-  it('updateRecord: log mode lets a teacher edit another teacher\'s record but logs it; admin can edit any record', async () => {
+  it('updateRecord: log mode still refuses a teacher editing another teacher\'s record (D7) and logs it; admin can edit any record', async () => {
     const other = rec({ reportedById: new Types.ObjectId(), reportedBy: 'Mr Khan' });
-    await expect(build({ records: [other] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, TEACHER_USER as any, logMode())).resolves.toBeDefined();
+    await expect(build({ records: [other] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, TEACHER_USER as any, logMode())).rejects.toThrow(ForbiddenException); // D7 (security-followups): author-or-admin is always enforced, the log still records it
     expect(logEvents()[0]).toMatchObject({ decision: 'would_deny', reason: 'teacher_edits_other_record' });
     await expect(build({ records: [other] }).svc.updateRecord(OID(), 'demo', { title: 'x' }, ADMIN_USER as any, adminAccess())).resolves.toBeDefined();
   });
@@ -194,7 +196,7 @@ describe('writes: create / edit / resolve', () => {
     await svc.updateRecord(OID(), 'demo', { title: 'x', schoolSlug: 'evil-school', campusId: OID(), _id: OID() }, ADMIN_USER as any, adminAccess());
     const [filter, update] = recordModel.findOneAndUpdate.mock.calls[0];
     expect(filter.schoolSlug).toBe('demo');
-    expect(update.$set).toEqual({ title: 'x' });
+    expect(omitStamp(update.$set)).toEqual({ title: 'x' });
   });
 
   it('resolveRecord: teacher can resolve in-class records only', async () => {
@@ -211,7 +213,7 @@ describe('Tarbiyah: author or admin', () => {
   it('author may edit; a non-author teacher/coordinator is 403 in enforce and only logged in log mode', async () => {
     await expect(build({ tarbiyah: [mineT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, access())).resolves.toBeDefined();
     await expect(build({ tarbiyah: [otherT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
-    await expect(build({ tarbiyah: [otherT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, logMode())).resolves.toBeDefined();
+    await expect(build({ tarbiyah: [otherT()] }).svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x' }, TEACHER_USER as any, logMode())).rejects.toThrow(ForbiddenException); // D7: always enforced, the log still records it
     expect(logEvents()[0]).toMatchObject({ decision: 'would_deny', reason: 'tarbiyah_edit_not_author_or_admin' });
   });
 
@@ -227,10 +229,10 @@ describe('Tarbiyah: author or admin', () => {
   it('an update never re-homes or re-attributes (schoolSlug/studentId/assessedById; assessedBy for non-admins)', async () => {
     const t = build({ tarbiyah: [mineT()] });
     await t.svc.updateTarbiyahAssessment(OID(), 'demo', { teacherObservations: 'x', schoolSlug: 'evil', studentId: OID(), assessedById: OID(), assessedBy: 'Forged', campusId: OID() }, TEACHER_USER as any, access());
-    expect(t.tarbiyahModel.findOneAndUpdate.mock.calls[0][1].$set).toEqual({ teacherObservations: 'x' });
+    expect(omitStamp(t.tarbiyahModel.findOneAndUpdate.mock.calls[0][1].$set)).toEqual({ teacherObservations: 'x' });
     const a = build({ tarbiyah: [otherT()] });
     await a.svc.updateTarbiyahAssessment(OID(), 'demo', { assessedBy: 'Renamed', schoolSlug: 'evil' }, ADMIN_USER as any, adminAccess());
-    expect(a.tarbiyahModel.findOneAndUpdate.mock.calls[0][1].$set).toEqual({ assessedBy: 'Renamed' });
+    expect(omitStamp(a.tarbiyahModel.findOneAndUpdate.mock.calls[0][1].$set)).toEqual({ assessedBy: 'Renamed' });
   });
 
   it('the parentShared notification path still works (existing record read once)', async () => {
