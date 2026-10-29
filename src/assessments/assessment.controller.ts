@@ -15,7 +15,7 @@ import { AssessmentService } from './assessment.service';
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
   CreateQuestionDto, QuestionQueryDto,
-  BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
+  BulkMarkEntryDto, VerifyMarksDto, UpdateMarkEntryDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
   PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
   CreateExamPaperDto, UpdateExamPaperDto,
@@ -375,5 +375,25 @@ export class AssessmentController {
   async verifyMarks(@Body() dto: VerifyMarksDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.verifyMarks({ ...dto, schoolSlug, verifiedBy: userName });
+  }
+
+  // Edits one already-saved mark - the Mark Sheet's "Edit" action. Same
+  // role gate as bulk entry (STAFF_WRITE_ROLES): a teacher correcting their
+  // own just-entered mark is the common case, not just an admin action.
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('marks/:id')
+  async updateMarkEntry(@Param('id') id: string, @Body() dto: UpdateMarkEntryDto, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateMarkEntry(id, schoolSlug, dto, requestingUser);
+  }
+
+  // Deletes one mark entry - gated stricter than editing (admin-type roles
+  // only), since removing a result outright is more consequential than
+  // correcting it.
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Delete('marks/:id')
+  async deleteMarkEntry(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteMarkEntry(id, schoolSlug);
   }
 }

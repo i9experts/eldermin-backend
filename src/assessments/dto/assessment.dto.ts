@@ -205,6 +205,13 @@ export class VerifyMarksDto {
   verifiedBy?: string;
 }
 
+export class UpdateMarkEntryDto {
+  @IsOptional() @IsNumber() @Min(0) obtainedMarks?: number;
+  @IsOptional() @IsBoolean() isAbsent?: boolean;
+  @IsOptional() @IsBoolean() isExempt?: boolean;
+  @IsOptional() @IsString() remarks?: string;
+}
+
 export class MarkQueryDto extends PaginationDto {
   @IsOptional() @IsMongoId() assessmentId?: string;
   @IsOptional() @IsMongoId() studentId?: string;

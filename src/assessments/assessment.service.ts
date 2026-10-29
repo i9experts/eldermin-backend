@@ -83,6 +83,20 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
 export const TEACHER_MARKS_LOCKED_MESSAGE =
   'Results for this assessment are published (or the assessment is cancelled): marks can no longer be changed. Contact an administrator.';
 
+// Shared by bulkEnterMarks and updateMarkEntry so a single mark edited from
+// the Mark Sheet (admin's "Edit" action) is scored exactly the same way a
+// freshly bulk-entered one is - same percentage rounding, grade scale and
+// pass/fail cutoff, no drift between the two entry points.
+function computeMarkOutcome(obtainedMarks: number | undefined, isAbsent: boolean | undefined, isExempt: boolean | undefined, totalMarks: number, passingMarks: number) {
+  if (isAbsent) return { percentage: undefined, grade_result: undefined, gpa: undefined, result: 'absent' };
+  if (isExempt) return { percentage: undefined, grade_result: undefined, gpa: undefined, result: 'exempt' };
+  if (obtainedMarks === undefined || obtainedMarks === null) return { percentage: undefined, grade_result: undefined, gpa: undefined, result: undefined };
+  const percentage = parseFloat(((obtainedMarks / totalMarks) * 100).toFixed(1));
+  const { grade, gpa } = getGrade(percentage);
+  const result = percentage >= ((passingMarks / totalMarks) * 100) ? 'pass' : 'fail';
+  return { percentage, grade_result: grade, gpa, result };
+}
+
 @Injectable()
 export class AssessmentService {
   private readonly logger = new Logger(AssessmentService.name);
@@ -1716,6 +1730,19 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     }
   }
 
+  /**
+   * BB6: marks are entered / edited for the teacher's own class + subject only (a class teacher: every subject of their class; a subject teacher: their
+   * (class, subject) pairs; the web's assessment carries grade/section and subjects[].subject). An assessment without a section covers the whole grade and
+   * is matched by class only (a teacher of section A enters their own students' marks). TEACHER_SCOPE_GUARD_MODE: log = would_deny line, enforce = 403.
+   * Used by the bulk entry AND the single-mark edit of the Mark Sheet (PATCH marks/:id); the delete is admin-only at the controller.
+   */
+  private async assertTeacherMarksScope(user: any, assessment: any, subject: string, route: string): Promise<void> {
+    const scope = await this.teacherContext(user);
+    if (!mayTeacherAccessClassSubject(scope, { grade: assessment?.grade, section: assessment?.section, subject })) {
+      teacherScopeVerdict(user, route, 'teacher_marks_outside_assignment', 'You can only enter marks for your own class and subject.');
+    }
+  }
+
   async bulkEnterMarks(dto: BulkMarkEntryDto, requestingUser?: ScopedUser) {
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
@@ -1728,13 +1755,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // row is out of bounds or already verified (locked).
     const teacher = isTeacherCaller(requestingUser);
     if (teacher) {
-      // BB6: marks are entered for the teacher's own class + subject only (a class teacher: every subject of their class; a subject teacher:
-      // their (class, subject) pairs; the web's assessment carries grade/section and subjects[].subject). TEACHER_SCOPE_GUARD_MODE: log | enforce.
-      const scope = await this.teacherContext(requestingUser);
-      // an assessment without a section covers the whole grade: matched by class only (a teacher of section A enters their own students' marks)
-      if (!mayTeacherAccessClassSubject(scope, { grade: (assessment as any).grade, section: (assessment as any).section, subject: dto.subject })) {
-        teacherScopeVerdict(requestingUser, 'POST /assessments/marks/bulk', 'teacher_marks_outside_assignment', 'You can only enter marks for your own class and subject.');
-      }
+      await this.assertTeacherMarksScope(requestingUser, assessment, dto.subject, 'POST /assessments/marks/bulk');
       this.assertTeacherMarksNotLocked(assessment);
       const bad: string[] = [];
       for (const m of dto.marks) {
@@ -1760,23 +1781,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     }
 
     const ops = dto.marks.map(m => {
-      let percentage: number | undefined;
-      let grade_result: string | undefined;
-      let gpa: number | undefined;
-      let result: string | undefined;
-
-      if (m.isAbsent) {
-        result = 'absent';
-      } else if (m.isExempt) {
-        result = 'exempt';
-      } else if (m.obtainedMarks !== undefined) {
-        percentage = parseFloat(((m.obtainedMarks / subjectConfig.totalMarks) * 100).toFixed(1));
-        const gradeInfo = getGrade(percentage);
-        grade_result = gradeInfo.grade;
-        gpa = gradeInfo.gpa;
-        result = percentage >= ((subjectConfig.passingMarks / subjectConfig.totalMarks) * 100)
-          ? 'pass' : 'fail';
-      }
+      const { percentage, grade_result, gpa, result } = computeMarkOutcome(
+        m.obtainedMarks, m.isAbsent, m.isExempt, subjectConfig.totalMarks, subjectConfig.passingMarks,
+      );
 
       return {
         updateOne: {
@@ -1847,6 +1854,66 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       },
       { $set: { verified: true, verifiedBy: dto.verifiedBy } },
     );
+  }
+
+  /** Edits one already-saved mark from the Mark Sheet - the gap that made
+   * "enter marks" effectively write-once: the only other entry point,
+   * bulkEnterMarks, always seeds blank rows from the class roster rather
+   * than loading what's already saved, so there was no way to correct a
+   * single student's mark short of re-running the whole subject's entry.
+   * Recomputes percentage/grade/gpa/result with the exact same formula
+   * bulkEnterMarks uses (computeMarkOutcome), off the mark's own stored
+   * totalMarks/passingMarks rather than re-reading the assessment - keeps
+   * the edit consistent with whatever was already on screen even if the
+   * assessment's subject config has since changed. */
+  async updateMarkEntry(id: string, schoolSlug: string, dto: { obtainedMarks?: number; isAbsent?: boolean; isExempt?: boolean; remarks?: string }, requestingUser?: ScopedUser) {
+    assertValidObjectId(id, 'mark entry');
+    const mark: any = await this.markModel.findOne({ _id: id, schoolSlug });
+    if (!mark) throw new NotFoundException('Mark entry not found');
+
+    // Same teacher-only lock bulkEnterMarks enforces - other roles
+    // (admin, principal, etc.) keep today's overwrite behaviour.
+    if (isTeacherCaller(requestingUser)) {
+      const assessment = await this.assessmentModel.findById(mark.assessmentId);
+      await this.assertTeacherMarksScope(requestingUser, assessment, mark.subject, 'PATCH /assessments/marks/:id');
+      this.assertTeacherMarksNotLocked(assessment);
+      if (mark.verified) {
+        throw new ConflictException(`Marks for ${mark.studentName || mark.studentId}${mark.rollNumber ? ` (roll ${mark.rollNumber})` : ''} are verified and locked.`);
+      }
+    }
+
+    const isAbsent = dto.isAbsent ?? mark.isAbsent ?? false;
+    const isExempt = dto.isExempt ?? mark.isExempt ?? false;
+    const obtainedMarks = (isAbsent || isExempt) ? undefined : (dto.obtainedMarks ?? mark.obtainedMarks);
+    if (!isAbsent && !isExempt && obtainedMarks !== undefined) {
+      if (typeof obtainedMarks !== 'number' || !Number.isFinite(obtainedMarks) || obtainedMarks < 0 || obtainedMarks > mark.totalMarks) {
+        throw new BadRequestException(`Marks must be between 0 and ${mark.totalMarks}.`);
+      }
+    }
+    const { percentage, grade_result, gpa, result } = computeMarkOutcome(obtainedMarks, isAbsent, isExempt, mark.totalMarks, mark.passingMarks);
+
+    mark.obtainedMarks = obtainedMarks;
+    mark.isAbsent = isAbsent;
+    mark.isExempt = isExempt;
+    mark.percentage = percentage ?? null;
+    mark.grade_result = grade_result ?? null;
+    mark.gpa = gpa ?? null;
+    mark.result = result;
+    if (dto.remarks !== undefined) mark.remarks = dto.remarks;
+    await mark.save();
+    return mark;
+  }
+
+  /** Deletes one mark entry - e.g. a student added to the roster by mistake,
+   * or a row that needs to be re-entered from scratch. Gated at the
+   * controller level to admin-type roles only (TEACHING_ADMIN_ROLES) -
+   * stricter than editing, since removing a result entirely (rather than
+   * correcting it) is the more consequential action. */
+  async deleteMarkEntry(id: string, schoolSlug: string) {
+    assertValidObjectId(id, 'mark entry');
+    const mark = await this.markModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!mark) throw new NotFoundException('Mark entry not found');
+    return { success: true };
   }
 
   // ============================================================
