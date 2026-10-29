@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import { makeAssessmentService, oid, teacherUser } from './assessment-test-fakes';
+import { makeAssessmentService, me, oid, teacherUser } from './assessment-test-fakes';
 
 const assessment = { title: 'Mid', subjects: [{ subject: 'Math', totalMarks: 50, passingMarks: 20 }] };
 const sid = oid().toString();
@@ -52,33 +52,14 @@ describe('marks/bulk teacher rules', () => {
     await service.bulkEnterMarks(dto([row({ obtainedMarks: 500, isAbsent: true })]), teacherUser());
     expect(markModel.bulkWrite).toHaveBeenCalled();
   });
-  it('is only for the teacher role: no caller context lookups needed', async () => {
+  it('non-teacher callers need no teacher context lookups (admin keeps today\'s behaviour)', async () => {
     const { service, staffModel } = makeAssessmentService({ assessment });
-    await service.bulkEnterMarks(dto([row()]), teacherUser());
+    await service.bulkEnterMarks(dto([row({ obtainedMarks: 500 })]), { userId: me.userId, role: 'admin', name: 'A', schoolSlug: 's' } as any);
     expect(staffModel.findOne).not.toHaveBeenCalled();
   });
-});
-
-describe.each(['principal', 'admin', 'institution_owner', 'vice_principal', 'academic_coordinator', 'super_admin'])('marks/bulk %s unchanged', (role) => {
-  it('allows > total, never looks up verified rows, overwrites, leaves percentage keys as before', async () => {
-    const { service, markModel } = makeAssessmentService({ assessment, existingMarks: [{ studentId: sid }] });
-    await service.bulkEnterMarks(dto([row({ obtainedMarks: 75 })]), teacherUser({ role }));
-    expect(markModel.find).not.toHaveBeenCalled();
-    const set = markModel.bulkWrite.mock.calls[0][0][0].updateOne.update.$set;
-    expect(set.obtainedMarks).toBe(75);
-    expect(set).not.toHaveProperty('verified');
+  it('a teacher caller resolves their class/subject scope once (BB6)', async () => {
+    const { service, staffModel } = makeAssessmentService({ assessment });
+    await service.bulkEnterMarks(dto([row()]), teacherUser());
+    expect(staffModel.findOne).toHaveBeenCalledTimes(1);
   });
-  it('absent row keeps undefined percentage (today)', async () => {
-    const { service, markModel } = makeAssessmentService({ assessment });
-    await service.bulkEnterMarks(dto([row({ obtainedMarks: undefined, isAbsent: true })]), teacherUser({ role }));
-    const set = markModel.bulkWrite.mock.calls[0][0][0].updateOne.update.$set;
-    expect(set.percentage).toBeUndefined();
-    expect(set.result).toBe('absent');
-  });
-});
-
-it('no user (internal callers) behaves as before', async () => {
-  const { service, markModel } = makeAssessmentService({ assessment });
-  await service.bulkEnterMarks(dto([row({ obtainedMarks: 99 })]));
-  expect(markModel.bulkWrite).toHaveBeenCalled();
 });

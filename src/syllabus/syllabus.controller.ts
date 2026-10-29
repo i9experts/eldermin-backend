@@ -33,7 +33,7 @@ export class SyllabusController {
    * assigned to, computed against the school's actual academic calendar. */
   @Get('weekly-planner')
   getTeacherWeeklyPlanner(@Request() req: any, @Query('teacherId') teacherId: string) {
-    return this.service.getTeacherWeeklyPlanner(req.user.tenantId, req.user.schoolSlug, teacherId);
+    return this.service.getTeacherWeeklyPlanner(req.user.tenantId, req.user.schoolSlug, teacherId, req.user);
   }
 
   /** SLO Templates - reusable, sourced curriculum content applied to

@@ -32,8 +32,10 @@ import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
 import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { GradeSubmissionDto } from './dto/assignment.dto';
 import {
-  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, isOwnTeacherRef, TeacherIdentity, teacherIdsMatch,
 } from '../../staff-portal/teacher-identity.util';
+import { teacherClassAccessOf, mayTeacherAccessClassSubject } from '../../staff-portal/teacher-class-access.util';
+import { teacherScopeVerdict } from '../../auth/teacher-scope-verdict';
 
 /** description/classworkDescription/homeworkDescription arrive from the
  * frontend's rich-text editor as HTML - sanitized here (not just trusted
@@ -371,7 +373,7 @@ export class TeachingService {
     // wins regardless of what (if anything) was requested.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.lessonPlanModel.find(filter).sort({ planDate: -1 }).limit(100).lean();
   }
@@ -1126,7 +1128,7 @@ Rules:
     // assignments/homework, never a caller-suppliable or absent filter.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.assignmentModel.find(filter).sort({ dueDate: -1 }).lean();
   }
@@ -1268,6 +1270,23 @@ Rules:
 
   // ── ASSIGNMENT SUBMISSIONS (grading) ────────────────────────────────────────────
 
+  /**
+   * BB6: a TEACHER may only view / grade the submissions of homework in their own classes and subjects: the owner of the assignment (either of
+   * my ids, legacy admin-created rows hold the TeacherProfile id) or the class teacher of its class (all subjects) or the subject teacher of
+   * its class + subject (same rule as quiz attempts and marks entry). Under TEACHER_SCOPE_GUARD_MODE: log = would_deny line only, enforce = 403.
+   * Other staff roles keep today's behaviour. Parents/students never reach these routes (class-level staff-only guard on the controller;
+   * they use /parent-portal/students/:id/homework for their own child).
+   */
+  private async assertTeacherMayHandleSubmissions(requestingUser: ScopedUser | undefined, assignment: any, route: string): Promise<void> {
+    if (!isTeacherCaller(requestingUser)) return;
+    const me = await this.teacherIdentity(requestingUser!);
+    if (isOwnTeacherRef(me, assignment.teacherId)) return;
+    const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+      .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments currentAssignments').lean();
+    if (mayTeacherAccessClassSubject(teacherClassAccessOf(profile), { grade: assignment.gradeLevel, section: assignment.sectionName, subject: assignment.subject })) return;
+    teacherScopeVerdict(requestingUser, route, 'teacher_submissions_outside_classes', 'You can only handle homework of your own classes and subjects.');
+  }
+
   async getSubmissionsForAssignment(tenantId: string, assignmentId: string, requestingUser?: ScopedUser) {
     assertValidObjectId(assignmentId, 'assignment');
     const assignment = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
@@ -1278,6 +1297,7 @@ Rules:
         throw new ForbiddenException('This assignment belongs to a different campus.');
       }
     }
+    await this.assertTeacherMayHandleSubmissions(requestingUser, assignment, 'GET /teaching/assignments/:id/submissions');
     const submissions = await this.submissionModel.find({ tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) })
       .sort({ studentName: 1 }).lean();
     return { assignment, submissions };
@@ -1288,6 +1308,17 @@ Rules:
     assertValidObjectId(submissionId, 'submission');
     const submission = await this.submissionModel.findOne({ _id: submissionId, tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) });
     if (!submission) throw new NotFoundException('Submission not found');
+    // the assignment this submission belongs to: same campus rule as the read, then the teacher class/subject rule (BB6)
+    const parent: any = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
+    if (parent) {
+      if (requestingUser) {
+        const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+        if (effectiveCampusId && String(parent.campusId || '') !== String(effectiveCampusId)) {
+          throw new ForbiddenException('This assignment belongs to a different campus.');
+        }
+      }
+      await this.assertTeacherMayHandleSubmissions(requestingUser, parent, 'PATCH /teaching/assignments/:id/submissions/:submissionId');
+    }
     if (dto.grade > submission.maxGrade) {
       throw new BadRequestException(`Grade cannot exceed this assignment's maximum of ${submission.maxGrade}.`);
     }
@@ -1369,7 +1400,7 @@ Rules:
     // note at their campus.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.reportedBy = new Types.ObjectId(me.staffId);
+      filter.reportedBy = teacherIdsMatch(me);
     }
     return this.behaviourModel.find(filter).sort({ incidentDate: -1 }).limit(100).lean();
   }
@@ -1462,7 +1493,7 @@ Rules:
     }
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.reportedBy = new Types.ObjectId(me.staffId);
+      filter.reportedBy = teacherIdsMatch(me);
     }
     const page = Math.max(1, parseInt(query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 20));
@@ -1492,7 +1523,7 @@ Rules:
     // their own class diary entries.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.classDiaryModel.find(filter).sort({ diaryDate: -1 }).lean();
   }

@@ -21,7 +21,7 @@ function makeService(existingSections: any[]) {
   };
   const noop: any = {};
   const service = new OrganizationService(
-    noop, noop, noop, gradeModel, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop,
+    noop, noop, noop, gradeModel, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop,
   );
   return { service, gradeDoc };
 }
@@ -58,7 +58,7 @@ describe('OrganizationService.addSection', () => {
     const gradeModel: any = { findOne: jest.fn().mockResolvedValue(null) };
     const noop: any = {};
     const service = new OrganizationService(
-      noop, noop, noop, gradeModel, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop,
+      noop, noop, noop, gradeModel, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop, noop,
     );
     await expect(
       service.addSection('missing', 'demo-school', { name: 'A' }),

@@ -8,7 +8,7 @@ import { InvoiceSchema, PaymentSchema, ExpenseSchema, BankAccountSchema } from '
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { AssessmentSchema } from '../assessments/schemas/assessment.schema';
-import { BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
+import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema';
 import { CharacterProgramSettings, CharacterProgramSettingsSchema } from '../behaviour/schemas/character-program-settings.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
@@ -39,7 +39,9 @@ import { FinanceModule } from '../finance/finance.module';
       { name: 'BankAccount', schema: BankAccountSchema },
       { name: 'School', schema: SchoolSchema },
       { name: 'Assessment', schema: AssessmentSchema },
-      { name: 'Behaviour', schema: BehaviourRecordSchema },
+      // behaviour_records under its OWN model name. This used to be registered as 'Behaviour', the name students.module uses for the legacy
+      // student_behaviour store, so whichever module loaded first decided which collection BOTH services read and wrote (BB12).
+      { name: BehaviourRecord.name, schema: BehaviourRecordSchema },
       { name: 'QaidaProgress', schema: QaidaProgressSchema },
       { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
       { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },

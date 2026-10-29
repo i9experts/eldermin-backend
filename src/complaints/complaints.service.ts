@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -8,7 +8,8 @@ import {
 } from './schemas/complaint.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { EmailService } from '../email/email.service';
-import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { assertStudentAccess, resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { NON_STAFF_ROLES } from '../auth/admin-role-sets';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -39,7 +40,41 @@ export class ComplaintsService {
   }
 
   // ── Cases ────────────────────────────────────────────────────
-  async createCase(schoolSlug: string, data: any, requestingUser?: ScopedUser) {
+  /** Parent / student (non-staff) token? */
+  static isNonStaff(user?: ScopedUser): boolean {
+    const role = String((user as any)?.role || (user as any)?.primaryRole || '');
+    return !role || NON_STAFF_ROLES.includes(role as any);
+  }
+
+  /**
+   * What a parent/student may set when filing a case: the text, an optional case type and (for a parent) one of their OWN linked children.
+   * Everything staff-side (priority, SLA, assignee, designation, requester identity, campus, status) is dropped or derived from the token, so a
+   * parent cannot route a case to a named staff member, shorten its SLA or file it in someone else's name.
+   */
+  private sanitiseNonStaffCase(data: any, user: ScopedUser): any {
+    const title = String(data?.title ?? '').trim().slice(0, 200);
+    const description = String(data?.description ?? '').trim().slice(0, 5000);
+    if (!title || !description) throw new BadRequestException('A title and a description are required.');
+    const out: any = {
+      title, description,
+      caseTypeId: data?.caseTypeId && Types.ObjectId.isValid(String(data.caseTypeId)) ? String(data.caseTypeId) : undefined,
+      caseGroup: String(data?.caseGroup ?? 'Parent feedback').slice(0, 80), caseType: String(data?.caseType ?? 'Feedback').slice(0, 80),
+      raisedByType: (user as any).role === 'student' ? 'student' : 'parent',
+      raisedByName: (user as any).name || 'Parent',
+      priority: 'medium',
+    };
+    if (data?.studentId) {
+      if (!Types.ObjectId.isValid(String(data.studentId))) throw new BadRequestException('Invalid student id');
+      assertStudentAccess(user, String(data.studentId));       // a parent: one of their linked children, else 403
+      out.studentId = String(data.studentId);
+      out.studentName = data.studentName ? String(data.studentName).slice(0, 120) : undefined;
+    }
+    return out;
+  }
+
+  async createCase(schoolSlug: string, rawData: any, requestingUser?: ScopedUser) {
+    const nonStaff = ComplaintsService.isNonStaff(requestingUser);
+    const data = nonStaff ? this.sanitiseNonStaffCase(rawData, requestingUser as ScopedUser) : rawData;
     let slaHours = data.slaHours || 48;
     let caseGroup = data.caseGroup, caseType = data.caseType;
     let defaultAssigneeDesignation: string | undefined;
@@ -68,14 +103,15 @@ export class ComplaintsService {
       caseGroup, caseType,
       title: data.title, description: data.description,
       raisedByType: data.raisedByType || 'parent',
-      raisedByName: data.raisedByName, raisedByPhone: data.raisedByPhone, raisedByEmail: data.raisedByEmail,
+      raisedByName: data.raisedByName, raisedByPhone: nonStaff ? undefined : data.raisedByPhone, raisedByEmail: nonStaff ? undefined : data.raisedByEmail,
+      raisedByUserId: requestingUser?.userId && Types.ObjectId.isValid(String(requestingUser.userId)) ? new Types.ObjectId(String(requestingUser.userId)) : null,
       studentId: data.studentId || null, studentName: data.studentName,
       priority: data.priority || 'medium',
       assignedToId: data.assignedToId || null, assignedToName, assignedDesignation,
       status: 'open',
       slaHours, dueBy,
       schoolSlug,
-      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
+      campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (!nonStaff && data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
     await complaintCase.save();
 
@@ -116,6 +152,39 @@ export class ComplaintsService {
       this.caseModel.countDocuments(filter),
     ]);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
+  }
+
+  /** What a parent/student sees of a case they filed: no assignee, escalations, internal remarks, notification outcomes or campus. */
+  private mineView(c: any) {
+    return {
+      id: String(c._id), caseNumber: c.caseNumber, title: c.title, description: c.description, status: c.status,
+      caseGroup: c.caseGroup, caseType: c.caseType, priority: c.priority, studentId: c.studentId ? String(c.studentId) : null, studentName: c.studentName || null,
+      createdAt: c.createdAt, dueBy: c.dueBy, closedAt: c.closedAt || null, resolution: c.status === 'closed' ? (c.resolutionNotes || null) : null,
+    };
+  }
+
+  /** GET /complaints/mine: the caller's OWN cases only (filed by their account, in their school). */
+  async getMyCases(schoolSlug: string, user: ScopedUser, page = 1, limit = 20) {
+    const uid = user?.userId;
+    if (!uid || !Types.ObjectId.isValid(String(uid))) throw new ForbiddenException('No account context.');
+    const l = Math.min(50, Math.max(1, Number(limit) || 20));
+    const p = Math.max(1, Number(page) || 1);
+    const filter = { schoolSlug, raisedByUserId: new Types.ObjectId(String(uid)) };
+    const [rows, total] = await Promise.all([
+      this.caseModel.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l).lean(),
+      this.caseModel.countDocuments(filter),
+    ]);
+    return { items: rows.map((c: any) => this.mineView(c)), page: p, limit: l, total, hasMore: (p - 1) * l + rows.length < total };
+  }
+
+  async getMyCase(id: string, schoolSlug: string, user: ScopedUser) {
+    const uid = user?.userId;
+    if (!uid || !Types.ObjectId.isValid(String(uid))) throw new ForbiddenException('No account context.');
+    if (!Types.ObjectId.isValid(String(id))) throw new BadRequestException('Invalid case id');
+    // someone else's case, another school's case and a missing case are all the same 404
+    const c: any = await this.caseModel.findOne({ _id: id, schoolSlug, raisedByUserId: new Types.ObjectId(String(uid)) }).lean();
+    if (!c) throw new NotFoundException('Case not found');
+    return this.mineView(c);
   }
 
   async getCaseById(id: string, schoolSlug: string) {

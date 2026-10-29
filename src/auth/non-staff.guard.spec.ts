@@ -308,6 +308,7 @@ const APP_PARENT_PORTAL_CALLS = [
   'GET students/:id/ptm', 'GET students/:id/ptm/teachers', 'POST students/:id/ptm', 'POST students/:id/ptm/:m/cancel',
   'GET students/:id/home-tasks', 'POST students/:id/home-tasks/:t/complete',
   'GET notifications', 'POST notifications/:id/read', 'POST notifications/read-all',
+  'POST device-ping',
   'GET threads', 'POST threads', 'GET threads/:id/messages', 'POST threads/:id/messages',
 ];
 const STAFF_ONLY_HANDLERS = ['listConsentRequests', 'createConsentRequest', 'getConsentRequestResults', 'closeConsentRequest', 'linkGuardian', 'unlinkGuardian'];
@@ -348,8 +349,8 @@ describe('Parent-app regression: enforce mode, parent token', () => {
     expect(hit).toBeDefined();
     expect(guard.canActivate(ctxFor(ParentPortalController, hit!.name, parent, m))).toBe(true);
   });
-  it('covers all 41 parent-portal endpoints (method+path) the app calls that exist on main', () => {
-    expect(APP_PARENT_PORTAL_CALLS).toHaveLength(41);
+  it('covers all 42 parent-portal endpoints (method+path) the app calls that exist on main', () => {
+    expect(APP_PARENT_PORTAL_CALLS).toHaveLength(42);
   });
   it('reaches POST /complaints (feedback)', () => {
     expect(guard.canActivate(ctxFor(ComplaintsController, 'createCase', parent, 'POST'))).toBe(true);

@@ -1038,7 +1038,7 @@ export class OrganizationService {
       notes: {
         downloads: appleAppStoreDownloads.configured
           ? 'Apple App Store downloads are now connected (via App Store Connect) and shown separately below - a download is not the same as activation, since a parent can install the app without ever logging in. Google Play download counts still aren’t connected yet. "Activated Parents" and "Activation Rate" above reflect actual parent app logins (a real, already-tracked signal), independent of either store’s download count. "Devices Registered" is the app’s own install signal: it pings us on every login and app open.'
-          : 'Real Play Store/App Store download counts require integrating those stores’ own Developer APIs, which isn’t connected yet. "Devices Registered" above is a real, already-tracked proxy instead — the app pings us on every login and app open, so it reflects actual installs in use, not raw store downloads.',
+          : 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads. "Devices Registered" is the app’s own install signal: it pings us on every login and app open.',
         staffApp: 'Staff currently access Eldermin through the web dashboard - there is no separate staff mobile app login yet to measure activation for, so staff numbers above are headcount only.',
       },
     };

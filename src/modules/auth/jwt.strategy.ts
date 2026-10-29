@@ -16,7 +16,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: any) {
     // S3: user must exist, be active and carry the current tokenVersion (cached <= 30 s, 503 on DB failure)
-    await this.authState.assertTokenValid(payload);
+    // BB11: a campus-scoped staff token without campusId gets the campus derived from the account (token value always wins)
+    const derived = await this.authState.check(payload);
     return {
       tv: payload.tv,
       userId: payload.sub,
@@ -26,7 +27,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       name: payload.name,
       schoolSlug: payload.schoolSlug,
       activeModules: payload.activeModules || [],
-      campusId: payload.campusId,
+      campusId: payload.campusId || derived.campusId,
       department: payload.department,
       guardianOfStudentIds: payload.guardianOfStudentIds,
       linkedStudentId: payload.linkedStudentId,

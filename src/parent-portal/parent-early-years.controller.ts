@@ -1,5 +1,5 @@
 import { Controller, Get, Param, Query, Request, UseInterceptors } from '@nestjs/common';
-import { Roles } from '../auth/decorators';
+import { Roles, AllowNonStaff } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentEarlyYearsService } from './parent-early-years.service';
@@ -11,6 +11,9 @@ import { ParentEarlyYearsPageDto } from './dto/parent-early-years.dto';
  * never from a header. See ParentEarlyYearsService for the visibility and projection rules.
  * The academic year is resolved on the server (the school's current year); an `x-academic-year` header from a parent client is ignored.
  */
+// Opens NonStaffGuard (a parent token is a non-staff token, so without this the controller would be refused the day NON_STAFF_GUARD_MODE=enforce);
+// @Roles(PARENT) below is what keeps student, staff and reseller tokens out.
+@AllowNonStaff()
 @Roles(UserRole.PARENT)
 @Controller('parent-portal/students/:studentId/early-years')
 @UseInterceptors(GuardianRefreshInterceptor)

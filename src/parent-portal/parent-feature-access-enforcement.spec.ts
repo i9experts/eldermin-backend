@@ -13,7 +13,7 @@ function stubModel() { return {} as any; }
 // positional args (fragile against constructor reordering), build the
 // model list, slot the one model this test actually needs in at the
 // reportCardModel position, and spread everything through `new`.
-const MODEL_COUNT = 26;
+const MODEL_COUNT = 27;
 const REPORT_CARD_MODEL_INDEX = 4; // 0-based: studentModel, attendanceModel, invoiceModel, markModel, reportCardModel, ...
 
 function buildService(parentAccess: any) {

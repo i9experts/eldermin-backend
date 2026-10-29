@@ -2,6 +2,8 @@
 // ASSESSMENT SERVICE — Eldermin ERP | NestJS
 // ============================================================
 
+import { teacherScopeVerdict } from '../auth/teacher-scope-verdict';
+import { mayTeacherAccessClassSubject } from '../staff-portal/teacher-class-access.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
@@ -1726,6 +1728,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     // row is out of bounds or already verified (locked).
     const teacher = isTeacherCaller(requestingUser);
     if (teacher) {
+      // BB6: marks are entered for the teacher's own class + subject only (a class teacher: every subject of their class; a subject teacher:
+      // their (class, subject) pairs; the web's assessment carries grade/section and subjects[].subject). TEACHER_SCOPE_GUARD_MODE: log | enforce.
+      const scope = await this.teacherContext(requestingUser);
+      // an assessment without a section covers the whole grade: matched by class only (a teacher of section A enters their own students' marks)
+      if (!mayTeacherAccessClassSubject(scope, { grade: (assessment as any).grade, section: (assessment as any).section, subject: dto.subject })) {
+        teacherScopeVerdict(requestingUser, 'POST /assessments/marks/bulk', 'teacher_marks_outside_assignment', 'You can only enter marks for your own class and subject.');
+      }
       this.assertTeacherMarksNotLocked(assessment);
       const bad: string[] = [];
       for (const m of dto.marks) {

@@ -9,7 +9,7 @@ import {
   PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment,
 } from './parent-behaviour.projection';
 
-const MODEL_COUNT = 26;
+const MODEL_COUNT = 27;
 const SENSITIVE_RECORD_FIELDS = [
   'witnesses', 'location', 'followUpRequired', 'followUpDate', 'followUpNote', 'resolvedNote', 'resolvedDate', 'resolved',
   'parentResponse', 'parentNotifiedBy', 'verifiedBy', 'verified', 'reportedBy', 'reportedById', 'attachments',

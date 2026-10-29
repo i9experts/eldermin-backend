@@ -114,10 +114,10 @@ describe('AuthStateService.assertTokenValid', () => {
 describe('JwtStrategy', () => {
   const cfg: any = { get: () => 'secret' };
   it('rejects through the state check and otherwise returns the SAME req.user shape plus tv', async () => {
-    const ok = new JwtStrategy(cfg, { assertTokenValid: jest.fn().mockResolvedValue(undefined) } as any);
+    const ok = new JwtStrategy(cfg, { check: jest.fn().mockResolvedValue({}) } as any);
     const u = await ok.validate({ sub: 'u1', tv: 2, tenantId: 't', role: 'teacher', name: 'N', schoolSlug: 's' });
     expect(u).toMatchObject({ userId: 'u1', tv: 2, tenantId: 't', role: 'teacher', schoolSlug: 's', activeModules: [], isBoardLevel: false });
-    const bad = new JwtStrategy(cfg, { assertTokenValid: jest.fn().mockRejectedValue(new UnauthorizedException('x')) } as any);
+    const bad = new JwtStrategy(cfg, { check: jest.fn().mockRejectedValue(new UnauthorizedException('x')) } as any);
     await expect(bad.validate({ sub: 'u1' })).rejects.toThrow(UnauthorizedException);
   });
 });

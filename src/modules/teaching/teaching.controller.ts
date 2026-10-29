@@ -5,7 +5,8 @@ import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { TeachingService } from './teaching.service';
 import { CreateAssignmentDto, UpdateAssignmentDto, GradeSubmissionDto } from './dto/assignment.dto';
-import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../../auth/role-sets';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES, SCHOOL_STAFF_ROLES } from '../../auth/role-sets';
+import { Roles } from '../../auth/decorators';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { RequireModuleAccess } from '../../roles/decorators/require-module-access.decorator';
 
@@ -241,6 +242,8 @@ export class TeachingController {
 
   // ── ASSIGNMENTS (= the Homework tab) ────────────────────────────────────────────
 
+  // staff only, always (a parent/student token must never read or grade submissions; they use /parent-portal/students/:id/homework)
+  @Roles(...SCHOOL_STAFF_ROLES)
   @RequireModuleAccess('teaching', 'homework', 'view')
   @Get('assignments')
   getAssignments(@Request() req, @Query() q: any) { return this.teachingService.getAssignments(req.user.tenantId, q, req.user); }
@@ -260,10 +263,14 @@ export class TeachingController {
   @Delete('assignments/:id')
   deleteAssignment(@Request() req, @Param('id') id: string) { return this.teachingService.deleteAssignment(req.user.tenantId, id, req.user); }
 
+  // staff only, always (a parent/student token must never read or grade submissions; they use /parent-portal/students/:id/homework)
+  @Roles(...SCHOOL_STAFF_ROLES)
   @RequireModuleAccess('teaching', 'homework', 'view')
   @Get('assignments/:id/submissions')
   getSubmissions(@Request() req, @Param('id') id: string) { return this.teachingService.getSubmissionsForAssignment(req.user.tenantId, id, req.user); }
 
+  // staff only, always (a parent/student token must never read or grade submissions; they use /parent-portal/students/:id/homework)
+  @Roles(...SCHOOL_STAFF_ROLES)
   @RequireModuleAccess('teaching', 'homework', 'manage')
   @RolesOrModuleManage('teaching', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('assignments/:id/submissions/:submissionId')
