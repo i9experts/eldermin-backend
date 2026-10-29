@@ -198,6 +198,14 @@ export class ParentPortalController {
     return this.service.getLearningResources(studentId, requestingUser, tenantId, schoolSlug);
   }
 
+  // ── LMS Phase 0: "My Learning" hub (courses + assignments + quizzes +
+  // certificates, combined) ────────────────────────────────────
+  @Get('students/:studentId/my-learning')
+  async getMyLearning(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getMyLearning(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
   // ── LMS: My Courses ─────────────────────────────────────────
   @Get('students/:studentId/courses')
   async getMyCourses(@Param('studentId') studentId: string, @Request() req: any) {

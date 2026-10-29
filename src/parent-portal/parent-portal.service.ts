@@ -419,6 +419,24 @@ export class ParentPortalService {
     }).filter((c: any) => c.totalLessons > 0); // a published syllabus with no lessons yet has nothing to show
   }
 
+  // ── LMS Phase 0: "My Learning" hub ──────────────────────────────
+  // One combined payload for courses + assignments + quizzes +
+  // certificates, instead of a parent/student view having to hit four
+  // separate endpoints and stitch them together client-side. Each piece
+  // is exactly the existing getMyCourses/getHomework/listMyQuizzes/
+  // getIssuedForStudent result, unchanged - this adds no new data or
+  // business logic, just one call site for all four.
+  async getMyLearning(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const [courses, assignments, quizzes, certificates] = await Promise.all([
+      this.getMyCourses(studentId, requestingUser, tenantId, schoolSlug),
+      this.getHomework(studentId, requestingUser, tenantId, schoolSlug),
+      this.listMyQuizzes(studentId, requestingUser, schoolSlug),
+      this.certificatesService.getIssuedForStudent(schoolSlug, studentId),
+    ]);
+    return { courses, assignments, quizzes, certificates };
+  }
+
   async markLessonProgress(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string }) {
     assertStudentAccess(requestingUser, studentId);
     if (!['not_started', 'in_progress', 'completed'].includes(dto.status)) {

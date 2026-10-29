@@ -52,6 +52,7 @@ import { CertificatesModule } from './modules/certificates/certificates.module';
 import { AccountingIntegrationsModule } from './modules/accounting-integrations/accounting-integrations.module';
 import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
+import { LmsModule } from './lms/lms.module';
 
 import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-match.selftest';
 @Module({
@@ -123,6 +124,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     KnowledgeBaseModule,
     IdCardsModule,
     CertificatesModule,
+    LmsModule,
   ],
   controllers: [AppController],
   providers: [

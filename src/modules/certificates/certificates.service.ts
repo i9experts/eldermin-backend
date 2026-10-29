@@ -79,6 +79,14 @@ export class CertificatesService {
     return this.issuedModel.find({ schoolSlug, studentId }).sort({ issuedAt: -1 }).limit(50).lean();
   }
 
+  /** Cheap count for the LMS overview card - how many course-completion
+   * certificates this school has ever auto-issued. Intentionally lifetime,
+   * not per-term: a single countDocuments, no need for the heavier
+   * per-student getIssuedForStudent query shape. */
+  async countIssuedByType(schoolSlug: string, certificateType: string) {
+    return this.issuedModel.countDocuments({ schoolSlug, certificateType });
+  }
+
   // ── School branding (same institution/campus resolution as
   // IdCardsService.resolveBranding) ───────────────────────────
   private async resolveBranding(schoolSlug: string, campusId?: any): Promise<{ name: string; logo: string; campusName: string }> {

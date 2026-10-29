@@ -298,6 +298,7 @@ const APP_PARENT_PORTAL_CALLS = [
   'GET circulars', 'POST circulars/:id/acknowledge', 'GET events',
   'GET students/:id/profile', 'GET students/:id/medical', 'GET students/:id/documents', 'GET students/:id/attendance',
   'GET students/:id/homework', 'POST students/:id/homework/:a/submit',
+  'GET students/:id/my-learning',
   'GET students/:id/courses', 'POST students/:id/lessons/progress',
   'GET students/:id/quizzes', 'POST students/:id/quizzes/start', 'POST students/:id/quizzes/:a/submit',
   'GET students/:id/class-diary', 'GET students/:id/class-diary/:d/pdf', 'GET students/:id/learning-resources',
@@ -349,8 +350,8 @@ describe('Parent-app regression: enforce mode, parent token', () => {
     expect(hit).toBeDefined();
     expect(guard.canActivate(ctxFor(ParentPortalController, hit!.name, parent, m))).toBe(true);
   });
-  it('covers all 42 parent-portal endpoints (method+path) the app calls that exist on main', () => {
-    expect(APP_PARENT_PORTAL_CALLS).toHaveLength(42);
+  it('covers all 43 parent-portal endpoints (method+path) the app calls that exist on main', () => {
+    expect(APP_PARENT_PORTAL_CALLS).toHaveLength(43);
   });
   it('reaches POST /complaints (feedback)', () => {
     expect(guard.canActivate(ctxFor(ComplaintsController, 'createCase', parent, 'POST'))).toBe(true);
