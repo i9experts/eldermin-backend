@@ -166,6 +166,7 @@ export class ParentAuthService {
         primaryRole: 'parent',
         isActive: true,
         guardianOfStudentIds: studentIds,
+        lastLoginAt: new Date(),
       });
     } else {
       const existingIds = (user.guardianOfStudentIds || []).map(String);

@@ -29,6 +29,7 @@ import {
   Message, MessageSchema,
 } from './schemas/notification-and-message.schema';
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
+import { ParentDevice, ParentDeviceSchema } from './schemas/parent-device.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
@@ -76,6 +77,7 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
       { name: MessageThread.name, schema: MessageThreadSchema },
       { name: Message.name, schema: MessageSchema },
       { name: PhoneOtp.name, schema: PhoneOtpSchema },
+      { name: ParentDevice.name, schema: ParentDeviceSchema },
       { name: Tenant.name, schema: TenantSchema },
       // Registered as 'OrgInstitution', not Institution.name - the literal
       // class name "Institution" is already taken by the (unrelated)
