@@ -8,6 +8,7 @@ import { User, UserSchema } from '../modules/organization/schemas/user.schema';
 import { AuditLogModule } from '../common/audit-log.module';
 import { CustomRoleGuard } from './guards/custom-role.guard';
 import { RolesOrModuleManageGuard } from './guards/roles-or-module-manage.guard';
+import { CustomRolePolicyGuard } from './guards/custom-role-policy.guard';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { RolesOrModuleManageGuard } from './guards/roles-or-module-manage.guard'
     RolesService,
     CustomRoleGuard,
     RolesOrModuleManageGuard,
+    CustomRolePolicyGuard,
     // Registered here (rather than app.module.ts) so it can be constructed
     // with the Role/User models already scoped to this module - NestJS
     // recognizes APP_GUARD as a global-guard token regardless of which
@@ -31,6 +33,8 @@ import { RolesOrModuleManageGuard } from './guards/roles-or-module-manage.guard'
     { provide: APP_GUARD, useExisting: CustomRoleGuard },
     // Role-list OR live custom-role grant (see RolesOrModuleManageGuard).
     { provide: APP_GUARD, useExisting: RolesOrModuleManageGuard },
+    // Generic custom-role view/manage enforcement for the non-teaching modules (R1, CUSTOM_ROLE_GUARD_MODE=log|enforce, default log).
+    { provide: APP_GUARD, useExisting: CustomRolePolicyGuard },
   ],
   exports: [RolesService],
 })

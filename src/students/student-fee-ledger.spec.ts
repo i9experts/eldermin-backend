@@ -19,7 +19,7 @@ function makeController(financeOverrides: any = {}, serviceOverrides: any = {}) 
     recordPayment: jest.fn(async () => ({ _id: 'payment-1' })),
     ...financeOverrides,
   };
-  return { ctrl: new StudentsController(svc, finance), svc, finance };
+  return { ctrl: new StudentsController(svc, finance, { assertMayMark: async () => undefined } as any), svc, finance };
 }
 
 const reqOf = (user: any) => ({ user: { schoolSlug: 's', ...user }, headers: {} });
