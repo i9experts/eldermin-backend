@@ -38,6 +38,7 @@ import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema'
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
 import { CourseEnrollment, CourseEnrollmentDocument } from '../syllabus/schemas/course-enrollment.schema';
 import { computeLessonLock } from '../syllabus/lesson-lock.util';
+import { buildCourseVisibilityFilter } from '../syllabus/course-visibility.util';
 import { QuizAttempt, QuizAttemptDocument } from '../assessments/schemas/quiz-attempt.schema';
 import {
   computeAttendanceRate, studentDayWeight, STUDENT_NON_SCHOOL_DAY_STATUSES,
@@ -1938,26 +1939,19 @@ export class StudentsService {
     if (!student) throw new NotFoundException('Student not found');
     if (!tenantId) return { courses: [], quizzes: { attempted: 0, graded: 0, avgPercentage: null, recent: [] } };
 
-    // LMS Phase 1: same two-source match as Parent Portal's getMyCourses -
-    // 'auto_by_class' syllabi by grade/section/campus, 'manual' (elective)
-    // syllabi only via an active CourseEnrollment row, so this admin
-    // summary doesn't show (or miscount lessons from) an elective this
-    // student was never actually enrolled in.
-    const autoFilter: any = {
-      tenantId, gradeLevel: (student as any).currentGrade, publishedToStudents: true,
-      enrollmentMode: { $ne: 'manual' },
-      $or: [{ sectionName: (student as any).currentSection }, { sectionName: { $exists: false } }, { sectionName: null }],
-    };
-    if ((student as any).campusId) autoFilter.campusId = new Types.ObjectId((student as any).campusId);
-
+    // LMS Phase 1: same shared visibility rule as Parent Portal's
+    // getMyCourses - 'auto_by_class' syllabi by grade/section/campus,
+    // 'manual' (elective) syllabi only via an active CourseEnrollment row,
+    // so this admin summary doesn't show (or miscount lessons from) an
+    // elective this student was never actually enrolled in.
     const [enrolledSyllabusIds, quizAttempts] = await Promise.all([
       this.enrollmentModel
         ? this.enrollmentModel.find({ tenantId, studentId: new Types.ObjectId(id), status: 'active' }).distinct('syllabusId')
         : Promise.resolve([]),
       this.quizAttemptModel.find({ studentId: new Types.ObjectId(id), schoolSlug }).sort({ submittedAt: -1 }).limit(20).lean(),
     ]);
-    const manualFilter = { tenantId, publishedToStudents: true, enrollmentMode: 'manual', _id: { $in: enrolledSyllabusIds } };
-    const syllabi = await this.syllabusModel.find({ $or: [autoFilter, manualFilter] }).sort({ subjectName: 1 }).lean();
+    const visibilityFilter = buildCourseVisibilityFilter(tenantId, student as any, enrolledSyllabusIds);
+    const syllabi = await this.syllabusModel.find(visibilityFilter).sort({ subjectName: 1 }).lean();
 
     let courses: any[] = [];
     if (syllabi.length > 0) {

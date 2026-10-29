@@ -101,7 +101,13 @@ describe('guardian-link ownership on every route that takes a student id', () =>
   });
 
   it('every ParentPortalService / HomeTasksService method that takes a studentId checks ownership first (source scan)', () => {
-    const NOT_PARENT_METHODS = ['linkGuardianToStudents', 'unlinkGuardianFromStudent', 'createConsentRequest', 'checkFeatureSuspended'];
+    const NOT_PARENT_METHODS = [
+      'linkGuardianToStudents', 'unlinkGuardianFromStudent', 'createConsentRequest', 'checkFeatureSuspended',
+      // LMS Phase 4 forum helpers - private, always called from a public
+      // method (listCourseForumThreads etc.) that already ran
+      // assertStudentAccess before reaching either of these.
+      'assertStudentCanAccessCourse', 'studentDisplayName',
+    ];
     const files = [
       path.join(__dirname, 'parent-portal.service.ts'),
       path.join(__dirname, '..', 'home-tasks', 'home-tasks.service.ts'),

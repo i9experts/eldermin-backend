@@ -164,6 +164,20 @@ export class EnrollStudentsDto {
   @IsArray() @IsMongoId({ each: true }) studentIds: string[];
 }
 
+export class CreateForumThreadDto {
+  @IsString() title: string;
+  @IsString() body: string;
+}
+
+export class CreateForumReplyDto {
+  @IsString() body: string;
+}
+
+export class SetThreadModerationDto {
+  @IsOptional() @IsBoolean() isPinned?: boolean;
+  @IsOptional() @IsBoolean() isLocked?: boolean;
+}
+
 export class SyllabusQueryDto {
   @IsOptional() @IsString() gradeLevel?: string;
   @IsOptional() @IsString() sectionName?: string;

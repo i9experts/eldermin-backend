@@ -42,6 +42,7 @@ import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { AssessmentModule } from '../assessments/assessment.module';
 import { CertificatesModule } from '../modules/certificates/certificates.module';
+import { SyllabusModule } from '../syllabus/syllabus.module';
 import { UploadModule } from '../upload/upload.module';
 import { PdfModule } from '../pdf/pdf.module';
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
@@ -106,6 +107,7 @@ import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organi
     AuthModule,
     AssessmentModule,
     CertificatesModule,
+    SyllabusModule,
     UploadModule,
     PdfModule,
     HomeTasksModule,
