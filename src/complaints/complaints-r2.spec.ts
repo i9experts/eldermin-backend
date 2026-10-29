@@ -4,40 +4,60 @@ import { Reflector } from '@nestjs/core';
 import { Types } from 'mongoose';
 import { ComplaintsController } from './complaints.controller';
 import { ComplaintsService } from './complaints.service';
-import { RolesGuard } from '../auth/roles.guard';
+import { RolesOrModuleManageGuard } from '../roles/guards/roles-or-module-manage.guard';
+import { ROLES_OR_MODULE_KEY } from '../roles/decorators/roles-or-module-manage.decorator';
 import { ROLES_KEY, ALLOW_NON_STAFF_KEY } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
-import { SCHOOL_STAFF_ROLES } from '../auth/role-sets';
+import { COMPLAINTS_STAFF_ROLES } from '../auth/role-sets';
 
 const proto: any = ComplaintsController.prototype;
-const STAFF_HANDLERS = ['getCaseTypes', 'createCaseType', 'updateCaseType', 'getAging', 'getCases', 'getById', 'addRemark', 'reassign', 'close', 'reopen', 'runEscalationsNow'];
-const reflector = new Reflector();
-const guard = new RolesGuard(reflector);
-const passes = (handler: string, role: string): boolean => {
+const READS = ['getCaseTypes', 'getAging', 'getCases', 'getById'];
+const WRITES = ['createCaseType', 'updateCaseType', 'addRemark', 'reassign', 'close', 'reopen', 'runEscalationsNow'];
+const STAFF_HANDLERS = [...READS, ...WRITES];
+
+function guardFor(moduleAccess: any[] | null) {
+  const userModel: any = { findById: () => ({ select: () => ({ lean: async () => ({ customRoleId: moduleAccess ? 'cr1' : null }) }) }) };
+  const roleModel: any = { findById: () => ({ select: () => ({ lean: async () => (moduleAccess ? { moduleAccess } : null) }) }) };
+  return new RolesOrModuleManageGuard(new Reflector(), roleModel, userModel);
+}
+const passes = async (handler: string, role: string, moduleAccess: any[] | null = null): Promise<boolean> => {
   const ctx: any = { getHandler: () => proto[handler], getClass: () => ComplaintsController, switchToHttp: () => ({ getRequest: () => ({ user: { role, userId: 'u', schoolSlug: 's' } }) }) };
-  try { return !!guard.canActivate(ctx); } catch (e) { if (e instanceof ForbiddenException) return false; throw e; }
+  try { return !!(await guardFor(moduleAccess).canActivate(ctx)); } catch (e) { if (e instanceof ForbiddenException) return false; throw e; }
 };
 
-describe('complaints guard (R2 item 6): staff actions are staff-only, hard', () => {
-  it.each(STAFF_HANDLERS)('%s carries @Roles(SCHOOL_STAFF_ROLES) and is not opened to non-staff tokens', (h) => {
-    expect([...Reflect.getMetadata(ROLES_KEY, proto[h])].sort()).toEqual([...SCHOOL_STAFF_ROLES].sort());
+describe('complaints guard (R2.1): staff actions only for the roles the web shows the Complaints tab to, plus custom roles with the complaints grant', () => {
+  it('COMPLAINTS_STAFF_ROLES is exactly the web\'s governance:view enum roles (roles.ts:92,126,148,170)', () => {
+    expect([...COMPLAINTS_STAFF_ROLES].sort()).toEqual([UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.ADMIN, UserRole.PRINCIPAL].sort());
+  });
+  it.each(STAFF_HANDLERS)('%s: governance / complaints requirement, view for reads and manage for changes; no legacy @Roles', (h) => {
+    const meta = Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]);
+    expect(meta).toMatchObject({ moduleKey: 'governance', subModuleKey: 'complaints', allowModuleWide: true, level: READS.includes(h) ? 'view' : 'manage' });
+    expect([...meta.roles].sort()).toEqual([...COMPLAINTS_STAFF_ROLES].sort());
+    expect(Reflect.getMetadata(ROLES_KEY, proto[h])).toBeUndefined();
     expect(Reflect.getMetadata(ALLOW_NON_STAFF_KEY, proto[h])).toBeUndefined();
   });
-  it.each(STAFF_HANDLERS)('%s: parent, student and reseller tokens get 403 (RolesGuard, independent of NON_STAFF_GUARD_MODE)', (h) => {
-    for (const r of ['parent', 'student', 'reseller_admin', 'reseller_support']) expect(passes(h, r)).toBe(false);
+  it.each(STAFF_HANDLERS)('%s: super_admin, institution_owner, admin, principal pass', async (h) => {
+    for (const r of ['super_admin', 'institution_owner', 'admin', 'principal']) expect(await passes(h, r)).toBe(true);
   });
-  it.each(STAFF_HANDLERS)('%s: every school staff role keeps access, as the web\'s Governance > Complaints tab needs (super_admin, institution_owner, admin, principal and custom roles)', (h) => {
-    for (const r of ['super_admin', 'institution_owner', 'admin', 'principal', 'vice_principal', 'academic_coordinator', 'teacher', 'hr_manager']) expect(passes(h, r)).toBe(true);
+  it.each(STAFF_HANDLERS)('%s: teacher and every other role get 403 (no flag): vice principal, coordinator, hr, finance, librarian, support, parent, student, partners', async (h) => {
+    for (const r of ['teacher', 'vice_principal', 'academic_coordinator', 'hr_manager', 'finance_manager', 'librarian', 'support_staff', 'parent', 'student', 'reseller_admin', 'reseller_support']) expect(await passes(h, r)).toBe(false);
   });
-  it('the three parent routes: create (any token incl. parent) and read-own (parent/student only), all opened to NonStaffGuard', () => {
+  it('custom roles: a governance/complaints grant opens it (view = reads, manage = changes); module-wide governance counts as in the web; another sub-module or module does not; the stock Teacher role does not', async () => {
+    const view = [{ moduleKey: 'governance', subModuleKey: 'complaints', level: 'view' }];
+    const manage = [{ moduleKey: 'governance', subModuleKey: 'complaints', level: 'manage' }];
+    const wideView = [{ moduleKey: 'governance', level: 'view' }];
+    for (const h of READS) { for (const acc of [view, manage, wideView]) expect(await passes(h, 'teacher', acc)).toBe(true); }
+    for (const h of WRITES) { expect(await passes(h, 'teacher', view)).toBe(false); expect(await passes(h, 'teacher', wideView)).toBe(false); expect(await passes(h, 'teacher', manage)).toBe(true); expect(await passes(h, 'hr_manager', manage)).toBe(true); }
+    for (const h of STAFF_HANDLERS) {
+      expect(await passes(h, 'teacher', [{ moduleKey: 'governance', subModuleKey: 'audit', level: 'manage' }])).toBe(false);
+      expect(await passes(h, 'teacher', [{ moduleKey: 'hr', level: 'manage' }])).toBe(false);
+      expect(await passes(h, 'teacher', [{ moduleKey: 'teaching', level: 'manage' }, { moduleKey: 'behaviour', level: 'manage' }, { moduleKey: 'students', level: 'view' }])).toBe(false);
+    }
+  });
+  it('the three parent routes: create (any token incl. parent) and read-own (parent/student only), all opened to NonStaffGuard, unchanged', async () => {
     for (const h of ['createCase', 'getMine', 'getMineById']) expect(Reflect.getMetadata(ALLOW_NON_STAFF_KEY, proto[h])).toBe(true);
     expect(Reflect.getMetadata(ROLES_KEY, proto.createCase)).toBeUndefined();
-    for (const h of ['getMine', 'getMineById']) {
-      expect([...Reflect.getMetadata(ROLES_KEY, proto[h])].sort()).toEqual([UserRole.PARENT, UserRole.STUDENT].sort());
-      expect(passes(h, 'parent')).toBe(true);
-      expect(passes(h, 'student')).toBe(true);
-      expect(passes(h, 'teacher')).toBe(false);          // staff read ANY case through the staff routes, not 'mine'
-    }
+    for (const h of ['getMine', 'getMineById']) expect([...Reflect.getMetadata(ROLES_KEY, proto[h])].sort()).toEqual([UserRole.PARENT, UserRole.STUDENT].sort());
   });
   it('route order: "mine" is declared before ":id" so it is never read as a case id', () => {
     const names = Object.getOwnPropertyNames(proto);

@@ -136,6 +136,7 @@ export class Behaviour {
       'late_coming', 'uniform_violation', 'misconduct',
       'bullying', 'cheating', 'property_damage', 'absenteeism', // negative
       'counselling', 'parent_meeting', 'warning',         // neutral
+      'general',                                          // default when a caller (the web Student Profile) sends no category
     ],
     required: true,
   })
