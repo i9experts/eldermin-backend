@@ -72,6 +72,15 @@ describe('parent creates only what a parent may set', () => {
     expect(String(c.raisedByUserId)).toBe(String(ME));
     expect(c.slaHours).toBe(48);
   });
+  it('the parent app\'s own feedback body (priority medium, caseGroup Feedback, slaHours 168) is accepted unchanged; the SLA can be longer than the default but never shorter', async () => {
+    const { s, created } = svc();
+    await s.createCase('s', { title: 'Feedback', description: 'Great app', raisedByName: 'Pat', priority: 'medium', caseGroup: 'Feedback', caseType: 'General Feedback', raisedByType: 'parent', slaHours: 168 }, parent);
+    expect(created[0]).toMatchObject({ caseGroup: 'Feedback', caseType: 'General Feedback', slaHours: 168, priority: 'medium', raisedByType: 'parent' });
+    await s.createCase('s', { title: 't', description: 'd', slaHours: 100000 }, parent);
+    expect(created[1].slaHours).toBe(720);
+    await s.createCase('s', { title: 't', description: 'd', slaHours: 0 }, parent);
+    expect(created[2].slaHours).toBe(48);
+  });
   it('a child must be one of the parent\'s OWN linked children (403 otherwise); a malformed id is 400; a title and description are required', async () => {
     const { s, created } = svc();
     await s.createCase('s', { title: 't', description: 'd', studentId: String(CHILD) }, parent);

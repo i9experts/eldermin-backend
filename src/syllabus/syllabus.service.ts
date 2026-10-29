@@ -381,6 +381,8 @@ export class SyllabusService {
     let teacherFilter: any;
     if (isTeacherCaller(requestingUser)) teacherFilter = teacherIdsMatch(await this.teacherIdentity(requestingUser!));
     else {
+      // no teacher chosen (the web only sends one once a teacher is picked): nothing to plan, as before (an absent id used to match nobody)
+      if (teacherId === undefined || teacherId === null || teacherId === '') return [];
       if (!Types.ObjectId.isValid(String(teacherId))) throw new BadRequestException('teacherId must be a valid id');
       teacherFilter = new Types.ObjectId(teacherId);
     }

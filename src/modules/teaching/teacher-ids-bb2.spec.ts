@@ -90,5 +90,9 @@ describe('BB2: syllabus list and weekly planner', () => {
     await s.getTeacherWeeklyPlanner('t', 's', String(target), admin);
     expect(String((s as any).syllabusModel.find.mock.calls[0][0].teacherId)).toBe(String(target));
     await expect(s.getTeacherWeeklyPlanner('t', 's', 'nope', admin)).rejects.toBeInstanceOf(BadRequestException);
+    // no teacher chosen: an empty plan (200), as before; nothing is queried
+    const before = (s as any).syllabusModel.find.mock.calls.length;
+    expect(await s.getTeacherWeeklyPlanner('t', 's', undefined as any, admin)).toEqual([]);
+    expect((s as any).syllabusModel.find.mock.calls.length).toBe(before);
   });
 });

@@ -62,6 +62,8 @@ export class ComplaintsService {
       raisedByType: (user as any).role === 'student' ? 'student' : 'parent',
       raisedByName: (user as any).name || 'Parent',
       priority: 'medium',
+      // the parent app asks for a week (168 h); a parent can lengthen the default SLA but never shorten it below 48 h (nor push it past 30 days)
+      slaHours: Math.min(720, Math.max(48, Number(data?.slaHours) || 48)),
     };
     if (data?.studentId) {
       if (!Types.ObjectId.isValid(String(data.studentId))) throw new BadRequestException('Invalid student id');
