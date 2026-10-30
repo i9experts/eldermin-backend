@@ -48,6 +48,7 @@ import { PdfService } from '../pdf/pdf.service';
 import { ParentAccessControlService } from '../parent-access-control/parent-access-control.service';
 import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
 import { GamificationService } from '../gamification/gamification.service';
+import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
 export const MAX_DEVICES_PER_PARENT = 10;
@@ -90,6 +91,7 @@ export class ParentPortalService {
     private parentAccess: ParentAccessControlService,
     private forumService: ForumService,
     private gamificationService: GamificationService,
+    private qaidaNazraExtras: QaidaNazraExtrasService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -515,6 +517,30 @@ export class ParentPortalService {
     return this.gamificationService.getLeaderboard(schoolSlug, {
       grade: (student as any)?.currentGrade, section: (student as any)?.currentSection,
     });
+  }
+
+  // ── Qaida/Nazra home recitation log (parent-reported, reference only) ──
+  // This is purely a reference log for the school's Qaida/Nazra teacher -
+  // a parent logging a home-taught lesson here never touches the official
+  // takhtis/paras progress a teacher records (see QaidaNazraExtrasService).
+  async getMyHomeRecitationLog(studentId: string, requestingUser: ScopedUser, schoolSlug: string, program?: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_home_log');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_home_log', reason: access.reason || null };
+    return this.qaidaNazraExtras.getHomeLog(studentId, schoolSlug, program);
+  }
+
+  async logMyHomeRecitationEntry(studentId: string, requestingUser: ScopedUser, schoolSlug: string, guardianName: string, dto: any) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_home_log');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_home_log', reason: access.reason || null };
+    if (!requestingUser.userId) throw new BadRequestException('No guardian account on this request');
+    return this.qaidaNazraExtras.logHomeEntry(studentId, schoolSlug, dto, requestingUser.userId, guardianName);
+  }
+
+  async deleteMyHomeRecitationEntry(entryId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    if (!requestingUser.userId) throw new BadRequestException('No guardian account on this request');
+    return this.qaidaNazraExtras.deleteHomeEntry(entryId, schoolSlug, requestingUser.userId);
   }
 
   async markLessonProgress(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string }) {

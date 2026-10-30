@@ -108,8 +108,18 @@ export const QAIDA_TAKHTIS: QaidaTakhtiDef[] = [
 
 export const QAIDA_TAKHTI_COUNT = QAIDA_TAKHTIS.length;
 
-export type QaidaTakhtiStatus = 'not_started' | 'in_progress' | 'mastered' | 'needs_revision';
+// 'not_tracked' marks a board a student was never taught/recorded AT THIS
+// SCHOOL - a child who joined partway through the Qaida sequence (transferred
+// in, or placed directly onto a later board after an entry assessment) with
+// no earlier written record here. It is deliberately distinct from
+// 'not_started': a 'not_started' board is one the student hasn't reached
+// yet and genuinely needs to go through; a 'not_tracked' one is excluded
+// from mastery%/needs-revision math and from the "where is this student
+// now" pointer, so a late joiner's report doesn't read as "behind" on
+// boards the school was never responsible for.
+export type QaidaTakhtiStatus = 'not_started' | 'in_progress' | 'mastered' | 'needs_revision' | 'not_tracked';
 export type QaidaOverallStatus = 'not_started' | 'in_progress' | 'completed';
+export type QaidaRecordType = 'full_history' | 'joined_later';
 
 // Common, specific error tags a teacher can flag on an attempt - drawn
 // directly from the cautions the Qaida itself prints (e.g. the Takhti 10
@@ -166,7 +176,7 @@ const TakhtiAttemptSchema = SchemaFactory.createForClass(TakhtiAttempt);
 class TakhtiRecord {
   @Prop({ required: true }) takhtiNumber: number;
   @Prop({
-    enum: ['not_started', 'in_progress', 'mastered', 'needs_revision'],
+    enum: ['not_started', 'in_progress', 'mastered', 'needs_revision', 'not_tracked'],
     default: 'not_started',
   })
   status: QaidaTakhtiStatus;
@@ -227,6 +237,16 @@ export class QaidaProgress {
   @Prop({ type: Types.ObjectId, ref: 'User' }) currentTeacherId?: Types.ObjectId;
 
   @Prop() overallRemarks?: string;
+
+  // 'joined_later': this student came in without a full Qaida history at
+  // this school (transferred, or placed directly on a later board after an
+  // entry assessment) - the boards before wherever they were placed are
+  // seeded 'not_tracked' rather than 'not_started' at init time. See
+  // QaidaTakhtiStatus for why that distinction matters to the reports.
+  @Prop({ enum: ['full_history', 'joined_later'], default: 'full_history' }) recordType: QaidaRecordType;
+  // Free text explaining the gap, e.g. "Transferred from Jamia X, Takhti
+  // 1-9 placement per entry assessment, no written record provided."
+  @Prop() priorRecordNote?: string;
 
   @Prop({ required: true, index: true }) schoolSlug: string;
   @Prop({ required: true }) academicYear: string;

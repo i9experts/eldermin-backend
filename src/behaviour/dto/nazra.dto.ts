@@ -14,6 +14,11 @@ export class InitNazraProgressDto {
   @IsString() grade: string;
   @IsOptional() @IsString() section?: string;
   @IsOptional() @IsMongoId() campusId?: string;
+
+  // Mirrors InitQaidaProgressDto - see QaidaProgress.recordType.
+  @IsOptional() @IsIn(['full_history', 'joined_later']) recordType?: string;
+  @IsOptional() @IsString() @MaxLength(500) priorRecordNote?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) startAtPara?: number;
 }
 
 export class DiarySabaqDto {
@@ -56,6 +61,6 @@ export class RecordNazraDiaryDto {
 }
 
 export class UpdateParaStatusDto {
-  @IsIn(['not_started', 'in_progress', 'completed', 'needs_revision'])
+  @IsIn(['not_started', 'in_progress', 'completed', 'needs_revision', 'not_tracked'])
   status: string;
 }

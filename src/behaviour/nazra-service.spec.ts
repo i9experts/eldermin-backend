@@ -27,12 +27,18 @@ function makeProgress(overrides: Partial<any> = {}) {
   };
 }
 
-function makeService(progress: any) {
+function makeService(progress: any, reverseOrder = false) {
   const progressModel: any = {
     findOne: jest.fn().mockReturnValue(Promise.resolve(progress)),
+    updateOne: jest.fn().mockResolvedValue(undefined),
   };
   const studentModel: any = {};
-  const service = new NazraService(progressModel, studentModel);
+  // Standard (non-reverse) Mushaf order by default - see
+  // qaida-nazra-extras.schema.ts's QaidaNazraSettings.nazraReverseOrder.
+  const settingsModel: any = {
+    findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(reverseOrder ? { nazraReverseOrder: true } : null) }) }),
+  };
+  const service = new NazraService(progressModel, studentModel, settingsModel);
   return service;
 }
 
@@ -132,5 +138,76 @@ describe('NAZRA_PARAS', () => {
   it('has exactly 30 paras, numbered 1-30', () => {
     expect(NAZRA_PARA_COUNT).toBe(30);
     expect(NAZRA_PARAS.map((p) => p.number)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+  });
+});
+
+describe('NazraService reverse Mushaf order (Para 30 -> 1)', () => {
+  function reverseProgress() {
+    return makeProgress({
+      paras: NAZRA_PARAS.map((p) => ({
+        paraNumber: p.number,
+        status: p.number === 30 ? 'in_progress' : 'not_started',
+        startedDate: p.number === 30 ? new Date() : undefined,
+        revisionCount: 0,
+        attempts: [],
+      })),
+      currentPara: 30,
+    });
+  }
+
+  it('rejects a Sabaq on Para 28 before Para 29 (the "previous" one in reverse direction) has started', async () => {
+    const progress = reverseProgress();
+    const service = makeService(progress, true);
+    await expect(
+      service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', { sabaq: { paraNumber: 28, rating: 'proficient' } } as any, 'Teacher'),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('advances the pointer from 30 down to 29 on a passing Sabaq', async () => {
+    const progress = reverseProgress();
+    const service = makeService(progress, true);
+    await service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', { sabaq: { paraNumber: 30, rating: 'mastered' } } as any, 'Teacher');
+    expect(progress.paras.find((p: any) => p.paraNumber === 30)?.status).toBe('completed');
+    expect(progress.currentPara).toBe(29);
+  });
+
+  it('seeds Para 30 (not Para 1) in_progress at init for a reverse-order school', async () => {
+    const progress = makeProgress();
+    const service = makeService(progress, true);
+    await service.getOrInitProgress('507f1f77bcf86cd799439011', 'demo-school', '2025-26', {
+      studentName: 'New Student', grade: 'Grade 1',
+    } as any);
+    const setOnInsert = (service as any).progressModel.updateOne.mock.calls[0][1].$setOnInsert;
+    expect(setOnInsert.currentPara).toBe(30);
+    expect(setOnInsert.paras.find((p: any) => p.paraNumber === 30).status).toBe('in_progress');
+    expect(setOnInsert.paras.find((p: any) => p.paraNumber === 1).status).toBe('not_started');
+  });
+});
+
+describe('NazraService not_tracked (joined-later) handling', () => {
+  it('skips not_tracked Paras when recomputing the pointer', async () => {
+    const progress = makeProgress({
+      paras: NAZRA_PARAS.map((p) => ({
+        paraNumber: p.number,
+        status: p.number <= 10 ? 'not_tracked' : p.number === 11 ? 'in_progress' : 'not_started',
+        revisionCount: 0,
+        attempts: [],
+      })),
+    });
+    const service = makeService(progress);
+    await service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', { sabaq: { paraNumber: 11, rating: 'proficient' } } as any, 'Teacher');
+    expect(progress.currentPara).toBe(12);
+  });
+
+  it('seeds a joined-later student with earlier Paras not_tracked', async () => {
+    const progress = makeProgress();
+    const service = makeService(progress);
+    await service.getOrInitProgress('507f1f77bcf86cd799439011', 'demo-school', '2025-26', {
+      studentName: 'Late Joiner', grade: 'Grade 6', recordType: 'joined_later', startAtPara: 15,
+    } as any);
+    const setOnInsert = (service as any).progressModel.updateOne.mock.calls[0][1].$setOnInsert;
+    expect(setOnInsert.recordType).toBe('joined_later');
+    expect(setOnInsert.paras.filter((p: any) => p.status === 'not_tracked')).toHaveLength(14);
+    expect(setOnInsert.paras.find((p: any) => p.paraNumber === 15).status).toBe('in_progress');
   });
 });

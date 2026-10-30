@@ -57,6 +57,7 @@ import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from '../ece/schemas/portf
 import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { GamificationModule } from '../gamification/gamification.module';
+import { BehaviourModule } from '../behaviour/behaviour.module';
 
 @Module({
   imports: [
@@ -112,6 +113,7 @@ import { GamificationModule } from '../gamification/gamification.module';
     UploadModule,
     PdfModule,
     GamificationModule,
+    BehaviourModule,
     HomeTasksModule,
     ParentAccessControlModule,
   ],

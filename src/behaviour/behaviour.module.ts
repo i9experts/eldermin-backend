@@ -6,6 +6,8 @@ import { QaidaController } from './qaida.controller';
 import { QaidaService } from './qaida.service';
 import { NazraController } from './nazra.controller';
 import { NazraService } from './nazra.service';
+import { QaidaNazraExtrasController } from './qaida-nazra-extras.controller';
+import { QaidaNazraExtrasService } from './qaida-nazra-extras.service';
 import {
   BehaviourRecord, BehaviourRecordSchema,
   TarbiyahAssessment, TarbiyahAssessmentSchema,
@@ -18,6 +20,11 @@ import {
 } from './schemas/character-program-settings.schema';
 import { QaidaProgress, QaidaProgressSchema } from './schemas/qaida-progress.schema';
 import { NazraProgress, NazraProgressSchema } from './schemas/nazra-progress.schema';
+import {
+  QaidaNazraSettings, QaidaNazraSettingsSchema,
+  InvigilatorAssessment, InvigilatorAssessmentSchema,
+  HomeRecitationLog, HomeRecitationLogSchema,
+} from './schemas/qaida-nazra-extras.schema';
 import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
@@ -37,6 +44,9 @@ import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
       { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },
       { name: QaidaProgress.name, schema: QaidaProgressSchema },
       { name: NazraProgress.name, schema: NazraProgressSchema },
+      { name: QaidaNazraSettings.name, schema: QaidaNazraSettingsSchema },
+      { name: InvigilatorAssessment.name, schema: InvigilatorAssessmentSchema },
+      { name: HomeRecitationLog.name, schema: HomeRecitationLogSchema },
       { name: Student.name, schema: StudentSchema },
       // BehaviourAccessGuard (custom-role lookup) + teacher class scoping.
       { name: Staff.name, schema: StaffSchema },
@@ -45,8 +55,8 @@ import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
       { name: User.name, schema: UserSchema },
     ]),
   ],
-  controllers: [BehaviourController, QaidaController, NazraController],
-  providers: [BehaviourService, QaidaService, NazraService, BehaviourAccessGuard, BehaviourStaffOnlyGuard],
-  exports: [BehaviourService, QaidaService, NazraService],
+  controllers: [BehaviourController, QaidaController, NazraController, QaidaNazraExtrasController],
+  providers: [BehaviourService, QaidaService, NazraService, QaidaNazraExtrasService, BehaviourAccessGuard, BehaviourStaffOnlyGuard],
+  exports: [BehaviourService, QaidaService, NazraService, QaidaNazraExtrasService],
 })
 export class BehaviourModule {}
