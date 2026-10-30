@@ -9,6 +9,7 @@ import { Model, Types } from 'mongoose';
 import {
   NazraProgress, NazraProgressDocument, NAZRA_PARAS, NAZRA_PARA_COUNT,
 } from './schemas/nazra-progress.schema';
+import { QaidaNazraSettings, QaidaNazraSettingsDocument } from './schemas/qaida-nazra-extras.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { InitNazraProgressDto, RecordNazraDiaryDto } from './dto/nazra.dto';
 import { assertValidObjectId } from '../common/utils/object-id.util';
@@ -25,10 +26,19 @@ export class NazraService {
   constructor(
     @InjectModel(NazraProgress.name) private progressModel: Model<NazraProgressDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(QaidaNazraSettings.name) private settingsModel: Model<QaidaNazraSettingsDocument>,
   ) {}
 
   getParas() {
     return { paras: NAZRA_PARAS, total: NAZRA_PARA_COUNT };
+  }
+
+  // Whether this school teaches Nazra starting from Para 30 backward to
+  // Para 1 (the common "shorter surahs first" convention) instead of the
+  // standard Mushaf order - see QaidaNazraSettings.nazraReverseOrder.
+  private async isReverseOrder(schoolSlug: string): Promise<boolean> {
+    const settings = await this.settingsModel.findOne({ schoolSlug }).select('nazraReverseOrder').lean();
+    return !!settings?.nazraReverseOrder;
   }
 
   async getOrInitProgress(
@@ -40,23 +50,60 @@ export class NazraService {
   ) {
     assertValidObjectId(studentId, 'student');
     const studentObjectId = new Types.ObjectId(studentId);
+    const reverse = await this.isReverseOrder(schoolSlug);
+    const startPara = reverse ? NAZRA_PARA_COUNT : 1;
+
+    const setOnInsert: any = {
+      studentId: studentObjectId,
+      schoolSlug,
+      academicYear,
+      studentName: init.studentName,
+      grade: init.grade,
+      section: init.section,
+      campusId: requestingUser?.campusId
+        ? new Types.ObjectId(requestingUser.campusId)
+        : (init.campusId ? new Types.ObjectId(init.campusId) : null),
+      startDate: new Date(),
+    };
+
+    // A reverse-order school needs Para 30 (not Para 1) seeded in_progress
+    // at creation, since the schema's own default always starts at Para 1 -
+    // that default is only correct for the standard-order case.
+    if (reverse) {
+      setOnInsert.paras = NAZRA_PARAS.map((p) => ({
+        paraNumber: p.number,
+        status: p.number === startPara ? 'in_progress' : 'not_started',
+        startedDate: p.number === startPara ? new Date() : undefined,
+        revisionCount: 0,
+        attempts: [],
+      }));
+      setOnInsert.currentPara = startPara;
+    }
+
+    // A student who joined without a full Nazra history at this school:
+    // place them at their real starting Para instead of Para 1 (or Para 30
+    // in reverse order) - everything already "behind" them in the teaching
+    // direction is marked 'not_tracked', not 'not_started'. See
+    // QaidaProgress.recordType for the equivalent Qaida behavior.
+    if (init.recordType === 'joined_later' && init.startAtPara) {
+      setOnInsert.recordType = 'joined_later';
+      setOnInsert.priorRecordNote = init.priorRecordNote;
+      setOnInsert.paras = NAZRA_PARAS.map((p) => {
+        const isBehind = reverse ? p.number > init.startAtPara! : p.number < init.startAtPara!;
+        return {
+          paraNumber: p.number,
+          status: isBehind ? 'not_tracked' : p.number === init.startAtPara ? 'in_progress' : 'not_started',
+          startedDate: p.number === init.startAtPara ? new Date() : undefined,
+          revisionCount: 0,
+          attempts: [],
+        };
+      });
+      setOnInsert.currentPara = init.startAtPara;
+    }
 
     await this.progressModel.updateOne(
       { studentId: studentObjectId, schoolSlug },
-      {
-        $setOnInsert: {
-          studentId: studentObjectId,
-          schoolSlug,
-          academicYear,
-          studentName: init.studentName,
-          grade: init.grade,
-          section: init.section,
-          campusId: requestingUser?.campusId
-            ? new Types.ObjectId(requestingUser.campusId)
-            : (init.campusId ? new Types.ObjectId(init.campusId) : null),
-          startDate: new Date(),
-        },
-      },
+      { $setOnInsert: setOnInsert },
       { upsert: true },
     );
 
@@ -73,16 +120,21 @@ export class NazraService {
   }
 
   // Same single-source-of-truth pointer logic as Qaida's recomputePointer,
-  // over the 30-Para sequence instead of the 16-Takhti one.
-  private recomputePointer(progress: NazraProgressDocument) {
-    const firstUnfinished = progress.paras.find((p) => p.status !== 'completed');
+  // over the 30-Para sequence instead of the 16-Takhti one. Walks the
+  // sequence in whichever direction this school teaches it (reverse =
+  // Para 30 -> 1), and skips 'not_tracked' Paras (joined-later students)
+  // the same way Qaida's version skips them.
+  private recomputePointer(progress: NazraProgressDocument, reverse: boolean) {
+    const ordered = reverse ? [...progress.paras].reverse() : progress.paras;
+    const firstUnfinished = ordered.find((p) => p.status !== 'completed' && p.status !== 'not_tracked');
+    const startPara = reverse ? NAZRA_PARA_COUNT : 1;
     if (!firstUnfinished) {
-      progress.currentPara = NAZRA_PARA_COUNT;
+      progress.currentPara = reverse ? 1 : NAZRA_PARA_COUNT;
       progress.overallStatus = 'completed';
       if (!progress.completionDate) progress.completionDate = new Date();
     } else {
       progress.currentPara = firstUnfinished.paraNumber;
-      progress.overallStatus = firstUnfinished.paraNumber === 1 && firstUnfinished.status === 'not_started'
+      progress.overallStatus = firstUnfinished.paraNumber === startPara && firstUnfinished.status === 'not_started'
         ? 'not_started' : 'in_progress';
       progress.completionDate = undefined;
     }
@@ -100,18 +152,24 @@ export class NazraService {
     assessedById?: string,
   ) {
     const progress = await this.getProgress(studentId, schoolSlug);
+    const reverse = await this.isReverseOrder(schoolSlug);
     const { sabaq, sabqi, manzil } = dto;
 
     const sabaqRecord = progress.paras.find((p) => p.paraNumber === sabaq.paraNumber);
     if (!sabaqRecord) throw new BadRequestException(`Invalid para number: ${sabaq.paraNumber}`);
 
-    // A Para's Sabaq can't start before the one before it has at least
-    // been started - same sequential-progression guarantee as Qaida.
-    if (sabaq.paraNumber > 1) {
-      const previous = progress.paras.find((p) => p.paraNumber === sabaq.paraNumber - 1);
+    // A Para's Sabaq can't start before the one before it (in whichever
+    // direction this school teaches - see isReverseOrder) has at least
+    // been started - same sequential-progression guarantee Qaida used to
+    // have, kept here since Nazra wasn't asked to go out-of-order too. A
+    // 'not_tracked' previous Para (joined-later student) never blocks -
+    // there's nothing to "start" there.
+    const previousNumber = reverse ? sabaq.paraNumber + 1 : sabaq.paraNumber - 1;
+    if (previousNumber >= 1 && previousNumber <= NAZRA_PARA_COUNT) {
+      const previous = progress.paras.find((p) => p.paraNumber === previousNumber);
       if (previous && previous.status === 'not_started') {
         throw new BadRequestException(
-          `Para ${sabaq.paraNumber - 1} (${NAZRA_PARAS[sabaq.paraNumber - 2].titleEn}) hasn't been started yet`,
+          `Para ${previousNumber} (${NAZRA_PARAS[previousNumber - 1].titleEn}) hasn't been started yet`,
         );
       }
     }
@@ -175,13 +233,14 @@ export class NazraService {
       manzil: manzil ? { ...manzil, errorsNoted: manzil.errorsNoted || [] } : undefined,
     } as any);
 
-    this.recomputePointer(progress);
+    this.recomputePointer(progress, reverse);
     await progress.save();
     return progress;
   }
 
   async updateParaStatus(studentId: string, schoolSlug: string, paraNumber: number, status: string) {
     const progress = await this.getProgress(studentId, schoolSlug);
+    const reverse = await this.isReverseOrder(schoolSlug);
     const record = progress.paras.find((p) => p.paraNumber === paraNumber);
     if (!record) throw new BadRequestException(`Invalid para number: ${paraNumber}`);
 
@@ -191,7 +250,7 @@ export class NazraService {
     if (status === 'in_progress' && !record.startedDate) record.startedDate = new Date();
     if (status === 'needs_revision' && wasCompleted) record.revisionCount += 1;
 
-    this.recomputePointer(progress);
+    this.recomputePointer(progress, reverse);
     await progress.save();
     return progress;
   }
@@ -234,6 +293,11 @@ export class NazraService {
       const completedCount = progress
         ? progress.paras.filter((p: any) => p.status === 'completed').length
         : 0;
+      // Mirrors Qaida's trackedTakhtis - excludes 'not_tracked' Paras
+      // (joined-later students) from the completion % denominator.
+      const trackedParas = progress
+        ? progress.paras.filter((p: any) => p.status !== 'not_tracked').length
+        : NAZRA_PARA_COUNT;
       const lastEntry = progress?.diaryEntries?.length
         ? progress.diaryEntries[progress.diaryEntries.length - 1]
         : null;
@@ -246,9 +310,11 @@ export class NazraService {
         hasProgress: !!progress,
         currentPara: progress?.currentPara ?? 1,
         overallStatus: progress?.overallStatus ?? 'not_started',
+        recordType: progress?.recordType ?? 'full_history',
         completedCount,
         totalParas: NAZRA_PARA_COUNT,
-        completionPct: Math.round((completedCount / NAZRA_PARA_COUNT) * 100),
+        trackedParas,
+        completionPct: trackedParas ? Math.round((completedCount / trackedParas) * 100) : 0,
         needsRevisionCount: progress
           ? progress.paras.filter((p: any) => p.status === 'needs_revision').length
           : 0,
@@ -317,6 +383,7 @@ export class NazraService {
     });
 
     const completedCount = paras.filter((p) => p.status === 'completed').length;
+    const trackedParas = paras.filter((p) => p.status !== 'not_tracked').length;
 
     // Chronological diary log for the report - every Sabaq/Sabqi/Manzil
     // entry ever recorded, the real "daily diary" the program produces.
@@ -358,9 +425,12 @@ export class NazraService {
       section: progress.section,
       currentPara: progress.currentPara,
       overallStatus: progress.overallStatus,
+      recordType: progress.recordType,
+      priorRecordNote: progress.priorRecordNote,
       completedCount,
       totalParas: NAZRA_PARA_COUNT,
-      completionPct: Math.round((completedCount / NAZRA_PARA_COUNT) * 100),
+      trackedParas,
+      completionPct: trackedParas ? Math.round((completedCount / trackedParas) * 100) : 0,
       startDate: progress.startDate,
       completionDate: progress.completionDate,
       currentTeacher: progress.currentTeacher,

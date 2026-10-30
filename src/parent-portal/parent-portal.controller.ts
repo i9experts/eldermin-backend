@@ -272,6 +272,28 @@ export class ParentPortalController {
     return this.service.getMyClassLeaderboard(studentId, requestingUser, schoolSlug);
   }
 
+  // ── Qaida/Nazra home recitation log (reference only) ──────────
+  @Get('students/:studentId/qaida-nazra/home-log')
+  async getMyHomeRecitationLog(
+    @Param('studentId') studentId: string, @Query('program') program: string | undefined, @Request() req: any,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyHomeRecitationLog(studentId, requestingUser, schoolSlug, program);
+  }
+
+  @Post('students/:studentId/qaida-nazra/home-log')
+  @HttpCode(HttpStatus.CREATED)
+  async logMyHomeRecitationEntry(@Param('studentId') studentId: string, @Body() dto: any, @Request() req: any) {
+    const { requestingUser, schoolSlug, name } = this.ctx(req);
+    return this.service.logMyHomeRecitationEntry(studentId, requestingUser, schoolSlug, name, dto);
+  }
+
+  @Delete('students/:studentId/qaida-nazra/home-log/:entryId')
+  async deleteMyHomeRecitationEntry(@Param('entryId') entryId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.deleteMyHomeRecitationEntry(entryId, requestingUser, schoolSlug);
+  }
+
   @Post('students/:studentId/lessons/progress')
   @HttpCode(HttpStatus.OK)
   async markLessonProgress(

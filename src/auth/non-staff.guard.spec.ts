@@ -304,6 +304,7 @@ const APP_PARENT_PORTAL_CALLS = [
   'POST students/:id/courses/:a/forum/threads', 'POST students/:id/courses/:a/forum/threads/:b/replies',
   'DELETE students/:id/forum/threads/:a', 'DELETE students/:id/forum/replies/:a',
   'GET students/:id/gamification/summary', 'GET students/:id/gamification/leaderboard',
+  'GET students/:id/qaida-nazra/home-log', 'POST students/:id/qaida-nazra/home-log', 'DELETE students/:id/qaida-nazra/home-log/:a',
   'GET students/:id/quizzes', 'POST students/:id/quizzes/start', 'POST students/:id/quizzes/:a/submit',
   'GET students/:id/class-diary', 'GET students/:id/class-diary/:d/pdf', 'GET students/:id/learning-resources',
   'GET students/:id/results', 'GET students/:id/dues', 'GET students/:id/behaviour', 'GET students/:id/timetable',
@@ -354,8 +355,8 @@ describe('Parent-app regression: enforce mode, parent token', () => {
     expect(hit).toBeDefined();
     expect(guard.canActivate(ctxFor(ParentPortalController, hit!.name, parent, m))).toBe(true);
   });
-  it('covers all 51 parent-portal endpoints (method+path) the app calls that exist on main', () => {
-    expect(APP_PARENT_PORTAL_CALLS).toHaveLength(51);
+  it('covers all 54 parent-portal endpoints (method+path) the app calls that exist on main', () => {
+    expect(APP_PARENT_PORTAL_CALLS).toHaveLength(54);
   });
   it('reaches POST /complaints (feedback)', () => {
     expect(guard.canActivate(ctxFor(ComplaintsController, 'createCase', parent, 'POST'))).toBe(true);

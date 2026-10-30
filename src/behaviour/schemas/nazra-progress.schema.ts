@@ -68,8 +68,13 @@ export const NAZRA_PARAS: NazraParaDef[] = [
 
 export const NAZRA_PARA_COUNT = NAZRA_PARAS.length;
 
-export type NazraParaStatus = 'not_started' | 'in_progress' | 'completed' | 'needs_revision';
+// 'not_tracked' mirrors Qaida's QaidaTakhtiStatus - a Para this student was
+// never taught/recorded AT THIS SCHOOL (joined later / placed directly onto
+// a later Para after an entry assessment), excluded from completion%/
+// needs-revision math and from the "where is this student now" pointer.
+export type NazraParaStatus = 'not_started' | 'in_progress' | 'completed' | 'needs_revision' | 'not_tracked';
 export type NazraOverallStatus = 'not_started' | 'in_progress' | 'completed';
+export type NazraRecordType = 'full_history' | 'joined_later';
 
 // Common, specific tajweed/fluency error tags - the globally-taught Qur'an
 // recitation rules, distinct from Qaida's makhraj-primer error set since a
@@ -115,7 +120,7 @@ const SabaqAttemptSchema = SchemaFactory.createForClass(SabaqAttempt);
 class ParaRecord {
   @Prop({ required: true }) paraNumber: number;
   @Prop({
-    enum: ['not_started', 'in_progress', 'completed', 'needs_revision'],
+    enum: ['not_started', 'in_progress', 'completed', 'needs_revision', 'not_tracked'],
     default: 'not_started',
   })
   status: NazraParaStatus;
@@ -218,6 +223,10 @@ export class NazraProgress {
   @Prop({ type: Types.ObjectId, ref: 'User' }) currentTeacherId?: Types.ObjectId;
 
   @Prop() overallRemarks?: string;
+
+  // Mirrors QaidaProgress.recordType/priorRecordNote - see QaidaProgress.
+  @Prop({ enum: ['full_history', 'joined_later'], default: 'full_history' }) recordType: NazraRecordType;
+  @Prop() priorRecordNote?: string;
 
   // The full daily diary log - every Sabaq/Sabqi/Manzil entry ever recorded,
   // oldest first, the single real record of "what did this student read and
