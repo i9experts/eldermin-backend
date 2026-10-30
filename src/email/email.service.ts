@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import {
-  SESClient, SendEmailCommand, SendRawEmailCommand,
-} from '@aws-sdk/client-ses';
+import * as nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 
 export interface EmailOptions {
   to: string | string[];
@@ -19,103 +18,74 @@ export interface EmailAttachment {
 
 @Injectable()
 export class EmailService {
-  private ses: SESClient;
+  private transporter: Transporter;
   private fromEmail: string;
   private logger = new Logger('EmailService');
 
   constructor() {
-    this.ses = new SESClient({
-      region: process.env.AWS_REGION || 'ap-south-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+    // Hostinger SMTP (replaces AWS SES — SES sending was being blocked by
+    // AWS's account-level sending policy for both Eldermin's own mail and
+    // mail sent on behalf of SaaS clients from the super-admin area).
+    // Hostinger's usual ports: 465 with SMTP_SECURE=true, or 587 with false.
+    this.transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.hostinger.com',
+      port: Number(process.env.SMTP_PORT) || 465,
+      secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : true,
+      auth: {
+        user: process.env.SMTP_USER || '',
+        pass: process.env.SMTP_PASS || '',
       },
     });
-    this.fromEmail = process.env.SES_FROM_EMAIL || 'noreply@eldermin.com';
+    this.fromEmail = process.env.SMTP_FROM_EMAIL || 'noreply@eldermin.com';
   }
 
   async sendEmail(options: EmailOptions): Promise<{ sent: boolean; messageId?: string; error?: string }> {
     const toList = Array.isArray(options.to) ? options.to : [options.to];
 
     try {
-      const command = new SendEmailCommand({
-        Source: `Eldermin ERP <${this.fromEmail}>`,
-        Destination: { ToAddresses: toList },
-        Message: {
-          Subject: { Data: options.subject, Charset: 'UTF-8' },
-          Body: {
-            Html: { Data: options.html, Charset: 'UTF-8' },
-            Text: { Data: options.text || options.subject, Charset: 'UTF-8' },
-          },
-        },
-        ReplyToAddresses: options.replyTo ? [options.replyTo] : [],
+      // IMPORTANT: a successful response here only means the SMTP server
+      // *accepted* the message into its sending pipeline - not that it was
+      // actually delivered. A bounce, spam-filter rejection, or suppression
+      // all happen AFTER this point and would never throw here. Capturing
+      // and logging the real messageId is the only way to trace what
+      // actually happened to a specific send afterward (via mail server logs).
+      const info = await this.transporter.sendMail({
+        from: `Eldermin ERP <${this.fromEmail}>`,
+        to: toList,
+        subject: options.subject,
+        html: options.html,
+        text: options.text || options.subject,
+        replyTo: options.replyTo,
       });
-
-      // IMPORTANT: a successful response here only means SES *accepted*
-      // the message into its sending pipeline - not that it was actually
-      // delivered. A bounce, spam-filter rejection, or suppression-list
-      // block all happen AFTER this point and would never throw here.
-      // Capturing and logging the real MessageId is the only way to
-      // trace what actually happened to a specific send afterward, via
-      // AWS's own SES sending statistics / CloudWatch - this was
-      // previously discarded entirely, silently.
-      const response = await this.ses.send(command);
-      this.logger.log(`Email accepted by SES for: ${toList.join(', ')} | Subject: ${options.subject} | MessageId: ${response.MessageId}`);
-      return { sent: true, messageId: response.MessageId };
+      this.logger.log(`Email accepted by SMTP for: ${toList.join(', ')} | Subject: ${options.subject} | MessageId: ${info.messageId}`);
+      return { sent: true, messageId: info.messageId };
     } catch (err: any) {
-      this.logger.error(`Email rejected by SES immediately: ${err.message}`);
+      this.logger.error(`Email rejected by SMTP immediately: ${err.message}`);
       return { sent: false, error: err.message };
     }
   }
 
-  /**
-   * SendEmailCommand (above) has no attachment support at all — SES's
-   * "simple" send API only accepts a Subject + HTML/Text body. An
-   * attachment (a generated report PDF/Excel/CSV, here) requires the "raw"
-   * API instead: a hand-built MIME multipart/mixed message, base64-encoded
-   * per RFC 2045, that SES parses itself. This is the standard SES pattern
-   * for attachments — there's no higher-level helper in the AWS SDK for it.
-   */
   async sendEmailWithAttachment(options: EmailOptions & { attachment: EmailAttachment }): Promise<{ sent: boolean; messageId?: string; error?: string }> {
     const toList = Array.isArray(options.to) ? options.to : [options.to];
-    const boundary = `----ElderminBoundary${Date.now().toString(36)}`;
 
     try {
-      const attachmentB64 = options.attachment.content.toString('base64').replace(/(.{76})/g, '$1\r\n');
-
-      const raw = [
-        `From: Eldermin ERP <${this.fromEmail}>`,
-        `To: ${toList.join(', ')}`,
-        `Subject: ${options.subject}`,
-        'MIME-Version: 1.0',
-        `Content-Type: multipart/mixed; boundary="${boundary}"`,
-        '',
-        `--${boundary}`,
-        'Content-Type: text/html; charset=UTF-8',
-        'Content-Transfer-Encoding: 7bit',
-        '',
-        options.html,
-        '',
-        `--${boundary}`,
-        `Content-Type: ${options.attachment.contentType}; name="${options.attachment.filename}"`,
-        'Content-Transfer-Encoding: base64',
-        `Content-Disposition: attachment; filename="${options.attachment.filename}"`,
-        '',
-        attachmentB64,
-        '',
-        `--${boundary}--`,
-      ].join('\r\n');
-
-      const command = new SendRawEmailCommand({
-        Destinations: toList,
-        RawMessage: { Data: Buffer.from(raw, 'utf-8') },
+      const info = await this.transporter.sendMail({
+        from: `Eldermin ERP <${this.fromEmail}>`,
+        to: toList,
+        subject: options.subject,
+        html: options.html,
+        text: options.text || options.subject,
+        replyTo: options.replyTo,
+        attachments: [{
+          filename: options.attachment.filename,
+          content: options.attachment.content,
+          contentType: options.attachment.contentType,
+        }],
       });
-
-      const response = await this.ses.send(command);
-      this.logger.log(`Email with attachment accepted by SES for: ${toList.join(', ')} | Subject: ${options.subject} | Attachment: ${options.attachment.filename} | MessageId: ${response.MessageId}`);
-      return { sent: true, messageId: response.MessageId };
+      this.logger.log(`Email with attachment accepted by SMTP for: ${toList.join(', ')} | Subject: ${options.subject} | Attachment: ${options.attachment.filename} | MessageId: ${info.messageId}`);
+      return { sent: true, messageId: info.messageId };
     } catch (err: any) {
-      this.logger.error(`Email with attachment rejected by SES immediately: ${err.message}`);
+      this.logger.error(`Email with attachment rejected by SMTP immediately: ${err.message}`);
       return { sent: false, error: err.message };
     }
   }
