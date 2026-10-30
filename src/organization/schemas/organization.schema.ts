@@ -76,6 +76,16 @@ export class School {
   // reports, tables) - day-first is the Pakistani/most-of-the-world
   // standard, so it's the default rather than the US-only MM/DD/YYYY.
   @Prop({ enum: ['DD/MM/YYYY', 'MM/DD/YYYY'], default: 'DD/MM/YYYY' }) dateFormat: string;
+  // Opt-in: shows the equivalent Hijri (Islamic lunar) date alongside the
+  // Gregorian one on the School Calendar, Circulars and Consent Requests -
+  // off by default since not every school wants it, same opt-in shape as
+  // the feature toggles below (hostelEnabled, transportEnabled, ...).
+  @Prop({ default: false }) showHijriDates: boolean;
+  // A pure tabular Hijri calendar can land a day off from the locally
+  // observed/Umm al-Qura calendar for a given region - lets a school
+  // nudge the displayed Hijri date by a day or two instead of it being
+  // permanently off. See common/utils/hijri-date.util.ts.
+  @Prop({ default: 0, min: -2, max: 2 }) hijriDayAdjustment: number;
 
   // Academic settings
   @Prop({ default: 3 }) termsPerYear: number;
