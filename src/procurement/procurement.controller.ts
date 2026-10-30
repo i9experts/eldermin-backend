@@ -134,6 +134,24 @@ export class ProcurementController {
     });
   }
 
+  @Put('orders/:id')
+  async updatePO(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updatePO(id, schoolSlug, dto);
+  }
+
+  @Patch('orders/:id/approve')
+  async approvePO(@Param('id') id: string, @Body() dto: any = {}, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.approvePO(id, schoolSlug, dto?.approvedBy || userName);
+  }
+
+  @Patch('orders/:id/cancel')
+  async cancelPO(@Param('id') id: string, @Body() dto: any = {}, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.cancelPO(id, schoolSlug, dto?.cancelledBy || userName, dto?.reason);
+  }
+
   @Patch('orders/:id/status')
   async updatePOStatus(@Param('id') id: string, @Body('status') status: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -158,6 +176,12 @@ export class ProcurementController {
   async createGRN(@Body() dto: any, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.createGRN({ ...dto, schoolSlug, receivedBy: dto.receivedBy || userName });
+  }
+
+  @Put('grn/:id')
+  async updateGRN(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateGRN(id, schoolSlug, dto);
   }
 
   @Patch('grn/:id/verify')
