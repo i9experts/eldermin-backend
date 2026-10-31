@@ -38,6 +38,13 @@ import {
 import { ExamPaper, ExamPaperDocument } from './schemas/exam-paper.schema';
 import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-sheet.schema';
 import { QuizAttempt, QuizAttemptDocument } from './schemas/quiz-attempt.schema';
+import { TermReportCard, TermReportCardDocument } from './schemas/term-report-card.schema';
+import { BehaviourService } from '../behaviour/behaviour.service';
+import { QaidaService } from '../behaviour/qaida.service';
+import { NazraService } from '../behaviour/nazra.service';
+import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
+import { StudentsService } from '../students/students.service';
+import { ParentEngagementService } from '../parent-engagement/parent-engagement.service';
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
@@ -51,7 +58,7 @@ import { Subject, SubjectDocument } from '../modules/academics/schemas/subject.s
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import {
   AnalyticsMarkRow, computeStudentOverallStats, gradeDistribution, classComparison,
-  QuizAnswerRow, computeQuizInsights,
+  QuizAnswerRow, computeQuizInsights, rankStudentStats,
 } from './analytics.util';
 
 import {
@@ -60,6 +67,7 @@ import {
   BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
   PublishResultDto, ReportCardQueryDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto,
 } from './dto/assessment.dto';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
@@ -126,6 +134,18 @@ export class AssessmentService {
     // strictly-typed `new AssessmentService(...)` test construction
     // (exam-paper-error-handling.spec.ts) keeps compiling unchanged.
     @Optional() private gamificationService?: GamificationService,
+    // Comprehensive Term Report Card - same trailing-optional convention
+    // as gamificationService above, for the same reason (keeps every
+    // existing direct `new AssessmentService(...)` test construction,
+    // e.g. assessment-test-fakes.ts, compiling with no changes). Always
+    // present in the real app via AssessmentModule's imports/forFeature.
+    @Optional() @InjectModel(TermReportCard.name) private termReportCardModel?: Model<TermReportCardDocument>,
+    @Optional() private behaviourService?: BehaviourService,
+    @Optional() private qaidaService?: QaidaService,
+    @Optional() private nazraService?: NazraService,
+    @Optional() private qaidaNazraExtrasService?: QaidaNazraExtrasService,
+    @Optional() private studentsService?: StudentsService,
+    @Optional() private parentEngagementService?: ParentEngagementService,
   ) {}
 
   /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
@@ -2425,6 +2445,262 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       body: `${assessment?.title || 'Assessment'} results are now available.`, relatedEntityId: String(dto.assessmentId),
     });
     return { message: 'Results published successfully' };
+  }
+
+  // ============================================================
+  // TERM REPORT CARDS (comprehensive, whole-term report)
+  // ============================================================
+  /** Generates one TermReportCard per student in scope, combining every
+   * assessment this academicYear+term into a term-wide academic summary
+   * and class position (NOT the same as ReportCard.classPosition, which
+   * only ranks within one exam), plus whichever optional sections the
+   * admin asked for - Tarbiyah, Qaida, Nazra, attendance, compiled
+   * teacher feedback, Parent Engagement Score. A student with no marks
+   * at all for this academicYear+term is skipped (nothing academic to
+   * report), same convention as generateReportCards. */
+  async generateTermReportCards(dto: GenerateTermReportCardsDto) {
+    if (!this.termReportCardModel) throw new InternalServerErrorException('Term report cards are not available');
+    const { academicYear, term, scopeType = 'all', scopeValue, schoolSlug, generatedBy } = dto;
+    const sections = dto.sections || {};
+
+    const studentMatch: any = { schoolSlug, status: 'active' };
+    if (scopeType === 'class' && scopeValue) {
+      studentMatch.currentGrade = scopeValue;
+    } else if (scopeType === 'section' && scopeValue) {
+      const [g, s] = scopeValue.split('::');
+      studentMatch.currentGrade = g;
+      if (s) studentMatch.currentSection = s;
+    } else if (scopeType === 'student' && scopeValue) {
+      studentMatch._id = new Types.ObjectId(scopeValue);
+    }
+    const students = await this.studentModel.find(studentMatch).lean();
+    if (students.length === 0) return { message: 'No matching active students found for this scope', count: 0, skipped: 0 };
+    const studentIds = students.map((s: any) => s._id);
+
+    // Every assessment in this term feeds the academic summary - a term
+    // report isn't tied to one exam, unlike ReportCard.
+    const assessments = await this.assessmentModel.find({ schoolSlug, academicYear, term }).lean();
+    const assessmentIds = assessments.map((a: any) => a._id);
+    const assessmentById = new Map(assessments.map((a: any) => [String(a._id), a]));
+
+    const marks = assessmentIds.length
+      ? await this.markModel.find({ schoolSlug, assessmentId: { $in: assessmentIds }, studentId: { $in: studentIds } }).lean()
+      : [];
+    if (marks.length === 0) return { message: `No marks found for any assessment in ${term} ${academicYear} for this scope`, count: 0, skipped: students.length };
+
+    // Default term date range (for attendance/Qaida-Nazra-extras scoping
+    // below) from the earliest/latest assessment in this term, unless the
+    // admin gave explicit dates.
+    const termFrom = dto.termStartDate || new Date(Math.min(...assessments.map((a: any) => new Date(a.startDate).getTime()))).toISOString().slice(0, 10);
+    const termTo = dto.termEndDate || new Date(Math.max(...assessments.map((a: any) => new Date(a.endDate || a.startDate).getTime()))).toISOString().slice(0, 10);
+
+    const marksByStudent = new Map<string, any[]>();
+    for (const m of marks as any[]) {
+      const key = String(m.studentId);
+      (marksByStudent.get(key) ?? marksByStudent.set(key, []).get(key)!).push(m);
+    }
+
+    const analyticsRows: AnalyticsMarkRow[] = (marks as any[]).map((m) => ({
+      studentId: String(m.studentId), studentName: m.studentName, grade: m.grade, section: m.section,
+      subject: m.subject, totalMarks: m.totalMarks, obtainedMarks: m.obtainedMarks, isAbsent: m.isAbsent, isExempt: m.isExempt,
+    }));
+    const stats = computeStudentOverallStats(analyticsRows);
+
+    // Rank within each grade/section separately - mixing classes into one
+    // ranking (e.g. scopeType 'all' spanning several grades) would make
+    // "class position" meaningless.
+    const statsByClass = new Map<string, typeof stats>();
+    for (const s of stats) {
+      const key = `${s.grade}||${s.section || ''}`;
+      (statsByClass.get(key) ?? statsByClass.set(key, []).get(key)!).push(s);
+    }
+    const statByStudent = new Map<string, ReturnType<typeof rankStudentStats>[number]>();
+    for (const group of statsByClass.values()) {
+      for (const ranked of rankStudentStats(group)) statByStudent.set(ranked.studentId, ranked);
+    }
+
+    const studentById = new Map(students.map((s: any) => [String(s._id), s]));
+    let created = 0;
+    const skippedStudentIds: string[] = [];
+
+    for (const [studentId, stat] of statByStudent) {
+      const student: any = studentById.get(studentId);
+      if (!student) continue;
+      const studentMarks = marksByStudent.get(studentId) || [];
+      const firstMark = studentMarks[0];
+      const gradeInfo = getGrade(stat.overallPct);
+
+      const subjects = stat.subjects.map((sub) => ({
+        subject: sub.subject, obtainedMarks: sub.obtainedMarks, totalMarks: sub.totalMarks,
+        percentage: sub.pct, grade: getGrade(sub.pct).grade, isAbsent: sub.isAbsent,
+      }));
+
+      const assessmentsIncluded = Array.from(new Set(studentMarks.map((m: any) => String(m.assessmentId))))
+        .map((id) => assessmentById.get(id))
+        .filter(Boolean)
+        .map((a: any) => ({ assessmentId: a._id, title: a.title, type: a.type, date: a.startDate }));
+
+      const teacherFeedback: any[] = [];
+      if (sections.teacherFeedback) {
+        for (const m of studentMarks) {
+          if (m.remarks) teacherFeedback.push({ source: 'subject_remark', date: m.updatedAt || m.createdAt, author: m.enteredBy, subject: m.subject, text: m.remarks });
+        }
+      }
+
+      let tarbiyah: Record<string, any> | null = null;
+      if (sections.tarbiyah && this.behaviourService) {
+        try {
+          const result = await this.behaviourService.getTarbiyahAssessments(schoolSlug as string, { studentId, academicYear, limit: 1 });
+          const doc: any = result?.data?.[0];
+          if (doc) {
+            tarbiyah = {
+              period: doc.period, overallScore: doc.overallScore, overallPercentage: doc.overallPercentage,
+              overallRating: doc.overallRating, traits: doc.traits, teacherObservations: doc.teacherObservations,
+              areasOfStrength: doc.areasOfStrength, areasForImprovement: doc.areasForImprovement, recommendedActions: doc.recommendedActions,
+            };
+            if (sections.teacherFeedback && doc.teacherObservations) {
+              teacherFeedback.push({ source: 'tarbiyah', date: doc.assessmentDate, author: doc.assessedBy, text: doc.teacherObservations });
+            }
+          }
+        } catch { /* a student with no Tarbiyah assessment yet is not an error - section stays null */ }
+      }
+
+      let qaida: Record<string, any> | null = null;
+      if (sections.qaida && this.qaidaService) {
+        try { qaida = await this.qaidaService.getReportData(studentId, schoolSlug as string); } catch { /* not enrolled in Qaida - not an error */ }
+      }
+
+      let nazra: Record<string, any> | null = null;
+      if (sections.nazra && this.nazraService) {
+        try { nazra = await this.nazraService.getReportData(studentId, schoolSlug as string); } catch { /* not enrolled in Nazra - not an error */ }
+      }
+
+      let qaidaNazraExtras: Record<string, any> | null = null;
+      if ((sections.qaida || sections.nazra) && this.qaidaNazraExtrasService) {
+        const [invigilator, homeLog] = await Promise.all([
+          this.qaidaNazraExtrasService.getAssessmentsForStudent(studentId, schoolSlug as string),
+          this.qaidaNazraExtrasService.getHomeLog(studentId, schoolSlug as string),
+        ]);
+        const inRange = (d: any) => d && new Date(d) >= new Date(termFrom) && new Date(d) <= new Date(termTo);
+        qaidaNazraExtras = {
+          invigilatorAssessments: (invigilator as any[]).filter((a: any) => inRange(a.visitDate)),
+          homeLog: (homeLog as any[]).filter((h: any) => inRange(h.date)),
+        };
+        if (sections.teacherFeedback) {
+          for (const a of qaidaNazraExtras.invigilatorAssessments) {
+            if (a.overallRemarks) teacherFeedback.push({ source: 'ptm', date: a.visitDate, author: a.invigilatorName, text: a.overallRemarks });
+          }
+        }
+      }
+
+      let attendance: Record<string, any> | null = null;
+      if (sections.attendance && this.studentsService) {
+        const report: any = await this.studentsService.getStudentAttendanceSummaryReport(schoolSlug as string, { studentId, from: termFrom, to: termTo });
+        attendance = { ...(report.rows?.[0] || {}), trend: report.trend || [] };
+      }
+
+      let parentEngagement: Record<string, any> | null = null;
+      if (sections.parentEngagement && this.parentEngagementService) {
+        parentEngagement = await this.parentEngagementService.computeScore(schoolSlug as string, studentId) as any;
+      }
+
+      if (sections.teacherFeedback && this.behaviourService) {
+        try {
+          const profile: any = await this.behaviourService.getStudentBehaviourProfile(studentId, schoolSlug as string, academicYear);
+          for (const r of profile.recent || []) {
+            teacherFeedback.push({ source: 'behaviour', date: r.date, author: r.reportedBy, text: `${r.title}: ${r.description}` });
+          }
+        } catch { /* behaviour profile lookup failing (e.g. no access context) must never block the whole report */ }
+      }
+      teacherFeedback.sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+
+      const doc = {
+        studentId: student._id, studentName: `${student.firstName || ''} ${student.lastName || ''}`.trim() || firstMark?.studentName,
+        rollNumber: student.admissionNumber || firstMark?.rollNumber, grade: stat.grade, section: stat.section,
+        academicYear, term,
+        assessmentsIncluded, subjects,
+        totalObtainedMarks: stat.totalObtained, totalMaxMarks: stat.totalMax, overallPercentage: stat.overallPct,
+        overallGrade: gradeInfo.grade, overallGPA: gradeInfo.gpa, overallResult: stat.overallPct >= 40 ? 'pass' : 'fail',
+        classPosition: stat.classPosition, totalStudents: stat.totalStudents,
+        strongestSubject: stat.strongestSubject?.subject, weakestSubject: stat.weakestSubject?.subject,
+        sectionsIncluded: {
+          tarbiyah: !!sections.tarbiyah, qaida: !!sections.qaida, nazra: !!sections.nazra,
+          attendance: !!sections.attendance, teacherFeedback: !!sections.teacherFeedback, parentEngagement: !!sections.parentEngagement,
+        },
+        tarbiyah, qaida, nazra, qaidaNazraExtras, attendance, parentEngagement, teacherFeedback,
+        generatedBy, schoolSlug,
+      };
+
+      await this.termReportCardModel.findOneAndUpdate(
+        { studentId: student._id, academicYear, term, schoolSlug },
+        { $set: doc, $setOnInsert: { published: false } },
+        { upsert: true },
+      );
+      created++;
+    }
+
+    for (const s of students as any[]) {
+      if (!statByStudent.has(String(s._id))) skippedStudentIds.push(String(s._id));
+    }
+
+    return { message: `${created} term report card(s) generated`, count: created, skipped: skippedStudentIds.length };
+  }
+
+  async getTermReportCards(schoolSlug: string, query: TermReportCardQueryDto) {
+    const { page, limit, studentId, grade, section, academicYear, term, published } = query;
+    const { skip } = paged(page, limit);
+
+    const filter: any = { schoolSlug };
+    if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    if (grade) filter.grade = grade;
+    if (section) filter.section = section;
+    if (academicYear) filter.academicYear = academicYear;
+    if (term) filter.term = term;
+    if (published !== undefined) filter.published = published;
+
+    const [data, total] = await Promise.all([
+      this.termReportCardModel!.find(filter).sort({ classPosition: 1 }).skip(skip).limit(limit!),
+      this.termReportCardModel!.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit!) } };
+  }
+
+  async getTermReportCard(id: string, schoolSlug: string) {
+    assertValidObjectId(id, 'term report card');
+    const rc = await this.termReportCardModel!.findOne({ _id: id, schoolSlug });
+    if (!rc) throw new NotFoundException('Term report card not found');
+    return rc;
+  }
+
+  async updateTermReportCardRemarks(id: string, schoolSlug: string, dto: UpdateReportCardRemarksDto, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const t = await this.teacherContext(requestingUser);
+      const card: any = Types.ObjectId.isValid(id) ? await this.termReportCardModel!.findOne({ _id: id, schoolSlug }).select('grade section').lean() : null;
+      if (!card) throw new NotFoundException('Term report card not found');
+      if (!this.classIncludes(t.classTeacherClasses, card.grade, card.section)) {
+        throw new ForbiddenException('Only the class teacher of this class can edit report card remarks.');
+      }
+      const $set: any = {};
+      if (dto.classTeacherRemarks !== undefined) $set.classTeacherRemarks = dto.classTeacherRemarks;
+      if (!Object.keys($set).length) return this.termReportCardModel!.findOne({ _id: id, schoolSlug });
+      return this.termReportCardModel!.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
+    }
+    assertValidObjectId(id, 'term report card');
+    return this.termReportCardModel!.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  async publishTermReportCards(dto: PublishTermReportCardsDto) {
+    const filter: any = { schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, term: dto.term };
+    if (dto.grade) filter.grade = dto.grade;
+    if (dto.section) filter.section = dto.section;
+
+    await this.termReportCardModel!.updateMany(filter, { $set: { published: true, publishedAt: new Date() } });
+    const cards: any[] = await this.termReportCardModel!.find(filter).select('studentId').lean();
+    await notifyGuardiansOfStudents(this.termReportCardModel!.db, cards.map((c) => c.studentId), {
+      schoolSlug: dto.schoolSlug as string, type: 'result', title: 'Term report card published',
+      body: `Your child's ${dto.term} ${dto.academicYear} report card is now available.`, relatedEntityId: `${dto.academicYear}-${dto.term}`,
+    });
+    return { message: `${cards.length} term report card(s) published` };
   }
 
   // ============================================================

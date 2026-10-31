@@ -1,5 +1,5 @@
 import {
-  computeStudentOverallStats, gradeDistribution, classComparison, computeQuizInsights,
+  computeStudentOverallStats, gradeDistribution, classComparison, computeQuizInsights, rankStudentStats,
 } from './analytics.util';
 
 describe('computeStudentOverallStats', () => {
@@ -39,6 +39,26 @@ describe('computeStudentOverallStats', () => {
       { studentId: 's1', studentName: 'Zoya', grade: 'Grade-1', section: 'A', subject: 'Art', totalMarks: 50, obtainedMarks: null, isAbsent: false, isExempt: true },
     ]);
     expect(stats).toHaveLength(0);
+  });
+});
+
+describe('rankStudentStats', () => {
+  const stat = (studentId: string, overallPct: number) => ({
+    studentId, studentName: studentId, grade: 'Grade-1', section: 'A',
+    totalObtained: 0, totalMax: 0, overallPct, subjects: [], strongestSubject: null, weakestSubject: null,
+  });
+
+  it('ranks highest overall % first, assigning 1-based classPosition and the group totalStudents', () => {
+    const ranked = rankStudentStats([stat('s1', 60), stat('s2', 90), stat('s3', 75)]);
+    expect(ranked.map(r => r.studentId)).toEqual(['s2', 's3', 's1']);
+    expect(ranked.map(r => r.classPosition)).toEqual([1, 2, 3]);
+    expect(ranked.every(r => r.totalStudents === 3)).toBe(true);
+  });
+
+  it('does not mutate the input array', () => {
+    const input = [stat('s1', 60), stat('s2', 90)];
+    rankStudentStats(input);
+    expect(input[0].studentId).toBe('s1');
   });
 });
 
