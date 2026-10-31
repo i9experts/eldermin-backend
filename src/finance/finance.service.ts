@@ -14,7 +14,7 @@ import {
   StudentFeeAssignment, StudentFeeAssignmentDocument,
 } from './schemas/finance.schema';
 import { findConflictingAssignments, feeHeadsOverlap } from './fee-assignment.util';
-import { pickApplicableFeeStructures } from './fee-structure-match.util';
+import { pickApplicableFeeStructures, structuresAreComplementary } from './fee-structure-match.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
 import { canResyncInvoiceDiscount, discountActuallyChanged } from './discount-resync.util';
@@ -146,7 +146,7 @@ export class FinanceService {
         { $group: { _id: null, total: { $sum: '$totalAmount' } } },
       ]),
       this.paymentModel.aggregate([
-        { $match: { schoolSlug } },
+        { $match: { schoolSlug, isRefunded: { $ne: true } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       // rolledForwardInto excluded - that invoice's balance is already
@@ -158,7 +158,7 @@ export class FinanceService {
         { $group: { _id: null, total: { $sum: '$balanceDue' } } },
       ]),
       this.paymentModel.aggregate([
-        { $match: { schoolSlug, paymentDate: { $gte: monthStart, $lt: monthEnd } } },
+        { $match: { schoolSlug, paymentDate: { $gte: monthStart, $lt: monthEnd }, isRefunded: { $ne: true } } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.expenseModel.aggregate([
@@ -1738,6 +1738,26 @@ export class FinanceService {
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status === 'paid') throw new BadRequestException('Invoice already paid');
 
+    // Duplicate-submission guard: a double-click or a retried request (slow
+    // network, accidental double-tap on the "Record Payment" button) used to
+    // create two separate Payment documents for the same invoice/amount and
+    // double-increment paidAmount, with nothing downstream able to tell them
+    // apart. An identical, non-refunded payment on this invoice recorded in
+    // the last 10 seconds is almost certainly that, not a genuine second
+    // instalment - genuine instalments of the same amount still go through
+    // fine once that short window has passed.
+    const tenSecondsAgo = new Date(Date.now() - 10_000);
+    const recentDuplicate = await this.paymentModel.findOne({
+      invoiceId: invoice._id,
+      schoolSlug,
+      amount: paymentData.amount,
+      isRefunded: { $ne: true },
+      createdAt: { $gte: tenSecondsAgo },
+    });
+    if (recentDuplicate) {
+      throw new BadRequestException('An identical payment was just recorded for this invoice - please check Collected Fee before submitting again.');
+    }
+
     const payment = new this.paymentModel({
       ...paymentData,
       invoiceId: invoice._id,
@@ -2432,7 +2452,7 @@ export class FinanceService {
 
     const [revenue, expenses] = await Promise.all([
       this.paymentModel.aggregate([
-        { $match: { schoolSlug, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
+        { $match: { schoolSlug, isRefunded: { $ne: true }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.expenseModel.aggregate([
@@ -2581,7 +2601,10 @@ export class FinanceService {
   }) {
     const { groupBy, from, to, month, grade, academicYear } = params;
 
-    const paymentMatch: any = { schoolSlug };
+    // A payment voided via reversePayment() (isRefunded: true) must not keep
+    // showing up as "collected" in any of this report's groupings forever —
+    // it was previously included unconditionally here.
+    const paymentMatch: any = { schoolSlug, isRefunded: { $ne: true } };
     if (from || to) {
       paymentMatch.paymentDate = {};
       if (from) paymentMatch.paymentDate.$gte = new Date(from);
@@ -2865,6 +2888,19 @@ export class FinanceService {
       deletedBy,
     );
 
+    // An earlier invoice may have rolled its unpaid balance forward into
+    // THIS one (rolledForwardInto points here — see generateInvoices). That
+    // earlier invoice is excluded from Receivables/Defaulters on the
+    // assumption its balance now lives on this invoice's arrears line. If
+    // this invoice is deleted without undoing that, the earlier invoice is
+    // orphaned — permanently invisible to every admin report — while the
+    // Parent Portal (which doesn't filter on rolledForwardInto) still shows
+    // it as payable. Un-roll it back onto its own books so it reappears.
+    await this.invoiceModel.updateMany(
+      { schoolSlug, rolledForwardInto: invoice._id },
+      { $set: { rolledForwardInto: null } },
+    );
+
     invoice.isDeleted = true;
     invoice.deletedAt = new Date();
     invoice.deletedBy = deletedBy;
@@ -2989,9 +3025,22 @@ export class FinanceService {
       match.campus = params.scopeValue;
     }
 
+    const toDeleteIds = (await this.invoiceModel.find(match).select('_id').lean()).map((d: any) => d._id);
+
     const result = await this.invoiceModel.updateMany(match, {
       $set: { isDeleted: true, deletedAt: new Date(), deletedBy, deleteReason: reason || 'Bulk reverted from Fee Assignment' },
     });
+
+    // Same un-roll as softDeleteInvoice: an earlier invoice may have rolled
+    // its balance forward into one of the invoices this bulk-deletes. Left
+    // alone, that earlier invoice would be permanently orphaned - invisible
+    // to Receivables/Defaulters, but still shown payable in Parent Portal.
+    if (toDeleteIds.length) {
+      await this.invoiceModel.updateMany(
+        { schoolSlug, rolledForwardInto: { $in: toDeleteIds } },
+        { $set: { rolledForwardInto: null } },
+      );
+    }
 
     if (result.matchedCount === 0) {
       const { academicYear, ...matchWithoutYear } = match;
@@ -3148,7 +3197,7 @@ export class FinanceService {
   }) {
     const { from, to, month, grade, academicYear } = params;
 
-    const paymentMatch: any = { schoolSlug };
+    const paymentMatch: any = { schoolSlug, isRefunded: { $ne: true } };
     if (from || to) {
       paymentMatch.paymentDate = {};
       if (from) paymentMatch.paymentDate.$gte = new Date(from);
@@ -4234,7 +4283,14 @@ export class FinanceService {
             (!fs.campus || fs.campus === studentCampusName)
           );
           applicableStructures = pickApplicableFeeStructures(gradeSectionCampusMatch, billingMonthAnchor);
-          if (applicableStructures.length > 1) {
+          // More than one equally-specific match is only a genuine,
+          // unresolved ambiguity when the tied structures actually overlap
+          // on a fee head (see structuresAreComplementary) - a school
+          // billing e.g. Monthly Tuition Fee from one structure and
+          // Admission Fee from another, both for the same grade, is
+          // complementary, not a conflict, and bills from both (the loop
+          // below already iterates every structure in applicableStructures).
+          if (applicableStructures.length > 1 && !structuresAreComplementary(applicableStructures)) {
             skippedAmbiguousMatch++;
             const prevAmb = gradesWithAmbiguousMatch.get(key);
             gradesWithAmbiguousMatch.set(key, { grade: (student as any).currentGrade || 'Unknown', section: (student as any).currentSection || '', count: (prevAmb?.count || 0) + 1 });
@@ -4566,6 +4622,50 @@ export class FinanceService {
       willFix: fixes.reduce((a, f) => a + f.sourceInvoiceIds.length, 0),
       mismatchCount: fixes.filter((f) => f.amountMismatch).length,
       fixes,
+    };
+  }
+
+  /**
+   * One-time repair for the mirror-image bug: softDeleteInvoice/
+   * bulkDeleteInvoices previously never cleared rolledForwardInto on the
+   * earlier invoice(s) a deleted invoice had absorbed, orphaning them -
+   * invisible to Receivables/Defaulters (both exclude rolledForwardInto !=
+   * null) forever, even though Parent Portal still shows them as payable
+   * since it doesn't filter on that field. Finds every invoice whose
+   * rolledForwardInto points at an invoice that is now deleted or gone
+   * entirely, and un-rolls it. Safe to re-run; dryRun defaults to true.
+   */
+  async fixOrphanedRolledForwardInvoices(schoolSlug: string, dryRun = true) {
+    const candidates = await this.invoiceModel
+      .find({ schoolSlug, isDeleted: { $ne: true }, rolledForwardInto: { $ne: null } })
+      .select('invoiceNumber studentName studentId month balanceDue rolledForwardInto')
+      .lean();
+
+    if (candidates.length === 0) return { dryRun, orphansFound: 0, orphansFixed: 0, orphans: [] };
+
+    const targetIds = Array.from(new Set(candidates.map((c: any) => String(c.rolledForwardInto))));
+    const liveTargets = await this.invoiceModel
+      .find({ _id: { $in: targetIds }, isDeleted: { $ne: true } })
+      .select('_id').lean();
+    const liveTargetIds = new Set(liveTargets.map((t: any) => String(t._id)));
+
+    const orphans = candidates.filter((c: any) => !liveTargetIds.has(String(c.rolledForwardInto)));
+
+    if (!dryRun && orphans.length) {
+      await this.invoiceModel.updateMany(
+        { _id: { $in: orphans.map((o: any) => o._id) } },
+        { $set: { rolledForwardInto: null } },
+      );
+    }
+
+    return {
+      dryRun,
+      orphansFound: orphans.length,
+      orphansFixed: dryRun ? 0 : orphans.length,
+      orphans: orphans.map((o: any) => ({
+        invoiceId: String(o._id), invoiceNumber: o.invoiceNumber, studentName: o.studentName,
+        month: o.month, balanceDue: o.balanceDue,
+      })),
     };
   }
 
@@ -4979,7 +5079,7 @@ export class FinanceService {
   // invoice's creation and the payment that settled it, plus a simple
   // month-by-month invoiced/collected/avg-days-to-pay breakdown.
   async getPaymentPeriodReport(schoolSlug: string, from?: string, to?: string) {
-    const paymentMatch: any = { schoolSlug };
+    const paymentMatch: any = { schoolSlug, isRefunded: { $ne: true } };
     if (from || to) {
       paymentMatch.paymentDate = {};
       if (from) paymentMatch.paymentDate.$gte = new Date(from);
@@ -5254,7 +5354,7 @@ export class FinanceService {
       const rule: any = ruleBySource.get(sourceName);
       const studentIds = Array.from(studentIdSet).filter(Types.ObjectId.isValid);
       const collectedAgg = studentIds.length ? await this.paymentModel.aggregate([
-        { $match: { schoolSlug, studentId: { $in: studentIds.map(id => new Types.ObjectId(id)) }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
+        { $match: { schoolSlug, studentId: { $in: studentIds.map(id => new Types.ObjectId(id)) }, isRefunded: { $ne: true }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
       ]) : [];
       const totalCollected = collectedAgg[0]?.total || 0;
@@ -5280,7 +5380,7 @@ export class FinanceService {
     const dateFilter: any = {};
     if (from) dateFilter.$gte = new Date(from);
     if (to) dateFilter.$lte = new Date(to);
-    const match: any = { schoolSlug, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) };
+    const match: any = { schoolSlug, isRefunded: { $ne: true }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) };
     const dateFormat = groupBy === 'day' ? '%Y-%m-%d' : groupBy === 'week' ? '%G-W%V' : '%Y-%m';
 
     const [byPeriod, byMethod, byCollector, totalsAgg] = await Promise.all([
