@@ -500,7 +500,7 @@ export class BehaviourService {
 
   async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     const classes = await this.teacherClassScope(requestingUser, access);
-    const { grade, section, studentId, period, periodType, campusId } = query;
+    const { grade, section, studentId, period, periodType, campusId, academicYear } = query;
     const { page, limit, skip } = pageParams(query.page, query.limit);
 
     const filter: any = { schoolSlug };
@@ -509,6 +509,11 @@ export class BehaviourService {
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (period) filter.period = period;
     if (periodType) filter.periodType = periodType;
+    // Term Report Card (assessments module) needs "this student's Tarbiyah
+    // for this academic year" without knowing the school's own free-text
+    // period naming convention - academicYear was on the schema already
+    // but never exposed as a filter here until now.
+    if (academicYear) filter.academicYear = academicYear;
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
 

@@ -18,6 +18,7 @@ import {
   BulkMarkEntryDto, VerifyMarksDto, UpdateMarkEntryDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
   PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto,
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
@@ -136,6 +137,44 @@ export class AssessmentController {
   async publishResults(@Body() dto: PublishResultDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.publishResults({ ...dto, schoolSlug, publishedBy: userName });
+  }
+
+  // ── Term Report Cards (comprehensive, whole-term report; static before :id) ──
+  @Get('term-report-cards')
+  async getTermReportCards(@Request() req: any, @Query() query: TermReportCardQueryDto) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCards(schoolSlug, query);
+  }
+
+  @Get('term-report-cards/:id')
+  async getTermReportCard(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCard(id, schoolSlug);
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/generate')
+  async generateTermReportCards(@Body() dto: GenerateTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.generateTermReportCards({ ...dto, schoolSlug, generatedBy: userName });
+  }
+
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('term-report-cards/:id/remarks')
+  async updateTermReportCardRemarks(
+    @Param('id') id: string,
+    @Body() dto: UpdateReportCardRemarksDto,
+    @Request() req: any,
+  ) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateTermReportCardRemarks(id, schoolSlug, dto, requestingUser);
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/publish')
+  async publishTermReportCards(@Body() dto: PublishTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.publishTermReportCards({ ...dto, schoolSlug, publishedBy: userName });
   }
 
   // ── Analytics ─────────────────────────────────────────────────

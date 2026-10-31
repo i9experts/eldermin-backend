@@ -247,6 +247,48 @@ export class ReportCardQueryDto extends PaginationDto {
   @IsOptional() @IsBoolean() @Type(() => Boolean) published?: boolean;
 }
 
+// ── Term Report Card (comprehensive, whole-term report) ─────────
+export class TermReportCardSectionsDto {
+  @IsOptional() @IsBoolean() tarbiyah?: boolean;
+  @IsOptional() @IsBoolean() qaida?: boolean;
+  @IsOptional() @IsBoolean() nazra?: boolean;
+  @IsOptional() @IsBoolean() attendance?: boolean;
+  @IsOptional() @IsBoolean() teacherFeedback?: boolean;
+  @IsOptional() @IsBoolean() parentEngagement?: boolean;
+}
+
+export class GenerateTermReportCardsDto {
+  @IsString() academicYear: string;
+  @IsString() term: string;
+  @IsOptional() @IsEnum(['all', 'class', 'section', 'student']) scopeType?: 'all' | 'class' | 'section' | 'student';
+  @IsOptional() @IsString() scopeValue?: string;
+  // Term date range - needed to scope attendance/Qaida-Nazra/behaviour
+  // entries to just this term rather than a student's whole history.
+  @IsOptional() @IsDateString() termStartDate?: string;
+  @IsOptional() @IsDateString() termEndDate?: string;
+  @IsOptional() @ValidateNested() @Type(() => TermReportCardSectionsDto) sections?: TermReportCardSectionsDto;
+  schoolSlug?: string;
+  generatedBy?: string;
+}
+
+export class TermReportCardQueryDto extends PaginationDto {
+  @IsOptional() @IsMongoId() studentId?: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @IsString() academicYear?: string;
+  @IsOptional() @IsString() term?: string;
+  @IsOptional() @IsBoolean() @Type(() => Boolean) published?: boolean;
+}
+
+export class PublishTermReportCardsDto {
+  @IsString() academicYear: string;
+  @IsString() term: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  schoolSlug?: string;
+  publishedBy?: string;
+}
+
 export class ClassifyBloomsLevelDto {
   @IsString() questionText: string;
   @IsString() questionType: string;
