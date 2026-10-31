@@ -2432,6 +2432,15 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async publishResults(dto: PublishResultDto) {
+    const reportCardCount = await this.reportCardModel.countDocuments({
+      assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug,
+    });
+    if (!reportCardCount) {
+      // Previously this silently flipped the assessment's status to
+      // result_published and notified zero guardians - admins had no way
+      // to tell "nothing to publish yet" from "published successfully".
+      throw new BadRequestException('No report cards exist for this assessment yet - generate report cards before publishing.');
+    }
     await this.reportCardModel.updateMany(
       { assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug },
       { $set: { published: true, publishedAt: new Date() } },
