@@ -14,6 +14,7 @@ import { escapeHtml, renderRichTextField, urduFontFaceCss } from '../common/util
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
 import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
+import { TermReportCard } from '../assessments/schemas/term-report-card.schema';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -333,7 +334,125 @@ export class GenerateTarbiyahSchoolReportDto {
   @IsOptional() @IsString() category?: string;
 }
 
-const REPORT_CARD_TEMPLATE = (data: any) => `
+// Human label for a TraitScore.traitKey - falls back to the raw key
+// (title-cased) for a school-customized characteristic not in the
+// default TARBIYAH_TRAITS list (see CharacterProgramSettings).
+const tarbiyahTraitLabel = (key: string): string =>
+  TARBIYAH_TRAITS.find((t) => t.key === key)?.nameEn
+  || key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
+
+// Comprehensive, whole-term report card - academics (with a term-wide
+// class position and a subject-performance bar chart) plus whichever
+// optional Tarbiyah/Qaida/Nazra/attendance/teacher-feedback/Parent
+// Engagement sections the admin included at generation time (see
+// TermReportCard.sectionsIncluded). Every chart here is hand-built CSS
+// (bar widths as percentages), matching this file's existing tarb-bar/
+// starGlyphs convention - no JS charting library is wired into the
+// Puppeteer pipeline, and inline SVG/CSS avoids waiting on an async
+// render loop that htmlToPdf's `waitUntil:'load'` wouldn't catch anyway.
+const REPORT_CARD_TEMPLATE = (data: any) => {
+  const included = data.sectionsIncluded || {};
+  const esc = escapeHtml;
+
+  const gradeClass = (grade: string) => {
+    const g = (grade || '').charAt(0).toUpperCase();
+    return g === 'A' ? 'grade-a' : g === 'B' ? 'grade-b' : g === 'C' ? 'grade-c' : 'grade-d';
+  };
+
+  const subjectRows = (data.subjects || []).map((s: any) => `
+    <tr>
+      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span style="color:#DC2626;font-size:10px">(Absent)</span>' : ''}</td>
+      <td>${s.totalMarks ?? 0}</td>
+      <td>${s.obtainedMarks ?? 0}</td>
+      <td>${s.percentage ?? 0}%</td>
+      <td class="${gradeClass(s.grade)}">${esc(s.grade) || 'N/A'}</td>
+    </tr>`).join('');
+
+  const subjectBars = (data.subjects || []).map((s: any) => `
+    <div class="bar-item">
+      <div class="bar-name">${esc(s.subject)}</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, s.percentage || 0))}%"></div></div>
+      <div class="bar-score">${s.percentage ?? 0}%</div>
+    </div>`).join('');
+
+  const tarbiyahSection = included.tarbiyah ? (() => {
+    const t = data.tarbiyah;
+    if (!t) return `<div class="section-title">Tarbiyah (Character Development)</div><p class="muted">No Tarbiyah assessment on file for this academic year.</p>`;
+    const traitRows = (t.traits || []).map((tr: any) => `
+      <div class="list-item"><span>${esc(tarbiyahTraitLabel(tr.traitKey))}</span><span style="font-weight:700;color:#1B4F8A">${tr.score}</span></div>`).join('');
+    return `
+    <div class="section-title">Tarbiyah (Character Development)</div>
+    <div class="summary-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="summary-card"><div class="summary-num">${t.overallScore ?? '—'}</div><div class="summary-label">Overall Score</div></div>
+      <div class="summary-card"><div class="summary-num" style="font-size:16px;text-transform:capitalize">${esc((t.overallRating || '').replace(/_/g, ' ')) || 'N/A'}</div><div class="summary-label">Rating</div></div>
+      <div class="summary-card"><div class="summary-num">${t.overallPercentage ?? '—'}%</div><div class="summary-label">Percentage</div></div>
+    </div>
+    ${traitRows ? `<div class="tarb-grid">${traitRows}</div>` : ''}
+    ${t.teacherObservations ? `<p class="note"><strong>Teacher's Observations:</strong> ${esc(t.teacherObservations)}</p>` : ''}
+    `;
+  })() : '';
+
+  const qaidaNazraSection = (included.qaida || included.nazra) ? `
+    <div class="section-title">Qaida / Nazra Progress</div>
+    <div class="summary-grid" style="grid-template-columns:repeat(2,1fr)">
+      ${included.qaida ? (data.qaida ? `
+        <div class="summary-card" style="text-align:left;padding:14px">
+          <div class="info-label">Qaida</div>
+          <div class="info-value" style="text-transform:capitalize">${esc((data.qaida.overallStatus || '').replace(/_/g, ' ')) || 'N/A'}</div>
+          <p class="note" style="margin-top:6px">Takhti ${data.qaida.currentTakhti ?? '—'} of ${data.qaida.totalTakhtis ?? 16} · ${data.qaida.masteryPct ?? 0}% mastered</p>
+        </div>` : `<div class="summary-card" style="text-align:left;padding:14px"><div class="info-label">Qaida</div><p class="muted">Not enrolled.</p></div>`) : ''}
+      ${included.nazra ? (data.nazra ? `
+        <div class="summary-card" style="text-align:left;padding:14px">
+          <div class="info-label">Nazra</div>
+          <div class="info-value" style="text-transform:capitalize">${esc((data.nazra.overallStatus || '').replace(/_/g, ' ')) || 'N/A'}</div>
+        </div>` : `<div class="summary-card" style="text-align:left;padding:14px"><div class="info-label">Nazra</div><p class="muted">Not enrolled.</p></div>`) : ''}
+    </div>` : '';
+
+  const attendanceSection = included.attendance ? (() => {
+    const a = data.attendance;
+    if (!a || a.markedDays == null) return `<div class="section-title">Attendance</div><p class="muted">No attendance records for this term.</p>`;
+    const rate = a.attendanceRate ?? 0;
+    return `
+    <div class="section-title">Attendance</div>
+    <div class="bar-item" style="margin-bottom:12px">
+      <div class="bar-name" style="width:110px">Overall Rate</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, rate))}%;background:${rate >= 90 ? '#16A34A' : rate >= 75 ? '#F5A623' : '#DC2626'}"></div></div>
+      <div class="bar-score">${rate}%</div>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-card"><div class="summary-num">${a.presentCount ?? 0}</div><div class="summary-label">Present</div></div>
+      <div class="summary-card"><div class="summary-num">${a.lateCount ?? 0}</div><div class="summary-label">Late</div></div>
+      <div class="summary-card"><div class="summary-num">${a.absentCount ?? 0}</div><div class="summary-label">Absent</div></div>
+      <div class="summary-card"><div class="summary-num">${a.halfDayCount ?? 0}</div><div class="summary-label">Half Day</div></div>
+    </div>`;
+  })() : '';
+
+  const parentEngagementSection = included.parentEngagement ? (() => {
+    const p = data.parentEngagement;
+    if (!p || p.overallScore == null) return `<div class="section-title">Parent Engagement</div><p class="muted">Not enough data yet to compute a Parent Engagement Score.</p>`;
+    return `
+    <div class="section-title">Parent Engagement</div>
+    <div class="bar-item">
+      <div class="bar-name" style="width:110px;text-transform:capitalize">${esc((p.rating || '').replace(/_/g, ' '))}</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, p.overallScore))}%;background:#7C3AED"></div></div>
+      <div class="bar-score">${p.overallScore}/100</div>
+    </div>
+    ${p.recommendation ? `<p class="note">${esc(p.recommendation)}</p>` : ''}`;
+  })() : '';
+
+  const feedbackSection = included.teacherFeedback ? (() => {
+    const entries = (data.teacherFeedback || []).slice(0, 8);
+    if (entries.length === 0) return `<div class="section-title">Teacher Feedback This Term</div><p class="muted">No feedback recorded for this term yet.</p>`;
+    return `
+    <div class="section-title">Teacher Feedback This Term</div>
+    ${entries.map((f: any) => `
+      <div class="feedback-item">
+        <p class="feedback-text">${f.subject ? `<strong>${esc(f.subject)}:</strong> ` : ''}${esc(f.text)}</p>
+        <p class="feedback-meta">${esc(f.author) || 'Staff'}${f.date ? ' · ' + new Date(f.date).toLocaleDateString('en-GB') : ''}</p>
+      </div>`).join('')}`;
+  })() : '';
+
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -350,8 +469,9 @@ const REPORT_CARD_TEMPLATE = (data: any) => `
   .student-box { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
   .info-label { font-size: 10px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
   .info-value { font-size: 14px; font-weight: 600; color: #0D1F35; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
+  .section-title { font-size: 13px; font-weight: 700; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
+  .section-title:first-of-type { margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 13px; }
   th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
   th:last-child { text-align: center; }
   td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; }
@@ -361,16 +481,26 @@ const REPORT_CARD_TEMPLATE = (data: any) => `
   .grade-b { color: #2563EB; font-weight: 700; }
   .grade-c { color: #D97706; font-weight: 700; }
   .grade-d { color: #DC2626; font-weight: 700; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
   .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 8px; padding: 12px; text-align: center; }
-  .summary-num { font-size: 24px; font-weight: 800; color: #1B4F8A; }
+  .summary-num { font-size: 22px; font-weight: 800; color: #1B4F8A; }
   .summary-label { font-size: 10px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
-  .tarb-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
-  .tarb-item { display: flex; align-items: center; gap: 8px; }
-  .tarb-bar-wrap { flex: 1; background: #EEF4FB; border-radius: 4px; height: 6px; overflow: hidden; }
-  .tarb-bar { height: 100%; border-radius: 4px; background: #1B4F8A; }
-  .tarb-name { font-size: 11px; color: #3D5A7A; width: 80px; }
-  .tarb-score { font-size: 11px; font-weight: 700; color: #1B4F8A; width: 28px; text-align: right; }
+  .tags-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tag { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; }
+  .tag-strong { background: #ECFDF5; color: #16A34A; }
+  .tag-weak { background: #FEF3DC; color: #B45309; }
+  .bar-item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .bar-name { font-size: 11px; color: #3D5A7A; width: 130px; flex-shrink: 0; }
+  .bar-wrap { flex: 1; background: #EEF4FB; border-radius: 4px; height: 8px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; background: #1B4F8A; }
+  .bar-score { font-size: 11px; font-weight: 700; color: #1B4F8A; width: 36px; text-align: right; flex-shrink: 0; }
+  .tarb-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 20px; margin-bottom: 10px; }
+  .list-item { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #F7FAFD; }
+  .note { font-size: 12px; color: #3D5A7A; line-height: 1.5; margin-bottom: 8px; }
+  .muted { font-size: 12px; color: #9CA7B8; font-style: italic; margin-bottom: 14px; }
+  .feedback-item { background: #F7FAFD; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .feedback-text { font-size: 12px; color: #0D1F35; }
+  .feedback-meta { font-size: 10px; color: #9CA7B8; margin-top: 2px; }
   .remarks-box { background: #FEF3DC; border: 1px solid #F5A623; border-radius: 8px; padding: 14px; margin-bottom: 20px; }
   .remarks-text { font-size: 13px; color: #0D1F35; line-height: 1.6; }
   .sig-row { display: flex; justify-content: space-between; margin-top: 32px; padding-top: 16px; border-top: 1px solid #DDE8F4; }
@@ -385,80 +515,73 @@ const REPORT_CARD_TEMPLATE = (data: any) => `
 <div class="page">
   <div class="header">
     <div>
-      <div class="school-name">${data.schoolName}</div>
-      <div class="school-sub">${data.schoolAddress || ''}</div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
     </div>
     <div>
-      <div class="doc-title">Student Report Card</div>
-      <div class="doc-year">${data.academicYear} ${data.term ? '· ' + data.term : ''}</div>
+      <div class="doc-title">Term Report Card</div>
+      <div class="doc-year">${esc(data.academicYear)} ${data.term ? '· ' + esc(data.term) : ''}</div>
     </div>
   </div>
   <div class="student-box">
-    <div><div class="info-label">Student Name</div><div class="info-value">${data.studentName}</div></div>
-    <div><div class="info-label">GR No</div><div class="info-value">${data.rollNumber || 'N/A'}</div></div>
-    <div><div class="info-label">Grade / Class</div><div class="info-value">${data.grade} ${data.section || ''}</div></div>
-    <div><div class="info-label">Date of Birth</div><div class="info-value">${data.dob || 'N/A'}</div></div>
-    <div><div class="info-label">Attendance</div><div class="info-value">${data.attendance || 'N/A'}</div></div>
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">GR No</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
+    <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
+    <div><div class="info-label">Result</div><div class="info-value" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'};text-transform:uppercase">${esc(data.overallResult) || 'N/A'}</div></div>
     <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
   </div>
+
   <div class="section-title">Academic Performance</div>
   <table>
     <thead>
       <tr>
-        <th style="width:35%">Subject</th>
+        <th style="width:40%">Subject</th>
         <th>Total Marks</th>
         <th>Obtained</th>
         <th>Percentage</th>
         <th>Grade</th>
-        <th>Remarks</th>
       </tr>
     </thead>
-    <tbody>
-      ${(data.subjects || []).map((s: any) => {
-        const pct = s.totalMarks ? Math.round((s.obtainedMarks / s.totalMarks) * 100) : 0;
-        const grade = pct >= 80 ? 'A' : pct >= 65 ? 'B' : pct >= 50 ? 'C' : 'D';
-        const cls = `grade-${grade.toLowerCase()}`;
-        const remark = pct >= 80 ? 'Excellent' : pct >= 65 ? 'Good' : pct >= 50 ? 'Satisfactory' : 'Needs Improvement';
-        return `<tr>
-          <td><strong>${s.subjectName}</strong></td>
-          <td>${s.totalMarks}</td>
-          <td>${s.obtainedMarks}</td>
-          <td>${pct}%</td>
-          <td class="${cls}">${grade}</td>
-          <td>${remark}</td>
-        </tr>`;
-      }).join('')}
-    </tbody>
+    <tbody>${subjectRows}</tbody>
   </table>
   <div class="summary-grid">
     <div class="summary-card"><div class="summary-num">${data.totalObtained || 0}</div><div class="summary-label">Total Obtained</div></div>
     <div class="summary-card"><div class="summary-num">${data.totalMarks || 0}</div><div class="summary-label">Total Marks</div></div>
     <div class="summary-card"><div class="summary-num" style="color:${data.overallPct >= 65 ? '#16A34A' : '#DC2626'}">${data.overallPct || 0}%</div><div class="summary-label">Overall %</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:#F5A623">${data.overallGrade || 'N/A'}</div><div class="summary-label">Final Grade</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (${data.overallGPA})` : ''}</div><div class="summary-label">Final Grade</div></div>
   </div>
-  ${data.tarbiyah && data.tarbiyah.length > 0 ? `
-  <div class="section-title">Behaviour & Tarbiyah</div>
-  <div class="tarb-grid">
-    ${data.tarbiyah.map((t: any) => `
-    <div class="tarb-item">
-      <div class="tarb-name">${t.trait}</div>
-      <div class="tarb-bar-wrap"><div class="tarb-bar" style="width:${t.score}%"></div></div>
-      <div class="tarb-score">${t.score}</div>
-    </div>`).join('')}
+  ${subjectBars ? `<div style="margin-bottom:10px">${subjectBars}</div>` : ''}
+  ${(data.strongestSubject || data.weakestSubject) ? `
+  <div class="tags-row">
+    ${data.strongestSubject ? `<span class="tag tag-strong">Strongest: ${esc(data.strongestSubject)}</span>` : ''}
+    ${data.weakestSubject ? `<span class="tag tag-weak">Needs Focus: ${esc(data.weakestSubject)}</span>` : ''}
   </div>` : ''}
+
+  ${tarbiyahSection}
+  ${qaidaNazraSection}
+  ${attendanceSection}
+  ${parentEngagementSection}
+  ${feedbackSection}
+
   ${data.remarks ? `
   <div class="section-title">Class Teacher Remarks</div>
-  <div class="remarks-box"><div class="remarks-text">${data.remarks}</div></div>` : ''}
+  <div class="remarks-box"><div class="remarks-text">${esc(data.remarks)}</div></div>` : ''}
+  ${data.principalRemarks ? `
+  <div class="section-title">Principal's Remarks</div>
+  <div class="remarks-box"><div class="remarks-text">${esc(data.principalRemarks)}</div></div>` : ''}
+
   <div class="sig-row">
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Principal</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
   </div>
-  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${data.schoolName} · ${new Date().toLocaleDateString('en-GB')}</div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
 </div>
 </body>
 </html>
 `;
+};
 
 // Human-readable labels for QAIDA_COMMON_ERRORS keys (qaida-progress.schema.ts)
 // - kept here rather than on the schema itself, since the schema's job is
@@ -1133,6 +1256,7 @@ export class PdfService implements OnModuleDestroy {
     @InjectModel(TarbiyahAssessment.name) private tarbiyahModel: Model<any>,
     @InjectModel(CharacterProgramSettings.name) private characterSettingsModel: Model<any>,
     private financeService: FinanceService,
+    @InjectModel(TermReportCard.name) private termReportCardModel: Model<any>,
   ) {}
 
   /**
@@ -1322,6 +1446,21 @@ export class PdfService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Comprehensive, whole-term report card PDF. Previously this queried
+   * `this.assessmentModel` (one whole-exam definition per grade/section,
+   * with no `studentId` field at all) and a `behaviourModel.traits` field
+   * that doesn't exist on that schema either - so this always produced an
+   * empty subjects list and zero marks, regardless of real data, silently.
+   * Now reads the already-computed TermReportCard directly (see
+   * AssessmentService.generateTermReportCards) - the single source of
+   * truth for a student's whole-term academic summary plus whichever
+   * optional Tarbiyah/Qaida/Nazra/attendance/teacher-feedback/Parent
+   * Engagement sections were included at generation time - instead of
+   * re-deriving the same aggregation a second time against the wrong
+   * collections. If `dto.term` is omitted, the most recently generated
+   * term report for that academic year is used.
+   */
   async generateReportCard(
     schoolSlug: string,
     dto: GenerateReportCardDto,
@@ -1334,61 +1473,48 @@ export class PdfService implements OnModuleDestroy {
       .lean();
     if (!student) throw new NotFoundException('Student not found');
 
-    const assessments = await this.assessmentModel
-      .find({
-        schoolSlug,
-        studentId: dto.studentId,
-        academicYear: dto.academicYear,
-        ...(dto.term ? { term: dto.term } : {}),
-      })
+    const filter: any = { schoolSlug, studentId: dto.studentId, academicYear: dto.academicYear };
+    if (dto.term) filter.term = dto.term;
+    const trc: any = await this.termReportCardModel
+      .findOne(filter)
+      .sort({ createdAt: -1 })
       .lean();
-
-    const behaviour = await this.behaviourModel
-      .findOne({
-        schoolSlug,
-        studentId: dto.studentId,
-        academicYear: dto.academicYear,
-      })
-      .lean();
-
-    const subjects = assessments.map((a: any) => ({
-      subjectName: a.subjectName || a.subject,
-      totalMarks: a.totalMarks || 100,
-      obtainedMarks: a.obtainedMarks || a.marksObtained || 0,
-    }));
-
-    const totalMarks = subjects.reduce((s: number, x: any) => s + x.totalMarks, 0);
-    const totalObtained = subjects.reduce((s: number, x: any) => s + x.obtainedMarks, 0);
-    const overallPct = totalMarks > 0 ? Math.round((totalObtained / totalMarks) * 100) : 0;
-    const overallGrade = overallPct >= 80 ? 'A' : overallPct >= 65 ? 'B' : overallPct >= 50 ? 'C' : 'D';
-
-    const tarbiyah = (behaviour as any)?.traits
-      ? Object.entries((behaviour as any).traits).map(([trait, score]) => ({
-          trait: trait.charAt(0).toUpperCase() + trait.slice(1),
-          score: Number(score),
-        }))
-      : [];
+    if (!trc) {
+      throw new NotFoundException(
+        `No report card has been generated yet for ${studentFullName(student as any)} in ${dto.academicYear}` +
+        `${dto.term ? ` (${dto.term})` : ''} - generate one first from Assessments → Results → Whole Term.`,
+      );
+    }
 
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
-      academicYear: dto.academicYear,
-      term: dto.term || '',
-      studentName: studentFullName(student as any),
-      rollNumber: (student as any).rollNumber || (student as any).admissionNumber || 'N/A',
-      grade: (student as any).grade || (student as any).gradeLevel || '',
-      section: (student as any).section || '',
-      dob: (student as any).dateOfBirth
-        ? new Date((student as any).dateOfBirth).toLocaleDateString('en-GB')
-        : 'N/A',
-      attendance: (student as any).attendancePct ? `${(student as any).attendancePct}%` : 'N/A',
-      subjects,
-      totalMarks,
-      totalObtained,
-      overallPct,
-      overallGrade,
-      tarbiyah,
-      remarks: (behaviour as any)?.teacherRemarks || '',
+      academicYear: trc.academicYear,
+      term: trc.term,
+      studentName: trc.studentName,
+      rollNumber: trc.rollNumber || 'N/A',
+      grade: trc.grade,
+      section: trc.section || '',
+      subjects: trc.subjects || [],
+      totalMarks: trc.totalMaxMarks || 0,
+      totalObtained: trc.totalObtainedMarks || 0,
+      overallPct: trc.overallPercentage || 0,
+      overallGrade: trc.overallGrade || 'N/A',
+      overallGPA: trc.overallGPA,
+      overallResult: trc.overallResult,
+      classPosition: trc.classPosition,
+      totalStudents: trc.totalStudents,
+      strongestSubject: trc.strongestSubject,
+      weakestSubject: trc.weakestSubject,
+      sectionsIncluded: trc.sectionsIncluded || {},
+      tarbiyah: trc.tarbiyah || null,
+      qaida: trc.qaida || null,
+      nazra: trc.nazra || null,
+      attendance: trc.attendance || null,
+      parentEngagement: trc.parentEngagement || null,
+      teacherFeedback: trc.teacherFeedback || [],
+      remarks: trc.classTeacherRemarks || '',
+      principalRemarks: trc.principalRemarks || '',
     };
 
     // Same reasoning as generateFeeReceipt above: route through the
@@ -1397,7 +1523,11 @@ export class PdfService implements OnModuleDestroy {
     // cards, instead of always using this fixed HTML template regardless
     // of what a school designed. Falls back to the original fixed layout
     // if the template-driven render fails for any reason - a report card
-    // going home to a parent must never simply error out.
+    // going home to a parent must never simply error out. Note: the
+    // generic template-driven engine only supports simple field/table/text
+    // sections, so a custom school template won't render the chart-bearing
+    // sections below - an acceptable degradation, not a regression, since
+    // it never rendered them before either.
     let pdf: Buffer;
     try {
       pdf = await this.renderTemplateDrivenPdf(schoolSlug, 'result_card', data);
