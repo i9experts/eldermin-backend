@@ -1,4 +1,4 @@
-import { feeStructureCoversMonth, pickApplicableFeeStructures } from './fee-structure-match.util';
+import { feeStructureCoversMonth, pickApplicableFeeStructures, structuresAreComplementary } from './fee-structure-match.util';
 
 const d = (s: string) => new Date(s);
 
@@ -56,5 +56,41 @@ describe('pickApplicableFeeStructures', () => {
     const specialA = { _id: '2', grade: 'Prek-2', section: 'A', effectiveFrom: d('2026-08-01'), effectiveTo: d('2026-08-31') }; // a since-superseded mid-year variant
     const current = { _id: '3', grade: 'Prek-2', section: 'A', effectiveFrom: d('2026-09-01') };
     expect(pickApplicableFeeStructures([y2025, specialA, current], d('2026-09-15'))).toEqual([current]);
+  });
+});
+
+describe('structuresAreComplementary', () => {
+  it('is true for a single structure (nothing to conflict with)', () => {
+    expect(structuresAreComplementary([{ _id: '1', items: [{ feeHead: 'Monthly Tuition Fee' }] }])).toBe(true);
+  });
+
+  it('is true when two equally-specific structures cover entirely different fee heads - the Admission Fee / Monthly Tuition Fee real-world case', () => {
+    const mtf = { _id: '1', grade: 'Prek-2', items: [{ feeHead: 'Monthly Tuition Fee' }] };
+    const af = { _id: '2', grade: 'Prek-2', items: [{ feeHead: 'Admission Fee' }] };
+    expect(structuresAreComplementary([mtf, af])).toBe(true);
+  });
+
+  it('is false when the same fee head is priced by more than one structure - the genuine duplicate pickApplicableFeeStructures must still flag', () => {
+    const old = { _id: '1', grade: 'Prek-2', items: [{ feeHead: 'Monthly Tuition Fee' }] };
+    const duplicate = { _id: '2', grade: 'Prek-2', items: [{ feeHead: 'Monthly Tuition Fee' }] };
+    expect(structuresAreComplementary([old, duplicate])).toBe(false);
+  });
+
+  it('is false when only one fee head among several overlaps', () => {
+    const a = { _id: '1', items: [{ feeHead: 'Monthly Tuition Fee' }, { feeHead: 'Admission Fee' }] };
+    const b = { _id: '2', items: [{ feeHead: 'Monthly Tuition Fee' }] };
+    expect(structuresAreComplementary([a, b])).toBe(false);
+  });
+
+  it('treats fee head comparison as case/whitespace-insensitive', () => {
+    const a = { _id: '1', items: [{ feeHead: ' Admission Fee ' }] };
+    const b = { _id: '2', items: [{ feeHead: 'admission fee' }] };
+    expect(structuresAreComplementary([a, b])).toBe(false);
+  });
+
+  it('treats a structure with no items as contributing no conflict', () => {
+    const empty = { _id: '1', items: [] };
+    const af = { _id: '2', items: [{ feeHead: 'Admission Fee' }] };
+    expect(structuresAreComplementary([empty, af])).toBe(true);
   });
 });

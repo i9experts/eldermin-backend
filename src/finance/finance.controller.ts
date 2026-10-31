@@ -742,6 +742,17 @@ export class FinanceController {
     return this.service.backfillRolledForwardInvoices(schoolSlug, dto.dryRun !== false);
   }
 
+  // Mirror-image repair for invoices orphaned by the old delete-invoice bug
+  // (see FinanceService.fixOrphanedRolledForwardInvoices) - un-rolls any
+  // invoice still pointing at a now-deleted/missing invoice so it reappears
+  // in Receivables/Defaulters. Defaults to a dry run.
+  @RequireModuleAccess('finance', 'fee', 'manage')
+  @Post('invoices/fix-orphaned-rolled-forward') @HttpCode(HttpStatus.OK)
+  async fixOrphanedRolledForwardInvoices(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.fixOrphanedRolledForwardInvoices(schoolSlug, dto.dryRun !== false);
+  }
+
   // ============================================================
   // PHASE 2 — VENDOR MASTER / ACCOUNTS PAYABLE
   // ============================================================
