@@ -421,4 +421,20 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('User not found');
     return { avatarUrl: url };
   }
+
+  // "Show Me Around" product tour. scope 'global' marks the one-time
+  // sidebar/topbar orientation tour (finished or skipped - either way the
+  // frontend won't auto-start it again); a module key (e.g. 'finance')
+  // records that module's own mini-tour as seen, independent of every
+  // other module's tour state.
+  async updateTourState(userId: string, tenantId: string, scope: string) {
+    const update = scope === 'global'
+      ? { $set: { globalTourCompleted: true, globalTourCompletedAt: new Date() } }
+      : { $addToSet: { moduleToursSeen: scope } };
+    const user = await this.userModel.findOneAndUpdate(
+      { _id: userId, tenantId }, update, { new: true },
+    ).select('globalTourCompleted globalTourCompletedAt moduleToursSeen');
+    if (!user) throw new UnauthorizedException('User not found');
+    return user;
+  }
 }
