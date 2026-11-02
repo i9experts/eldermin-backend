@@ -1,8 +1,10 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Types } from 'mongoose';
 import { assertEceStudentInScope, eceCampusOf, eceScopedStudentIds } from './ece-scope.util';
 import { EceService } from './ece.service';
 import { EceController } from './ece.controller';
+import { ROLES_OR_MODULE_KEY } from '../roles/decorators/roles-or-module-manage.decorator';
 
 // Round 2: Early Years campus scope. Campus-/teacher-level callers see only children of their own campus; institution-level callers see all.
 const CAMPUS_A = new Types.ObjectId().toHexString();
@@ -121,8 +123,10 @@ describe('EceController applies the scope before touching a child', () => {
     await ctrl.addSupportStrategy(req, SID, {} as any);
     await ctrl.addSupportReview(req, SID, {} as any);
     await ctrl.updateSupportCase(req, SID, {} as any);
+    await ctrl.getWorkRecords(req, SID);
+    await ctrl.upsertWorkRecord(req, { studentId: SID } as any);
     const scopeChecks = calls.filter((c) => c === 'scope').length;
-    expect(scopeChecks).toBe(17);
+    expect(scopeChecks).toBe(19);
     for (let i = 0; i < calls.length; i += 2) { expect(calls[i]).toBe('scope'); expect(calls[i + 1]).not.toBe('scope'); }
   });
   it('when the scope check throws, the action is never run', async () => {
@@ -130,5 +134,30 @@ describe('EceController applies the scope before touching a child', () => {
     const service: any = { assertStudentInScope: async () => { throw new ForbiddenException('no'); }, createObservation: async () => { calls.push('created'); } };
     await expect(new EceController(service).createObservation(req, { studentId: SID } as any)).rejects.toBeInstanceOf(ForbiddenException);
     expect(calls).toEqual([]);
+  });
+});
+
+// A custom role with no early-years grant must not reach these writes via the
+// controller-level @Roles(...SCHOOL_STAFF_ROLES) alone - they need their own
+// @RolesOrModuleManage, same as the sibling writes (createObservation etc.) already had.
+describe('EceController Learning Experience / Environment / Montessori writes require the early-years module grant', () => {
+  const reflector = new Reflector();
+  const handlers: [keyof EceController, string][] = [
+    ['createExperience', 'POST experiences'],
+    ['updateExperience', 'PUT experiences/:id'],
+    ['deleteExperience', 'DELETE experiences/:id'],
+    ['createEnvironmentArea', 'POST environment-areas'],
+    ['seedDefaultEnvironmentAreas', 'POST environment-areas/seed-default'],
+    ['updateEnvironmentArea', 'PUT environment-areas/:id'],
+    ['logSafetyCheck', 'PATCH environment-areas/:id/safety-check'],
+    ['addEnvironmentObservation', 'PATCH environment-areas/:id/observation'],
+    ['createMontessoriMaterial', 'POST montessori/materials'],
+    ['seedClassicMontessoriMaterials', 'POST montessori/materials/seed-classics'],
+  ];
+  it.each(handlers)('%s (%s) carries the RolesOrModuleManage(early-years) requirement', (method) => {
+    const requirement = reflector.get(ROLES_OR_MODULE_KEY, (EceController.prototype as any)[method]);
+    expect(requirement).toBeDefined();
+    expect(requirement.moduleKey).toBe('early-years');
+    expect(requirement.allowModuleWide).toBe(true);
   });
 });
