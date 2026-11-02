@@ -1,4 +1,4 @@
-import { normalizeGradeName, normalizeSectionName, sameGrade, sameSection } from './class-match.util';
+import { normalizeGradeName, normalizeSectionName, sameGrade, sameSection, sectionMatcher } from './class-match.util';
 
 describe('class-match.util', () => {
   it.each(['Grade 3', 'grade-3', 'Class 3', 'G3', '3', ' 3 ', 'GRADE   3', 'Std 3', 'Standard 3', 'grade_3', 'Grade3', '03'])(
@@ -67,5 +67,36 @@ describe('class-match.util', () => {
     // A grade-prefixed section still only matches its own grade's bare
     // section, never collides with an unrelated plain section string.
     expect(sameSection('Grade 2A', 'Grade 2A')).toBe(true);
+  });
+
+  // Regression: sameSection()/normalizeSectionName() (the plain in-process
+  // JS comparison) correctly normalize "Grade 1B" -> "b", but sectionMatcher()
+  // (the Mongo-queryable regex, used by students.service.getStudents()'s
+  // $in filter against the REAL stored currentSection field - the actual
+  // query path Assessments' Enter Marks screen runs) never got the same
+  // leading grade/class-reference strip added to its regex pattern, only
+  // the trailing 'section '/'sec ' one - so a query for canonical section
+  // "Grade 1B" matched zero students whose currentSection was stored as
+  // "Grade 1B" (or any other grade-prefixed form), even though sameSection
+  // itself said they were equal. This is the live "No active students
+  // found for GRADE-1 — Grade 1B" bug reported after the above fix landed.
+  it('sectionMatcher matches a raw grade-prefixed stored section value', () => {
+    const matcher = sectionMatcher('Grade 1B');
+    expect(matcher.test('B')).toBe(true);
+    expect(matcher.test('b')).toBe(true);
+    expect(matcher.test('Grade 1B')).toBe(true);
+    expect(matcher.test('GRADE-1B')).toBe(true);
+    expect(matcher.test('Grade-1-B')).toBe(true);
+    expect(matcher.test('Section B')).toBe(true);
+    expect(matcher.test('C')).toBe(false);
+    expect(matcher.test('Grade 2B')).toBe(true); // bare section only, grade prefix is ignored same as normalizeSectionName
+  });
+
+  it('sectionMatcher matches a raw stored value against a bare canonical section', () => {
+    const matcher = sectionMatcher('A');
+    expect(matcher.test('Grade 2A')).toBe(true);
+    expect(matcher.test('GRADE-3A')).toBe(true);
+    expect(matcher.test('A')).toBe(true);
+    expect(matcher.test('B')).toBe(false);
   });
 });
