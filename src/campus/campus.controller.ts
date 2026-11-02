@@ -117,6 +117,12 @@ export class CampusController {
     return this.service.allocateHostel({ ...dto, schoolSlug });
   }
 
+  @Patch('hostel/allocations/:id')
+  async updateAllocation(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateHostelAllocation(id, schoolSlug, dto);
+  }
+
   @Patch('hostel/allocations/:id/checkout')
   async checkOut(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
@@ -148,6 +154,12 @@ export class CampusController {
   async updateMaintenanceStatus(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateMaintenanceStatus(id, schoolSlug, dto);
+  }
+
+  @Patch('maintenance/:id')
+  async updateMaintenance(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateMaintenance(id, schoolSlug, dto);
   }
 
   @Get('assets')

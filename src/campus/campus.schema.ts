@@ -218,7 +218,11 @@ export type MaintenanceRequestDocument = MaintenanceRequest & Document;
 
 @Schema({ timestamps: true, collection: 'maintenance_requests' })
 export class MaintenanceRequest {
-  @Prop({ required: true, unique: true }) mrNumber: string;   // MR-2025-0001
+  // Not globally unique - scoped per-school by the compound index below.
+  // A single-field unique index across the whole platform left only ~9000
+  // possible numbers per year shared by every tenant, so duplicate-key 500s
+  // were only a matter of tenant count and time.
+  @Prop({ required: true }) mrNumber: string;   // MR-2025-0001
   @Prop({ required: true }) title: string;
   @Prop({ required: true }) description: string;
   @Prop({
@@ -254,10 +258,11 @@ export class MaintenanceRequest {
 }
 export const MaintenanceRequestSchema = SchemaFactory.createForClass(MaintenanceRequest);
 MaintenanceRequestSchema.index({ schoolSlug: 1, status: 1, priority: 1 });
+MaintenanceRequestSchema.index({ schoolSlug: 1, mrNumber: 1 }, { unique: true });
 MaintenanceRequestSchema.pre('validate', function () {
   if (this.isNew && !this.mrNumber) {
     const y = new Date().getFullYear();
-    const r = Math.floor(1000 + Math.random() * 9000);
+    const r = Math.floor(100000 + Math.random() * 900000);
     this.mrNumber = `MR-${y}-${r}`;
   }
 });
@@ -270,7 +275,9 @@ export type AssetDocument = Asset & Document;
 @Schema({ timestamps: true, collection: 'assets' })
 export class Asset {
   @Prop({ required: true }) name: string;
-  @Prop({ required: true, unique: true }) assetCode: string;  // AST-001
+  // Not globally unique - scoped per-school by the compound index below
+  // (same reasoning as MaintenanceRequest.mrNumber).
+  @Prop({ required: true }) assetCode: string;  // AST-001
   @Prop({
     enum: ['furniture', 'it_equipment', 'lab_equipment', 'sports',
            'library', 'vehicle', 'appliance', 'musical_instrument', 'other'],
@@ -311,9 +318,10 @@ export class Asset {
 }
 export const AssetSchema = SchemaFactory.createForClass(Asset);
 AssetSchema.index({ schoolSlug: 1, category: 1, status: 1 });
+AssetSchema.index({ schoolSlug: 1, assetCode: 1 }, { unique: true });
 AssetSchema.pre('validate', async function () {
   if (this.isNew && !this.assetCode) {
-    const rand = Math.floor(100 + Math.random() * 900);
+    const rand = Math.floor(10000 + Math.random() * 90000);
     this.assetCode = `AST-${rand}`;
   }
 });

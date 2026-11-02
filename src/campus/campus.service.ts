@@ -48,7 +48,7 @@ export class CampusService {
       totalBeds, occupiedBeds, hostelBlocks,
       hostelStudents,
       openMaintenance, urgentMaintenance,
-      completedThisMonth, maintenanceCostThisMonth,
+      completedThisMonth, maintenanceCostThisMonth, maintenanceByStatus,
       totalAssets, assetsByCondition,
       assetsNeedingInspection,
       upcomingEvents, ongoingEvents,
@@ -82,6 +82,13 @@ export class CampusService {
       this.maintenanceModel.aggregate([
         { $match: { schoolSlug, status: 'completed', completedAt: { $gte: monthStart } } },
         { $group: { _id: null, total: { $sum: '$actualCost' } } },
+      ]),
+      // Powers the dashboard's real "Maintenance Ticket Status" chart -
+      // this used to be a hardcoded fake array (4/5/2/8) on the frontend,
+      // unrelated to any real ticket in the school.
+      this.maintenanceModel.aggregate([
+        { $match: { schoolSlug } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       this.assetModel.countDocuments({ schoolSlug, status: 'active' }),
       this.assetModel.aggregate([
@@ -124,6 +131,7 @@ export class CampusService {
         open: openMaintenance, urgent: urgentMaintenance,
         completedThisMonth,
         costThisMonth: maintenanceCostThisMonth[0]?.total || 0,
+        byStatus: maintenanceByStatus,
       },
       assets: {
         total: totalAssets,
@@ -233,22 +241,50 @@ export class CampusService {
   }
 
   async allocateHostel(data: any) {
-    const room = await this.roomModel.findById(data.roomId);
+    if (!data.studentId) throw new BadRequestException('studentId is required');
+    if (!data.roomId || !data.blockId) throw new BadRequestException('roomId and blockId are required');
+    // Scoped by schoolSlug like every other lookup in this service - an
+    // unscoped findById let a caller allocate against (and corrupt the
+    // occupancy counters of) another tenant's room/block by id guessing.
+    const room = await this.roomModel.findOne({ _id: data.roomId, schoolSlug: data.schoolSlug });
     if (!room) throw new NotFoundException('Room not found');
-    if (room.occupancy >= room.capacity) throw new Error('Room is full');
+    const block = await this.blockModel.findOne({ _id: data.blockId, schoolSlug: data.schoolSlug });
+    if (!block) throw new NotFoundException('Block not found');
+    if (room.occupancy >= room.capacity) throw new BadRequestException('Room is full');
     const alloc = new this.allocationModel({
       ...data,
       checkInDate: new Date(data.checkInDate || Date.now()),
     });
     await alloc.save();
     const newOccupancy = room.occupancy + 1;
-    await this.roomModel.findByIdAndUpdate(data.roomId, {
+    await this.roomModel.updateOne({ _id: data.roomId, schoolSlug: data.schoolSlug }, {
       $set: {
         occupancy: newOccupancy,
         status: newOccupancy >= room.capacity ? 'full' : 'available',
       },
     });
-    await this.blockModel.findByIdAndUpdate(data.blockId, { $inc: { occupiedBeds: 1 } });
+    await this.blockModel.updateOne({ _id: data.blockId, schoolSlug: data.schoolSlug }, { $inc: { occupiedBeds: 1 } });
+    return alloc;
+  }
+
+  async updateHostelAllocation(id: string, schoolSlug: string, dto: any) {
+    // Deliberately excludes studentId/roomId/blockId/schoolSlug - moving an
+    // allocation to a different room/block is a transfer (would need to
+    // reverse the old room/block counters and apply new ones), not a plain
+    // edit, and isn't supported by this endpoint.
+    const { status, bedNumber, notes, guardianName, guardianPhone, emergencyContact, dietaryRequirements } = dto;
+    const $set: any = {};
+    if (status !== undefined) $set.status = status;
+    if (bedNumber !== undefined) $set.bedNumber = bedNumber;
+    if (notes !== undefined) $set.notes = notes;
+    if (guardianName !== undefined) $set.guardianName = guardianName;
+    if (guardianPhone !== undefined) $set.guardianPhone = guardianPhone;
+    if (emergencyContact !== undefined) $set.emergencyContact = emergencyContact;
+    if (dietaryRequirements !== undefined) $set.dietaryRequirements = dietaryRequirements;
+    const alloc = await this.allocationModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set }, { new: true },
+    );
+    if (!alloc) throw new NotFoundException('Allocation not found');
     return alloc;
   }
 
@@ -259,8 +295,8 @@ export class CampusService {
       { new: true },
     );
     if (alloc) {
-      await this.roomModel.findByIdAndUpdate(alloc.roomId, { $inc: { occupancy: -1 }, $set: { status: 'available' } });
-      await this.blockModel.findByIdAndUpdate(alloc.blockId, { $inc: { occupiedBeds: -1 } });
+      await this.roomModel.updateOne({ _id: alloc.roomId, schoolSlug }, { $inc: { occupancy: -1 }, $set: { status: 'available' } });
+      await this.blockModel.updateOne({ _id: alloc.blockId, schoolSlug }, { $inc: { occupiedBeds: -1 } });
     }
     return alloc;
   }
@@ -315,6 +351,26 @@ export class CampusService {
     }
     if (data.status === 'rejected') update.rejectionReason = data.rejectionReason;
     return this.maintenanceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+  }
+
+  // General edit (title/location/priority/assignedTo/status) - distinct from
+  // updateMaintenanceStatus above, which only handles a status transition's
+  // own side-effect fields (assignedAt, completedAt, etc). Editing a
+  // ticket's own details previously had no backing endpoint at all: the
+  // frontend's edit modal called nothing and just showed a fake success
+  // toast, silently discarding every change.
+  async updateMaintenance(id: string, schoolSlug: string, data: any) {
+    const { title, description, location, priority, assignedTo, status } = data;
+    const $set: any = {};
+    if (title !== undefined) $set.title = title;
+    if (description !== undefined) $set.description = description;
+    if (location !== undefined) $set.location = location;
+    if (priority !== undefined) $set.priority = priority;
+    if (assignedTo !== undefined) $set.assignedTo = assignedTo;
+    if (status !== undefined) $set.status = status;
+    const ticket = await this.maintenanceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
+    if (!ticket) throw new NotFoundException('Maintenance ticket not found');
+    return ticket;
   }
 
   async getMaintenanceStats(schoolSlug: string) {
@@ -467,6 +523,10 @@ export class CampusService {
   }
 
   async deleteBuilding(id: string, schoolSlug: string) {
+    const roomCount = await this.campusRoomModel.countDocuments({ buildingId: id, schoolSlug });
+    if (roomCount > 0) {
+      throw new BadRequestException(`Cannot delete this building - ${roomCount} room(s) still reference it. Delete or reassign those rooms first.`);
+    }
     const building = await this.buildingModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!building) throw new NotFoundException('Building not found');
     return building;
