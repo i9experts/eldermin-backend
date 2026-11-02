@@ -37,6 +37,17 @@ export function normalizeGradeName(v: unknown): string {
 
 export function normalizeSectionName(v: unknown): string {
   let s = collapse(v);
+  // Some records denormalize section as the FULL class label ("Grade 2A"),
+  // not just the bare section name ("A") - a real, documented convention
+  // (see bulk-assign-class-section.spec.ts: currentSection: 'Grade 1A').
+  // A caller comparing against the canonical bare section name (e.g. an
+  // Assessment's section, sourced straight from the Grade/Section master)
+  // previously matched zero students whose currentSection carried the
+  // grade prefix too - exactly the "No active students found" / mark-entry
+  // "paper never appears" bug on Assessments' Enter Marks screen. Strip a
+  // leading grade/class reference the same way normalizeGradeName detects
+  // one, before the existing 'section '/'sec ' prefix strip.
+  s = s.replace(/^(?:grade|class|standard|std|g)[\s\-_.]*\d+[\s\-_.]*/, '');
   s = s.replace(/^(?:section|sec)[\s\-_.:]+(?=\S)/, '');
   return s;
 }
