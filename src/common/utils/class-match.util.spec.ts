@@ -49,4 +49,23 @@ describe('class-match.util', () => {
     expect(sameSection('Girls', 'Boys')).toBe(false);
     expect(sameSection('Section 1', '1')).toBe(true);
   });
+
+  // Regression: Assessments' Enter Marks screen showed "No active students
+  // found" / the mark sheet never appeared, because a Student's
+  // currentSection is sometimes denormalized as the full class label
+  // ("Grade 2A") while an Assessment's section is the bare canonical name
+  // ("A") from the Grade/Section master - see bulk-assign-class-section.spec.ts
+  // for the real stored convention this reproduces.
+  it('matches a full class-label section against the bare canonical section', () => {
+    expect(sameSection('Grade 2A', 'A')).toBe(true);
+    expect(sameSection('A', 'Grade 2A')).toBe(true);
+    expect(sameSection('GRADE-1B', 'B')).toBe(true);
+    expect(sameSection('Class 5 C', 'C')).toBe(true);
+    expect(normalizeSectionName('Grade 2A')).toBe('a');
+    // Still distinguishes real sections once the grade prefix is stripped.
+    expect(sameSection('Grade 2A', 'B')).toBe(false);
+    // A grade-prefixed section still only matches its own grade's bare
+    // section, never collides with an unrelated plain section string.
+    expect(sameSection('Grade 2A', 'Grade 2A')).toBe(true);
+  });
 });
