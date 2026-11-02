@@ -29,6 +29,7 @@ import { projectForTeacher, TEACHER_NO_FINANCE_MESSAGE } from './teacher-student
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 import { ForbiddenException } from '@nestjs/common';
 import { TeacherAttendanceScopeService } from './teacher-attendance-scope.service';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 @Controller('students')
 export class StudentsController {
@@ -41,7 +42,7 @@ export class StudentsController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
       tenantId: req?.user?.tenantId,

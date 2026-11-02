@@ -11,6 +11,7 @@ import { InitNazraProgressDto, RecordNazraDiaryDto, UpdateParaStatusDto } from '
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // B0.2: parent / student / reseller tokens are denied on every route (both guard modes); staff access unchanged.
 @Controller('behaviour/nazra')
@@ -21,7 +22,7 @@ export class NazraController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       userId: req?.user?.userId,
       requestingUser: req?.user,
