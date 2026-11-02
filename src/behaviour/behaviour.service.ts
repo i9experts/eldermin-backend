@@ -28,6 +28,9 @@ import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
 import { BehaviourAccessContext, denyOrLog, logBehaviourGuard } from './behaviour-access';
+import { gradeMatcher, normalizeSectionName } from '../common/utils/class-match.util';
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 import { classIncludes, classScopeFilter, isOwnByAuthor, stripProtectedFields } from './behaviour-teacher-scope';
 import { sectionMatcher } from '../common/utils/class-match.util';
 
@@ -578,8 +581,26 @@ export class BehaviourService {
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
 
     const filter: any = { schoolSlug };
-    if (grade) filter.grade = grade;
-    if (section) filter.section = section;
+    // TarbiyahAssessment.grade/section are copied verbatim from
+    // Student.currentGrade/currentSection at assessment creation time
+    // (AddTarbiyahModal), which is free-text with no FK to the real
+    // Grade/Section master - the same drift documented in
+    // students.service.ts's getStudents filter. The Reports tab's Grade/
+    // Section filters now come from that real master (GradeLevelDropdown/
+    // SectionDropdown), e.g. "Grade 2"/"A", so an exact-match filter here
+    // would silently return zero rows against assessments stored as
+    // "GRADE-2"/"Grade 2A". gradeMatcher handles the grade side the same
+    // way getStudents already does; section additionally needs a
+    // trailing-match fallback because some schools' legacy section values
+    // bake the grade into the section string ("Grade 2A") rather than
+    // storing the bare section ("A") - sectionMatcher's prefix-only
+    // tolerance doesn't cover that, so match section values that simply
+    // end with the selected (normalized) section too.
+    if (grade) filter.grade = gradeMatcher(grade);
+    if (section) {
+      const bareSection = normalizeSectionName(section);
+      filter.section = bareSection ? new RegExp(`${escapeRegExp(bareSection)}\\s*$`, 'i') : section;
+    }
     if (period) filter.period = period;
     if (effectiveCampusId) filter.campusId = new Types.ObjectId(effectiveCampusId);
 
