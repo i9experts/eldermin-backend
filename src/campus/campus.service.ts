@@ -198,21 +198,38 @@ export class CampusService {
   }
 
   async allocateStudentTransport(data: any) {
-    await this.studentTransportModel.findOneAndUpdate(
+    if (!data.studentId) throw new BadRequestException('studentId is required');
+    if (!data.routeId) throw new BadRequestException('routeId is required');
+    // Scoped by schoolSlug like allocateHostel's room/block lookups - an
+    // unscoped findByIdAndUpdate let a caller increment (and corrupt) another
+    // tenant's route totalStudents counter by id guessing, and never
+    // confirmed the route actually exists for this tenant at all.
+    const route = await this.routeModel.findOne({ _id: data.routeId, schoolSlug: data.schoolSlug });
+    if (!route) throw new NotFoundException('Route not found');
+    const previous = await this.studentTransportModel.findOneAndUpdate(
       { studentId: new Types.ObjectId(data.studentId), schoolSlug: data.schoolSlug, isActive: true },
       { $set: { isActive: false, endDate: new Date() } },
     );
     const allocation = new this.studentTransportModel({ ...data, startDate: new Date() });
     const saved = await allocation.save();
-    await this.routeModel.findByIdAndUpdate(data.routeId, { $inc: { totalStudents: 1 } });
+    await this.routeModel.updateOne({ _id: data.routeId, schoolSlug: data.schoolSlug }, { $inc: { totalStudents: 1 } });
+    // Reassigning a student to a new route must also release their seat on
+    // whichever route they were previously on - without this, moving a
+    // student from Route A to Route B incremented B's totalStudents but
+    // left A's permanently inflated by one, drifting further every time a
+    // student switches routes.
+    if (previous && String(previous.routeId) !== String(data.routeId)) {
+      await this.routeModel.updateOne({ _id: previous.routeId, schoolSlug: data.schoolSlug }, { $inc: { totalStudents: -1 } });
+    }
     return saved;
   }
 
   async removeStudentTransport(id: string, schoolSlug: string) {
     const alloc = await this.studentTransportModel.findOneAndUpdate(
-      { _id: id, schoolSlug }, { $set: { isActive: false, endDate: new Date() } }, { new: true },
+      { _id: id, schoolSlug, isActive: true }, { $set: { isActive: false, endDate: new Date() } }, { new: true },
     );
-    if (alloc) await this.routeModel.findByIdAndUpdate(alloc.routeId, { $inc: { totalStudents: -1 } });
+    if (!alloc) throw new NotFoundException('Transport allocation not found, or already removed');
+    await this.routeModel.updateOne({ _id: alloc.routeId, schoolSlug }, { $inc: { totalStudents: -1 } });
     return alloc;
   }
 
@@ -227,6 +244,15 @@ export class CampusService {
   }
 
   async createRoom(data: any) {
+    // Same reasoning as createCampusRoom's buildingId check below - never
+    // let a room be created pointing at a blockId that doesn't actually
+    // belong to this tenant (a dangling/cross-tenant reference that would
+    // otherwise only surface later, confusingly, when allocateHostel's own
+    // block lookup fails).
+    if (data.blockId) {
+      const block = await this.blockModel.findOne({ _id: data.blockId, schoolSlug: data.schoolSlug });
+      if (!block) throw new NotFoundException('Block not found');
+    }
     return new this.roomModel(data).save();
   }
 
@@ -251,6 +277,16 @@ export class CampusService {
     const block = await this.blockModel.findOne({ _id: data.blockId, schoolSlug: data.schoolSlug });
     if (!block) throw new NotFoundException('Block not found');
     if (room.occupancy >= room.capacity) throw new BadRequestException('Room is full');
+    // Room-level occupancy vs capacity only stops over-filling the room as a
+    // whole - it never stopped two different students both being handed the
+    // same bedNumber (e.g. both "Bed 1") as long as the room still had a
+    // free slot. Bed numbers are optional, so only enforced when supplied.
+    if (data.bedNumber) {
+      const bedTaken = await this.allocationModel.findOne({
+        roomId: data.roomId, schoolSlug: data.schoolSlug, bedNumber: data.bedNumber, status: 'active',
+      });
+      if (bedTaken) throw new BadRequestException(`Bed ${data.bedNumber} in this room is already occupied`);
+    }
     const alloc = new this.allocationModel({
       ...data,
       checkInDate: new Date(data.checkInDate || Date.now()),
@@ -289,15 +325,24 @@ export class CampusService {
   }
 
   async checkOutHostel(id: string, schoolSlug: string) {
+    // The filter used to have no status precondition at all, so calling
+    // this twice on the same allocation (or on one already 'checked_out')
+    // matched and "succeeded" both times - decrementing room.occupancy and
+    // block.occupiedBeds a second time for a bed that was never actually
+    // reoccupied, eventually driving the counts negative and making a room
+    // appear to have more free space than it really does.
     const alloc = await this.allocationModel.findOneAndUpdate(
-      { _id: id, schoolSlug },
+      { _id: id, schoolSlug, status: { $ne: 'checked_out' } },
       { $set: { status: 'checked_out', checkOutDate: new Date() } },
       { new: true },
     );
-    if (alloc) {
-      await this.roomModel.updateOne({ _id: alloc.roomId, schoolSlug }, { $inc: { occupancy: -1 }, $set: { status: 'available' } });
-      await this.blockModel.updateOne({ _id: alloc.blockId, schoolSlug }, { $inc: { occupiedBeds: -1 } });
+    if (!alloc) {
+      const existing = await this.allocationModel.findOne({ _id: id, schoolSlug });
+      if (existing) throw new BadRequestException('This allocation is already checked out');
+      throw new NotFoundException('Allocation not found');
     }
+    await this.roomModel.updateOne({ _id: alloc.roomId, schoolSlug }, { $inc: { occupancy: -1 }, $set: { status: 'available' } });
+    await this.blockModel.updateOne({ _id: alloc.blockId, schoolSlug }, { $inc: { occupiedBeds: -1 } });
     return alloc;
   }
 
