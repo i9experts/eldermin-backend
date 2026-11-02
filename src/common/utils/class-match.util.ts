@@ -72,8 +72,18 @@ export function gradeMatcher(grade: unknown): RegExp {
   return new RegExp(`^\\s*${escapeRe(n)}\\s*$`, 'i');
 }
 
-/** Mongo-queryable equivalent of sameSection(). */
+/**
+ * Mongo-queryable equivalent of sameSection(). Must mirror every prefix
+ * normalizeSectionName() strips - it only had the trailing 'section '/'sec '
+ * strip, not the leading grade/class reference one added alongside it,
+ * so a raw stored value like "Grade 1B" (the denormalized-full-class-label
+ * convention, see normalizeSectionName above) matched n==="b" in a plain
+ * JS sameSection() comparison but never matched THIS regex against the
+ * raw field value in a Mongo query - the exact same "No active students
+ * found" bug this file's sectionMatcher is supposed to have already fixed,
+ * just still reachable through this one query path.
+ */
 export function sectionMatcher(section: unknown): RegExp {
   const n = normalizeSectionName(section);
-  return new RegExp(`^\\s*(?:(?:section|sec)[\\s\\-_.:]+)?${escapeRe(n)}\\s*$`, 'i');
+  return new RegExp(`^\\s*(?:(?:grade|class|standard|std|g)[\\s\\-_.]*\\d+[\\s\\-_.]*)?(?:(?:section|sec)[\\s\\-_.:]+)?${escapeRe(n)}\\s*$`, 'i');
 }
