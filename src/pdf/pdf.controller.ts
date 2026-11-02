@@ -1,4 +1,5 @@
 import { schoolSlugOf } from '../common/utils/school-slug.util';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 import { assertStaffAccount } from '../behaviour/behaviour-access';
 import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import {
@@ -154,7 +155,7 @@ export class PdfController {
     @Res() res: Response,
   ) {
     const schoolSlug = schoolSlugOf(req);
-    const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
+    const academicYear = dto.academicYear || req.headers['x-academic-year'] || resolveAcademicYearFallback();
     const pdf = await this.pdfService.generateBulkChallans(
       schoolSlug,
       { month: dto.month, academicYear, scopeType: dto.scopeType as any, scopeValue: dto.scopeValue },
@@ -231,7 +232,7 @@ export class PdfController {
     @Res() res: Response,
   ) {
     const schoolSlug = schoolSlugOf(req);
-    const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
+    const academicYear = dto.academicYear || req.headers['x-academic-year'] || resolveAcademicYearFallback();
     const pdf = await this.pdfService.generateFeeRevenueReportPdf(
       schoolSlug, { month: dto.month, academicYear, campus: dto.campus }, req.user.userId,
     );

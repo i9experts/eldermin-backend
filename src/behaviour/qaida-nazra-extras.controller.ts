@@ -14,6 +14,7 @@ import {
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Same guard as QaidaController/NazraController - parent/student/reseller
 // tokens are denied on every route; the separate Parent Portal routes (for
@@ -28,7 +29,7 @@ export class QaidaNazraExtrasController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       userId: req?.user?.userId,
     };

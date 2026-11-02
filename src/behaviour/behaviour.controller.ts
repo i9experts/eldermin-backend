@@ -14,6 +14,7 @@ import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { BehaviourAccessGuard } from './guards/behaviour-access.guard';
 import { BehaviourAccess } from './behaviour-access';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Counselling sessions and interventions are confidential pastoral records: admin roles, or a custom role with a grant on exactly that
 // sub-module (behaviour -> counselling / interventions). A teacher (or the stock module-wide Teacher custom role) is NOT authorised.
@@ -35,7 +36,7 @@ export class BehaviourController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
       access: req?.behaviourAccess,

@@ -5,6 +5,7 @@ import {
 import type { Response } from 'express';
 import { FinanceService } from './finance.service';
 import { RequireModuleAccess } from '../roles/decorators/require-module-access.decorator';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Real, enforced pilot of the custom-role sub-module permission system (see
 // CustomRoleGuard) — Finance is the ONLY module with live server-side
@@ -21,7 +22,7 @@ export class FinanceController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
     };
   }

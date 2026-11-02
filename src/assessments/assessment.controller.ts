@@ -26,6 +26,7 @@ import {
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { NON_STAFF_ROLES } from '../auth/admin-role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
 // Read-only routes stay open to any authenticated role (matches the rest of
@@ -42,7 +43,7 @@ export class AssessmentController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
     };
