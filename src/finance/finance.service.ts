@@ -1357,16 +1357,40 @@ export class FinanceService {
     // priority over the Department/Campus fallback — see the
     // Expense.costCenterId/costCenterName comment in finance.schema.ts.
     const costCenterName = expense.costCenterName || expense.departmentId || expense.campusId;
+    const partnerName = expense.vendorName || expense.paidTo;
+
+    // Withholding is applied at PAY time, not at creation — same convention
+    // as recordVendorPayment. `withholdingAmount` was already computed as a
+    // preview when the expense was created (see createExpense); re-resolve
+    // the category here only to get its accountCode for the journal line.
+    let withholdingAmount = Number(expense.withholdingAmount || 0);
+    let withholdingAccountCode: string | null = null;
+    let withholdingCategoryName: string | undefined;
+    if (withholdingAmount > 0 && expense.withholdingCategoryId) {
+      const category = await this.withholdingCategoryModel.findOne({ _id: expense.withholdingCategoryId, schoolSlug, isActive: true });
+      if (category) {
+        withholdingAccountCode = category.accountCode;
+        withholdingCategoryName = category.name;
+      } else {
+        withholdingAmount = 0; // category was deactivated/removed since creation — don't withhold against a dead account
+      }
+    }
+    const cashAmount = Math.round((expense.amount - withholdingAmount) * 100) / 100;
+
     try {
+      const lines: any[] = [
+        { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName, costCenterName },
+        { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: cashAmount, partnerType: 'vendor', partnerName, costCenterName, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
+      ];
+      if (withholdingAmount > 0 && withholdingAccountCode) {
+        lines.push({ accountCode: withholdingAccountCode, credit: withholdingAmount, partnerType: 'vendor', partnerName, costCenterName, taxTemplateName: withholdingCategoryName });
+      }
       await this.postJournalEntry(schoolSlug, {
         date: new Date(),
         reference: expense.expenseNo,
         narration: `Expense ${expense.expenseNo} — ${expense.title}`,
         sourceType: 'expense', sourceId: String(expense._id),
-        lines: [
-          { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName },
-          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
-        ],
+        lines,
       });
     } catch (err: any) { /* see postFeeInvoiceJournal note */ }
   }
@@ -1892,16 +1916,86 @@ export class FinanceService {
   }
 
   async createExpense(data: any) {
+    const schoolSlug = data.schoolSlug;
+
+    // Three-way-match upgrade: resolve the Vendor master record when one was
+    // selected, so vendorName/taxId-bearing fields are always sourced from
+    // the vendor, not re-typed — same convention as createVendorBill.
+    let vendor: any = null;
+    if (data.vendorId) {
+      vendor = await this.vendorModel.findOne({ _id: data.vendorId, schoolSlug });
+      if (!vendor) throw new NotFoundException('Vendor not found');
+    }
+
+    // Duplicate-payment guard — the same vendor can't submit the same
+    // invoice number twice. Checked explicitly (rather than only relying on
+    // the schema's unique index) so the error is a clear BadRequestException
+    // instead of a raw duplicate-key error. Only applies when both a vendor
+    // and an invoice number were actually given.
+    if (data.vendorId && data.invoiceNumber) {
+      const dup = await this.expenseModel.findOne({ schoolSlug, vendorId: data.vendorId, invoiceNumber: data.invoiceNumber });
+      if (dup) {
+        throw new BadRequestException(
+          `Invoice ${data.invoiceNumber} has already been recorded for this vendor (expense ${dup.expenseNo}) — check you're not entering it twice.`,
+        );
+      }
+    }
+
+    const date = new Date(data.date || data.expenseDate || Date.now());
+
+    // Due Date auto-calculation from Payment Terms — same convention as
+    // createVendorBill: an explicit dueDate always wins; otherwise resolve
+    // dueDays from the chosen term (falling back to the vendor's own default
+    // term when the invoice didn't pick one) and add it to the invoice date.
+    let dueDate = data.dueDate ? new Date(data.dueDate) : null;
+    let paymentTermName = data.paymentTermName;
+    const termId = data.paymentTermId || vendor?.paymentTermId;
+    if (termId) {
+      const term = await this.paymentTermModel.findOne({ _id: termId, schoolSlug });
+      if (term) {
+        paymentTermName = term.name;
+        if (!dueDate) {
+          dueDate = new Date(date);
+          dueDate.setDate(dueDate.getDate() + (term.dueDays || 0));
+        }
+      }
+    }
+
+    // Withholding tax preview — computed up front (from the vendor's
+    // WithholdingTaxCategory, same rate convention as recordVendorPayment)
+    // purely for display on the invoice/approval screen. The actual journal
+    // split only happens at pay time in postExpensePaidJournal, matching how
+    // the formal Vendor Bill flow withholds at payment, not at bill time.
+    let withholdingAmount = 0;
+    const withholdingCategoryId = data.withholdingCategoryId || vendor?.withholdingCategoryId;
+    if (withholdingCategoryId && data.amount) {
+      const category = await this.withholdingCategoryModel.findOne({ _id: withholdingCategoryId, schoolSlug, isActive: true });
+      if (category) {
+        withholdingAmount = Math.round(Number(data.amount) * (category.rate || 0)) / 100;
+        withholdingAmount = Math.min(withholdingAmount, Number(data.amount));
+      }
+    }
+
     const exp = new this.expenseModel({
       ...data,
       title: data.title || data.description || 'Expense',
-      date: new Date(data.date || data.expenseDate || Date.now()),
-      paidTo: data.paidTo || data.vendorName,
-      vendorName: data.vendorName || data.paidTo,
+      date,
+      paidTo: data.paidTo || vendor?.name || data.vendorName,
+      vendorName: vendor?.name || data.vendorName || data.paidTo,
+      vendorId: vendor?._id || null,
+      paymentTermId: termId || null,
+      paymentTermName,
+      dueDate,
+      withholdingCategoryId: withholdingCategoryId || null,
+      withholdingAmount,
+      // Status is driven by the Submit → Approve → Pay workflow, not freely
+      // settable from the create form — always starts at 'submitted'
+      // regardless of what the caller sends.
+      status: 'submitted',
     });
     // Phase 6 — see recordPayment's identical note on bankAccountName denorm.
     if (exp.bankAccountId) {
-      const acc = await this.bankModel.findOne({ _id: exp.bankAccountId, schoolSlug: data.schoolSlug });
+      const acc = await this.bankModel.findOne({ _id: exp.bankAccountId, schoolSlug });
       if (acc) exp.bankAccountName = `${acc.bankName} — ${acc.accountTitle}`;
     }
     // Denormalize costCenterName from the selected Cost Center up front, so
@@ -1910,7 +2004,7 @@ export class FinanceService {
     // convention of denormalizing a CostCenter's name onto the record that
     // references it.
     if (exp.costCenterId) {
-      const cc = await this.costCenterModel.findOne({ _id: exp.costCenterId, schoolSlug: data.schoolSlug });
+      const cc = await this.costCenterModel.findOne({ _id: exp.costCenterId, schoolSlug });
       if (cc) exp.costCenterName = cc.name;
     }
     return exp.save();
@@ -1924,7 +2018,11 @@ export class FinanceService {
   // reflects the correction instead of staying stuck on the old value.
   async updateExpense(id: string, schoolSlug: string, data: any) {
     const update: any = {};
-    for (const key of ['costCenterId', 'costCenterName', 'departmentId', 'campusId', 'category', 'description', 'vendorName', 'paidTo']) {
+    for (const key of [
+      'costCenterId', 'costCenterName', 'departmentId', 'campusId', 'category', 'description', 'vendorName', 'paidTo',
+      'invoiceNumber', 'paymentTermId', 'paymentTermName', 'dueDate', 'attachmentUrl',
+      'purchaseOrderId', 'poNumber', 'grnId', 'grnNumber',
+    ]) {
       if (data[key] !== undefined) update[key] = data[key];
     }
     if (update.costCenterId) {
