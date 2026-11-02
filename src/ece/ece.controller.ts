@@ -210,17 +210,20 @@ export class EceController {
     return this.service.getExperiences(this.ctx(req).schoolSlug, domainId);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('experiences') @HttpCode(HttpStatus.CREATED)
   createExperience(@Request() req: any, @Body() dto: CreateLearningExperienceDto) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.createExperience(schoolSlug, userName, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('experiences/:id')
   updateExperience(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateLearningExperienceDto) {
     return this.service.updateExperience(this.ctx(req).schoolSlug, id, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Delete('experiences/:id') @HttpCode(HttpStatus.OK)
   deleteExperience(@Request() req: any, @Param('id') id: string) {
     return this.service.deleteExperience(this.ctx(req).schoolSlug, id);
@@ -250,26 +253,31 @@ export class EceController {
     return this.service.getEnvironmentAreas(this.ctx(req).schoolSlug);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('environment-areas') @HttpCode(HttpStatus.CREATED)
   createEnvironmentArea(@Request() req: any, @Body() dto: CreateEnvironmentAreaDto) {
     return this.service.createEnvironmentArea(this.ctx(req).schoolSlug, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('environment-areas/seed-default') @HttpCode(HttpStatus.OK)
   seedDefaultEnvironmentAreas(@Request() req: any) {
     return this.service.seedDefaultEnvironmentAreas(this.ctx(req).schoolSlug);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Put('environment-areas/:id')
   updateEnvironmentArea(@Request() req: any, @Param('id') id: string, @Body() dto: UpdateEnvironmentAreaDto) {
     return this.service.updateEnvironmentArea(this.ctx(req).schoolSlug, id, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('environment-areas/:id/safety-check')
   logSafetyCheck(@Request() req: any, @Param('id') id: string, @Body() dto: LogSafetyCheckDto) {
     return this.service.logSafetyCheck(this.ctx(req).schoolSlug, id, dto.checkedBy);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch('environment-areas/:id/observation')
   addEnvironmentObservation(@Request() req: any, @Param('id') id: string, @Body() dto: AddObservationNoteDto) {
     return this.service.addEnvironmentObservation(this.ctx(req).schoolSlug, id, dto.note);
@@ -305,24 +313,29 @@ export class EceController {
     return this.service.getMontessoriMaterials(this.ctx(req).schoolSlug, area);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('montessori/materials') @HttpCode(HttpStatus.CREATED)
   createMontessoriMaterial(@Request() req: any, @Body() dto: CreateMontessoriMaterialDto) {
     return this.service.createMontessoriMaterial(this.ctx(req).schoolSlug, dto);
   }
 
+  @RolesOrModuleManage('early-years', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('montessori/materials/seed-classics') @HttpCode(HttpStatus.OK)
   seedClassicMontessoriMaterials(@Request() req: any) {
     return this.service.seedClassicMontessoriMaterials(this.ctx(req).schoolSlug);
   }
 
   @Get('montessori/work-records/:studentId')
-  getWorkRecords(@Request() req: any, @Param('studentId') studentId: string) {
-    return this.service.getWorkRecords(this.ctx(req).schoolSlug, studentId);
+  async getWorkRecords(@Request() req: any, @Param('studentId') studentId: string) {
+    const { schoolSlug } = this.ctx(req);
+    await this.service.assertStudentInScope(schoolSlug, studentId, req.user);
+    return this.service.getWorkRecords(schoolSlug, studentId);
   }
 
   @Put('montessori/work-records') @HttpCode(HttpStatus.OK)
-  upsertWorkRecord(@Request() req: any, @Body() dto: UpsertWorkRecordDto) {
+  async upsertWorkRecord(@Request() req: any, @Body() dto: UpsertWorkRecordDto) {
     const { schoolSlug, userName } = this.ctx(req);
+    await this.service.assertStudentInScope(schoolSlug, dto.studentId, req.user);
     return this.service.upsertWorkRecord(schoolSlug, userName, dto);
   }
 
