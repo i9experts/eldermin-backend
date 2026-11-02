@@ -136,6 +136,25 @@ export class TeachingService {
     // Cheap, idempotent, and scoped to this tenant only - a no-op once no
     // document matches.
     await this.teacherProfileModel.updateMany({ tenantId: tid, campusId: '' }, { $set: { campusId: null } });
+
+    // Self-healing #2: a teacher whose HR Staff record was added after the
+    // last manual "Sync from HR" click (or if it was never clicked at all)
+    // has no TeacherProfile row yet, so they can't appear in - or select
+    // themselves from - any of the "pick a teacher" dropdowns across the
+    // Teaching module (Class Diary, Homework, Syllabus, Timetable, etc.),
+    // all of which call this same method. Rather than re-scanning the
+    // entire staff roster on every fetch (what the full "Sync from HR"
+    // button does), lazily upsert just the requester's own profile here -
+    // cheap (one Staff lookup) and guarantees they can always find
+    // themselves without an admin having to remember to sync first.
+    if (requestingUser?.staffId) {
+      const hasProfile = await this.teacherProfileModel.exists({ tenantId: tid, staffId: new Types.ObjectId(requestingUser.staffId) });
+      if (!hasProfile) {
+        const ownStaff = await this.staffModel.findOne({ _id: requestingUser.staffId, tenantId: tid }).lean();
+        if (ownStaff) await this.upsertTeacherProfileFromStaff(ownStaff, tid, ownStaff.institutionId ? String(ownStaff.institutionId) : undefined);
+      }
+    }
+
     const filter: any = { tenantId: tid };
     if (requestingUser) {
       // Inclusive, not a hard filter: syncTeacherProfilesFromHR (below)
@@ -153,8 +172,21 @@ export class TeachingService {
       const effectiveDepartment = resolveDepartmentScope(requestingUser, undefined);
       if (effectiveDepartment) filter.department = effectiveDepartment;
     }
+
+    // Guarantee the requester always sees their own profile, even if its
+    // `department` field doesn't exactly match their own department claim
+    // (free-text drift between HR's Staff.department and the Teaching
+    // Profile's denormalized copy - the same class of mismatch documented
+    // elsewhere in this codebase, e.g. Students currentGrade/currentSection).
+    // A dropdown whose entire purpose is "let me identify myself" must
+    // never exclude the person using it; department/campus scoping for
+    // every OTHER teacher's visibility is unaffected.
+    const query = requestingUser?.staffId
+      ? { $or: [filter, { tenantId: tid, staffId: new Types.ObjectId(requestingUser.staffId) }] }
+      : filter;
+
     return this.teacherProfileModel
-      .find(filter)
+      .find(query)
       .populate('campusId', 'name code')
       .sort({ lastName: 1 })
       .lean();
@@ -266,68 +298,82 @@ export class TeachingService {
     let created = 0;
     let updated = 0;
     let skippedPossibleDuplicates: Array<{ staffId: string; name: string; matchedProfileId: string }> = [];
-    const normalizeName = (s: any) => `${s.firstName || ''} ${s.lastName || ''}`.trim().toLowerCase().replace(/\s+/g, ' ');
     for (const staff of teacherStaff as any[]) {
-      const erpRole = (staff.erpRole || '').toLowerCase().trim();
-      // Mirrors HrService.resolvePrimaryRole's own default: an erpRole
-      // that isn't one of the other recognized roles defaults to teacher.
-      const OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
-        'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
-      const isTeacher = !OTHER_ROLES.includes(erpRole);
-      if (!isTeacher) continue;
-
-      const existing = await this.teacherProfileModel.findOne({ tenantId: tid, staffId: staff._id });
-      const tp = staff.teacherProfile || {};
-      const fields: any = {
-        tenantId: tid,
-        institutionId: staff.institutionId || new Types.ObjectId(institutionId),
-        employeeId: staff.employeeId,
-        firstName: staff.firstName,
-        lastName: staff.lastName,
-        designation: staff.designation,
-        department: staff.department,
-        campusId: staff.campusId || null,
-      };
-      if (tp.subjectsCanTeach?.length) {
-        fields.subjectsCanTeach = [...new Set([...(existing?.subjectsCanTeach || []), ...tp.subjectsCanTeach])];
-      }
-      if (tp.gradeLevelsCanTeach?.length) {
-        fields.gradeLevelsCanTeach = [...new Set([...(existing?.gradeLevelsCanTeach || []), ...tp.gradeLevelsCanTeach])];
-      }
-      if (tp.maxPeriodsPerDay) fields.maxPeriodsPerDay = tp.maxPeriodsPerDay;
-      if (tp.maxPeriodsPerWeek) fields.maxPeriodsPerWeek = tp.maxPeriodsPerWeek;
-      if (typeof tp.isClassTeacher === 'boolean' && !existing) fields.isClassTeacher = tp.isClassTeacher;
-
-      if (existing) {
-        await this.teacherProfileModel.updateOne({ _id: existing._id }, { $set: fields });
-        updated++;
-      } else {
-        // Before creating a brand-new TeacherProfile, check whether one
-        // already exists under a DIFFERENT Staff record with the same
-        // name in this tenant - a second Staff document for the same
-        // physical person (re-entered by mistake, e.g. during a later
-        // "add a role" attempt) otherwise silently got its own TeacherProfile
-        // here, showing that person twice in the Teacher Directory with one
-        // row blank. Flagged for manual review instead of auto-created.
-        const name = normalizeName(staff);
-        const possibleDuplicate = name
-          ? await this.teacherProfileModel.findOne({
-              tenantId: tid,
-              staffId: { $ne: staff._id },
-              $expr: {
-                $eq: [{ $toLower: { $trim: { input: { $concat: ['$firstName', ' ', '$lastName'] } } } }, name],
-              },
-            }).select('_id').lean()
-          : null;
-        if (possibleDuplicate) {
-          skippedPossibleDuplicates.push({ staffId: String(staff._id), name: `${staff.firstName} ${staff.lastName}`, matchedProfileId: String(possibleDuplicate._id) });
-          continue;
-        }
-        await this.teacherProfileModel.create({ ...fields, staffId: staff._id });
-        created++;
-      }
+      const result = await this.upsertTeacherProfileFromStaff(staff, tid, institutionId);
+      if (result === 'created') created++;
+      else if (result === 'updated') updated++;
+      else if (result) skippedPossibleDuplicates.push(result);
     }
     return { scanned: teacherStaff.length, created, updated, skippedPossibleDuplicates };
+  }
+
+  /** Upserts a single Staff record's TeacherProfile - the per-record unit
+   * of work `syncTeacherProfilesFromHR` loops over, extracted so it can
+   * also be run for just one teacher (see `getTeacherProfiles`'s lazy
+   * self-heal) without re-scanning the entire staff roster. Returns
+   * 'created' | 'updated' | a skipped-duplicate record | undefined (not a
+   * teacher role, nothing to do). */
+  private async upsertTeacherProfileFromStaff(
+    staff: any, tid: string, institutionId?: string,
+  ): Promise<'created' | 'updated' | { staffId: string; name: string; matchedProfileId: string } | undefined> {
+    const erpRole = (staff.erpRole || '').toLowerCase().trim();
+    // Mirrors HrService.resolvePrimaryRole's own default: an erpRole
+    // that isn't one of the other recognized roles defaults to teacher.
+    const OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
+      'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
+    const isTeacher = !OTHER_ROLES.includes(erpRole);
+    if (!isTeacher) return undefined;
+
+    const existing = await this.teacherProfileModel.findOne({ tenantId: tid, staffId: staff._id });
+    const tp = staff.teacherProfile || {};
+    const fields: any = {
+      tenantId: tid,
+      institutionId: staff.institutionId || (institutionId ? new Types.ObjectId(institutionId) : undefined),
+      employeeId: staff.employeeId,
+      firstName: staff.firstName,
+      lastName: staff.lastName,
+      designation: staff.designation,
+      department: staff.department,
+      campusId: staff.campusId || null,
+    };
+    if (tp.subjectsCanTeach?.length) {
+      fields.subjectsCanTeach = [...new Set([...(existing?.subjectsCanTeach || []), ...tp.subjectsCanTeach])];
+    }
+    if (tp.gradeLevelsCanTeach?.length) {
+      fields.gradeLevelsCanTeach = [...new Set([...(existing?.gradeLevelsCanTeach || []), ...tp.gradeLevelsCanTeach])];
+    }
+    if (tp.maxPeriodsPerDay) fields.maxPeriodsPerDay = tp.maxPeriodsPerDay;
+    if (tp.maxPeriodsPerWeek) fields.maxPeriodsPerWeek = tp.maxPeriodsPerWeek;
+    if (typeof tp.isClassTeacher === 'boolean' && !existing) fields.isClassTeacher = tp.isClassTeacher;
+
+    if (existing) {
+      await this.teacherProfileModel.updateOne({ _id: existing._id }, { $set: fields });
+      return 'updated';
+    }
+
+    // Before creating a brand-new TeacherProfile, check whether one
+    // already exists under a DIFFERENT Staff record with the same
+    // name in this tenant - a second Staff document for the same
+    // physical person (re-entered by mistake, e.g. during a later
+    // "add a role" attempt) otherwise silently got its own TeacherProfile
+    // here, showing that person twice in the Teacher Directory with one
+    // row blank. Flagged for manual review instead of auto-created.
+    const normalizeName = (s: any) => `${s.firstName || ''} ${s.lastName || ''}`.trim().toLowerCase().replace(/\s+/g, ' ');
+    const name = normalizeName(staff);
+    const possibleDuplicate = name
+      ? await this.teacherProfileModel.findOne({
+          tenantId: tid,
+          staffId: { $ne: staff._id },
+          $expr: {
+            $eq: [{ $toLower: { $trim: { input: { $concat: ['$firstName', ' ', '$lastName'] } } } }, name],
+          },
+        }).select('_id').lean()
+      : null;
+    if (possibleDuplicate) {
+      return { staffId: String(staff._id), name: `${staff.firstName} ${staff.lastName}`, matchedProfileId: String(possibleDuplicate._id) };
+    }
+    await this.teacherProfileModel.create({ ...fields, staffId: staff._id });
+    return 'created';
   }
 
   // ── ATTENDANCE SETTINGS ───────────────────────────────────────────────────────
