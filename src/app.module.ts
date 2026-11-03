@@ -54,6 +54,7 @@ import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
 import { LmsModule } from './lms/lms.module';
 import { GamificationModule } from './gamification/gamification.module';
+import { AppVersionModule } from './app-version/app-version.module';
 
 import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-match.selftest';
 @Module({
@@ -89,6 +90,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     AccountingIntegrationsModule,
     SchoolCalendarModule,
     EventsModule,
+    AppVersionModule,
     ProcurementModule,
     StudentsModule,
     TeachingModule,
