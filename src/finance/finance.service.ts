@@ -190,6 +190,35 @@ export class FinanceService {
         .select('bankName accountTitle currentBalance isPrimary'),
     ]);
 
+    // Month-wise generated / collected / defaulters, keyed off the invoice's
+    // own billing `month` (e.g. "2025-02") rather than createdAt, so a fee
+    // generated for February still shows under February even if it was
+    // actually raised/paid late. rolledForwardInto excluded for the same
+    // double-counting reason as totalOutstanding above. Defaulters counts
+    // distinct STUDENTS (not invoices) still overdue for that billing month.
+    const [monthlyInvoices, monthlyDefaulters] = await Promise.all([
+      this.invoiceModel.aggregate([
+        { $match: { ...base, isDeleted: { $ne: true }, rolledForwardInto: null } },
+        { $group: { _id: '$month', generated: { $sum: '$totalAmount' }, collected: { $sum: '$paidAmount' } } },
+        { $sort: { _id: -1 } },
+        { $limit: 12 },
+      ]),
+      this.invoiceModel.aggregate([
+        { $match: { ...base, isDeleted: { $ne: true }, rolledForwardInto: null, status: 'overdue' } },
+        { $group: { _id: '$month', defaulterStudents: { $addToSet: '$studentId' } } },
+        { $project: { _id: 1, defaulters: { $size: '$defaulterStudents' } } },
+      ]),
+    ]);
+    const defaulterByMonth = new Map(monthlyDefaulters.map((d: any) => [d._id, d.defaulters]));
+    const monthlyTrend = monthlyInvoices
+      .map((m: any) => ({
+        month: m._id,
+        generated: m.generated || 0,
+        collected: m.collected || 0,
+        defaulters: defaulterByMonth.get(m._id) || 0,
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
     return {
       summary: {
         totalInvoiced: totalInvoiced[0]?.total || 0,
@@ -206,6 +235,7 @@ export class FinanceService {
       recentPayments,
       expenseByCategory,
       bankBalances,
+      monthlyTrend,
     };
   }
 
