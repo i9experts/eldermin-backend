@@ -213,6 +213,18 @@ export class UpdateMarkEntryDto {
 }
 
 export class MarkQueryDto extends PaginationDto {
+  // Overrides PaginationDto's default limit:20 - unlike a genuinely
+  // paginated list (assessments, questions, report cards), a Mark Sheet
+  // request IS the full roster for one class/subject: the Total/Entered/
+  // Pass/Fail/Absent/Avg% summary cards and "Verify All" all silently
+  // operate over whatever this one page returns. A 20-row cap meant a
+  // class of 30+ (or "All sections" of a grade) showed only its first 20
+  // students, with wrong totals and no way to reach - or verify - the
+  // rest, and no pagination control existed on this screen to surface the
+  // truncation. 2000 comfortably covers even a large grade's combined
+  // sections in one request; the cap stays only as a hard safety ceiling.
+  @IsOptional() @Type(() => Number) @Min(1) @Max(2000) limit?: number = 2000;
+
   @IsOptional() @IsMongoId() assessmentId?: string;
   @IsOptional() @IsMongoId() studentId?: string;
   @IsOptional() @IsString() grade?: string;
