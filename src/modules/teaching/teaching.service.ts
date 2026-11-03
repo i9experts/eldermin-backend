@@ -1,5 +1,6 @@
 import { Optional, Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { assertValidObjectId } from '../../common/utils/object-id.util';
+import { idForms } from '../../common/utils/id-forms.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
 import { sanitizeRichText } from '../../common/utils/rich-text.util';
 import { InjectModel } from '@nestjs/mongoose';
@@ -147,10 +148,29 @@ export class TeachingService {
     // button does), lazily upsert just the requester's own profile here -
     // cheap (one Staff lookup) and guarantees they can always find
     // themselves without an admin having to remember to sync first.
-    if (requestingUser?.staffId) {
-      const hasProfile = await this.teacherProfileModel.exists({ tenantId: tid, staffId: new Types.ObjectId(requestingUser.staffId) });
+    //
+    // staffId is resolved live from the DB rather than trusted from the
+    // JWT claim alone - same reasoning as resolveTeacherIdentity ("the
+    // JWT's staffId claim is never trusted; a stale token must not act for
+    // a removed/changed staff member"). A teacher whose Staff<->login link
+    // was created (or fixed) AFTER their current token was issued would
+    // otherwise have no staffId claim and never self-heal even after
+    // logging out and back in, if the token happened to be refreshed from
+    // a cache rather than a fresh login. idForms() guards against the
+    // documented string-vs-ObjectId storage drift on Staff.userId
+    // (B0_ID_TYPING.md) the same way the login-time resolution does.
+    let staffId = requestingUser?.staffId;
+    if (!staffId && requestingUser?.userId) {
+      const ownStaffByLogin = await this.staffModel
+        .findOne({ tenantId: tid, userId: idForms(requestingUser.userId), isActive: { $ne: false } })
+        .select('_id')
+        .lean();
+      if (ownStaffByLogin) staffId = String((ownStaffByLogin as any)._id);
+    }
+    if (staffId) {
+      const hasProfile = await this.teacherProfileModel.exists({ tenantId: tid, staffId: new Types.ObjectId(staffId) });
       if (!hasProfile) {
-        const ownStaff = await this.staffModel.findOne({ _id: requestingUser.staffId, tenantId: tid }).lean();
+        const ownStaff = await this.staffModel.findOne({ _id: staffId, tenantId: tid }).lean();
         if (ownStaff) await this.upsertTeacherProfileFromStaff(ownStaff, tid, ownStaff.institutionId ? String(ownStaff.institutionId) : undefined);
       }
     }
@@ -181,8 +201,8 @@ export class TeachingService {
     // A dropdown whose entire purpose is "let me identify myself" must
     // never exclude the person using it; department/campus scoping for
     // every OTHER teacher's visibility is unaffected.
-    const query = requestingUser?.staffId
-      ? { $or: [filter, { tenantId: tid, staffId: new Types.ObjectId(requestingUser.staffId) }] }
+    const query = staffId
+      ? { $or: [filter, { tenantId: tid, staffId: new Types.ObjectId(staffId) }] }
       : filter;
 
     return this.teacherProfileModel

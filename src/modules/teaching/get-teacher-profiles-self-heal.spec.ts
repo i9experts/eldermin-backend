@@ -101,4 +101,59 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     const normalBranch = capturedQuery.$or[0];
     expect(normalBranch.department).toBe('Secondary');
   });
+
+  it('resolves staffId from the DB (by login userId) when the JWT carries no staffId claim, and still self-heals', async () => {
+    // Covers a Staff<->login link created (or repaired) after the current
+    // token was issued, or any other reason the claim itself is missing -
+    // the requester must not be stuck with an empty dropdown just because
+    // their token predates/lacks the claim, even after re-logging in.
+    const userId = new Types.ObjectId();
+    const staffId = new Types.ObjectId();
+    const ownStaff = {
+      _id: staffId, tenantId, firstName: 'No', lastName: 'Claim',
+      employeeId: 'EMP-300', erpRole: 'teacher', department: 'Secondary', campusId: null,
+      institutionId: new Types.ObjectId(), userId,
+    };
+    const teacherProfileModel: any = {
+      updateMany: jest.fn().mockResolvedValue({}),
+      exists: jest.fn().mockResolvedValue(null), // no profile yet
+      findOne: jest.fn((filter: any) => {
+        if (filter.$expr) return { select: () => ({ lean: () => Promise.resolve(null) }) };
+        return Promise.resolve(null);
+      }),
+      create: jest.fn().mockResolvedValue({}),
+      find: jest.fn().mockReturnValue(makeFindChain([{ _id: 'new-profile', firstName: 'No', lastName: 'Claim' }])),
+    };
+    const staffModel: any = {
+      findOne: jest.fn((filter: any) => {
+        // The by-login lookup (select().lean() chain) vs the by-_id lookup
+        // the upsert path uses afterwards (plain .lean()) - both resolve to
+        // this same Staff record here.
+        if ('userId' in filter) return { select: () => ({ lean: () => Promise.resolve(ownStaff) }) };
+        return { lean: () => Promise.resolve(ownStaff) };
+      }),
+    };
+
+    const service = makeService(staffModel, teacherProfileModel);
+    const requestingUser: any = { role: 'teacher', userId: String(userId), department: 'Secondary', campusId: String(new Types.ObjectId()) };
+    const result = await service.getTeacherProfiles(tenantId, requestingUser);
+
+    expect(teacherProfileModel.create).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([{ _id: 'new-profile', firstName: 'No', lastName: 'Claim' }]);
+  });
+
+  it('leaves the normal department-only filter in place when no staffId can be resolved at all', async () => {
+    const teacherProfileModel: any = {
+      updateMany: jest.fn().mockResolvedValue({}),
+      exists: jest.fn(),
+      find: jest.fn().mockReturnValue(makeFindChain([])),
+    };
+    const staffModel: any = { findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }) };
+
+    const service = makeService(staffModel, teacherProfileModel);
+    const requestingUser: any = { role: 'teacher', userId: String(new Types.ObjectId()), department: 'Secondary', campusId: String(new Types.ObjectId()) };
+    await service.getTeacherProfiles(tenantId, requestingUser);
+
+    expect(teacherProfileModel.exists).not.toHaveBeenCalled();
+  });
 });
