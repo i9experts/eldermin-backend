@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed": "ts-node -r tsconfig-paths/register src/seed/seed.ts",
     "seed:report-templates": "ts-node -r tsconfig-paths/register src/modules/report-templates/seed-report-templates.ts",
+    "seed:app-versions": "ts-node -r tsconfig-paths/register src/scripts/seed-app-versions.ts",
     "seed:kb": "ts-node -r tsconfig-paths/register src/seed/seed-kb-articles.ts",
     "audit:orphaned-staff-logins": "node dist/scripts/audit-orphaned-staff-logins.js",
     "migrate:student-attendance-index": "node dist/scripts/migrate-student-attendance-index.js",
