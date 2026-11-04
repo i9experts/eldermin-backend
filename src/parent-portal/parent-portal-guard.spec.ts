@@ -15,8 +15,11 @@ const proto: any = ParentPortalController.prototype;
 const routeNames = (): string[] =>
   Object.getOwnPropertyNames(proto).filter((n) => n !== 'constructor' && typeof proto[n] === 'function' && Reflect.getMetadata('path', proto[n]) !== undefined);
 
-// The six school-side routes (five when the branch was cut; getConsentRequestResults was added on main since): they keep their own method-level @Roles.
-const CONSENT = ['listConsentRequests', 'createConsentRequest', 'closeConsentRequest', 'getConsentRequestResults'];
+// The school-side routes that keep their own method-level @Roles(CONSENT_ADMIN_ROLES)
+// rather than inheriting the class's PARENT default - getPendingStudentLeaveCount
+// (Institution Overview dashboard's Academics widget) reuses the exact same
+// consent-admin role set as the original four consent routes.
+const CONSENT = ['listConsentRequests', 'createConsentRequest', 'closeConsentRequest', 'getConsentRequestResults', 'getPendingStudentLeaveCount'];
 const LINK = ['linkGuardian', 'unlinkGuardian'];
 const STAFF_ROUTES = [...CONSENT, ...LINK];
 
