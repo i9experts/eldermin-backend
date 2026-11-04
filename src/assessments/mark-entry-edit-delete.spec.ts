@@ -71,6 +71,32 @@ describe('updateMarkEntry', () => {
     expect(result.obtainedMarks).toBe(10);
     expect(mark.save).toHaveBeenCalledTimes(1);
   });
+
+  // Pins the fix for "Save Changes" 500ing on a mark row that was originally
+  // written by bulkEnterMarks's raw bulkWrite (no schema validation on
+  // write) and ended up missing a now-required field, e.g. academicYear -
+  // updateMarkEntry is the only path that calls the full-validation
+  // mark.save(), so an old gap like this only ever surfaced here.
+  it('backfills a missing academicYear from the parent assessment instead of 500ing on save', async () => {
+    const mark = makeMark({ academicYear: undefined });
+    const { service } = makeAssessmentService({ existingMarkEntry: mark, assessment: { status: 'ongoing', academicYear: '2026-2027' } });
+    const result = await service.updateMarkEntry(String(mark._id), 's', { obtainedMarks: 40 });
+    expect(result.academicYear).toBe('2026-2027');
+    expect(mark.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a genuine save-time ValidationError into a 400 with a clear message, not a bare 500', async () => {
+    const mark = makeMark({
+      save: jest.fn(async function (this: any) {
+        const err: any = new Error('Validation failed');
+        err.name = 'ValidationError';
+        err.errors = { schoolSlug: {} };
+        throw err;
+      }),
+    });
+    const { service } = makeAssessmentService({ existingMarkEntry: mark });
+    await expect(service.updateMarkEntry(String(mark._id), 's', { obtainedMarks: 10 })).rejects.toBeInstanceOf(BadRequestException);
+  });
 });
 
 describe('deleteMarkEntry', () => {
