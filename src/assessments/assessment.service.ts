@@ -1897,16 +1897,27 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const mark: any = await this.markModel.findOne({ _id: id, schoolSlug });
     if (!mark) throw new NotFoundException('Mark entry not found');
 
+    const assessment = await this.assessmentModel.findById(mark.assessmentId);
+
     // Same teacher-only lock bulkEnterMarks enforces - other roles
     // (admin, principal, etc.) keep today's overwrite behaviour.
     if (isTeacherCaller(requestingUser)) {
-      const assessment = await this.assessmentModel.findById(mark.assessmentId);
       await this.assertTeacherMarksScope(requestingUser, assessment, mark.subject, 'PATCH /assessments/marks/:id');
       this.assertTeacherMarksNotLocked(assessment);
       if (mark.verified) {
         throw new ConflictException(`Marks for ${mark.studentName || mark.studentId}${mark.rollNumber ? ` (roll ${mark.rollNumber})` : ''} are verified and locked.`);
       }
     }
+
+    // Rows written by the raw bulkWrite/updateOne paths (bulkEnterMarks,
+    // upsertMarkEntryFromAttempt) skip schema validation on write, so an
+    // older row can be missing a field the schema has since made required
+    // (e.g. academicYear, assessmentTitle). This is the only write path
+    // that calls the full-validation mark.save() - backfill from the
+    // parent assessment first so an old row doesn't 500 on an edit that
+    // has nothing to do with the missing field.
+    if (!mark.academicYear && assessment?.academicYear) mark.academicYear = assessment.academicYear;
+    if (!mark.assessmentTitle && assessment?.title) mark.assessmentTitle = assessment.title;
 
     const isAbsent = dto.isAbsent ?? mark.isAbsent ?? false;
     const isExempt = dto.isExempt ?? mark.isExempt ?? false;
@@ -1926,7 +1937,15 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     mark.gpa = gpa ?? null;
     mark.result = result;
     if (dto.remarks !== undefined) mark.remarks = dto.remarks;
-    await mark.save();
+    try {
+      await mark.save();
+    } catch (err: any) {
+      if (err?.name === 'ValidationError') {
+        const fields = Object.keys(err.errors || {}).join(', ') || 'a required field';
+        throw new BadRequestException(`Could not save this mark - it's missing ${fields}. Please re-enter it from the class roster (Enter Marks) instead of editing it directly.`);
+      }
+      throw err;
+    }
     return mark;
   }
 
