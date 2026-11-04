@@ -1836,6 +1836,39 @@ export class HrService {
     return { pending, approved, total };
   }
 
+  // Institution Overview dashboard's "Staff by Designation Strength"
+  // widget - nothing previously aggregated staff by designation at all
+  // (designation is free text, grouped as typed; staff with none fall
+  // under "Unspecified" rather than being silently dropped), same
+  // male/female/other $cond-sum pattern StudentsService uses for its own
+  // gender-split-by-class aggregation.
+  async getStaffDesignationStrength(tenantId: string) {
+    const tid = this.newTid(tenantId);
+    const rows = await this.staffModel.aggregate([
+      { $match: { tenantId: tid, isActive: true } },
+      {
+        $group: {
+          _id: { $ifNull: ['$designation', 'Unspecified'] },
+          total: { $sum: 1 },
+          male: { $sum: { $cond: [{ $eq: ['$gender', 'male'] }, 1, 0] } },
+          female: { $sum: { $cond: [{ $eq: ['$gender', 'female'] }, 1, 0] } },
+          other: { $sum: { $cond: [{ $eq: ['$gender', 'other'] }, 1, 0] } },
+        },
+      },
+      { $sort: { total: -1 } },
+    ]);
+
+    const designations = rows.map((r: any) => ({
+      designation: r._id, total: r.total, male: r.male, female: r.female, other: r.other,
+    }));
+    const totals = designations.reduce((acc, d) => {
+      acc.total += d.total; acc.male += d.male; acc.female += d.female; acc.other += d.other;
+      return acc;
+    }, { total: 0, male: 0, female: 0, other: 0 });
+
+    return { totals, designations };
+  }
+
   // ── PAYROLL ───────────────────────────────────────────────────────────
 
   async getPayrollRuns(tenantId: string) {

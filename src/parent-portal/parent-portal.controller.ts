@@ -417,6 +417,17 @@ export class ParentPortalController {
     return this.service.getStudentLeaves(studentId, requestingUser, schoolSlug);
   }
 
+  // Staff-facing override of this controller's parent-only default, same
+  // pattern as the consent-admin routes above - the Institution Overview
+  // dashboard's Academics widget needs a school-wide pending count, not
+  // one child's own leave history.
+  @Roles(...CONSENT_ADMIN_ROLES)
+  @Get('student-leave-requests/pending-count')
+  async getPendingStudentLeaveCount(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPendingStudentLeaveCount(schoolSlug);
+  }
+
   @Post('students/:studentId/leaves')
   @HttpCode(HttpStatus.CREATED)
   async createLeave(@Param('studentId') studentId: string, @Body() dto: any, @Request() req: any) {

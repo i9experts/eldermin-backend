@@ -40,7 +40,7 @@ async function run(h: string, user: any, m = models()) {
 }
 
 describe('HrController route matrix', () => {
-  it('covers all 180 routes', () => expect(handlers.length).toBe(180));
+  it('covers all 181 routes', () => expect(handlers.length).toBe(181));
   it.each(handlers)('%s has exactly one access policy (or is leave:self)', (h) => {
     const w = Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]);
     const r = Reflect.getMetadata(HR_READ_KEY, proto[h]);
@@ -132,7 +132,7 @@ describe('HR reads: log-only vs enforce', () => {
 
   it('sensitive reads are 403 for non-HR staff roles even in LOG mode (no flag needed)', async () => {
     delete process.env.HR_READ_GUARD_MODE;
-    expect(sensitive.length).toBe(46);
+    expect(sensitive.length).toBe(47);
     for (const r of NON_HR) for (const h of sensitive)
       await expect(readGuard().canActivate(ctx(h, { userId: 'u', tenantId: 't', role: r }))).rejects.toThrow(ForbiddenException);
     expect(JSON.parse(warn.mock.calls[0][0])).toMatchObject({ bucket: 'sensitive', decision: 'denied' });

@@ -2115,10 +2115,19 @@ export class StudentsService {
       }),
       this.studentModel.countDocuments({ ...filter, scholarshipHolder: true }),
       this.studentModel.countDocuments({ ...filter, specialNeeds: true }),
-      // Grade+Section breakdown — same as gradeDistribution but split further
+      // Grade+Section breakdown — same as gradeDistribution but split further.
+      // male/female counts added for the dashboard's "Students by class"
+      // gender-split bars (Academics breakdown widget) - additive fields,
+      // every existing caller that only reads grade/section/count is
+      // unaffected.
       this.studentModel.aggregate([
         { $match: { ...filter, status: 'active' } },
-        { $group: { _id: { grade: '$currentGrade', section: '$currentSection' }, count: { $sum: 1 } } },
+        { $group: {
+          _id: { grade: '$currentGrade', section: '$currentSection' },
+          count: { $sum: 1 },
+          male: { $sum: { $cond: [{ $eq: ['$gender', 'male'] }, 1, 0] } },
+          female: { $sum: { $cond: [{ $eq: ['$gender', 'female'] }, 1, 0] } },
+        } },
         { $sort: { '_id.grade': 1, '_id.section': 1 } },
       ]),
       // Min/max/avg age per grade+section, computed from dateOfBirth as of today.
@@ -2208,7 +2217,7 @@ export class StudentsService {
       },
       gradeDistribution,
       gradeSectionDistribution: gradeSectionDistribution.map((r: any) => ({
-        grade: r._id.grade, section: r._id.section, count: r.count,
+        grade: r._id.grade, section: r._id.section, count: r.count, male: r.male, female: r.female,
       })),
       sectionAgeStats: sectionAgeStats.map((r: any) => ({
         grade: r._id.grade, section: r._id.section,
@@ -2234,6 +2243,120 @@ export class StudentsService {
         outstanding: outstanding[0]?.total || 0,
       },
     };
+  }
+
+  // Class-wise attendance for a single day, for the Institution Overview
+  // dashboard's attendance widget - getDashboardStats' todayAttendance is
+  // school-wide only (no class breakdown, no Leave/Holiday/Unmarked
+  // buckets), and nothing else in the codebase aggregates attendance by
+  // class for one specific day. Every StudentAttendance.status value maps
+  // into exactly one of present/absent/leave/late, so totals always add up
+  // without an "other" bucket.
+  async getClassAttendanceDaySummary(schoolSlug: string, dateStr?: string) {
+    const date = dateStr ? new Date(dateStr) : new Date();
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const [classCounts, attendanceCounts, holiday] = await Promise.all([
+      this.studentModel.aggregate([
+        { $match: { schoolSlug, status: 'active' } },
+        { $group: { _id: { grade: '$currentGrade', section: '$currentSection' }, total: { $sum: 1 } } },
+      ]),
+      this.attendanceModel.aggregate([
+        { $match: { schoolSlug, date: { $gte: dayStart, $lt: dayEnd } } },
+        { $group: { _id: { grade: '$grade', section: '$section', status: '$status' }, count: { $sum: 1 } } },
+      ]),
+      // Same school-wide ('gradeLevels: []') holiday check assertValidSchoolDay
+      // uses above - this widget doesn't need the per-grade-scoped variant.
+      this.calendarEventModel.findOne({
+        schoolSlug, type: { $in: ['holiday', 'public_holiday'] }, gradeLevels: { $size: 0 },
+        startDate: { $lte: dayEnd }, endDate: { $gte: dayStart },
+      }).select('title').lean(),
+    ]);
+
+    const PRESENT_STATUSES = new Set(['present', 'half_day', 'half_day_am', 'half_day_pm']);
+    const LEAVE_STATUSES = new Set(['on_leave', 'excused', 'medical']);
+
+    type ClassRow = { grade: string; section: string; total: number; present: number; absent: number; leave: number; late: number };
+    const classMap = new Map<string, ClassRow>();
+    for (const c of classCounts as any[]) {
+      const grade = c._id.grade, section = c._id.section || '';
+      classMap.set(`${grade}|${section}`, { grade, section, total: c.total, present: 0, absent: 0, leave: 0, late: 0 });
+    }
+    for (const a of attendanceCounts as any[]) {
+      const row = classMap.get(`${a._id.grade}|${a._id.section || ''}`);
+      if (!row) continue; // attendance marked for a class with no currently-active students - ignore
+      if (PRESENT_STATUSES.has(a._id.status)) row.present += a.count;
+      else if (a._id.status === 'absent') row.absent += a.count;
+      else if (LEAVE_STATUSES.has(a._id.status)) row.leave += a.count;
+      else if (a._id.status === 'late') row.late += a.count;
+    }
+
+    const classes = Array.from(classMap.values())
+      .map((c) => ({ ...c, unmarked: Math.max(0, c.total - c.present - c.absent - c.leave - c.late) }))
+      .sort((a, b) => a.grade.localeCompare(b.grade) || a.section.localeCompare(b.section));
+
+    const totals = classes.reduce((acc, c) => {
+      acc.total += c.total; acc.present += c.present; acc.absent += c.absent;
+      acc.leave += c.leave; acc.late += c.late; acc.unmarked += c.unmarked;
+      return acc;
+    }, { total: 0, present: 0, absent: 0, leave: 0, late: 0, unmarked: 0 });
+
+    return {
+      date: dayStart.toISOString().slice(0, 10),
+      isHoliday: !!holiday,
+      holidayTitle: holiday?.title,
+      totals: {
+        ...totals,
+        classesCount: classes.length,
+        markedPct: totals.total ? Math.round(((totals.total - totals.unmarked) / totals.total) * 100) : 0,
+      },
+      classes,
+    };
+  }
+
+  // Student-side twin of HR's Staff getUpcomingReminders - same
+  // nextOccurrence/daysUntil math, over Student.dateOfBirth instead of
+  // Staff.dateOfBirth, for the dashboard's Birthdays widget. No existing
+  // query anywhere computes student birthday proximity.
+  async getUpcomingStudentBirthdays(schoolSlug: string, withinDays = 30) {
+    const students = await this.studentModel
+      .find({ schoolSlug, status: 'active', dateOfBirth: { $exists: true, $ne: null } },
+        { firstName: 1, lastName: 1, dateOfBirth: 1, currentGrade: 1, currentSection: 1 })
+      .lean();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const nextOccurrence = (date: Date) => {
+      const d = new Date(date);
+      const next = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+      if (next < today) next.setFullYear(today.getFullYear() + 1);
+      return next;
+    };
+    const daysUntil = (d: Date) => Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    const birthdays = students
+      .map((s: any) => {
+        const next = nextOccurrence(s.dateOfBirth);
+        const inDays = daysUntil(next);
+        return {
+          studentId: s._id,
+          name: `${s.firstName} ${s.lastName}`,
+          grade: s.currentGrade,
+          section: s.currentSection,
+          dateOfBirth: s.dateOfBirth,
+          date: next,
+          inDays,
+          type: 'birthday' as const,
+        };
+      })
+      .filter((b) => b.inDays <= withinDays)
+      .sort((a, b) => a.inDays - b.inDays);
+
+    return { birthdays };
   }
 
   // ============================================================

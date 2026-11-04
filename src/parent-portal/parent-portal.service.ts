@@ -1207,6 +1207,14 @@ export class ParentPortalService {
     return this.studentLeaveModel.find({ studentId, schoolSlug }).sort({ createdAt: -1 }).lean();
   }
 
+  // School-wide pending count for the Institution Overview dashboard's
+  // Academics widget - everything else touching StudentLeave is scoped to
+  // one student's own leave history.
+  async getPendingStudentLeaveCount(schoolSlug: string) {
+    const pending = await this.studentLeaveModel.countDocuments({ schoolSlug, status: 'pending' });
+    return { pending };
+  }
+
   // ── Notifications / Inbox (same data, two views) ──────────────
   async getNotifications(userId: string, schoolSlug: string, query: any) {
     const filter: any = { recipientUserId: new Types.ObjectId(userId), schoolSlug };

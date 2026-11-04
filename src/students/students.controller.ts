@@ -97,6 +97,24 @@ export class StudentsController {
     return { lastRollNumber, nextSuggested: lastRollNumber !== null ? lastRollNumber + 1 : null };
   }
 
+  /** GET /api/v1/students/attendance/day-summary?date=YYYY-MM-DD
+   * Class-wise attendance totals for one day - the Institution Overview
+   * dashboard's Attendance widget. Omit `date` for today. */
+  @Get('attendance/day-summary')
+  async getClassAttendanceDaySummary(@Request() req: any, @Query('date') date?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getClassAttendanceDaySummary(schoolSlug, date);
+  }
+
+  /** GET /api/v1/students/birthdays/upcoming?days=30
+   * Student birthdays within the next N days - the dashboard's Birthdays
+   * widget pairs this with HR's GET /hr/reminders/upcoming (staff). */
+  @Get('birthdays/upcoming')
+  async getUpcomingStudentBirthdays(@Request() req: any, @Query('days') days?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getUpcomingStudentBirthdays(schoolSlug, days ? Number(days) : 30);
+  }
+
   // ============================================================
   // BULK IMPORT
   // ============================================================

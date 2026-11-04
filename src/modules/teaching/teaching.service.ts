@@ -120,6 +120,90 @@ export class TeachingService {
     };
   }
 
+  // Institution Overview dashboard's "Homework Summary" widget - which
+  // class+subject combinations have (and haven't) been given homework for
+  // a given day. Nothing previously cross-referenced Timetable (the only
+  // source of "what subjects/teachers are actually taught in this class
+  // today") against Assignment (whether homework was actually created for
+  // it), so there was no way to answer "which classes still need homework
+  // assigned today" at a glance.
+  //
+  // Assignment has no separate "published" flag - status is the closest
+  // proxy (product decision): 'draft' = created but not yet published to
+  // students, 'assigned'/'submitted'/'graded'/'overdue' = published. No
+  // Assignment row at all for a class+subject = not assigned yet.
+  private static readonly HOMEWORK_PUBLISHED_STATUSES = new Set(['assigned', 'submitted', 'graded', 'overdue']);
+  private static readonly HOMEWORK_NON_TEACHING_PERIOD_TYPES = new Set(['break', 'assembly', 'free']);
+
+  async getHomeworkSummary(tenantId: string, dateStr?: string, campusId?: string) {
+    const tid = this.tid(tenantId);
+    const date = dateStr ? new Date(dateStr) : new Date();
+    const dayOfWeek = date.getDay();
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const timetableFilter: any = { tenantId: tid, status: 'active' };
+    if (campusId) timetableFilter.campusId = campusId;
+
+    const [timetables, assignments] = await Promise.all([
+      this.timetableModel.find(timetableFilter).select('gradeLevel sectionName periods').lean(),
+      this.assignmentModel.find({
+        tenantId: tid, type: 'homework', assignedDate: { $gte: dayStart, $lt: dayEnd },
+        ...(campusId ? { campusId } : {}),
+      }).select('gradeLevel sectionName subject status').lean(),
+    ]);
+
+    const assignmentStatusByKey = new Map<string, string>();
+    for (const a of assignments as any[]) {
+      assignmentStatusByKey.set(`${a.gradeLevel}|${a.sectionName || ''}|${a.subject}`, a.status);
+    }
+
+    type SubjectRow = { subject: string; teacherName: string; assigned: boolean; published: boolean };
+    const classes: { grade: string; section: string; subjects: SubjectRow[] }[] = [];
+
+    for (const tt of timetables as any[]) {
+      const seenSubjects = new Set<string>();
+      const subjects: SubjectRow[] = [];
+      for (const p of tt.periods || []) {
+        if (p.day !== dayOfWeek) continue;
+        if (!p.subject || TeachingService.HOMEWORK_NON_TEACHING_PERIOD_TYPES.has(p.type)) continue;
+        if (seenSubjects.has(p.subject)) continue;
+        seenSubjects.add(p.subject);
+        const status = assignmentStatusByKey.get(`${tt.gradeLevel}|${tt.sectionName || ''}|${p.subject}`);
+        subjects.push({
+          subject: p.subject,
+          teacherName: p.teacherName || '',
+          assigned: !!status,
+          published: !!status && TeachingService.HOMEWORK_PUBLISHED_STATUSES.has(status),
+        });
+      }
+      if (subjects.length > 0) classes.push({ grade: tt.gradeLevel, section: tt.sectionName || '', subjects });
+    }
+    classes.sort((a, b) => a.grade.localeCompare(b.grade) || a.section.localeCompare(b.section));
+
+    const totals = { total: 0, assigned: 0, published: 0, unassigned: 0, unpublished: 0 };
+    let classesWithHomework = 0;
+    for (const c of classes) {
+      let classHasAny = false;
+      for (const s of c.subjects) {
+        totals.total++;
+        if (s.assigned) { totals.assigned++; classHasAny = true; } else totals.unassigned++;
+        if (s.published) totals.published++; else totals.unpublished++;
+      }
+      if (classHasAny) classesWithHomework++;
+    }
+
+    return {
+      date: dayStart.toISOString().slice(0, 10),
+      classesAssignedHomework: classesWithHomework,
+      totalClasses: classes.length,
+      totals,
+      classes,
+    };
+  }
+
   // ── TEACHER PROFILES ──────────────────────────────────────────────────────────
 
   async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
