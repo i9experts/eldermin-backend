@@ -85,6 +85,18 @@ export class StudentsController {
     return projectForTeacher(requestingUser, await this.studentsService.getClassRosterDiagnostic(schoolSlug, grade, section, requestingUser));
   }
 
+  /** GET /api/v1/students/last-roll-number?grade=&section=&academicYear=
+   * Lets the Add Student wizard, Admissions enrollment form, and Student
+   * 360's roll-number edit all show "last used roll number in this class:
+   * N - try N+1" before the admin even submits, instead of only finding
+   * out about a collision after a rejected save. */
+  @Get('last-roll-number')
+  async getLastRollNumberInClass(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string, @Query('academicYear') academicYear?: string) {
+    const { schoolSlug } = this.ctx(req);
+    const lastRollNumber = await this.studentsService.getLastRollNumberInClass(schoolSlug, grade, section, academicYear);
+    return { lastRollNumber, nextSuggested: lastRollNumber !== null ? lastRollNumber + 1 : null };
+  }
+
   // ============================================================
   // BULK IMPORT
   // ============================================================

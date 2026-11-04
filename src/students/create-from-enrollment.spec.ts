@@ -11,7 +11,15 @@ function makeStudentModel(existing: any = null) {
     data: any;
     constructor(data: any) { this.data = data; }
     async save() { saved.push(this.data); return this.data; }
-    static findOne = jest.fn(async () => existing);
+    // Thenable so `await findOne(...)` (the admissionNumber pre-existence
+    // check) resolves to `existing`, but also chainable with
+    // .select().lean() for the roll-number-collision check
+    // (assertRollNumberAvailable) - these tests aren't exercising a
+    // collision, so that check always comes back empty.
+    static findOne = jest.fn(() => ({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+      then: (resolve: any, reject?: any) => Promise.resolve(existing).then(resolve, reject),
+    }));
   }
   return { Model: FakeStudentModel as any, saved };
 }
