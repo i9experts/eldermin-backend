@@ -47,16 +47,54 @@ export class GoogleAnalyticsService {
       return;
     }
     try {
-      // The env var holds the full service-account JSON key file's
-      // contents as a string (set via the environment's own secret/env-var
-      // mechanism, never committed) - parsed once here rather than reading
-      // a file path, since a container filesystem is the wrong place to
-      // keep it.
-      const credentials = JSON.parse(rawKey);
+      const credentials = GoogleAnalyticsService.parseServiceAccountKey(rawKey);
+      if (!credentials.client_email || !credentials.private_key) {
+        throw new Error('parsed JSON has no client_email/private_key - this is not a service account key file');
+      }
       this.client = new BetaAnalyticsDataClient({ credentials });
     } catch (err: any) {
-      this.initError = `GA4_SERVICE_ACCOUNT_KEY is not valid JSON: ${err.message}`;
+      // Never echo the raw value back (it's a secret) - but a shape
+      // diagnostic (length, first/last character) is enough for someone
+      // to tell "I pasted the wrong thing" or "this got truncated" apart
+      // from "this is genuinely malformed", without us ever seeing or
+      // logging the actual key material.
+      const len = rawKey.length;
+      const shape = len === 0 ? 'empty' : `starts with ${JSON.stringify(rawKey[0])}, ends with ${JSON.stringify(rawKey[len - 1])}, ${len} chars`;
+      this.initError = `GA4_SERVICE_ACCOUNT_KEY isn't a usable service account key (${shape}): ${err.message}. ` +
+        `Re-copy the ENTIRE .json key file Google downloaded when you created the service account - every ` +
+        `character from the opening { to the closing } - and paste it as one value with nothing added or removed. ` +
+        `If your environment's secret field strips newlines or quotes, minify the file first ` +
+        `(e.g. "python3 -c \\"import json,sys;print(json.dumps(json.load(open('key.json'))))\\" ") and paste that ` +
+        `single line instead; base64-encoding the file's contents also works (this will auto-detect it).`;
       this.logger.warn(this.initError);
+    }
+  }
+
+  /** Accepts the service account key as raw JSON, JSON double-encoded as a
+   * quoted/escaped string (some secret-manager UIs wrap a pasted value in
+   * an extra pair of quotes), or base64-encoded JSON (the standard
+   * workaround when an env var field won't preserve literal newlines/
+   * quotes) - tries each in turn and throws the raw-JSON parse error if
+   * none of them produce a usable object. */
+  private static parseServiceAccountKey(raw: string): any {
+    const trimmed = raw.trim();
+    let firstError: any = null;
+
+    try {
+      let result = JSON.parse(trimmed);
+      // A quoted/escaped wrapper (`"{\"client_email\":...}"`) parses as a
+      // JSON string whose own content is the real JSON - parse once more.
+      if (typeof result === 'string') result = JSON.parse(result);
+      return result;
+    } catch (err) {
+      firstError = err;
+    }
+
+    try {
+      const decoded = Buffer.from(trimmed, 'base64').toString('utf8');
+      return JSON.parse(decoded);
+    } catch {
+      throw firstError;
     }
   }
 
