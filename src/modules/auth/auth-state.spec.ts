@@ -128,6 +128,7 @@ describe('token issuance carries tv; resets and sign-out bump it', () => {
     const s: any = Object.create(AuthService.prototype);
     s.userModel = { findOne: jest.fn(() => Object.assign(Promise.resolve(user), { lean: () => Promise.resolve(user) })), findByIdAndUpdate: jest.fn(), updateOne: jest.fn() };
     s.tenantModel = { findById: () => ({ lean: () => Promise.resolve({ _id: 't1', slug: 's', status: 'active' }) }) };
+    s.onboardingSessionModel = { exists: jest.fn(async () => null) };
     s.rolesService = { getPermissionsForUser: async () => null };
     s.resolveScopeFieldsForUser = async () => ({});
     s.getPlatformPermissionsForUser = async () => undefined;

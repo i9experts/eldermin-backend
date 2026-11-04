@@ -14,6 +14,7 @@ import { TeacherProfile, TeacherProfileSchema } from '../teaching/schemas/teache
 import { Reseller, ResellerSchema } from '../../resellers/schemas/reseller.schema';
 import { PlatformRole, PlatformRoleSchema } from '../../super-admin/schemas/platform-role.schema';
 import { UsageLog, UsageLogSchema } from '../../super-admin/schemas/super-admin.schema';
+import { OnboardingSession, OnboardingSessionSchema } from '../../onboarding/schemas/onboarding-session.schema';
 import { UploadModule } from '../../upload/upload.module';
 import { RolesModule } from '../../roles/roles.module';
 import { EmailModule } from '../../email/email.module';
@@ -43,6 +44,7 @@ import { AuthStateModule } from './auth-state.module';
       { name: Reseller.name, schema: ResellerSchema },
       { name: PlatformRole.name, schema: PlatformRoleSchema },
       { name: UsageLog.name, schema: UsageLogSchema },
+      { name: OnboardingSession.name, schema: OnboardingSessionSchema },
     ]),
   ],
   controllers: [AuthController],

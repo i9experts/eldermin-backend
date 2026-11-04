@@ -12,6 +12,7 @@ import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teac
 import { Reseller, ResellerDocument } from '../../resellers/schemas/reseller.schema';
 import { PlatformRole, PlatformRoleDocument } from '../../super-admin/schemas/platform-role.schema';
 import { UsageLog, UsageLogDocument } from '../../super-admin/schemas/super-admin.schema';
+import { OnboardingSession, OnboardingSessionDocument } from '../../onboarding/schemas/onboarding-session.schema';
 import { recordLoginUsage } from '../../common/utils/usage-log.util';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
@@ -38,6 +39,7 @@ export class AuthService {
     @InjectModel(Reseller.name) private resellerModel: Model<ResellerDocument>,
     @InjectModel(PlatformRole.name) private platformRoleModel: Model<PlatformRoleDocument>,
     @InjectModel(UsageLog.name) private usageLogModel: Model<UsageLogDocument>,
+    @InjectModel(OnboardingSession.name) private onboardingSessionModel: Model<OnboardingSessionDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -221,6 +223,22 @@ export class AuthService {
 
     const schoolSlug = tenant?.slug || slugToUse || null;
     await recordLoginUsage(this.usageLogModel, schoolSlug);
+
+    // Setup Wizard gating: Tenant.isSetupComplete defaults to false and is
+    // only ever flipped true by the self-service wizard's own completion
+    // step (OnboardingService.complete). A school Super Admin activates
+    // directly (CRM "Activate Institution") never goes through that wizard
+    // at all - Super Admin already does the equivalent setup work itself -
+    // so isSetupComplete sits stuck at false forever for every one of
+    // those schools, and the frontend would otherwise keep showing the
+    // Setup Wizard link/button on an already fully-active account with no
+    // real wizard step left to complete. An OnboardingSession document
+    // only ever gets created by the self-service signup flow
+    // (OnboardingService.register) - its absence is a reliable signal that
+    // this school was never meant to see the wizard in the first place,
+    // regardless of the stored flag's value.
+    const isSetupComplete = tenant?.isSetupComplete === true
+      || !(schoolSlug && await this.onboardingSessionModel.exists({ schoolSlug }));
     const permissions = await this.rolesService.getPermissionsForUser(user._id.toString());
     // Only ever computed for super_admin - every other role has no
     // customPlatformRoleId and this resolves to undefined for them,
@@ -319,6 +337,7 @@ export class AuthService {
         slug: tenant?.slug || slugToUse || null,
         plan: tenant?.plan || null,
         activeModules,
+        isSetupComplete,
       },
     };
   }
