@@ -88,6 +88,12 @@ export class TermReportCard {
   @Prop() strongestSubject: string;
   @Prop() weakestSubject: string;
 
+  // false for a student with no marks recorded against any assessment in
+  // this term (e.g. a Qaida/Hifz-only student who sat no written exams) -
+  // lets the UI/PDF show "No academic marks on record" instead of a
+  // misleading 0%/F, while every other section below can still be real.
+  @Prop({ default: true }) hasAcademicData: boolean;
+
   // Which optional sections were requested at generation time, and
   // whether real data was actually found for each (so the UI/PDF can
   // show "not available" instead of a misleadingly empty section when a

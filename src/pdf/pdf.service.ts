@@ -474,6 +474,10 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   const ringColor = overallPct >= 80 ? '#16A34A' : overallPct >= 50 ? '#D97706' : '#DC2626';
   const ringCircumference = 2 * Math.PI * 52;
   const ringOffset = ringCircumference * (1 - overallPct / 100);
+  // A student with no marks this term (e.g. a Qaida/Hifz-only student with
+  // no written exams) still gets a report - just with this section swapped
+  // for a plain notice instead of a misleading 0%/F grade/position.
+  const hasAcademicData = data.hasAcademicData !== false;
 
   return `
 <!DOCTYPE html>
@@ -592,6 +596,9 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   </div>
 
   <div class="section-title">Academic Performance</div>
+  ${!hasAcademicData ? `
+  <p class="muted">No academic marks were recorded against this student for any assessment this term.</p>
+  ` : `
   <table>
     <thead>
       <tr>
@@ -627,6 +634,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     ${data.strongestSubject ? `<span class="tag tag-strong">Strongest: ${esc(data.strongestSubject)}</span>` : ''}
     ${data.weakestSubject ? `<span class="tag tag-weak">Needs Focus: ${esc(data.weakestSubject)}</span>` : ''}
   </div>` : ''}
+  `}
 
   ${tarbiyahSection}
   ${qaidaNazraSection}
@@ -1808,6 +1816,7 @@ export class PdfService implements OnModuleDestroy {
       totalStudents: trc.totalStudents,
       strongestSubject: trc.strongestSubject,
       weakestSubject: trc.weakestSubject,
+      hasAcademicData: trc.hasAcademicData !== false,
       sectionsIncluded: trc.sectionsIncluded || {},
       tarbiyah: trc.tarbiyah || null,
       qaida: trc.qaida || null,
