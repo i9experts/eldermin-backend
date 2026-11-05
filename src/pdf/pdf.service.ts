@@ -592,25 +592,52 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
 /** Per-exam Report Card PDF - deliberately a much smaller template than
  * REPORT_CARD_TEMPLATE above (which is actually the whole-TERM report),
  * since a single-assessment result has none of the Tarbiyah/Qaida/
- * attendance/engagement sections a term summary does. Reuses the exact
- * same CSS classes/palette so the two print styles feel consistent.
- * Works regardless of published state by design - this is the "print
- * preview before publishing" path, called from the same staff-only PDF
- * route whether or not the result has been published yet. */
+ * attendance/engagement sections a term summary does. Works regardless of
+ * published state by design - this is the "print preview before
+ * publishing" path, called from the same staff-only PDF route whether or
+ * not the result has been published yet - so a ribbon marks it Draft
+ * until then, rather than leaving the viewer to guess.
+ *
+ * Redesigned per school feedback on the original (plain table + flat
+ * tiles) layout: an accent gradient band, a logo slot, a student avatar
+ * with initials, medal styling for the top 3 class positions, colored
+ * grade pills with an inline mastery bar per subject, and a radial
+ * progress ring for the headline percentage instead of a plain number. */
 const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   const esc = escapeHtml;
-  const gradeClass = (grade: string) => {
+  const gradeTone = (grade: string) => {
     const g = (grade || '').charAt(0).toUpperCase();
-    return g === 'A' ? 'grade-a' : g === 'B' ? 'grade-b' : g === 'C' ? 'grade-c' : 'grade-d';
+    return g === 'A' ? { fg: '#15803D', bg: '#DCFCE7', bar: '#16A34A' }
+      : g === 'B' ? { fg: '#1D4ED8', bg: '#DBEAFE', bar: '#2563EB' }
+      : g === 'C' ? { fg: '#B45309', bg: '#FEF3C7', bar: '#D97706' }
+      : { fg: '#B91C1C', bg: '#FEE2E2', bar: '#DC2626' };
   };
-  const subjectRows = (data.subjects || []).map((s: any) => `
+  const initials = (data.studentName || '?')
+    .split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase() || '').join('') || '?';
+
+  const subjectRows = (data.subjects || []).map((s: any) => {
+    const tone = gradeTone(s.grade);
+    const pct = Math.max(0, Math.min(100, s.percentage ?? 0));
+    return `
     <tr>
-      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span style="color:#DC2626;font-size:10px">(Absent)</span>' : ''}</td>
-      <td>${s.totalMarks ?? 0}</td>
-      <td>${s.obtainedMarks ?? 0}</td>
-      <td>${s.percentage ?? 0}%</td>
-      <td class="${gradeClass(s.grade)}">${esc(s.grade) || 'N/A'}</td>
-    </tr>`).join('');
+      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span class="absent-tag">Absent</span>' : ''}</td>
+      <td class="num">${s.obtainedMarks ?? 0}<span class="of-max"> / ${s.totalMarks ?? 0}</span></td>
+      <td>
+        <div class="mastery-track"><div class="mastery-fill" style="width:${pct}%;background:${tone.bar}"></div></div>
+      </td>
+      <td class="num">${s.percentage ?? 0}%</td>
+      <td class="num"><span class="grade-pill" style="color:${tone.fg};background:${tone.bg}">${esc(s.grade) || 'N/A'}</span></td>
+    </tr>`;
+  }).join('');
+
+  const overallPct = Math.max(0, Math.min(100, data.overallPercentage ?? 0));
+  const ringColor = overallPct >= 80 ? '#16A34A' : overallPct >= 50 ? '#D97706' : '#DC2626';
+  // r=52, circumference ~326.7 - a plain SVG stroke-dasharray ring renders
+  // reliably in headless Chromium without any charting library.
+  const ringCircumference = 2 * Math.PI * 52;
+  const ringOffset = ringCircumference * (1 - overallPct / 100);
+
+  const positionMedal = data.classPosition === 1 ? '🥇' : data.classPosition === 2 ? '🥈' : data.classPosition === 3 ? '🥉' : null;
 
   return `
 <!DOCTYPE html>
@@ -620,99 +647,169 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1B4F8A; margin-bottom: 18px; }
-  .school-name { font-size: 22px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.5px; }
-  .school-sub { font-size: 12px; color: #3D5A7A; margin-top: 2px; }
-  .doc-title { font-size: 14px; font-weight: 700; color: #F5A623; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
-  .doc-year { font-size: 12px; color: #3D5A7A; text-align: right; }
-  .draft-badge { display: inline-block; margin-top: 4px; font-size: 10px; font-weight: 700; color: #B45309; background: #FEF3DC; border: 1px solid #F5A623; border-radius: 999px; padding: 2px 10px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .student-box { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-  .info-label { font-size: 10px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-  .info-value { font-size: 14px; font-weight: 600; color: #0D1F35; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
-  .section-title:first-of-type { margin-top: 0; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 13px; }
-  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  th:last-child { text-align: center; }
-  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; }
-  tr:nth-child(even) td { background: #F7FAFD; }
-  td:last-child { text-align: center; }
-  .grade-a { color: #16A34A; font-weight: 700; }
-  .grade-b { color: #2563EB; font-weight: 700; }
-  .grade-c { color: #D97706; font-weight: 700; }
-  .grade-d { color: #DC2626; font-weight: 700; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
-  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 8px; padding: 12px; text-align: center; }
-  .summary-num { font-size: 22px; font-weight: 800; color: #1B4F8A; }
-  .summary-label { font-size: 10px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
-  .note { font-size: 12px; color: #3D5A7A; line-height: 1.5; margin-bottom: 8px; }
-  .remarks-box { background: #FEF3DC; border: 1px solid #F5A623; border-radius: 8px; padding: 14px; margin-bottom: 20px; }
-  .remarks-text { font-size: 13px; color: #0D1F35; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 32px; padding-top: 16px; border-top: 1px solid #DDE8F4; }
+  .page { width: 210mm; min-height: 297mm; position: relative; }
+  .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
+  .content { padding: 14mm 16mm 16mm; }
+
+  .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
+    background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+    padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
+
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 2px solid #EEF4FB; margin-bottom: 18px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { height: 46px; width: 46px; object-fit: contain; border-radius: 8px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
+  .school-sub { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .doc-meta { text-align: right; }
+  .doc-eyebrow { font-size: 9.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #1B4F8A; margin-top: 2px; max-width: 260px; }
+  .doc-year { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .status-pill { display: inline-block; margin-top: 6px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 3px 11px; }
+  .status-published { color: #15803D; background: #DCFCE7; }
+  .status-draft { color: #B45309; background: #FEF3C7; }
+
+  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
+  .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
+  .student-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
+  .info-label { font-size: 9.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 14px; font-weight: 700; color: #0D1F35; }
+  .result-pass { color: #15803D; }
+  .result-fail { color: #B91C1C; }
+
+  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  tr:nth-child(even) td { background: #F9FBFD; }
+  .num { text-align: right; white-space: nowrap; }
+  .of-max { color: #94A3B8; font-weight: 400; }
+  .absent-tag { color: #DC2626; font-size: 9.5px; font-weight: 700; margin-left: 4px; }
+  .mastery-track { width: 100px; height: 6px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
+  .mastery-fill { height: 100%; border-radius: 4px; }
+  .grade-pill { display: inline-block; min-width: 30px; text-align: center; font-weight: 800; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; }
+
+  .results-row { display: flex; gap: 16px; align-items: stretch; margin: 18px 0 6px; }
+  .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px; }
+  .ring-pct { font-size: 20px; font-weight: 800; }
+  .ring-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  .tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 10px; padding: 12px 14px; }
+  .tile-num { font-size: 18px; font-weight: 800; color: #1B4F8A; }
+  .tile-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+
+  .compare { margin-top: 4px; margin-bottom: 18px; }
+  .compare-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .compare-name { width: 110px; font-size: 10.5px; color: #3D5A7A; flex-shrink: 0; }
+  .compare-track { flex: 1; height: 9px; border-radius: 5px; background: #EEF4FB; overflow: hidden; }
+  .compare-fill { height: 100%; border-radius: 5px; }
+  .compare-val { width: 44px; text-align: right; font-size: 10.5px; font-weight: 700; color: #1B4F8A; flex-shrink: 0; }
+
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 12px 14px; margin-bottom: 14px; }
+  .remarks-label { font-size: 9.5px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+  .remarks-text { font-size: 12.5px; color: #0D1F35; line-height: 1.55; }
+
+  .sig-row { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 4px; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px solid #0D1F35; margin-bottom: 6px; height: 32px; }
-  .sig-label { font-size: 11px; color: #3D5A7A; font-weight: 600; }
-  .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #7A9AB8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
+  .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: 30px; }
+  .sig-label { font-size: 10.5px; color: #3D5A7A; font-weight: 700; }
+
+  .footer { text-align: center; margin-top: 22px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
   .footer strong { color: #1B4F8A; }
 </style>
 </head>
 <body>
 <div class="page">
-  <div class="header">
-    <div>
-      <div class="school-name">${esc(data.schoolName)}</div>
-      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
+  <div class="accent-bar"></div>
+  ${!data.published ? '<div class="draft-ribbon">Draft</div>' : ''}
+  <div class="content">
+    <div class="header">
+      <div class="brand">
+        ${data.schoolLogo ? `<img class="logo" src="${data.schoolLogo}" alt="logo" />` : ''}
+        <div>
+          <div class="school-name">${esc(data.schoolName)}</div>
+          ${data.schoolAddress ? `<div class="school-sub">${esc(data.schoolAddress)}</div>` : ''}
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="doc-eyebrow">Report Card</div>
+        <div class="doc-title">${esc(data.assessmentTitle) || ''}</div>
+        <div class="doc-year">${esc(data.academicYear) || ''}${data.term ? ' · ' + esc(data.term) : ''}</div>
+        <div class="status-pill ${data.published ? 'status-published' : 'status-draft'}">${data.published ? 'Published' : 'Not Yet Published'}</div>
+      </div>
     </div>
-    <div>
-      <div class="doc-title">${esc(data.assessmentTitle) || 'Report Card'}</div>
-      <div class="doc-year">${esc(data.academicYear) || ''} ${data.term ? '· ' + esc(data.term) : ''}</div>
-      ${!data.published ? '<div class="draft-badge">Draft · Not Yet Published</div>' : ''}
+
+    <div class="student-card">
+      <div class="avatar">${esc(initials)}</div>
+      <div class="student-grid">
+        <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+        <div><div class="info-label">Roll Number</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
+        <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+        <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `${positionMedal ? positionMedal + ' ' : ''}#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
+        <div><div class="info-label">Result</div><div class="info-value ${data.overallResult === 'pass' ? 'result-pass' : 'result-fail'}">${esc(data.overallResult?.toUpperCase()) || 'N/A'}</div></div>
+        <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div></div>
+      </div>
     </div>
-  </div>
-  <div class="student-box">
-    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
-    <div><div class="info-label">Roll Number</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
-    <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
-    <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
-    <div><div class="info-label">Result</div><div class="info-value" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'};text-transform:uppercase">${esc(data.overallResult) || 'N/A'}</div></div>
-    <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div></div>
-  </div>
 
-  <div class="section-title">Academic Performance</div>
-  <table>
-    <thead>
-      <tr>
-        <th style="width:40%">Subject</th>
-        <th>Total Marks</th>
-        <th>Obtained</th>
-        <th>Percentage</th>
-        <th>Grade</th>
-      </tr>
-    </thead>
-    <tbody>${subjectRows}</tbody>
-  </table>
-  <div class="summary-grid">
-    <div class="summary-card"><div class="summary-num">${data.totalObtainedMarks || 0}</div><div class="summary-label">Total Obtained</div></div>
-    <div class="summary-card"><div class="summary-num">${data.totalMaxMarks || 0}</div><div class="summary-label">Total Marks</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:${data.overallPercentage >= 65 ? '#16A34A' : '#DC2626'}">${data.overallPercentage || 0}%</div><div class="summary-label">Overall %</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (${data.overallGPA})` : ''}</div><div class="summary-label">Final Grade</div></div>
-  </div>
-  ${data.classAveragePercentage != null ? `<p class="note">Class average: ${data.classAveragePercentage}%</p>` : ''}
+    <div class="section-title">Academic Performance</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:32%">Subject</th>
+          <th style="text-align:right">Marks</th>
+          <th style="text-align:center">Mastery</th>
+          <th style="text-align:right">%</th>
+          <th style="text-align:right">Grade</th>
+        </tr>
+      </thead>
+      <tbody>${subjectRows}</tbody>
+    </table>
 
-  ${data.classTeacherRemarks ? `
-  <div class="section-title">Class Teacher Remarks</div>
-  <div class="remarks-box"><div class="remarks-text">${esc(data.classTeacherRemarks)}</div></div>` : ''}
-  ${data.principalRemarks ? `
-  <div class="section-title">Principal's Remarks</div>
-  <div class="remarks-box"><div class="remarks-text">${esc(data.principalRemarks)}</div></div>` : ''}
+    <div class="results-row">
+      <div class="ring-card">
+        <svg width="120" height="120" viewBox="0 0 120 120">
+          <circle cx="60" cy="60" r="52" fill="none" stroke="#EEF4FB" stroke-width="12" />
+          <circle cx="60" cy="60" r="52" fill="none" stroke="${ringColor}" stroke-width="12" stroke-linecap="round"
+            stroke-dasharray="${ringCircumference.toFixed(1)}" stroke-dashoffset="${ringOffset.toFixed(1)}"
+            transform="rotate(-90 60 60)" />
+          <text x="60" y="66" text-anchor="middle" font-size="24" font-weight="800" fill="${ringColor}" font-family="Segoe UI, Arial, sans-serif">${overallPct}%</text>
+        </svg>
+        <div class="ring-label">Overall Score</div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="tile-num">${data.totalObtainedMarks || 0} / ${data.totalMaxMarks || 0}</div><div class="tile-label">Marks Obtained</div></div>
+        <div class="tile" style="border-left-color:#F5A623"><div class="tile-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (GPA ${data.overallGPA})` : ''}</div><div class="tile-label">Final Grade</div></div>
+        <div class="tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(data.overallResult?.toUpperCase()) || 'N/A'}</div><div class="tile-label">Result</div></div>
+        <div class="tile" style="border-left-color:#7C3AED"><div class="tile-num" style="color:#7C3AED">${(data.subjects || []).length}</div><div class="tile-label">Subjects</div></div>
+      </div>
+    </div>
 
-  <div class="sig-row">
-    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
-    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Principal</div></div>
-    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+    ${data.classAveragePercentage != null ? `
+    <div class="compare">
+      <div class="compare-row">
+        <div class="compare-name">This student</div>
+        <div class="compare-track"><div class="compare-fill" style="width:${overallPct}%;background:${ringColor}"></div></div>
+        <div class="compare-val">${overallPct}%</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-name">Class average</div>
+        <div class="compare-track"><div class="compare-fill" style="width:${Math.max(0, Math.min(100, data.classAveragePercentage))}%;background:#94A3B8"></div></div>
+        <div class="compare-val">${data.classAveragePercentage}%</div>
+      </div>
+    </div>` : ''}
+
+    ${data.classTeacherRemarks ? `
+    <div class="remarks-box"><div class="remarks-label">Class Teacher Remarks</div><div class="remarks-text">${esc(data.classTeacherRemarks)}</div></div>` : ''}
+    ${data.principalRemarks ? `
+    <div class="remarks-box"><div class="remarks-label">Principal's Remarks</div><div class="remarks-text">${esc(data.principalRemarks)}</div></div>` : ''}
+
+    <div class="sig-row">
+      <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
+      <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Principal</div></div>
+      <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+    </div>
+    <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
   </div>
-  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
 </div>
 </body>
 </html>
@@ -1711,6 +1808,7 @@ export class PdfService implements OnModuleDestroy {
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
+      schoolLogo: (school as any).logo || null,
       assessmentTitle: card.assessmentTitle,
       academicYear: card.academicYear,
       term: card.term,
