@@ -12,8 +12,10 @@ import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Invoice, InvoiceDocument } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntryDocument, ReportCard, ReportCardDocument } from '../assessments/schemas/assessment.schema';
+import { TermReportCard, TermReportCardDocument } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahAssessmentDocument } from '../behaviour/schemas/behaviour.schema';
 import { PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf } from './parent-behaviour.projection';
+import { projectParentReportCard, projectParentTermReportCard } from './parent-results.projection';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { AssignmentSubmission, AssignmentSubmissionDocument } from '../modules/teaching/schemas/assignment-submission.schema';
@@ -92,6 +94,13 @@ export class ParentPortalService {
     private forumService: ForumService,
     private gamificationService: GamificationService,
     private qaidaNazraExtras: QaidaNazraExtrasService,
+    // Assessment Master Settings' parent-facing Term Report Card view -
+    // appended at the END, not inserted alongside reportCardModel above, so
+    // every existing positional `new ParentPortalService(...)` test
+    // construction (several spec files hardcode exact argument indices/
+    // counts - see consent-request-results.spec.ts's own comment on this
+    // fragility) keeps compiling and passing unchanged.
+    @InjectModel(TermReportCard.name) private termReportCardModel: Model<TermReportCardDocument>,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -681,7 +690,30 @@ export class ParentPortalService {
     assertStudentAccess(requestingUser, studentId);
     const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
     if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
-    return this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean();
+    const [cards, settings] = await Promise.all([
+      this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean(),
+      this.assessmentService.getVisibilitySettings(schoolSlug),
+    ]);
+    // Assessment Master Settings' parent-visibility allowlist (see
+    // parent-results.projection.ts) - previously the full ReportCard
+    // document went straight to the parent app with zero filtering,
+    // including classPosition/totalStudents regardless of any setting.
+    return cards.map((c) => projectParentReportCard(c, settings as any));
+  }
+
+  // ── Term Report Cards (whole-term, comprehensive) ───────────────
+  // Previously no parent-facing path existed for TermReportCard at all -
+  // generateTermReportCards/publishTermReportCards only ever fed the
+  // staff-facing Results tab.
+  async getTermReportCards(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
+    const [cards, settings] = await Promise.all([
+      this.termReportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean(),
+      this.assessmentService.getVisibilitySettings(schoolSlug),
+    ]);
+    return cards.map((c) => projectParentTermReportCard(c, settings as any));
   }
 
   // ── Dues ─────────────────────────────────────────────────────

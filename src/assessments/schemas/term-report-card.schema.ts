@@ -81,6 +81,10 @@ export class TermReportCard {
   // ReportCard.classPosition, which only ranks within one exam.
   @Prop() classPosition: number;
   @Prop() totalStudents: number;
+  // Same convention as ReportCard.classAveragePercentage - computed once at
+  // generation time from the same grade/section cohort's overallPercentage
+  // values, gated behind Assessment Master Settings' shareClassAverage flag.
+  @Prop() classAveragePercentage: number;
   @Prop() strongestSubject: string;
   @Prop() weakestSubject: string;
 

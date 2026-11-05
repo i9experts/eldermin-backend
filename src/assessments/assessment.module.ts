@@ -9,6 +9,8 @@ import {
   ReportCard, ReportCardSchema,
 } from './schemas/assessment.schema';
 import { TermReportCard, TermReportCardSchema } from './schemas/term-report-card.schema';
+import { AssessmentGradingScale, AssessmentGradingScaleSchema } from './schemas/grading-scale.schema';
+import { AssessmentVisibilitySettings, AssessmentVisibilitySettingsSchema } from './schemas/assessment-visibility-settings.schema';
 import { ExamPaper, ExamPaperSchema } from './schemas/exam-paper.schema';
 import { OMRAnswerSheet, OMRAnswerSheetSchema } from './schemas/omr-answer-sheet.schema';
 import { QuizAttempt, QuizAttemptSchema } from './schemas/quiz-attempt.schema';
@@ -47,6 +49,8 @@ import { ParentEngagementModule } from '../parent-engagement/parent-engagement.m
       { name: MarkEntry.name, schema: MarkEntrySchema },
       { name: ReportCard.name, schema: ReportCardSchema },
       { name: TermReportCard.name, schema: TermReportCardSchema },
+      { name: AssessmentGradingScale.name, schema: AssessmentGradingScaleSchema },
+      { name: AssessmentVisibilitySettings.name, schema: AssessmentVisibilitySettingsSchema },
       { name: ExamPaper.name, schema: ExamPaperSchema },
       { name: OMRAnswerSheet.name, schema: OMRAnswerSheetSchema },
       { name: QuizAttempt.name, schema: QuizAttemptSchema },
