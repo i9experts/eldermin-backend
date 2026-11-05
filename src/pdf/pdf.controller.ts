@@ -9,7 +9,7 @@ import {
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SchoolGuard } from '../auth/school.guard';
-import { PdfService, GenerateReportCardDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto } from './pdf.service';
+import { PdfService, GenerateReportCardDto, GenerateExamReportCardDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto } from './pdf.service';
 import { IsArray, IsIn, IsMongoId, IsObject, IsOptional, IsString } from 'class-validator';
 import { REPORT_TEMPLATE_TYPES } from '../modules/report-templates/schemas/report-template.schema';
 
@@ -55,6 +55,22 @@ export class PdfController {
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="report-card-${dto.studentId}-${dto.academicYear}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('exam-report-card')
+  async generateExamReportCard(
+    @Body() dto: GenerateExamReportCardDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateExamReportCardPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="report-card-${dto.studentId}-${dto.assessmentId}.pdf"`,
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);

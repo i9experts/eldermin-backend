@@ -69,8 +69,8 @@ import {
   CreateQuestionDto, QuestionQueryDto,
   BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
-  PublishResultDto, ReportCardQueryDto,
-  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto,
+  PublishResultDto, UnpublishResultDto, ReportCardQueryDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto, UnpublishTermReportCardsDto,
   CreateGradingScaleDto, UpdateGradingScaleDto, UpdateAssessmentVisibilitySettingsDto,
 } from './dto/assessment.dto';
 
@@ -2608,6 +2608,26 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return { message: 'Results published successfully' };
   }
 
+  /** Reverses publishResults: parents immediately lose access (the Parent
+   * Portal's results/term-report-cards queries already filter on
+   * published:true, so clearing the flag is all that's needed there) and
+   * teachers regain the ability to edit marks for this assessment, since
+   * assertTeacherMarksNotLocked only locks on status 'result_published' /
+   * resultPublished:true. Status reverts to 'completed' - the state every
+   * assessment is already guaranteed to have passed through before
+   * publishing was ever possible. */
+  async unpublishResults(dto: UnpublishResultDto) {
+    await this.reportCardModel.updateMany(
+      { assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug },
+      { $set: { published: false }, $unset: { publishedAt: '' } },
+    );
+    await this.assessmentModel.findByIdAndUpdate(dto.assessmentId, {
+      $set: { status: 'completed', resultPublished: false },
+      $unset: { resultPublishedAt: '', resultPublishedBy: '' },
+    });
+    return { message: 'Results unpublished - no longer visible in the parent app' };
+  }
+
   // ============================================================
   // TERM REPORT CARDS (comprehensive, whole-term report)
   // ============================================================
@@ -2890,6 +2910,18 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     return { message: `${cards.length} term report card(s) published` };
   }
 
+  /** Reverses publishTermReportCards - see unpublishResults for why this is
+   * safe and sufficient on its own (Parent Portal already gates on
+   * published:true). */
+  async unpublishTermReportCards(dto: UnpublishTermReportCardsDto) {
+    const filter: any = { schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, term: dto.term };
+    if (dto.grade) filter.grade = dto.grade;
+    if (dto.section) filter.section = dto.section;
+
+    const result = await this.termReportCardModel!.updateMany(filter, { $set: { published: false }, $unset: { publishedAt: '' } });
+    return { message: `${result.modifiedCount} term report card(s) unpublished - no longer visible in the parent app` };
+  }
+
   // ============================================================
   // ANALYTICS
   // ============================================================
@@ -2908,10 +2940,20 @@ You are assisting a teacher's professional judgement, not replacing it - classif
    * directly (an assessment spanning "all sections" still needs
    * per-mark section filtering when the caller filters by one). */
   async getPerformanceAnalytics(schoolSlug: string, filters: {
-    academicYear: string; grade?: string; section?: string; subject?: string;
+    academicYear?: string; grade?: string; section?: string; subject?: string;
     term?: string; type?: string; dateFrom?: string; dateTo?: string;
   }) {
-    const assessmentFilter: any = { schoolSlug, academicYear: filters.academicYear };
+    // academicYear is optional ("All Years") rather than always required:
+    // the Institution Setup "current" year and the free-text academicYear
+    // stored on an Assessment at creation time are two independent values
+    // that can drift apart (the same class of bug previously fixed for a
+    // hardcoded '2025-26' default) - requiring an exact match meant a
+    // school could publish real results and still see a permanently blank
+    // Analytics tab with no indication why. Letting the filter be omitted
+    // guarantees published data is always reachable; a specific year can
+    // still be picked to narrow it down.
+    const assessmentFilter: any = { schoolSlug };
+    if (filters.academicYear) assessmentFilter.academicYear = filters.academicYear;
     if (filters.grade) assessmentFilter.grade = filters.grade;
     if (filters.section) assessmentFilter.$or = [{ section: filters.section }, { section: { $in: [null, ''] } }];
     if (filters.term) assessmentFilter.term = filters.term;

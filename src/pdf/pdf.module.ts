@@ -7,7 +7,7 @@ import { StudentSchema } from '../students/schemas/student.schema';
 import { InvoiceSchema, PaymentSchema, ExpenseSchema, BankAccountSchema } from '../finance/schemas/finance.schema';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
-import { AssessmentSchema } from '../assessments/schemas/assessment.schema';
+import { AssessmentSchema, ReportCard, ReportCardSchema } from '../assessments/schemas/assessment.schema';
 import { TermReportCard, TermReportCardSchema } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema';
@@ -46,6 +46,9 @@ import { FinanceModule } from '../finance/finance.module';
       // re-querying Assessment/behaviour collections with the wrong
       // field shapes, which always produced zero marks.
       { name: TermReportCard.name, schema: TermReportCardSchema },
+      // Per-exam Report Card PDF (generateExamReportCardPdf) - the "print
+      // preview before publish" path, separate from the whole-term one above.
+      { name: ReportCard.name, schema: ReportCardSchema },
       // behaviour_records under its OWN model name. This used to be registered as 'Behaviour', the name students.module uses for the legacy
       // student_behaviour store, so whichever module loaded first decided which collection BOTH services read and wrote (BB12).
       { name: BehaviourRecord.name, schema: BehaviourRecordSchema },

@@ -294,6 +294,11 @@ export class PublishResultDto {
   publishedBy?: string;
 }
 
+export class UnpublishResultDto {
+  @IsMongoId() assessmentId: string;
+  schoolSlug?: string;
+}
+
 export class ReportCardQueryDto extends PaginationDto {
   @IsOptional() @IsMongoId() assessmentId?: string;
   @IsOptional() @IsMongoId() studentId?: string;
@@ -342,6 +347,14 @@ export class PublishTermReportCardsDto {
   @IsOptional() @IsString() section?: string;
   schoolSlug?: string;
   publishedBy?: string;
+}
+
+export class UnpublishTermReportCardsDto {
+  @IsString() academicYear: string;
+  @IsString() term: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  schoolSlug?: string;
 }
 
 export class ClassifyBloomsLevelDto {

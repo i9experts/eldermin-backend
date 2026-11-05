@@ -17,8 +17,8 @@ import {
   CreateQuestionDto, QuestionQueryDto,
   BulkMarkEntryDto, VerifyMarksDto, UpdateMarkEntryDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
-  PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
-  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto,
+  PublishResultDto, UnpublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto, UnpublishTermReportCardsDto,
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
@@ -141,6 +141,13 @@ export class AssessmentController {
     return this.service.publishResults({ ...dto, schoolSlug, publishedBy: userName });
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('report-cards/unpublish')
+  async unpublishResults(@Body() dto: UnpublishResultDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unpublishResults({ ...dto, schoolSlug });
+  }
+
   // ── Term Report Cards (comprehensive, whole-term report; static before :id) ──
   @Get('term-report-cards')
   async getTermReportCards(@Request() req: any, @Query() query: TermReportCardQueryDto) {
@@ -179,11 +186,18 @@ export class AssessmentController {
     return this.service.publishTermReportCards({ ...dto, schoolSlug, publishedBy: userName });
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/unpublish')
+  async unpublishTermReportCards(@Body() dto: UnpublishTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unpublishTermReportCards({ ...dto, schoolSlug });
+  }
+
   // ── Analytics ─────────────────────────────────────────────────
   @Get('analytics/performance')
   async getAnalytics(
     @Request() req: any,
-    @Query('academicYear') academicYear: string,
+    @Query('academicYear') academicYear?: string,
     @Query('grade') grade?: string,
     @Query('section') section?: string,
     @Query('subject') subject?: string,
