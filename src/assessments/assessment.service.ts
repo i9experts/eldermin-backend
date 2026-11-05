@@ -2686,13 +2686,29 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const marks = assessmentIds.length
       ? await this.markModel.find({ schoolSlug, assessmentId: { $in: assessmentIds }, studentId: { $in: studentIds } }).lean()
       : [];
-    if (marks.length === 0) return { message: `No marks found for any assessment in ${term} ${academicYear} for this scope`, count: 0, skipped: students.length };
+    // Deliberately NOT bailing out here when no marks exist. A Term Report
+    // Card also carries Tarbiyah/Qaida/Nazra/Attendance/Parent Engagement -
+    // a student on a non-academic track (e.g. a Hifz/Qaida-only student
+    // with no written exams this term) can have real data in every one of
+    // those sections and nothing at all in Marks. Requiring marks here used
+    // to silently refuse to generate a report for exactly that student
+    // ("No marks found..."), even though every section they actually care
+    // about was ready. Each student below gets a report with whatever
+    // academic data exists (possibly none) plus their qualitative sections.
 
     // Default term date range (for attendance/Qaida-Nazra-extras scoping
     // below) from the earliest/latest assessment in this term, unless the
-    // admin gave explicit dates.
-    const termFrom = dto.termStartDate || new Date(Math.min(...assessments.map((a: any) => new Date(a.startDate).getTime()))).toISOString().slice(0, 10);
-    const termTo = dto.termEndDate || new Date(Math.max(...assessments.map((a: any) => new Date(a.endDate || a.startDate).getTime()))).toISOString().slice(0, 10);
+    // admin gave explicit dates. Falls back to the academic year's own
+    // start through today when the term has no assessments at all yet (so
+    // a purely non-academic term report - e.g. a brand-new Qaida-only term
+    // with no exams scheduled - still gets a sensible range instead of
+    // computing Math.min/max of an empty array).
+    const termFrom = dto.termStartDate || (assessments.length
+      ? new Date(Math.min(...assessments.map((a: any) => new Date(a.startDate).getTime()))).toISOString().slice(0, 10)
+      : `${(academicYear || '').slice(0, 4) || new Date().getFullYear()}-01-01`);
+    const termTo = dto.termEndDate || (assessments.length
+      ? new Date(Math.max(...assessments.map((a: any) => new Date(a.endDate || a.startDate).getTime()))).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10));
 
     const marksByStudent = new Map<string, any[]>();
     for (const m of marks as any[]) {
@@ -2725,21 +2741,29 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       for (const ranked of rankStudentStats(group)) statByStudent.set(ranked.studentId, ranked);
     }
 
-    const studentById = new Map(students.map((s: any) => [String(s._id), s]));
     let created = 0;
-    const skippedStudentIds: string[] = [];
+    let withoutMarks = 0;
 
-    for (const [studentId, stat] of statByStudent) {
-      const student: any = studentById.get(studentId);
-      if (!student) continue;
+    // Every active student in scope gets a term report card - not just the
+    // ones who turn up in statByStudent (built purely from marks). A
+    // student with zero marks this term still gets one, with the academic
+    // section left blank/zero and whichever qualitative sections below
+    // (Tarbiyah/Qaida/Nazra/Attendance/Parent Engagement) actually have data.
+    for (const student of students as any[]) {
+      const studentId = String(student._id);
+      const stat = statByStudent.get(studentId);
+      const hasMarks = !!stat;
+      if (!hasMarks) withoutMarks++;
       const studentMarks = marksByStudent.get(studentId) || [];
       const firstMark = studentMarks[0];
-      const gradeInfo = getGrade(stat.overallPct, termScale);
+      const gradeInfo = hasMarks ? getGrade(stat!.overallPct, termScale) : null;
 
-      const subjects = stat.subjects.map((sub) => ({
-        subject: sub.subject, obtainedMarks: sub.obtainedMarks, totalMarks: sub.totalMarks,
-        percentage: sub.pct, grade: getGrade(sub.pct, termScale).grade, isAbsent: sub.isAbsent,
-      }));
+      const subjects = hasMarks
+        ? stat!.subjects.map((sub) => ({
+            subject: sub.subject, obtainedMarks: sub.obtainedMarks, totalMarks: sub.totalMarks,
+            percentage: sub.pct, grade: getGrade(sub.pct, termScale).grade, isAbsent: sub.isAbsent,
+          }))
+        : [];
 
       const assessmentsIncluded = Array.from(new Set(studentMarks.map((m: any) => String(m.assessmentId))))
         .map((id) => assessmentById.get(id))
@@ -2820,16 +2844,30 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       }
       teacherFeedback.sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
 
+      const grade = hasMarks ? stat!.grade : (student.currentGrade || '');
+      const section = hasMarks ? stat!.section : (student.currentSection || '');
+
       const doc = {
         studentId: student._id, studentName: `${student.firstName || ''} ${student.lastName || ''}`.trim() || firstMark?.studentName,
-        rollNumber: student.admissionNumber || firstMark?.rollNumber, grade: stat.grade, section: stat.section,
+        rollNumber: student.currentRollNumber || student.admissionNumber || firstMark?.rollNumber || '-',
+        grade, section,
         academicYear, term,
         assessmentsIncluded, subjects,
-        totalObtainedMarks: stat.totalObtained, totalMaxMarks: stat.totalMax, overallPercentage: stat.overallPct,
-        overallGrade: gradeInfo.grade, overallGPA: gradeInfo.gpa, overallResult: stat.overallPct >= 40 ? 'pass' : 'fail',
-        classPosition: stat.classPosition, totalStudents: stat.totalStudents,
-        classAveragePercentage: classAverageByGroupKey.get(`${stat.grade}||${stat.section || ''}`) ?? 0,
-        strongestSubject: stat.strongestSubject?.subject, weakestSubject: stat.weakestSubject?.subject,
+        totalObtainedMarks: hasMarks ? stat!.totalObtained : 0,
+        totalMaxMarks: hasMarks ? stat!.totalMax : 0,
+        overallPercentage: hasMarks ? stat!.overallPct : 0,
+        overallGrade: gradeInfo?.grade, overallGPA: gradeInfo?.gpa,
+        overallResult: hasMarks ? (stat!.overallPct >= 40 ? 'pass' : 'fail') : undefined,
+        classPosition: hasMarks ? stat!.classPosition : undefined,
+        totalStudents: hasMarks ? stat!.totalStudents : undefined,
+        classAveragePercentage: hasMarks ? (classAverageByGroupKey.get(`${grade}||${section || ''}`) ?? 0) : 0,
+        strongestSubject: hasMarks ? stat!.strongestSubject?.subject : undefined,
+        weakestSubject: hasMarks ? stat!.weakestSubject?.subject : undefined,
+        // Lets the UI/PDF show "No academic marks on record this term" instead
+        // of a misleading 0% when this student simply wasn't marked (e.g. a
+        // Qaida/Hifz-only student with no written exams this term), as
+        // distinct from a 0% a student who sat exams and failed every one.
+        hasAcademicData: hasMarks,
         sectionsIncluded: {
           tarbiyah: !!sections.tarbiyah, qaida: !!sections.qaida, nazra: !!sections.nazra,
           attendance: !!sections.attendance, teacherFeedback: !!sections.teacherFeedback, parentEngagement: !!sections.parentEngagement,
@@ -2846,11 +2884,9 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       created++;
     }
 
-    for (const s of students as any[]) {
-      if (!statByStudent.has(String(s._id))) skippedStudentIds.push(String(s._id));
-    }
-
-    return { message: `${created} term report card(s) generated`, count: created, skipped: skippedStudentIds.length };
+    const message = `${created} term report card(s) generated`
+      + (withoutMarks ? ` (${withoutMarks} with no marks on record this term - academic section left blank)` : '');
+    return { message, count: created, skipped: 0 };
   }
 
   async getTermReportCards(schoolSlug: string, query: TermReportCardQueryDto) {

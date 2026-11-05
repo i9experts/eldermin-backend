@@ -82,7 +82,9 @@ describe('AssessmentService.generateTermReportCards', () => {
     expect(top.overallPercentage).toBe(90);
   });
 
-  it('skips a student with no marks for this academicYear/term', async () => {
+  it('still generates a report for a student with no marks this term, with the academic section left blank', async () => {
+    // e.g. a Qaida/Hifz-only student who sat no written exams this term -
+    // Tarbiyah/Qaida/Attendance can all be real even with zero Marks.
     const withMarks = student();
     const withoutMarks = student();
     const assessmentId = oid();
@@ -94,16 +96,29 @@ describe('AssessmentService.generateTermReportCards', () => {
 
     const result = await service.generateTermReportCards({ academicYear: '2025-26', term: 'Term 1', schoolSlug: 's' } as any);
 
-    expect(result.count).toBe(1);
-    expect(result.skipped).toBe(1);
-    expect(termReportCardModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(result.count).toBe(2);
+    expect(result.skipped).toBe(0);
+    expect(result.message).toContain('1 with no marks on record');
+    expect(termReportCardModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+    const calls = termReportCardModel.findOneAndUpdate.mock.calls;
+    const withoutMarksDoc = calls.find((c: any) => c[1].$set.studentId.equals(withoutMarks._id))[1].$set;
+    expect(withoutMarksDoc.hasAcademicData).toBe(false);
+    expect(withoutMarksDoc.subjects).toEqual([]);
+    expect(withoutMarksDoc.totalObtainedMarks).toBe(0);
+    expect(withoutMarksDoc.overallResult).toBeUndefined();
+    expect(withoutMarksDoc.grade).toBe('Grade-1');
+    const withMarksDoc = calls.find((c: any) => c[1].$set.studentId.equals(withMarks._id))[1].$set;
+    expect(withMarksDoc.hasAcademicData).toBe(true);
   });
 
-  it('returns a clear message and does nothing when no assessments exist for the term', async () => {
+  it('still generates a report when no assessments exist yet for the term (purely qualitative sections)', async () => {
     const { service, termReportCardModel } = buildService({ students: [student()], assessments: [], marks: [] });
     const result = await service.generateTermReportCards({ academicYear: '2025-26', term: 'Term 1', schoolSlug: 's' } as any);
-    expect(result.count).toBe(0);
-    expect(termReportCardModel.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(result.count).toBe(1);
+    expect(termReportCardModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    const saved = termReportCardModel.findOneAndUpdate.mock.calls[0][1].$set;
+    expect(saved.hasAcademicData).toBe(false);
+    expect(saved.subjects).toEqual([]);
   });
 
   it('includes the Tarbiyah section only when requested and the service is available', async () => {
