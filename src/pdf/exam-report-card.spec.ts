@@ -5,8 +5,9 @@ import { PdfService } from './pdf.service';
 // generateReportCard (which is actually the whole-TERM report, see
 // report-card.spec.ts). Deliberately has no published check.
 
-function makeService(overrides: { school?: any; reportCard?: any }) {
+function makeService(overrides: { school?: any; reportCard?: any; student?: any }) {
   const n: any = {};
+  const studentModel: any = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve(overrides.student ?? null) }) }) };
   const schoolModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.school) }) };
   const reportCardModel: any = {
     findOne: () => ({ lean: () => Promise.resolve(overrides.reportCard ?? null) }),
@@ -14,7 +15,7 @@ function makeService(overrides: { school?: any; reportCard?: any }) {
   // positions: pdfLog,student,invoice,school,assessment,behaviour,reportTemplate,
   // payment,expense,bankAccount,campus,groupInstitution,qaida,tarbiyah,
   // characterSettings,financeService,termReportCard,reportCard
-  const args = [n, n, n, schoolModel, n, n, n, n, n, n, n, n, n, n, n, n, n, reportCardModel];
+  const args = [n, studentModel, n, schoolModel, n, n, n, n, n, n, n, n, n, n, n, n, n, reportCardModel];
   const PdfServiceAny: any = PdfService;
   const service = new PdfServiceAny(...args) as PdfService;
   let capturedHtml = '';

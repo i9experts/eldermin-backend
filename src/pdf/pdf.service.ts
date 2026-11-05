@@ -360,26 +360,38 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   const included = data.sectionsIncluded || {};
   const esc = escapeHtml;
 
+  const gradeTone = (grade: string) => {
+    const g = (grade || '').charAt(0).toUpperCase();
+    return g === 'A' ? { fg: '#15803D', bg: '#DCFCE7', bar: '#16A34A' }
+      : g === 'B' ? { fg: '#1D4ED8', bg: '#DBEAFE', bar: '#2563EB' }
+      : g === 'C' ? { fg: '#B45309', bg: '#FEF3C7', bar: '#D97706' }
+      : { fg: '#B91C1C', bg: '#FEE2E2', bar: '#DC2626' };
+  };
+  // Kept for the gradeClass-based Qaida/Tarbiyah callers elsewhere in this
+  // file that still expect the old .grade-a/.grade-b/.grade-c/.grade-d
+  // classes (those CSS rules remain defined below for compatibility).
   const gradeClass = (grade: string) => {
     const g = (grade || '').charAt(0).toUpperCase();
     return g === 'A' ? 'grade-a' : g === 'B' ? 'grade-b' : g === 'C' ? 'grade-c' : 'grade-d';
   };
+  void gradeClass;
 
-  const subjectRows = (data.subjects || []).map((s: any) => `
+  const initials = (data.studentName || '?')
+    .split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase() || '').join('') || '?';
+  const positionMedal = data.classPosition === 1 ? '🥇' : data.classPosition === 2 ? '🥈' : data.classPosition === 3 ? '🥉' : null;
+
+  const subjectRows = (data.subjects || []).map((s: any) => {
+    const tone = gradeTone(s.grade);
+    const pct = Math.max(0, Math.min(100, s.percentage ?? 0));
+    return `
     <tr>
-      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span style="color:#DC2626;font-size:10px">(Absent)</span>' : ''}</td>
-      <td>${s.totalMarks ?? 0}</td>
-      <td>${s.obtainedMarks ?? 0}</td>
-      <td>${s.percentage ?? 0}%</td>
-      <td class="${gradeClass(s.grade)}">${esc(s.grade) || 'N/A'}</td>
-    </tr>`).join('');
-
-  const subjectBars = (data.subjects || []).map((s: any) => `
-    <div class="bar-item">
-      <div class="bar-name">${esc(s.subject)}</div>
-      <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, s.percentage || 0))}%"></div></div>
-      <div class="bar-score">${s.percentage ?? 0}%</div>
-    </div>`).join('');
+      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span class="absent-tag">Absent</span>' : ''}</td>
+      <td class="num">${s.obtainedMarks ?? 0}<span class="of-max"> / ${s.totalMarks ?? 0}</span></td>
+      <td><div class="mastery-track"><div class="mastery-fill" style="width:${pct}%;background:${tone.bar}"></div></div></td>
+      <td class="num">${s.percentage ?? 0}%</td>
+      <td class="num"><span class="grade-pill" style="color:${tone.fg};background:${tone.bg}">${esc(s.grade) || 'N/A'}</span></td>
+    </tr>`;
+  }).join('');
 
   const tarbiyahSection = included.tarbiyah ? (() => {
     const t = data.tarbiyah;
@@ -458,6 +470,11 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
       </div>`).join('')}`;
   })() : '';
 
+  const overallPct = Math.max(0, Math.min(100, data.overallPct ?? 0));
+  const ringColor = overallPct >= 80 ? '#16A34A' : overallPct >= 50 ? '#D97706' : '#DC2626';
+  const ringCircumference = 2 * Math.PI * 52;
+  const ringOffset = ringCircumference * (1 - overallPct / 100);
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -466,29 +483,55 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1B4F8A; margin-bottom: 18px; }
-  .school-name { font-size: 22px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.5px; }
-  .school-sub { font-size: 12px; color: #3D5A7A; margin-top: 2px; }
-  .doc-title { font-size: 14px; font-weight: 700; color: #F5A623; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
-  .doc-year { font-size: 12px; color: #3D5A7A; text-align: right; }
-  .student-box { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-  .info-label { font-size: 10px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-  .info-value { font-size: 14px; font-weight: 600; color: #0D1F35; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
+  .page { width: 210mm; min-height: 297mm; position: relative; }
+  .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
+  .content { padding: 14mm 16mm 16mm; }
+  .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
+    background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+    padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 2px solid #EEF4FB; margin-bottom: 18px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { height: 46px; width: 46px; object-fit: contain; border-radius: 8px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
+  .school-sub { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .doc-meta { text-align: right; }
+  .doc-eyebrow { font-size: 9.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #1B4F8A; margin-top: 2px; }
+  .doc-year { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .status-pill { display: inline-block; margin-top: 6px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 3px 11px; }
+  .status-published { color: #15803D; background: #DCFCE7; }
+  .status-draft { color: #B45309; background: #FEF3C7; }
+  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
+  .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  .student-box { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
+  .info-label { font-size: 9.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 14px; font-weight: 700; color: #0D1F35; }
+  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
   .section-title:first-of-type { margin-top: 0; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 13px; }
-  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  th:last-child { text-align: center; }
-  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; }
-  tr:nth-child(even) td { background: #F7FAFD; }
-  td:last-child { text-align: center; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 12.5px; }
+  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  tr:nth-child(even) td { background: #F9FBFD; }
+  .num { text-align: right; white-space: nowrap; }
+  .of-max { color: #94A3B8; font-weight: 400; }
+  .absent-tag { color: #DC2626; font-size: 9.5px; font-weight: 700; margin-left: 4px; }
+  .mastery-track { width: 100px; height: 6px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
+  .mastery-fill { height: 100%; border-radius: 4px; }
+  .grade-pill { display: inline-block; min-width: 30px; text-align: center; font-weight: 800; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; }
   .grade-a { color: #16A34A; font-weight: 700; }
   .grade-b { color: #2563EB; font-weight: 700; }
   .grade-c { color: #D97706; font-weight: 700; }
   .grade-d { color: #DC2626; font-weight: 700; }
+  .results-row { display: flex; gap: 16px; align-items: stretch; margin: 18px 0 6px; }
+  .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px; }
+  .ring-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  .result-tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .result-tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 10px; padding: 12px 14px; }
+  .result-tile-num { font-size: 18px; font-weight: 800; color: #1B4F8A; }
+  .result-tile-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
   .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
-  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 8px; padding: 12px; text-align: center; }
+  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 12px; text-align: center; }
   .summary-num { font-size: 22px; font-weight: 800; color: #1B4F8A; }
   .summary-label { font-size: 10px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
   .tags-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -507,57 +550,78 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   .feedback-item { background: #F7FAFD; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
   .feedback-text { font-size: 12px; color: #0D1F35; }
   .feedback-meta { font-size: 10px; color: #9CA7B8; margin-top: 2px; }
-  .remarks-box { background: #FEF3DC; border: 1px solid #F5A623; border-radius: 8px; padding: 14px; margin-bottom: 20px; }
-  .remarks-text { font-size: 13px; color: #0D1F35; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 32px; padding-top: 16px; border-top: 1px solid #DDE8F4; }
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 12px 14px; margin-bottom: 14px; }
+  .remarks-text { font-size: 12.5px; color: #0D1F35; line-height: 1.55; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 4px; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px solid #0D1F35; margin-bottom: 6px; height: 32px; }
-  .sig-label { font-size: 11px; color: #3D5A7A; font-weight: 600; }
-  .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #7A9AB8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
+  .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: 30px; }
+  .sig-label { font-size: 10.5px; color: #3D5A7A; font-weight: 700; }
+  .footer { text-align: center; margin-top: 22px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
   .footer strong { color: #1B4F8A; }
 </style>
 </head>
 <body>
 <div class="page">
+  <div class="accent-bar"></div>
+  ${!data.published ? '<div class="draft-ribbon">Draft</div>' : ''}
+  <div class="content">
   <div class="header">
-    <div>
-      <div class="school-name">${esc(data.schoolName)}</div>
-      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
+    <div class="brand">
+      ${data.schoolLogo ? `<img class="logo" src="${data.schoolLogo}" alt="logo" />` : ''}
+      <div>
+        <div class="school-name">${esc(data.schoolName)}</div>
+        ${data.schoolAddress ? `<div class="school-sub">${esc(data.schoolAddress)}</div>` : ''}
+      </div>
     </div>
-    <div>
-      <div class="doc-title">Term Report Card</div>
-      <div class="doc-year">${esc(data.academicYear)} ${data.term ? '· ' + esc(data.term) : ''}</div>
+    <div class="doc-meta">
+      <div class="doc-eyebrow">Term Report Card</div>
+      <div class="doc-title">${esc(data.academicYear)}${data.term ? ' · ' + esc(data.term) : ''}</div>
+      ${data.published != null ? `<div class="status-pill ${data.published ? 'status-published' : 'status-draft'}">${data.published ? 'Published' : 'Not Yet Published'}</div>` : ''}
     </div>
   </div>
-  <div class="student-box">
+  <div class="student-card">
+    <div class="avatar">${data.studentPhoto ? `<img src="${data.studentPhoto}" alt="" />` : esc(initials)}</div>
+    <div class="student-box">
     <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
     <div><div class="info-label">GR No</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
     <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
-    <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
+    <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `${positionMedal ? positionMedal + ' ' : ''}#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
     <div><div class="info-label">Result</div><div class="info-value" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'};text-transform:uppercase">${esc(data.overallResult) || 'N/A'}</div></div>
     <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
+    </div>
   </div>
 
   <div class="section-title">Academic Performance</div>
   <table>
     <thead>
       <tr>
-        <th style="width:40%">Subject</th>
-        <th>Total Marks</th>
-        <th>Obtained</th>
-        <th>Percentage</th>
-        <th>Grade</th>
+        <th style="width:32%">Subject</th>
+        <th style="text-align:right">Marks</th>
+        <th style="text-align:center">Mastery</th>
+        <th style="text-align:right">%</th>
+        <th style="text-align:right">Grade</th>
       </tr>
     </thead>
     <tbody>${subjectRows}</tbody>
   </table>
-  <div class="summary-grid">
-    <div class="summary-card"><div class="summary-num">${data.totalObtained || 0}</div><div class="summary-label">Total Obtained</div></div>
-    <div class="summary-card"><div class="summary-num">${data.totalMarks || 0}</div><div class="summary-label">Total Marks</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:${data.overallPct >= 65 ? '#16A34A' : '#DC2626'}">${data.overallPct || 0}%</div><div class="summary-label">Overall %</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (${data.overallGPA})` : ''}</div><div class="summary-label">Final Grade</div></div>
+  <div class="results-row">
+    <div class="ring-card">
+      <svg width="120" height="120" viewBox="0 0 120 120">
+        <circle cx="60" cy="60" r="52" fill="none" stroke="#EEF4FB" stroke-width="12" />
+        <circle cx="60" cy="60" r="52" fill="none" stroke="${ringColor}" stroke-width="12" stroke-linecap="round"
+          stroke-dasharray="${ringCircumference.toFixed(1)}" stroke-dashoffset="${ringOffset.toFixed(1)}"
+          transform="rotate(-90 60 60)" />
+        <text x="60" y="66" text-anchor="middle" font-size="24" font-weight="800" fill="${ringColor}" font-family="Segoe UI, Arial, sans-serif">${overallPct}%</text>
+      </svg>
+      <div class="ring-label">Overall Score</div>
+    </div>
+    <div class="result-tiles">
+      <div class="result-tile"><div class="result-tile-num">${data.totalObtained || 0} / ${data.totalMarks || 0}</div><div class="result-tile-label">Marks Obtained</div></div>
+      <div class="result-tile" style="border-left-color:#F5A623"><div class="result-tile-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (GPA ${data.overallGPA})` : ''}</div><div class="result-tile-label">Final Grade</div></div>
+      <div class="result-tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="result-tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(data.overallResult?.toUpperCase()) || 'N/A'}</div><div class="result-tile-label">Result</div></div>
+      <div class="result-tile" style="border-left-color:#7C3AED"><div class="result-tile-num" style="color:#7C3AED">${(data.subjects || []).length}</div><div class="result-tile-label">Subjects</div></div>
+    </div>
   </div>
-  ${subjectBars ? `<div style="margin-bottom:10px">${subjectBars}</div>` : ''}
   ${(data.strongestSubject || data.weakestSubject) ? `
   <div class="tags-row">
     ${data.strongestSubject ? `<span class="tag tag-strong">Strongest: ${esc(data.strongestSubject)}</span>` : ''}
@@ -583,6 +647,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
   </div>
   <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+  </div>
 </div>
 </body>
 </html>
@@ -671,6 +736,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
   .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
   .student-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
   .info-label { font-size: 9.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
   .info-value { font-size: 14px; font-weight: 700; color: #0D1F35; }
   .result-pass { color: #15803D; }
@@ -740,7 +806,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
     </div>
 
     <div class="student-card">
-      <div class="avatar">${esc(initials)}</div>
+      <div class="avatar">${data.studentPhoto ? `<img src="${data.studentPhoto}" alt="" />` : esc(initials)}</div>
       <div class="student-grid">
         <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
         <div><div class="info-label">Roll Number</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
@@ -1723,6 +1789,8 @@ export class PdfService implements OnModuleDestroy {
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
+      schoolLogo: (school as any).logo || null,
+      studentPhoto: (student as any).photo || null,
       academicYear: trc.academicYear,
       term: trc.term,
       studentName: trc.studentName,
@@ -1749,6 +1817,7 @@ export class PdfService implements OnModuleDestroy {
       teacherFeedback: trc.teacherFeedback || [],
       remarks: trc.classTeacherRemarks || '',
       principalRemarks: trc.principalRemarks || '',
+      published: !!trc.published,
     };
 
     // Same reasoning as generateFeeReceipt above: route through the
@@ -1798,17 +1867,21 @@ export class PdfService implements OnModuleDestroy {
     userId: string,
   ): Promise<Buffer> {
     const school = await this.getSchool(schoolSlug);
-    const card: any = await this.reportCardModel.findOne({
-      assessmentId: dto.assessmentId,
-      studentId: dto.studentId,
-      schoolSlug,
-    }).lean();
+    const [card, student]: [any, any] = await Promise.all([
+      this.reportCardModel.findOne({
+        assessmentId: dto.assessmentId,
+        studentId: dto.studentId,
+        schoolSlug,
+      }).lean(),
+      this.studentModel.findOne({ _id: dto.studentId, schoolSlug }).select('photo').lean(),
+    ]);
     if (!card) throw new NotFoundException('Report card not found - generate report cards for this assessment first.');
 
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
       schoolLogo: (school as any).logo || null,
+      studentPhoto: student?.photo || null,
       assessmentTitle: card.assessmentTitle,
       academicYear: card.academicYear,
       term: card.term,
