@@ -8,6 +8,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
+import { CURRICULUM_FRAMEWORKS } from '../../common/constants/curriculum-framework';
 
 export class PaginationDto {
   @IsOptional() @Type(() => Number) page?: number = 1;
@@ -58,11 +59,53 @@ export class CreateAssessmentDto {
 
   @IsOptional() @IsEnum(['teacher_marked', 'self_paced_online']) deliveryMode?: string;
 
+  // Assessment Master Settings - which grading scale (by curriculum
+  // framework) this assessment's results are graded under. Optional so
+  // existing clients/tests that don't send it keep working; the frontend
+  // always sends a real value going forward (auto-suggested from the
+  // assessment's subjects' Curriculum framework, editable).
+  @IsOptional() @IsEnum(CURRICULUM_FRAMEWORKS) framework?: string;
+
   schoolSlug?: string;
   createdBy?: string;
 }
 
 export class UpdateAssessmentDto extends PartialType(CreateAssessmentDto) {}
+
+// ── Assessment Master Settings: Grading Scales ──────────────────
+export class GradingBandDto {
+  @IsNumber() @Min(0) @Max(100) minPercent: number;
+  @IsNumber() @Min(0) @Max(100) maxPercent: number;
+  @IsString() label: string;
+  @IsOptional() @IsNumber() gpaPoint?: number;
+  @IsOptional() @IsBoolean() isPassing?: boolean;
+}
+
+export class CreateGradingScaleDto {
+  @IsEnum(CURRICULUM_FRAMEWORKS) framework: string;
+  @IsString() name: string;
+  @IsOptional() @IsString() presetKey?: string;
+
+  @IsArray() @ValidateNested({ each: true })
+  @Type(() => GradingBandDto)
+  bands: GradingBandDto[];
+
+  schoolSlug?: string;
+  updatedBy?: string;
+}
+
+export class UpdateGradingScaleDto extends PartialType(CreateGradingScaleDto) {}
+
+// ── Assessment Master Settings: Parent Visibility ────────────────
+export class UpdateAssessmentVisibilitySettingsDto {
+  @IsOptional() @IsBoolean() shareGPA?: boolean;
+  @IsOptional() @IsBoolean() shareSubjectBreakdown?: boolean;
+  @IsOptional() @IsBoolean() shareClassPosition?: boolean;
+  @IsOptional() @IsBoolean() shareClassAverage?: boolean;
+
+  schoolSlug?: string;
+  updatedBy?: string;
+}
 
 // ── LMS Phase 2: online quizzes ─────────────────────────────────
 export class StartQuizDto {

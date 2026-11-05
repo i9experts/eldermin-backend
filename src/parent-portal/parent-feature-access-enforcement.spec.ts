@@ -20,7 +20,13 @@ function buildService(parentAccess: any) {
   const reportCardModel = { find: jest.fn(() => ({ sort: () => ({ lean: () => Promise.resolve([{ _id: 'rc1' }]) }) })) };
   const models = Array.from({ length: MODEL_COUNT }, () => stubModel());
   models[REPORT_CARD_MODEL_INDEX] = reportCardModel as any;
-  const services = [stubModel(), stubModel(), stubModel(), stubModel()]; // assessmentService, certificatesService, uploadService, pdfService
+  // getResults also reads Assessment Master Settings' parent-visibility
+  // allowlist via assessmentService.getVisibilitySettings - defaults match
+  // AssessmentService's own fallback when no settings doc exists yet.
+  const assessmentService = {
+    getVisibilitySettings: jest.fn(() => Promise.resolve({ shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false })),
+  };
+  const services = [assessmentService, stubModel(), stubModel(), stubModel()]; // assessmentService, certificatesService, uploadService, pdfService
   return new (ParentPortalService as any)(...models, ...services, parentAccess);
 }
 

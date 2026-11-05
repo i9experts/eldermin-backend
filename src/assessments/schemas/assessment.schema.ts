@@ -73,7 +73,24 @@ export class Assessment {
   // just leaves examPaperId unset on the subjects staying teacher-marked.
   @Prop({ enum: ['teacher_marked', 'self_paced_online'], default: 'teacher_marked' }) deliveryMode: string;
 
-  // Grading config
+  // Assessment Master Settings - which curriculum framework/board this
+  // assessment is graded under (same CURRICULUM_FRAMEWORKS enum Curriculum
+  // Intelligence uses). Set at creation (auto-suggested from the assessment's
+  // subjects' own Curriculum records where resolvable, editable until report
+  // cards are generated) and never changed afterwards - it decides which
+  // AssessmentGradingScale gets snapshotted into `gradingScale` below the
+  // first time report cards are generated. Optional at the schema level so
+  // existing assessments created before this field existed stay valid; the
+  // UI defaults new ones to a real value.
+  @Prop() framework?: string;
+
+  // Grading config - starts as the long-standing hardcoded fallback scale,
+  // but is OVERWRITTEN with a snapshot of the school's AssessmentGradingScale
+  // for this assessment's `framework` the first time generateReportCards runs
+  // (see AssessmentService.resolveAndSnapshotGradingScale). Snapshotted, not
+  // looked up live, so a later edit to the master scale never changes a
+  // grade a parent already saw (Assessment Master Settings' "never
+  // retroactive" rule) - this field IS the historical record.
   @Prop({
     type: Object,
     default: {
@@ -87,6 +104,14 @@ export class Assessment {
     },
   })
   gradingScale: Record<string, { min: number; gpa: number }>;
+
+  // True once `gradingScale` has actually been overwritten with a real
+  // AssessmentGradingScale snapshot (see resolveAndSnapshotGradingScale) -
+  // distinguishes "this assessment deliberately uses the plain default
+  // scale" from "framework is set but no snapshot has run yet", so
+  // generateReportCards knows whether it still needs to resolve+snapshot
+  // (and potentially block) or can just reuse what's already here.
+  @Prop({ default: false }) gradingScaleSnapshotted: boolean;
 
   @Prop() createdBy: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
@@ -299,6 +324,10 @@ export class ReportCard {
   @Prop({ enum: ['pass', 'fail'] }) overallResult: string;
   @Prop() classPosition: number;
   @Prop() totalStudents: number;
+  // Computed once alongside classPosition at generation time (plain average
+  // of the class's overallPercentage) - gated behind Assessment Master
+  // Settings' shareClassAverage flag before ever reaching a parent.
+  @Prop() classAveragePercentage: number;
 
   // Teacher comments
   @Prop() classTeacherRemarks: string;

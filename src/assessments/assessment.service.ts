@@ -39,6 +39,9 @@ import { ExamPaper, ExamPaperDocument } from './schemas/exam-paper.schema';
 import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-sheet.schema';
 import { QuizAttempt, QuizAttemptDocument } from './schemas/quiz-attempt.schema';
 import { TermReportCard, TermReportCardDocument } from './schemas/term-report-card.schema';
+import { AssessmentGradingScale, AssessmentGradingScaleDocument } from './schemas/grading-scale.schema';
+import { AssessmentVisibilitySettings, AssessmentVisibilitySettingsDocument } from './schemas/assessment-visibility-settings.schema';
+import { GRADING_SCALE_PRESETS, findGradingPreset } from './grading-scale-presets';
 import { BehaviourService } from '../behaviour/behaviour.service';
 import { QaidaService } from '../behaviour/qaida.service';
 import { NazraService } from '../behaviour/nazra.service';
@@ -68,12 +71,17 @@ import {
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
   PublishResultDto, ReportCardQueryDto,
   GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto,
+  CreateGradingScaleDto, UpdateGradingScaleDto, UpdateAssessmentVisibilitySettingsDto,
 } from './dto/assessment.dto';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
-// Grade from percentage using default scale
-const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gpa: number } => {
+// Grade from percentage. `scale` is an Assessment.gradingScale-shaped
+// snapshot ({ label: { min, gpa } }); when absent (every assessment that
+// predates Assessment Master Settings, or one whose framework still has no
+// AssessmentGradingScale) this falls back to the same fixed scale Eldermin
+// has always used - legacy behaviour never changes or gets blocked.
+const getGrade = (pct: number, scale?: Record<string, { min: number; gpa: number }>): { grade: string; gpa: number } => {
   const defaultScale = [
     { grade: 'A+', min: 90, gpa: 4.0 },
     { grade: 'A',  min: 80, gpa: 3.7 },
@@ -83,10 +91,14 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
     { grade: 'D',  min: 40, gpa: 1.0 },
     { grade: 'F',  min: 0,  gpa: 0.0 },
   ];
-  for (const entry of defaultScale) {
+  const entries = scale && Object.keys(scale).length
+    ? Object.entries(scale).map(([grade, v]) => ({ grade, min: v.min, gpa: v.gpa }))
+    : defaultScale;
+  const sorted = [...entries].sort((a, b) => b.min - a.min);
+  for (const entry of sorted) {
     if (pct >= entry.min) return { grade: entry.grade, gpa: entry.gpa };
   }
-  return { grade: 'F', gpa: 0.0 };
+  return { grade: sorted[sorted.length - 1]?.grade ?? 'F', gpa: sorted[sorted.length - 1]?.gpa ?? 0.0 };
 };
 
 export const TEACHER_MARKS_LOCKED_MESSAGE =
@@ -146,7 +158,120 @@ export class AssessmentService {
     @Optional() private qaidaNazraExtrasService?: QaidaNazraExtrasService,
     @Optional() private studentsService?: StudentsService,
     @Optional() private parentEngagementService?: ParentEngagementService,
+    // Assessment Master Settings - same trailing-optional convention as
+    // termReportCardModel above, for the same reason (every existing
+    // `new AssessmentService(...)` test construction keeps compiling).
+    // Always present in the real app via AssessmentModule's forFeature.
+    @Optional() @InjectModel(AssessmentGradingScale.name) private gradingScaleModel?: Model<AssessmentGradingScaleDocument>,
+    @Optional() @InjectModel(AssessmentVisibilitySettings.name) private visibilitySettingsModel?: Model<AssessmentVisibilitySettingsDocument>,
   ) {}
+
+  // ── Assessment Master Settings: Grading Scales ──────────────────
+
+  private bandsToGradingScale(bands: { label: string; minPercent: number; gpaPoint?: number }[]): Record<string, { min: number; gpa: number }> {
+    const rec: Record<string, { min: number; gpa: number }> = {};
+    for (const b of bands) rec[b.label] = { min: b.minPercent, gpa: b.gpaPoint ?? 0 };
+    return rec;
+  }
+
+  /** Plain lookup, no snapshot/mutation - used by both generateReportCards (via resolveAndSnapshotGradingScale) and generateTermReportCards (which has no single assessment doc to snapshot onto). */
+  private async lookupGradingScale(schoolSlug: string, framework?: string): Promise<Record<string, { min: number; gpa: number }> | null> {
+    if (!framework || !this.gradingScaleModel) return null;
+    const scale: any = await this.gradingScaleModel.findOne({ schoolSlug, framework }).lean();
+    return scale ? this.bandsToGradingScale(scale.bands) : null;
+  }
+
+  /**
+   * Resolves the grading scale to use for one assessment's report cards and,
+   * the first time this runs for it, snapshots the result onto
+   * `assessment.gradingScale` so a later edit to the master
+   * AssessmentGradingScale never changes a grade already generated
+   * (Assessment Master Settings' "never retroactive" rule - see
+   * Assessment.gradingScaleSnapshotted).
+   *
+   * - No `framework` set (every assessment created before Assessment Master
+   *   Settings existed) -> legacy behaviour: reuse whatever is already in
+   *   `gradingScale` (the long-standing hardcoded default). Never blocks.
+   * - `framework` set and already snapshotted -> reuse the stored
+   *   `gradingScale` as-is, never re-resolves even if the master scale
+   *   changed since.
+   * - `framework` set, not yet snapshotted -> look up the school's
+   *   AssessmentGradingScale for that framework. Found -> snapshot + persist
+   *   `gradingScaleSnapshotted: true`. Not found -> throws, which is what
+   *   blocks Generate Report Cards (and therefore Publish Results, which
+   *   requires report cards to already exist) until an admin configures one.
+   */
+  private async resolveAndSnapshotGradingScale(assessment: any): Promise<Record<string, { min: number; gpa: number }>> {
+    if (!assessment.framework || assessment.gradingScaleSnapshotted) return assessment.gradingScale;
+    const record = await this.lookupGradingScale(assessment.schoolSlug, assessment.framework);
+    if (!record) {
+      throw new BadRequestException(
+        `No grading scale is configured for the "${assessment.framework}" framework yet. Add one under Assessments → Settings → Grading Scales before generating report cards.`,
+      );
+    }
+    await this.assessmentModel.updateOne({ _id: assessment._id }, { $set: { gradingScale: record, gradingScaleSnapshotted: true } });
+    return record;
+  }
+
+  /** The framework most of a term's included assessments agree on, or undefined if none have one set yet (legacy term, falls back to the default scale, never blocks). */
+  private majorityFramework(assessments: { framework?: string }[]): string | undefined {
+    const counts = new Map<string, number>();
+    for (const a of assessments) if (a.framework) counts.set(a.framework, (counts.get(a.framework) ?? 0) + 1);
+    if (!counts.size) return undefined;
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+
+  getGradingScalePresets() {
+    return GRADING_SCALE_PRESETS;
+  }
+
+  async listGradingScales(schoolSlug: string) {
+    if (!this.gradingScaleModel) return [];
+    return this.gradingScaleModel.find({ schoolSlug }).sort({ framework: 1 });
+  }
+
+  async createGradingScale(dto: CreateGradingScaleDto) {
+    if (!this.gradingScaleModel) throw new InternalServerErrorException('Grading scales are not available');
+    const existing = await this.gradingScaleModel.findOne({ schoolSlug: dto.schoolSlug, framework: dto.framework });
+    if (existing) throw new ConflictException(`A grading scale for the "${dto.framework}" framework already exists - edit it instead of creating another.`);
+    return this.gradingScaleModel.create(dto);
+  }
+
+  async updateGradingScale(id: string, schoolSlug: string, dto: UpdateGradingScaleDto) {
+    if (!this.gradingScaleModel) throw new InternalServerErrorException('Grading scales are not available');
+    assertValidObjectId(id, 'grading scale');
+    const updated = await this.gradingScaleModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!updated) throw new NotFoundException('Grading scale not found');
+    return updated;
+  }
+
+  async deleteGradingScale(id: string, schoolSlug: string) {
+    if (!this.gradingScaleModel) throw new InternalServerErrorException('Grading scales are not available');
+    assertValidObjectId(id, 'grading scale');
+    const deleted = await this.gradingScaleModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!deleted) throw new NotFoundException('Grading scale not found');
+    return { message: 'Grading scale deleted' };
+  }
+
+  // ── Assessment Master Settings: Parent Visibility ────────────────
+
+  async getVisibilitySettings(schoolSlug: string) {
+    if (!this.visibilitySettingsModel) {
+      return { schoolSlug, shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false };
+    }
+    const existing = await this.visibilitySettingsModel.findOne({ schoolSlug }).lean();
+    return existing ?? { schoolSlug, shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false };
+  }
+
+  async updateVisibilitySettings(schoolSlug: string, dto: UpdateAssessmentVisibilitySettingsDto) {
+    if (!this.visibilitySettingsModel) throw new InternalServerErrorException('Visibility settings are not available');
+    const { schoolSlug: _ignored, ...patch } = dto;
+    return this.visibilitySettingsModel.findOneAndUpdate(
+      { schoolSlug },
+      { $set: patch, $setOnInsert: { schoolSlug } },
+      { new: true, upsert: true },
+    );
+  }
 
   /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
   private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; subjectClasses: TeacherSubjectClassRef[]; isClassTeacher: boolean; classTeacherClasses: TeacherClassRef[] }> {
@@ -2309,6 +2434,11 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
 
+    // Resolves (and, the first time, snapshots) this assessment's grading
+    // scale - throws, blocking generation, if a framework is set but no
+    // AssessmentGradingScale exists for it yet (Assessment Master Settings).
+    const scale = await this.resolveAndSnapshotGradingScale(assessment);
+
     // Get all marks for this assessment
     const allMarks = await this.markModel.find({
       assessmentId: new Types.ObjectId(dto.assessmentId),
@@ -2332,15 +2462,23 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       const totalMax = marks.reduce((a, m) => a + m.totalMarks, 0);
       const totalObtained = validMarks.reduce((a, m) => a + (m.obtainedMarks || 0), 0);
       const pct = totalMax > 0 ? parseFloat(((totalObtained / totalMax) * 100).toFixed(1)) : 0;
-      const gradeInfo = getGrade(pct);
+      const gradeInfo = getGrade(pct, scale);
       const anyFail = marks.some(m => m.result === 'fail');
 
+      // Each subject's grade is recomputed from its own percentage against
+      // this assessment's resolved scale, rather than trusting
+      // m.grade_result verbatim - that field was written at mark-entry time
+      // using whatever scale was in effect then (always the plain default,
+      // since Enter Marks never resolves a framework scale), so without
+      // this a report card could show an overall grade under e.g. the
+      // Cambridge scale while a subject row still showed a default-scale
+      // letter for the same percentage.
       const subjects = marks.map(m => ({
         subject: m.subject,
         totalMarks: m.totalMarks,
         obtainedMarks: m.obtainedMarks || 0,
         percentage: m.percentage || 0,
-        grade: m.grade_result || 'F',
+        grade: (m.isAbsent || m.isExempt) ? (m.grade_result || 'F') : getGrade(m.percentage || 0, scale).grade,
         gpa: m.gpa || 0,
         result: m.result || 'fail',
         remarks: m.remarks || '',
@@ -2387,9 +2525,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     }).sort({ overallPercentage: -1 });
 
     const totalStudents = saved.length;
+    const classAverage = totalStudents
+      ? parseFloat((saved.reduce((sum, r) => sum + (r.overallPercentage || 0), 0) / totalStudents).toFixed(1))
+      : 0;
     for (let i = 0; i < saved.length; i++) {
       saved[i].classPosition = i + 1;
       saved[i].totalStudents = totalStudents;
+      saved[i].classAveragePercentage = classAverage;
       await saved[i].save();
     }
 
@@ -2502,6 +2644,25 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const assessmentIds = assessments.map((a: any) => a._id);
     const assessmentById = new Map(assessments.map((a: any) => [String(a._id), a]));
 
+    // Term Report Cards aggregate several assessments at once, so there's no
+    // single assessment doc to snapshot a scale onto (unlike
+    // resolveAndSnapshotGradingScale) - resolved fresh from whichever
+    // framework most of this term's assessments agree on, each time this
+    // runs. No framework set on any of them -> legacy behaviour (plain
+    // default scale, never blocks); a framework set but with no matching
+    // AssessmentGradingScale -> blocks, same as per-exam report cards.
+    const termFramework = this.majorityFramework(assessments as any[]);
+    let termScale: Record<string, { min: number; gpa: number }> | undefined;
+    if (termFramework) {
+      const resolved = await this.lookupGradingScale(schoolSlug as string, termFramework);
+      if (!resolved) {
+        throw new BadRequestException(
+          `No grading scale is configured for the "${termFramework}" framework yet. Add one under Assessments → Settings → Grading Scales before generating term report cards.`,
+        );
+      }
+      termScale = resolved;
+    }
+
     const marks = assessmentIds.length
       ? await this.markModel.find({ schoolSlug, assessmentId: { $in: assessmentIds }, studentId: { $in: studentIds } }).lean()
       : [];
@@ -2534,7 +2695,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       (statsByClass.get(key) ?? statsByClass.set(key, []).get(key)!).push(s);
     }
     const statByStudent = new Map<string, ReturnType<typeof rankStudentStats>[number]>();
-    for (const group of statsByClass.values()) {
+    // Same convention as ReportCard.classAveragePercentage - one plain
+    // average per grade/section group, computed once here alongside ranking.
+    const classAverageByGroupKey = new Map<string, number>();
+    for (const [key, group] of statsByClass) {
+      classAverageByGroupKey.set(key, group.length
+        ? parseFloat((group.reduce((sum, s) => sum + s.overallPct, 0) / group.length).toFixed(1))
+        : 0);
       for (const ranked of rankStudentStats(group)) statByStudent.set(ranked.studentId, ranked);
     }
 
@@ -2547,11 +2714,11 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       if (!student) continue;
       const studentMarks = marksByStudent.get(studentId) || [];
       const firstMark = studentMarks[0];
-      const gradeInfo = getGrade(stat.overallPct);
+      const gradeInfo = getGrade(stat.overallPct, termScale);
 
       const subjects = stat.subjects.map((sub) => ({
         subject: sub.subject, obtainedMarks: sub.obtainedMarks, totalMarks: sub.totalMarks,
-        percentage: sub.pct, grade: getGrade(sub.pct).grade, isAbsent: sub.isAbsent,
+        percentage: sub.pct, grade: getGrade(sub.pct, termScale).grade, isAbsent: sub.isAbsent,
       }));
 
       const assessmentsIncluded = Array.from(new Set(studentMarks.map((m: any) => String(m.assessmentId))))
@@ -2641,6 +2808,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
         totalObtainedMarks: stat.totalObtained, totalMaxMarks: stat.totalMax, overallPercentage: stat.overallPct,
         overallGrade: gradeInfo.grade, overallGPA: gradeInfo.gpa, overallResult: stat.overallPct >= 40 ? 'pass' : 'fail',
         classPosition: stat.classPosition, totalStudents: stat.totalStudents,
+        classAveragePercentage: classAverageByGroupKey.get(`${stat.grade}||${stat.section || ''}`) ?? 0,
         strongestSubject: stat.strongestSubject?.subject, weakestSubject: stat.weakestSubject?.subject,
         sectionsIncluded: {
           tarbiyah: !!sections.tarbiyah, qaida: !!sections.qaida, nazra: !!sections.nazra,

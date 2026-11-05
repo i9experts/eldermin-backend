@@ -22,6 +22,7 @@ import {
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
+  CreateGradingScaleDto, UpdateGradingScaleDto, UpdateAssessmentVisibilitySettingsDto,
 } from './dto/assessment.dto';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { NON_STAFF_ROLES } from '../auth/admin-role-sets';
@@ -241,6 +242,54 @@ export class AssessmentController {
   @Get('papers') async getExamPapers(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getExamPapers(schoolSlug, query);
+  }
+
+  // ── Assessment Master Settings (must stay registered before the
+  // 'settings/...' and ':id' routes below for the same reason as 'papers'
+  // above - every one of these is a static first path segment). ──────────
+  @Get('settings/grading-scales/presets')
+  getGradingScalePresets() {
+    return this.service.getGradingScalePresets();
+  }
+
+  @Get('settings/grading-scales')
+  async listGradingScales(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.listGradingScales(schoolSlug);
+  }
+
+  @Post('settings/grading-scales')
+  @Roles(...STAFF_WRITE_ROLES)
+  async createGradingScale(@Body() dto: CreateGradingScaleDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createGradingScale({ ...dto, schoolSlug, updatedBy: userName });
+  }
+
+  @Patch('settings/grading-scales/:id')
+  @Roles(...STAFF_WRITE_ROLES)
+  async updateGradingScale(@Param('id') id: string, @Body() dto: UpdateGradingScaleDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateGradingScale(id, schoolSlug, { ...dto, updatedBy: userName });
+  }
+
+  @Delete('settings/grading-scales/:id')
+  @Roles(...STAFF_WRITE_ROLES)
+  async deleteGradingScale(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteGradingScale(id, schoolSlug);
+  }
+
+  @Get('settings/visibility')
+  async getVisibilitySettings(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVisibilitySettings(schoolSlug);
+  }
+
+  @Patch('settings/visibility')
+  @Roles(...STAFF_WRITE_ROLES)
+  async updateVisibilitySettings(@Body() dto: UpdateAssessmentVisibilitySettingsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateVisibilitySettings(schoolSlug, { ...dto, updatedBy: userName });
   }
 
   // ── Dynamic :id (must come AFTER all static GET routes) ───────

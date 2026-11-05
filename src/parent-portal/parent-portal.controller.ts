@@ -336,6 +336,15 @@ export class ParentPortalController {
     return this.service.getResults(studentId, requestingUser, schoolSlug);
   }
 
+  // Whole-term, comprehensive report (academics + Tarbiyah/Qaida/Nazra/
+  // attendance where the school included them) - distinct from the
+  // per-exam list above.
+  @Get('students/:studentId/term-report-cards')
+  async getTermReportCards(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCards(studentId, requestingUser, schoolSlug);
+  }
+
   @Get('students/:studentId/dues')
   async getDues(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
