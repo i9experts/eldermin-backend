@@ -14,7 +14,9 @@ import { Invoice, InvoiceDocument } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntryDocument, ReportCard, ReportCardDocument } from '../assessments/schemas/assessment.schema';
 import { TermReportCard, TermReportCardDocument } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahAssessmentDocument } from '../behaviour/schemas/behaviour.schema';
-import { PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf } from './parent-behaviour.projection';
+import {
+  PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf,
+} from './parent-behaviour.projection';
 import { projectParentReportCard, projectParentTermReportCard } from './parent-results.projection';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
@@ -52,7 +54,9 @@ import { ParentFeatureKey } from '../parent-access-control/parent-feature.consta
 import { GamificationService } from '../gamification/gamification.service';
 import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
 import { QaidaService } from '../behaviour/qaida.service';
+import { NazraService } from '../behaviour/nazra.service';
 import { projectParentQaidaReport } from './parent-qaida.projection';
+import { projectParentNazraReport } from './parent-nazra.projection';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
 export const MAX_DEVICES_PER_PARENT = 10;
@@ -103,8 +107,9 @@ export class ParentPortalService {
     // counts - see consent-request-results.spec.ts's own comment on this
     // fragility) keeps compiling and passing unchanged.
     @InjectModel(TermReportCard.name) private termReportCardModel: Model<TermReportCardDocument>,
-    // Qaida & Tajweed progress report - appended last for the same positional-construction reason as above.
+    // Qaida & Nazra progress report - appended last for the same positional-construction reason as above.
     private qaidaService: QaidaService,
+    private nazraService: NazraService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -734,26 +739,36 @@ export class ParentPortalService {
 
   // ── Qaida & Tajweed progress report ───────────────────────────
   // Same data as the web's Qaida tracker report (QaidaService.getReportData), projected to a parent-safe shape. A child with no Qaida
-  // record yet is a normal state, not an error: `{ recorded: false }`.
+  // record yet, or one the teacher hasn't shared via the Share-with-Parent toggle, is a normal state, not an error: `{ recorded: false }`.
   async getQaidaReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
-    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
-    if (access.suspended) return { suspended: true, feature: 'tarbiyah_report', reason: access.reason || null };
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null };
     // Tenant check: the guardian link is by id only; the child must also belong to this school.
     if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
-    try {
-      return { recorded: true, ...projectParentQaidaReport(await this.qaidaService.getReportData(studentId, schoolSlug)) };
-    } catch (e) {
-      if (e instanceof NotFoundException) return { recorded: false };
-      throw e;
-    }
+    const shared = await this.qaidaService.getParentVisibleProgress(studentId, schoolSlug);
+    if (!shared) return { recorded: false };
+    return { recorded: true, ...projectParentQaidaReport(await this.qaidaService.getReportData(studentId, schoolSlug)) };
   }
 
   /** The same PDF the web's Qaida tracker downloads (PdfService.generateQaidaReport). */
   async downloadQaidaPdf(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
     if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    if (!(await this.qaidaService.getParentVisibleProgress(studentId, schoolSlug))) throw new NotFoundException('Report not shared yet');
     return this.pdfService.generateQaidaReport(schoolSlug, { studentId } as any, requestingUser.userId || 'parent');
+  }
+
+  // ── Nazra Qur'an progress report ─────────────────────────────
+  // Mirrors getQaidaReport above: same feature key, same parentShared gate, same "unshared looks identical to absent" convention.
+  async getNazraReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null };
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    const shared = await this.nazraService.getParentVisibleProgress(studentId, schoolSlug);
+    if (!shared) return { recorded: false };
+    return { recorded: true, ...projectParentNazraReport(await this.nazraService.getReportData(studentId, schoolSlug)) };
   }
 
   // ── Dues ─────────────────────────────────────────────────────

@@ -107,4 +107,15 @@ export class NazraController {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateOverallRemarks(studentId, schoolSlug, dto.remarks);
   }
+
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('students/:studentId/share')
+  async updateParentShared(
+    @Param('studentId') studentId: string,
+    @Body() dto: { parentShared: boolean },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateParentShared(studentId, schoolSlug, !!dto.parentShared);
+  }
 }
