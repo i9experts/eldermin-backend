@@ -363,6 +363,26 @@ export class ParentPortalController {
     res.end(pdf);
   }
 
+  @Get('students/:studentId/qaida')
+  async getQaidaReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getQaidaReport(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/qaida/pdf')
+  async downloadQaidaPdf(@Param('studentId') studentId: string, @Request() req: any, @Res() res: Response) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'tarbiyah_report', reason: access.reason || null });
+      return;
+    }
+    const pdf = await this.service.downloadQaidaPdf(studentId, requestingUser, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="qaida-report-${studentId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
   @Get('students/:studentId/dues')
   async getDues(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
