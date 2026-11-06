@@ -369,6 +369,12 @@ export class ParentPortalController {
     return this.service.getQaidaReport(studentId, requestingUser, schoolSlug);
   }
 
+  @Get('students/:studentId/nazra')
+  async getNazraReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getNazraReport(studentId, requestingUser, schoolSlug);
+  }
+
   @Get('students/:studentId/qaida/pdf')
   async downloadQaidaPdf(@Param('studentId') studentId: string, @Request() req: any, @Res() res: Response) {
     const { requestingUser, schoolSlug } = this.ctx(req);
