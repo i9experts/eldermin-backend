@@ -345,6 +345,24 @@ export class ParentPortalController {
     return this.service.getTermReportCards(studentId, requestingUser, schoolSlug);
   }
 
+  @Get('students/:studentId/results/:reportCardId/pdf')
+  async downloadResultPdf(
+    @Param('studentId') studentId: string, @Param('reportCardId') reportCardId: string,
+    @Request() req: any, @Res() res: Response,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    // Ownership first, so the suspended answer is never readable for someone else's child.
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'academic_progress_report', reason: access.reason || null });
+      return;
+    }
+    const pdf = await this.service.downloadResultPdf(studentId, reportCardId, requestingUser, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="result-${reportCardId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
   @Get('students/:studentId/dues')
   async getDues(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
