@@ -238,15 +238,11 @@ export class QaidaProgress {
 
   @Prop() overallRemarks?: string;
 
-  // Whether this student's Qaida progress is visible in the Parent Portal -
-  // same convention as TarbiyahAssessment.parentShared: a teacher explicitly
-  // shares the current snapshot rather than every takhti update being
-  // visible to parents the moment it's recorded (a student mid-revision on
-  // a hard board shouldn't alarm a parent before the teacher has had a
-  // chance to put it in context). Lives on the whole progress record, not
-  // per-takhti, since this is one ongoing tracker per student rather than
-  // Tarbiyah's discrete per-period assessments.
-  @Prop({ default: false }) parentShared: boolean;
+  // Whether this student's Qaida progress is visible in the Parent Portal. Shared by default: parents see their child's progress as soon
+  // as it is recorded and it grows with the child. A teacher can still hide it (PATCH .../share { parentShared: false }); the parent
+  // gate is `parentShared: { $ne: false }`, so records that predate this field stay visible too. Lives on the whole progress record,
+  // not per-takhti: one ongoing tracker per student.
+  @Prop({ default: true }) parentShared: boolean;
   @Prop() parentSharedDate?: Date;
 
   // 'joined_later': this student came in without a full Qaida history at
