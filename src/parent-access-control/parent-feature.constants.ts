@@ -26,6 +26,7 @@ export const PARENT_FEATURE_KEYS = [
   'tarbiyah_at_home',
   'hygiene_checklist',
   'qaida_nazra_home_log',
+  'qaida_nazra_report',
 ] as const;
 
 export type ParentFeatureKey = (typeof PARENT_FEATURE_KEYS)[number];
@@ -38,6 +39,7 @@ export const PARENT_FEATURE_LABELS: Record<ParentFeatureKey, string> = {
   tarbiyah_at_home: 'Tarbiyah at Home',
   hygiene_checklist: 'Hygiene Checklist',
   qaida_nazra_home_log: 'Qaida/Nazra Home Log',
+  qaida_nazra_report: 'Qaida/Nazra Progress Report',
 };
 
 export function isParentFeatureKey(value: string): value is ParentFeatureKey {

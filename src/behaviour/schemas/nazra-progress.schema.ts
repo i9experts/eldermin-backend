@@ -224,6 +224,10 @@ export class NazraProgress {
 
   @Prop() overallRemarks?: string;
 
+  // Mirrors QaidaProgress.parentShared/parentSharedDate - see QaidaProgress.
+  @Prop({ default: false }) parentShared: boolean;
+  @Prop() parentSharedDate?: Date;
+
   // Mirrors QaidaProgress.recordType/priorRecordNote - see QaidaProgress.
   @Prop({ enum: ['full_history', 'joined_later'], default: 'full_history' }) recordType: NazraRecordType;
   @Prop() priorRecordNote?: string;

@@ -24,11 +24,14 @@ const fullReport = (diary = 2) => ({
   commonErrors: [{ error: 'qalqalah_missed', count: 2 }],
 });
 
-function build(opts: { studentInSchool?: boolean; suspended?: boolean; report?: () => Promise<any> } = {}) {
+function build(opts: { studentInSchool?: boolean; suspended?: boolean; shared?: boolean; report?: () => Promise<any> } = {}) {
   const models: any[] = Array.from({ length: MODEL_COUNT }, () => ({}));
   models[0] = { exists: jest.fn(() => Promise.resolve(opts.studentInSchool === false ? null : { _id: sid })) };
   const parentAccess: any = { checkFeature: jest.fn(() => Promise.resolve(opts.suspended ? { suspended: true, reason: 'paused' } : { suspended: false })) };
-  const nazraService: any = { getReportData: jest.fn(opts.report ?? (() => Promise.resolve(fullReport()))) };
+  const nazraService: any = {
+    getReportData: jest.fn(opts.report ?? (() => Promise.resolve(fullReport()))),
+    getParentVisibleProgress: jest.fn(() => Promise.resolve(opts.shared === false ? null : { parentShared: true })),
+  };
   const svc: any = new (ParentPortalService as any)(...models, {}, {}, {}, {}, parentAccess, {}, {}, {}, {}, {}, nazraService);
   return { svc, nazraService, parentAccess };
 }
@@ -73,16 +76,17 @@ describe('ParentPortalService.getNazraReport', () => {
 
   it('a suspended feature answers the placeholder, no data', async () => {
     const { svc, nazraService } = build({ suspended: true });
-    expect(await svc.getNazraReport(String(sid), parent([sid]), 'demo-school')).toMatchObject({ suspended: true, feature: 'tarbiyah_report' });
+    expect(await svc.getNazraReport(String(sid), parent([sid]), 'demo-school')).toMatchObject({ suspended: true, feature: 'qaida_nazra_report' });
     expect(nazraService.getReportData).not.toHaveBeenCalled();
   });
 
-  it('a child who has not reached Nazra is { recorded: false }, not an error', async () => {
-    const { svc } = build({ report: () => Promise.reject(new NotFoundException('No Nazra progress recorded')) });
+  it('a child whose Nazra progress is not shared (or does not exist) is { recorded: false }, no data read', async () => {
+    const { svc, nazraService } = build({ shared: false });
     expect(await svc.getNazraReport(String(sid), parent([sid]), 'demo-school')).toEqual({ recorded: false });
+    expect(nazraService.getReportData).not.toHaveBeenCalled();
   });
 
-  it('other errors still surface; a child outside this school is a 404', async () => {
+  it('a report error still surfaces; a child outside this school is a 404', async () => {
     await expect(build({ report: () => Promise.reject(new Error('db down')) }).svc.getNazraReport(String(sid), parent([sid]), 'demo-school')).rejects.toThrow('db down');
     await expect(build({ studentInSchool: false }).svc.getNazraReport(String(sid), parent([sid]), 'demo-school')).rejects.toBeInstanceOf(NotFoundException);
   });

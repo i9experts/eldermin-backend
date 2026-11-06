@@ -22,15 +22,17 @@ const fullReport = () => ({
   commonErrors: [{ error: 'makhraj_confusion', count: 3 }],
 });
 
-function build(opts: { studentInSchool?: boolean; suspended?: boolean; report?: () => Promise<any> } = {}) {
+function build(opts: { studentInSchool?: boolean; suspended?: boolean; shared?: boolean; report?: () => Promise<any> } = {}) {
   const studentModel = { exists: jest.fn(() => Promise.resolve(opts.studentInSchool === false ? null : { _id: sid })) };
   const models: any[] = Array.from({ length: MODEL_COUNT }, () => ({}));
   models[0] = studentModel;
   const parentAccess: any = { checkFeature: jest.fn(() => Promise.resolve(opts.suspended ? { suspended: true, reason: 'paused' } : { suspended: false })) };
-  const qaidaService: any = { getReportData: jest.fn(opts.report ?? (() => Promise.resolve(fullReport()))) };
-  const nazraService: any = {};
+  const qaidaService: any = {
+    getReportData: jest.fn(opts.report ?? (() => Promise.resolve(fullReport()))),
+    getParentVisibleProgress: jest.fn(() => Promise.resolve(opts.shared === false ? null : { parentShared: true })),
+  };
   const pdfService: any = { generateQaidaReport: jest.fn(() => Promise.resolve(Buffer.from('%PDF-1.4'))) };
-  const svc: any = new (ParentPortalService as any)(...models, {}, {}, {}, pdfService, parentAccess, {}, {}, {}, {}, qaidaService, nazraService);
+  const svc: any = new (ParentPortalService as any)(...models, {}, {}, {}, pdfService, parentAccess, {}, {}, {}, {}, qaidaService, {});
   return { svc, qaidaService, pdfService, studentModel, parentAccess };
 }
 
@@ -70,13 +72,19 @@ describe('ParentPortalService.getQaidaReport / downloadQaidaPdf', () => {
 
   it('a suspended feature answers the suspended placeholder, no data', async () => {
     const { svc, qaidaService } = build({ suspended: true });
-    expect(await svc.getQaidaReport(String(sid), parent([sid]), 'demo-school')).toMatchObject({ suspended: true, feature: 'tarbiyah_report' });
+    expect(await svc.getQaidaReport(String(sid), parent([sid]), 'demo-school')).toMatchObject({ suspended: true, feature: 'qaida_nazra_report' });
     expect(qaidaService.getReportData).not.toHaveBeenCalled();
   });
 
   it('a child with no Qaida record yet is { recorded: false }, not an error', async () => {
-    const { svc } = build({ report: () => Promise.reject(new NotFoundException('No Qaida progress recorded')) });
+    const { svc } = build({ shared: false });
     expect(await svc.getQaidaReport(String(sid), parent([sid]), 'demo-school')).toEqual({ recorded: false });
+  });
+
+  it('a child with a record the teacher has not shared yet is also { recorded: false }, same as no record at all', async () => {
+    const { svc, qaidaService } = build({ shared: false });
+    expect(await svc.getQaidaReport(String(sid), parent([sid]), 'demo-school')).toEqual({ recorded: false });
+    expect(qaidaService.getReportData).not.toHaveBeenCalled();
   });
 
   it('other errors still surface', async () => {

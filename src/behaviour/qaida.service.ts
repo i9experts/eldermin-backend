@@ -198,6 +198,32 @@ export class QaidaService {
     return progress;
   }
 
+  // Parent Portal read path - returns null rather than throwing for "no
+  // progress yet" AND for "progress exists but hasn't been shared", so a
+  // parent never learns from the response shape alone whether a record is
+  // merely unshared vs genuinely absent. Projection (which fields a parent
+  // may actually see) lives in parent-behaviour.projection.ts, same as
+  // Tarbiyah - this just gates on the one flag.
+  async getParentVisibleProgress(studentId: string, schoolSlug: string) {
+    assertValidObjectId(studentId, 'student');
+    const progress = await this.progressModel.findOne({
+      studentId: new Types.ObjectId(studentId), schoolSlug, parentShared: true,
+    }).lean();
+    return progress || null;
+  }
+
+  // Same convention as TarbiyahService's share toggle: sharing stamps
+  // parentSharedDate (the moment the parent could first have seen this
+  // snapshot); un-sharing leaves that date alone so a prior share is never
+  // silently forgotten.
+  async updateParentShared(studentId: string, schoolSlug: string, parentShared: boolean) {
+    const progress = await this.getProgress(studentId, schoolSlug);
+    progress.parentShared = parentShared;
+    if (parentShared && !progress.parentSharedDate) progress.parentSharedDate = new Date();
+    await progress.save();
+    return progress;
+  }
+
   // Class roster view - every student in the grade/section, left-joined
   // with their Qaida progress (a student with no record yet simply shows
   // as "not started" rather than being left off the roster, the same

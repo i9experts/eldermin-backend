@@ -369,24 +369,24 @@ export class ParentPortalController {
     return this.service.getQaidaReport(studentId, requestingUser, schoolSlug);
   }
 
-  @Get('students/:studentId/nazra')
-  async getNazraReport(@Param('studentId') studentId: string, @Request() req: any) {
-    const { requestingUser, schoolSlug } = this.ctx(req);
-    return this.service.getNazraReport(studentId, requestingUser, schoolSlug);
-  }
-
   @Get('students/:studentId/qaida/pdf')
   async downloadQaidaPdf(@Param('studentId') studentId: string, @Request() req: any, @Res() res: Response) {
     const { requestingUser, schoolSlug } = this.ctx(req);
     assertStudentAccess(requestingUser, studentId);
-    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
     if (access.suspended) {
-      res.status(HttpStatus.OK).json({ suspended: true, feature: 'tarbiyah_report', reason: access.reason || null });
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null });
       return;
     }
     const pdf = await this.service.downloadQaidaPdf(studentId, requestingUser, schoolSlug);
     res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="qaida-report-${studentId}.pdf"`, 'Content-Length': pdf.length });
     res.end(pdf);
+  }
+
+  @Get('students/:studentId/nazra')
+  async getNazraReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getNazraReport(studentId, requestingUser, schoolSlug);
   }
 
   @Get('students/:studentId/dues')

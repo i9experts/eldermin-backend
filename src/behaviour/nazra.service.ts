@@ -262,6 +262,24 @@ export class NazraService {
     return progress;
   }
 
+  // Mirrors QaidaService.getParentVisibleProgress - see there.
+  async getParentVisibleProgress(studentId: string, schoolSlug: string) {
+    assertValidObjectId(studentId, 'student');
+    const progress = await this.progressModel.findOne({
+      studentId: new Types.ObjectId(studentId), schoolSlug, parentShared: true,
+    }).lean();
+    return progress || null;
+  }
+
+  // Mirrors QaidaService.updateParentShared - see there.
+  async updateParentShared(studentId: string, schoolSlug: string, parentShared: boolean) {
+    const progress = await this.getProgress(studentId, schoolSlug);
+    progress.parentShared = parentShared;
+    if (parentShared && !progress.parentSharedDate) progress.parentSharedDate = new Date();
+    await progress.save();
+    return progress;
+  }
+
   // Class roster view - mirrors Qaida's getClassProgress.
   async getClassProgress(
     schoolSlug: string,
