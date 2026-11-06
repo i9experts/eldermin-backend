@@ -393,6 +393,9 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     </tr>`;
   }).join('');
 
+  const tagList = (items: string[], cls: string) =>
+    `<div class="tags-row">${items.map((s) => `<span class="tag ${cls}">${esc(s)}</span>`).join('')}</div>`;
+
   const tarbiyahSection = included.tarbiyah ? (() => {
     const t = data.tarbiyah;
     if (!t) return `<div class="section-title">Tarbiyah (Character Development)</div><p class="muted">No Tarbiyah assessment on file for this academic year.</p>`;
@@ -405,10 +408,29 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
       <div class="summary-card"><div class="summary-num" style="font-size:16px;text-transform:capitalize">${esc((t.overallRating || '').replace(/_/g, ' ')) || 'N/A'}</div><div class="summary-label">Rating</div></div>
       <div class="summary-card"><div class="summary-num">${t.overallPercentage ?? '—'}%</div><div class="summary-label">Percentage</div></div>
     </div>
-    ${traitRows ? `<div class="tarb-grid">${traitRows}</div>` : ''}
+    ${traitRows ? `<p class="note" style="margin-top:10px"><strong>Trait Scores</strong></p><div class="tarb-grid">${traitRows}</div>` : ''}
     ${t.teacherObservations ? `<p class="note"><strong>Teacher's Observations:</strong> ${esc(t.teacherObservations)}</p>` : ''}
+    ${(t.areasOfStrength || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Areas of Strength</strong></p>${tagList(t.areasOfStrength, 'tag-strong')}` : ''}
+    ${(t.areasForImprovement || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Areas for Improvement</strong></p>${tagList(t.areasForImprovement, 'tag-weak')}` : ''}
+    ${(t.recommendedActions || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Recommended Actions</strong></p><ul style="margin:0 0 12px 18px;padding:0">${t.recommendedActions.map((a: string) => `<li class="note" style="margin-bottom:2px">${esc(a)}</li>`).join('')}</ul>` : ''}
     `;
   })() : '';
+
+  // Flattens every takhti's/para's day-by-day log into one chronological
+  // list (most recent first) - the actual "lesson diary" a comprehensive
+  // report needs, not just a single current-position snapshot.
+  const qaidaRecentLessons = (data.qaida?.takhtis || [])
+    .flatMap((tk: any) => (tk.sabaqLog || []).map((l: any) => ({ ...l, takhtiNumber: tk.number })))
+    .sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, 8);
+  const nazraRecentLessons = (data.nazra?.diaryLog || [])
+    .slice()
+    .sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, 8);
+  const qnExtras = data.qaidaNazraExtras || {};
+  const invigilatorEntries = (qnExtras.invigilatorAssessments || []).slice(0, 6);
+  const homeLogEntries = (qnExtras.homeLog || []).slice(0, 6);
+  const fmtDate = (d: any) => (d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—');
 
   const qaidaNazraSection = (included.qaida || included.nazra) ? `
     <div class="section-title">Qaida / Nazra Progress</div>
@@ -423,17 +445,68 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
         <div class="summary-card" style="text-align:left;padding:14px">
           <div class="info-label">Nazra</div>
           <div class="info-value" style="text-transform:capitalize">${esc((data.nazra.overallStatus || '').replace(/_/g, ' ')) || 'N/A'}</div>
+          <p class="note" style="margin-top:6px">Para ${data.nazra.currentPara ?? '—'} of ${data.nazra.totalParas ?? 30} · ${data.nazra.completionPct ?? 0}% complete</p>
         </div>` : `<div class="summary-card" style="text-align:left;padding:14px"><div class="info-label">Nazra</div><p class="muted">Not enrolled.</p></div>`) : ''}
-    </div>` : '';
+    </div>
+    ${qaidaRecentLessons.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Qaida — Recent Lessons</strong></p>
+    ${qaidaRecentLessons.map((l: any) => `
+      <div class="list-item"><span>Takhti ${l.takhtiNumber}${l.sabaqFrom ? ` · ${esc(l.sabaqFrom)}${l.sabaqTo ? `–${esc(l.sabaqTo)}` : ''}` : ''}</span><span style="text-transform:capitalize">${esc((l.rating || '').replace(/_/g, ' '))} · ${fmtDate(l.date)}</span></div>`).join('')}
+    ` : ''}
+    ${(data.qaida?.commonErrors || []).length ? `<p class="note" style="margin-top:8px;margin-bottom:4px"><strong>Qaida — Common Errors</strong></p>${tagList(data.qaida.commonErrors.slice(0, 6).map((e: any) => `${e.error} (${e.count})`), 'tag-weak')}` : ''}
+    ${nazraRecentLessons.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Nazra — Recent Diary</strong></p>
+    ${nazraRecentLessons.map((l: any) => `
+      <div class="list-item"><span>Para ${l.sabaq?.paraNumber ?? '—'}${l.sabaq?.pageFrom ? ` · ${esc(l.sabaq.pageFrom)}${l.sabaq.pageTo ? `–${esc(l.sabaq.pageTo)}` : ''}` : ''}</span><span style="text-transform:capitalize">${esc((l.sabaq?.rating || '').replace(/_/g, ' '))} · ${fmtDate(l.date)}</span></div>`).join('')}
+    ` : ''}
+    ${(data.nazra?.commonErrors || []).length ? `<p class="note" style="margin-top:8px;margin-bottom:4px"><strong>Nazra — Common Errors</strong></p>${tagList(data.nazra.commonErrors.slice(0, 6).map((e: any) => `${e.error} (${e.count})`), 'tag-weak')}` : ''}
+    ${invigilatorEntries.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Invigilator Assessments</strong></p>
+    ${invigilatorEntries.map((a: any) => `
+      <div class="feedback-item">
+        <p class="feedback-text">${a.overallScore != null ? `<strong>${a.overallScore}</strong> · ` : ''}${esc(a.overallRemarks) || 'No remarks recorded'}</p>
+        <p class="feedback-meta">${esc(a.invigilatorName) || 'Invigilator'}${a.invigilatorType ? ` (${esc(a.invigilatorType)})` : ''} · ${fmtDate(a.visitDate)}</p>
+      </div>`).join('')}
+    ` : ''}
+    ${homeLogEntries.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Parent Home-Tutoring Log</strong></p>
+    ${homeLogEntries.map((h: any) => `
+      <div class="feedback-item">
+        <p class="feedback-text">${h.takhtiNumber ? `Takhti ${h.takhtiNumber}` : h.paraNumber ? `Para ${h.paraNumber}` : ''}${h.pageFrom ? ` · ${esc(h.pageFrom)}${h.pageTo ? `–${esc(h.pageTo)}` : ''}` : ''}${h.notes ? ` — ${esc(h.notes)}` : ''}</p>
+        <p class="feedback-meta">${esc(h.tutorName) || 'Home tutor'} · ${fmtDate(h.date)}</p>
+      </div>`).join('')}
+    ` : ''}` : '';
 
   const attendanceSection = included.attendance ? (() => {
     const a = data.attendance;
     if (!a || a.markedDays == null) return `<div class="section-title">Attendance</div><p class="muted">No attendance records for this term.</p>`;
     const rate = a.attendanceRate ?? 0;
+    // Monthly roll-up of the daily trend the service already computes -
+    // compact enough for a report (a term is a few months), still a real
+    // breakdown instead of only the term-wide totals.
+    const monthly = new Map<string, { present: number; absent: number; total: number }>();
+    for (const d of (a.trend || [])) {
+      const key = String(d.date || '').slice(0, 7);
+      if (!key) continue;
+      const m = monthly.get(key) || { present: 0, absent: 0, total: 0 };
+      m.present += d.presentCount || 0;
+      m.absent += d.absentCount || 0;
+      m.total += d.total || 0;
+      monthly.set(key, m);
+    }
+    const monthRows = Array.from(monthly.entries()).sort(([a1], [b1]) => a1.localeCompare(b1)).map(([key, m]) => {
+      const pct = m.total ? Math.round((m.present / m.total) * 100) : 0;
+      const label = new Date(`${key}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+      return `<div class="bar-item">
+        <div class="bar-name">${esc(label)}</div>
+        <div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${pct >= 90 ? '#16A34A' : pct >= 75 ? '#F5A623' : '#DC2626'}"></div></div>
+        <div class="bar-score">${pct}%</div>
+      </div>`;
+    }).join('');
     return `
     <div class="section-title">Attendance</div>
     <div class="bar-item" style="margin-bottom:12px">
-      <div class="bar-name" style="width:110px">Overall Rate</div>
+      <div class="bar-name" style="width:110px">Term Overall</div>
       <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, rate))}%;background:${rate >= 90 ? '#16A34A' : rate >= 75 ? '#F5A623' : '#DC2626'}"></div></div>
       <div class="bar-score">${rate}%</div>
     </div>
@@ -442,7 +515,8 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
       <div class="summary-card"><div class="summary-num">${a.lateCount ?? 0}</div><div class="summary-label">Late</div></div>
       <div class="summary-card"><div class="summary-num">${a.absentCount ?? 0}</div><div class="summary-label">Absent</div></div>
       <div class="summary-card"><div class="summary-num">${a.halfDayCount ?? 0}</div><div class="summary-label">Half Day</div></div>
-    </div>`;
+    </div>
+    ${monthRows ? `<p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Month-by-Month</strong></p>${monthRows}` : ''}`;
   })() : '';
 
   const parentEngagementSection = included.parentEngagement ? (() => {
@@ -459,7 +533,10 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   })() : '';
 
   const feedbackSection = included.teacherFeedback ? (() => {
-    const entries = (data.teacherFeedback || []).slice(0, 8);
+    // Full history, not truncated - a comprehensive report shows every
+    // recorded entry across the term, chronological (most recent first,
+    // already sorted that way by the service), with its date and author.
+    const entries = data.teacherFeedback || [];
     if (entries.length === 0) return `<div class="section-title">Teacher Feedback This Term</div><p class="muted">No feedback recorded for this term yet.</p>`;
     return `
     <div class="section-title">Teacher Feedback This Term</div>
@@ -1821,6 +1898,7 @@ export class PdfService implements OnModuleDestroy {
       tarbiyah: trc.tarbiyah || null,
       qaida: trc.qaida || null,
       nazra: trc.nazra || null,
+      qaidaNazraExtras: trc.qaidaNazraExtras || null,
       attendance: trc.attendance || null,
       parentEngagement: trc.parentEngagement || null,
       teacherFeedback: trc.teacherFeedback || [],
@@ -1829,25 +1907,17 @@ export class PdfService implements OnModuleDestroy {
       published: !!trc.published,
     };
 
-    // Same reasoning as generateFeeReceipt above: route through the
-    // school's actual custom "Result Card" template so branding/layout
-    // choices made in the Report Templates designer show up on real report
-    // cards, instead of always using this fixed HTML template regardless
-    // of what a school designed. Falls back to the original fixed layout
-    // if the template-driven render fails for any reason - a report card
-    // going home to a parent must never simply error out. Note: the
+    // Deliberately NOT routing this through the school's custom "Result
+    // Card" template the way generateFeeReceipt does for receipts. The
     // generic template-driven engine only supports simple field/table/text
-    // sections, so a custom school template won't render the chart-bearing
-    // sections below - an acceptable degradation, not a regression, since
-    // it never rendered them before either.
-    let pdf: Buffer;
-    try {
-      pdf = await this.renderTemplateDrivenPdf(schoolSlug, 'result_card', data);
-    } catch (err: any) {
-      this.logger.warn(`Template-based report card render failed for student ${dto.studentId}, falling back to standard layout: ${err?.message}`);
-      const html = REPORT_CARD_TEMPLATE(data);
-      pdf = await this.htmlToPdf(html);
-    }
+    // sections - it has no way to represent Tarbiyah/Qaida/Nazra/
+    // attendance/Parent Engagement at all, so a school with a custom
+    // "Result Card" template configured (even one meant for something
+    // else entirely, e.g. a generic fee-style layout) would silently
+    // "succeed" with a near-blank page missing every comprehensive section
+    // below, with no error to signal it. A whole-term report card always
+    // needs the real thing, so it always goes through the fixed template.
+    const pdf = await this.htmlToPdf(REPORT_CARD_TEMPLATE(data));
 
     await this.logPdf({
       schoolSlug,

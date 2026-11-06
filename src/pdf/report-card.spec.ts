@@ -23,7 +23,6 @@ function makeService(overrides: { student?: any; school?: any; termReportCard?: 
   const PdfServiceAny: any = PdfService;
   const service = new PdfServiceAny(...args) as PdfService;
   let capturedHtml = '';
-  jest.spyOn(service as any, 'renderTemplateDrivenPdf').mockRejectedValue(new Error('no custom template configured'));
   jest.spyOn(service as any, 'htmlToPdf').mockImplementation(async (html: any) => {
     capturedHtml = html;
     return Buffer.from('fake-pdf');
@@ -109,5 +108,57 @@ describe('PdfService.generateReportCard', () => {
     await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
     expect(getHtml()).not.toContain('<script>alert(1)</script>');
     expect(getHtml()).toContain('&lt;script&gt;');
+  });
+
+  it('never routes through the custom template-driven "Result Card" - it cannot represent Tarbiyah/Qaida/attendance and would silently render a near-blank page', async () => {
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
+    const renderTemplateDrivenPdf = jest.spyOn(service as any, 'renderTemplateDrivenPdf');
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
+    expect(renderTemplateDrivenPdf).not.toHaveBeenCalled();
+    expect(getHtml()).toContain('Tarbiyah (Character Development)');
+  });
+
+  it('renders the comprehensive Tarbiyah/Qaida/Nazra/attendance detail - strengths, recommended actions, recent lessons, invigilator/home-tutoring logs, month-by-month attendance', async () => {
+    const comprehensive = {
+      ...TERM_REPORT_CARD,
+      sectionsIncluded: { ...TERM_REPORT_CARD.sectionsIncluded, qaida: true, nazra: true },
+      tarbiyah: {
+        ...TERM_REPORT_CARD.tarbiyah,
+        areasOfStrength: ['Punctuality'],
+        areasForImprovement: ['Sharing with classmates'],
+        recommendedActions: ['Encourage group activities at home'],
+      },
+      qaida: {
+        overallStatus: 'in_progress', currentTakhti: 6, totalTakhtis: 16, masteryPct: 81,
+        takhtis: [{ number: 6, sabaqLog: [{ date: '2025-09-20', sabaqFrom: '1', sabaqTo: '5', rating: 'excellent', assessedBy: 'Ustadh Ali' }] }],
+        commonErrors: [{ error: 'Makhraj of Dhaad', count: 3 }],
+      },
+      nazra: {
+        overallStatus: 'in_progress', currentPara: 2, totalParas: 30, completionPct: 7,
+        diaryLog: [{ date: '2025-09-21', assessedBy: 'Ustadh Bilal', sabaq: { paraNumber: 2, pageFrom: '5', pageTo: '8', rating: 'good' } }],
+        commonErrors: [],
+      },
+      qaidaNazraExtras: {
+        invigilatorAssessments: [{ visitDate: '2025-09-25', invigilatorName: 'Qari Yusuf', invigilatorType: 'external', overallScore: 4.1, overallRemarks: 'Good tajweed awareness.' }],
+        homeLog: [{ date: '2025-09-22', takhtiNumber: 6, pageFrom: '1', pageTo: '3', tutorName: 'Mother', notes: 'Practiced after Maghrib.' }],
+      },
+      attendance: { ...TERM_REPORT_CARD.attendance, trend: [{ date: '2025-09-02', presentCount: 20, absentCount: 1, total: 21 }] },
+    };
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: comprehensive });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('Areas of Strength');
+    expect(html).toContain('Punctuality');
+    expect(html).toContain('Recommended Actions');
+    expect(html).toContain('Encourage group activities at home');
+    expect(html).toContain('Qaida — Recent Lessons');
+    expect(html).toContain('Makhraj of Dhaad (3)');
+    expect(html).toContain('Nazra — Recent Diary');
+    expect(html).toContain('Invigilator Assessments');
+    expect(html).toContain('Qari Yusuf');
+    expect(html).toContain('Parent Home-Tutoring Log');
+    expect(html).toContain('Practiced after Maghrib.');
+    expect(html).toContain('Month-by-Month');
+    expect(html).toContain('September 2025');
   });
 });
