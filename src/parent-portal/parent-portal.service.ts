@@ -716,6 +716,18 @@ export class ParentPortalService {
     return cards.map((c) => projectParentTermReportCard(c, settings as any));
   }
 
+  /** Same PDF the web's Assessments > Results screen downloads (PdfService.generateExamReportCardPdf), gated to this parent's own child and published results. */
+  async downloadResultPdf(studentId: string, reportCardId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!Types.ObjectId.isValid(reportCardId)) throw new NotFoundException('Result not found');
+    const card: any = await this.reportCardModel.findOne({
+      _id: new Types.ObjectId(reportCardId), studentId: new Types.ObjectId(studentId), schoolSlug, published: true,
+    }).select('assessmentId').lean();
+    if (!card) throw new NotFoundException('Result not found');
+    return this.pdfService.generateExamReportCardPdf(
+      schoolSlug, { assessmentId: String(card.assessmentId), studentId }, requestingUser.userId || 'parent');
+  }
+
   // ── Dues ─────────────────────────────────────────────────────
   async getDues(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
