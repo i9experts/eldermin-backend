@@ -209,21 +209,39 @@ export class TeachingService {
   async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
     const tid = this.tid(tenantId);
 
-    // Self-healing #0: nobody has ever clicked "Sync from HR" for this
-    // school yet, so every "pick a teacher" dropdown across the Teaching
-    // module (Class Diary, Homework, Syllabus, Timetable, PTM...) shows
-    // "No teacher profiles yet" even though HR's Staff roster already has
-    // real teachers on it - reported from the PTM "Schedule Meeting"
-    // dropdown, used by whoever is scheduling the meeting, not necessarily
-    // one of the teachers themselves, so the self-heal below (which only
-    // ever creates the REQUESTER's own profile) never fires for them. Runs
-    // the same upsert "Sync from HR" does, but only the one time this
-    // tenant has literally zero profiles - cheap after that, since this
-    // count stays above zero from then on (the self-heals below keep
-    // adding to it even if every profile were somehow deleted again).
-    const anyProfileExists = await this.teacherProfileModel.exists({ tenantId: tid });
-    if (!anyProfileExists) {
-      await this.syncTeacherProfilesFromHR(tenantId, (requestingUser as any)?.institutionId);
+    // Self-healing #0: "Sync from HR" was never clicked for this school (or
+    // was clicked once, long ago, before most of today's teaching staff
+    // were even added to HR), so every "pick a teacher" dropdown across the
+    // Teaching module (Class Diary, Homework, Syllabus, Timetable, PTM...)
+    // is missing some or all real teachers - reported from the PTM
+    // "Schedule Meeting" dropdown, used by whoever is scheduling the
+    // meeting, not necessarily one of the teachers themselves, so the
+    // per-requester self-heal below (which only ever creates the
+    // REQUESTER's own profile) never fires for them. A first version of
+    // this only checked "does this tenant have ANY profile at all", which
+    // missed the (very common) case of a school that already has a handful
+    // of profiles - e.g. from admins' own self-heals below - but still has
+    // most of its real teaching staff unsynced: that first profile existing
+    // short-circuited the gate and the rest of the roster stayed invisible
+    // forever. Instead, diff the actual teacher-eligible Staff ids against
+    // the TeacherProfile ids on file and only upsert what's missing -
+    // self-correcting on every read (new hires show up without needing
+    // another manual sync) while staying cheap once caught up, since the
+    // diff is then empty and nothing further is written.
+    const [staffIdAndRole, existingProfileStaffIds] = await Promise.all([
+      this.staffModel.find({ tenantId: tid }, { _id: 1, erpRole: 1 }).lean(),
+      this.teacherProfileModel.find({ tenantId: tid }, { staffId: 1 }).lean(),
+    ]);
+    const knownStaffIds = new Set((existingProfileStaffIds as any[]).map((p) => String(p.staffId)));
+    const missingTeacherStaffIds = (staffIdAndRole as any[])
+      .filter((s) => this.isTeacherErpRole(s.erpRole) && !knownStaffIds.has(String(s._id)))
+      .map((s) => s._id);
+    if (missingTeacherStaffIds.length) {
+      const missingStaff = await this.staffModel.find({ _id: { $in: missingTeacherStaffIds }, tenantId: tid }).lean();
+      const institutionId = (requestingUser as any)?.institutionId;
+      for (const staff of missingStaff as any[]) {
+        await this.upsertTeacherProfileFromStaff(staff, tid, staff.institutionId ? String(staff.institutionId) : institutionId);
+      }
     }
 
     // Self-healing: updateTeacherProfile used to $set whatever the Edit
@@ -435,16 +453,21 @@ export class TeachingService {
    * self-heal) without re-scanning the entire staff roster. Returns
    * 'created' | 'updated' | a skipped-duplicate record | undefined (not a
    * teacher role, nothing to do). */
+  // Mirrors HrService.resolvePrimaryRole's own default: an erpRole that
+  // isn't one of the other recognized roles defaults to teacher. Shared by
+  // upsertTeacherProfileFromStaff and getTeacherProfiles's lazy "which
+  // teaching staff still have no TeacherProfile row" self-heal below, so
+  // both agree on who counts as a teacher.
+  private static readonly OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
+    'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
+  private isTeacherErpRole(erpRole: any): boolean {
+    return !TeachingService.OTHER_ROLES.includes((erpRole || '').toLowerCase().trim());
+  }
+
   private async upsertTeacherProfileFromStaff(
     staff: any, tid: string, institutionId?: string,
   ): Promise<'created' | 'updated' | { staffId: string; name: string; matchedProfileId: string } | undefined> {
-    const erpRole = (staff.erpRole || '').toLowerCase().trim();
-    // Mirrors HrService.resolvePrimaryRole's own default: an erpRole
-    // that isn't one of the other recognized roles defaults to teacher.
-    const OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
-      'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
-    const isTeacher = !OTHER_ROLES.includes(erpRole);
-    if (!isTeacher) return undefined;
+    if (!this.isTeacherErpRole(staff.erpRole)) return undefined;
 
     const existing = await this.teacherProfileModel.findOne({ tenantId: tid, staffId: staff._id });
     const tp = staff.teacherProfile || {};

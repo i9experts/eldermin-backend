@@ -2,15 +2,20 @@ import { Types } from 'mongoose';
 import { TeachingService } from './teaching.service';
 
 // Teachers added since the last manual "Sync from HR" click (or if it was
-// never clicked) had no TeacherProfile row, so they couldn't appear in -
-// or select themselves from - any of the "pick a teacher" dropdowns across
-// the Teaching module (Class Diary, Homework, Syllabus, Timetable, etc.),
+// never clicked, or only ever clicked back when the staff roster was much
+// smaller) had no TeacherProfile row, so they couldn't appear in - or
+// select themselves from - any of the "pick a teacher" dropdowns across the
+// Teaching module (Class Diary, Homework, Syllabus, Timetable, PTM, etc.),
 // all of which share this one getTeacherProfiles() call. A teacher's own
 // department-scoped visibility could also silently exclude their own
-// profile if its denormalized `department` didn't exactly match their
-// JWT's department claim. Both are fixed here: the requester's own
-// TeacherProfile is lazily upserted if missing, and the final query always
-// includes it regardless of department scope.
+// profile if its denormalized `department` didn't exactly match their JWT's
+// department claim. All three are fixed here: every teaching Staff record
+// missing a TeacherProfile is lazily upserted on every read (not just when
+// the tenant has literally zero profiles - a school can easily have a
+// handful of profiles already and still be missing most of its real
+// teachers), the requester's own TeacherProfile is lazily upserted if
+// missing, and the final query always includes it regardless of department
+// scope.
 
 function makeService(staffModel: any, teacherProfileModel: any) {
   const noop: any = {};
@@ -22,6 +27,27 @@ function makeService(staffModel: any, teacherProfileModel: any) {
 
 function makeFindChain(result: any) {
   return { populate: () => ({ sort: () => ({ lean: () => Promise.resolve(result) }) }) };
+}
+
+// Self-heal #0 reads staffModel.find(filter, {_id:1, erpRole:1}) to find
+// teacher-eligible staff and teacherProfileModel.find(filter, {staffId:1})
+// to see which already have a profile - both plain projection queries,
+// discriminated from every other find() call in the method by that second
+// projection argument.
+function makeStaffFindMock(allStaffProjected: any[], fullDocsByIdForMissingFetch: any[]) {
+  return jest.fn((_query: any, projection?: any) => {
+    if (projection && projection.erpRole) return { lean: () => Promise.resolve(allStaffProjected) };
+    return { lean: () => Promise.resolve(fullDocsByIdForMissingFetch) };
+  });
+}
+
+function makeProfileFindMock(existingProfileStaffIds: any[], finalListing: any) {
+  return jest.fn((query: any, projection?: any) => {
+    if (projection && projection.staffId) {
+      return { lean: () => Promise.resolve(existingProfileStaffIds.map((staffId) => ({ staffId }))) };
+    }
+    return makeFindChain(finalListing);
+  });
 }
 
 describe('TeachingService.getTeacherProfiles — self-heal for the requesting teacher', () => {
@@ -36,10 +62,7 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     };
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      // Discriminate by filter shape: the tenant-wide "has anyone ever
-      // synced" check (no staffId key) says yes, so only the staffId-scoped
-      // self-heal check below is the one under test here.
-      exists: jest.fn((filter: any) => Promise.resolve(filter.staffId ? null : { _id: 'tenant-has-profiles' })),
+      exists: jest.fn().mockResolvedValue(null), // self-heal #2's own-profile check: not found yet
       // Two different findOne() shapes the upsert path uses: a plain
       // await (existing-by-staffId check) and a .select().lean() chain
       // (duplicate-name check) - both resolve to "nothing found" here.
@@ -48,9 +71,13 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
         return Promise.resolve(null);
       }),
       create: jest.fn().mockResolvedValue({}),
-      find: jest.fn().mockReturnValue(makeFindChain([{ _id: 'new-profile', firstName: 'New', lastName: 'Teacher' }])),
+      // No teaching staff tenant-wide (other than the requester, handled
+      // below by self-heal #2), so self-heal #0 is a no-op here - this test
+      // is only about the per-requester self-heal.
+      find: makeProfileFindMock([], [{ _id: 'new-profile', firstName: 'New', lastName: 'Teacher' }]),
     };
     const staffModel: any = {
+      find: makeStaffFindMock([], []),
       findOne: jest.fn().mockReturnValue({ lean: () => Promise.resolve(ownStaff) }),
     };
 
@@ -67,7 +94,8 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
       exists: jest.fn().mockResolvedValue({ _id: 'already-exists' }), // profile already exists - no self-heal create needed
-      find: jest.fn((query: any) => {
+      find: jest.fn((query: any, projection?: any) => {
+        if (projection && projection.staffId) return { lean: () => Promise.resolve([]) };
         // Simulate the inclusive $or: the hard department filter alone would
         // exclude this teacher's own mismatched-department profile, but the
         // staffId branch of the $or guarantees they're still returned.
@@ -75,7 +103,7 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
         return makeFindChain([{ _id: 'own-profile', firstName: 'Mismatched', lastName: 'Dept', department: 'Primary' }]);
       }),
     };
-    const staffModel: any = { findOne: jest.fn() };
+    const staffModel: any = { find: makeStaffFindMock([], []), findOne: jest.fn() };
 
     const service = makeService(staffModel, teacherProfileModel);
     const requestingUser: any = { role: 'teacher', staffId: String(staffId), department: 'Secondary', campusId: String(new Types.ObjectId()) };
@@ -91,9 +119,13 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
       exists: jest.fn().mockResolvedValue({ _id: 'exists' }),
-      find: jest.fn((query: any) => { capturedQuery = query; return makeFindChain([]); }),
+      find: jest.fn((query: any, projection?: any) => {
+        if (projection && projection.staffId) return { lean: () => Promise.resolve([]) };
+        capturedQuery = query;
+        return makeFindChain([]);
+      }),
     };
-    const staffModel: any = { findOne: jest.fn() };
+    const staffModel: any = { find: makeStaffFindMock([], []), findOne: jest.fn() };
 
     const service = makeService(staffModel, teacherProfileModel);
     const requestingUser: any = { role: 'teacher', staffId: String(staffId), department: 'Secondary', campusId: String(new Types.ObjectId()) };
@@ -119,15 +151,16 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     };
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      exists: jest.fn((filter: any) => Promise.resolve(filter.staffId ? null : { _id: 'tenant-has-profiles' })),
+      exists: jest.fn().mockResolvedValue(null),
       findOne: jest.fn((filter: any) => {
         if (filter.$expr) return { select: () => ({ lean: () => Promise.resolve(null) }) };
         return Promise.resolve(null);
       }),
       create: jest.fn().mockResolvedValue({}),
-      find: jest.fn().mockReturnValue(makeFindChain([{ _id: 'new-profile', firstName: 'No', lastName: 'Claim' }])),
+      find: makeProfileFindMock([], [{ _id: 'new-profile', firstName: 'No', lastName: 'Claim' }]),
     };
     const staffModel: any = {
+      find: makeStaffFindMock([], []),
       findOne: jest.fn((filter: any) => {
         // The by-login lookup (select().lean() chain) vs the by-_id lookup
         // the upsert path uses afterwards (plain .lean()) - both resolve to
@@ -148,39 +181,92 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
   it('leaves the normal department-only filter in place when no staffId can be resolved at all', async () => {
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      // Only the tenant-wide "has anyone ever synced" check should run
-      // here - truthy, so the lazy full-sync path stays out of this test's
-      // way. No staffId-scoped call should happen since none could be
-      // resolved for this requester.
-      exists: jest.fn().mockResolvedValue({ _id: 'tenant-has-profiles' }),
-      find: jest.fn().mockReturnValue(makeFindChain([])),
+      exists: jest.fn(),
+      find: makeProfileFindMock([], []),
     };
-    const staffModel: any = { findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }) };
+    const staffModel: any = {
+      find: makeStaffFindMock([], []),
+      findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }),
+    };
 
     const service = makeService(staffModel, teacherProfileModel);
     const requestingUser: any = { role: 'teacher', userId: String(new Types.ObjectId()), department: 'Secondary', campusId: String(new Types.ObjectId()) };
     await service.getTeacherProfiles(tenantId, requestingUser);
 
-    const staffScopedCalls = teacherProfileModel.exists.mock.calls.filter((c: any) => c[0]?.staffId);
-    expect(staffScopedCalls.length).toBe(0);
+    // No staffId could be resolved for this requester, so the per-requester
+    // self-heal's exists() check (the only place exists() is used) never runs.
+    expect(teacherProfileModel.exists).not.toHaveBeenCalled();
   });
 
-  it('lazily runs the equivalent of "Sync from HR" when this tenant has never had a single TeacherProfile, so a brand-new school\'s dropdowns are never permanently empty', async () => {
+  it('lazily syncs every teaching Staff record that has no TeacherProfile yet, so a brand-new school\'s dropdowns are never permanently empty', async () => {
+    const teacherStaffId = new Types.ObjectId();
+    const teacherStaffDoc = {
+      _id: teacherStaffId, tenantId, firstName: 'Synced', lastName: 'Teacher',
+      employeeId: 'EMP-500', erpRole: 'teacher', department: 'Secondary', campusId: null,
+      institutionId: new Types.ObjectId(),
+    };
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      exists: jest.fn().mockResolvedValue(null), // literally zero profiles tenant-wide
-      find: jest.fn().mockReturnValue(makeFindChain([{ _id: 'synced-profile', firstName: 'Synced', lastName: 'Teacher' }])),
+      findOne: jest.fn((filter: any) => {
+        if (filter.$expr) return { select: () => ({ lean: () => Promise.resolve(null) }) };
+        return Promise.resolve(null);
+      }),
+      create: jest.fn().mockResolvedValue({}),
+      // Zero profiles on file tenant-wide.
+      find: makeProfileFindMock([], [{ _id: 'synced-profile', firstName: 'Synced', lastName: 'Teacher' }]),
     };
-    const staffModel: any = { findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }) };
+    const staffModel: any = {
+      find: makeStaffFindMock([{ _id: teacherStaffId, erpRole: 'teacher' }], [teacherStaffDoc]),
+      findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }),
+    };
 
     const service = makeService(staffModel, teacherProfileModel);
-    const syncSpy = jest.spyOn(service, 'syncTeacherProfilesFromHR').mockResolvedValue({ scanned: 1, created: 1, updated: 0, skippedPossibleDuplicates: [] } as any);
-
     const requestingUser: any = { role: 'admin', userId: String(new Types.ObjectId()), campusId: String(new Types.ObjectId()) };
     const result = await service.getTeacherProfiles(tenantId, requestingUser);
 
-    expect(syncSpy).toHaveBeenCalledTimes(1);
-    expect(syncSpy).toHaveBeenCalledWith(tenantId, undefined);
+    expect(teacherProfileModel.create).toHaveBeenCalledTimes(1);
+    expect(teacherProfileModel.create.mock.calls[0][0]).toEqual(expect.objectContaining({ staffId: teacherStaffId }));
     expect(result).toEqual([{ _id: 'synced-profile', firstName: 'Synced', lastName: 'Teacher' }]);
+  });
+
+  it('still syncs a teaching Staff member with no TeacherProfile even when OTHER profiles already exist for this tenant (not just when the count is literally zero)', async () => {
+    // Regression test: an earlier version of this self-heal only looked at
+    // "does this tenant have ANY TeacherProfile at all" - which a school
+    // reaches the moment a single admin's own self-heal (#2 below) fires,
+    // long before most of its real teaching staff are synced. That single
+    // profile existing silently permanently hid everyone else.
+    const alreadySyncedStaffId = new Types.ObjectId();
+    const missingStaffId = new Types.ObjectId();
+    const missingStaffDoc = {
+      _id: missingStaffId, tenantId, firstName: 'Still', lastName: 'Missing',
+      employeeId: 'EMP-600', erpRole: 'teacher', department: 'Secondary', campusId: null,
+      institutionId: new Types.ObjectId(),
+    };
+    const teacherProfileModel: any = {
+      updateMany: jest.fn().mockResolvedValue({}),
+      exists: jest.fn().mockResolvedValue({ _id: 'requester-already-has-one' }), // self-heal #2 no-ops
+      findOne: jest.fn((filter: any) => {
+        if (filter.$expr) return { select: () => ({ lean: () => Promise.resolve(null) }) };
+        return Promise.resolve(null);
+      }),
+      create: jest.fn().mockResolvedValue({}),
+      // One profile already exists tenant-wide (for alreadySyncedStaffId) -
+      // the old "any profile at all" gate would have stopped here.
+      find: makeProfileFindMock([alreadySyncedStaffId], [{ _id: 'listing' }]),
+    };
+    const staffModel: any = {
+      find: makeStaffFindMock(
+        [{ _id: alreadySyncedStaffId, erpRole: 'teacher' }, { _id: missingStaffId, erpRole: 'teacher' }],
+        [missingStaffDoc],
+      ),
+      findOne: jest.fn(),
+    };
+
+    const service = makeService(staffModel, teacherProfileModel);
+    const requestingUser: any = { role: 'admin', staffId: String(new Types.ObjectId()), department: 'Secondary', campusId: String(new Types.ObjectId()) };
+    await service.getTeacherProfiles(tenantId, requestingUser);
+
+    expect(teacherProfileModel.create).toHaveBeenCalledTimes(1);
+    expect(teacherProfileModel.create.mock.calls[0][0]).toEqual(expect.objectContaining({ staffId: missingStaffId }));
   });
 });
