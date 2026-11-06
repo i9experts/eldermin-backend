@@ -133,6 +133,12 @@ export class PTMService {
     if (query.status) filter.status = query.status;
     if (query.studentId) filter.studentId = new Types.ObjectId(query.studentId);
     if (query.teacherId) filter.teacherId = new Types.ObjectId(query.teacherId);
+    // gradeLevel/sectionName are denormalized onto the meeting at creation
+    // time (see createMeeting) from the student's currentGrade/
+    // currentSection, so filtering a meeting list by class doesn't need a
+    // join back to Students.
+    if (query.grade) filter.gradeLevel = query.grade;
+    if (query.section) filter.sectionName = query.section;
     if (query.from || query.to) {
       filter.scheduledDate = {};
       if (query.from) filter.scheduledDate.$gte = new Date(query.from);
@@ -240,6 +246,20 @@ export class PTMService {
     if (!meeting) throw new NotFoundException('Meeting not found');
     await this.notifyGuardians(tenantId, meeting, 'Parent-teacher meeting cancelled');
     return meeting;
+  }
+
+  /** Admin-only hard delete - for a meeting created by mistake (wrong
+   * student/teacher picked, duplicate entry, a test entry, etc.). Deletion
+   * is deliberately not something a teacher can do to their own meetings
+   * (that's what cancelMeeting is for, which keeps an auditable record) -
+   * gated at the controller to TEACHING_ADMIN_ROLES only, so this method
+   * itself doesn't re-check requestingUser/ownership the way the other
+   * mutations above do. */
+  async deleteMeeting(id: string, tenantId: string) {
+    assertValidObjectId(id, 'meeting');
+    const meeting = await this.ptmModel.findOneAndDelete({ _id: id, tenantId: this.tid(tenantId) });
+    if (!meeting) throw new NotFoundException('Meeting not found');
+    return { deleted: true };
   }
 
   /** A teacher's own upcoming meetings - the personalized-scheduling view. */
