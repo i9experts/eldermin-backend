@@ -461,21 +461,32 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async getExamPapers(schoolSlug: string, query: any) {
+    const { page = 1, limit = 20, search } = query;
+    const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (query.subject) filter.subject = query.subject;
     if (query.grade) filter.grade = query.grade;
-    const papers = await this.examPaperModel.find(filter).sort({ createdAt: -1 }).lean();
+    if (search) filter.title = { $regex: this.escapeRegex(search), $options: 'i' };
+    // Previously an unbounded .find() with no page/limit/countDocuments at
+    // all - every exam paper and worksheet a school ever created loaded in
+    // one request, with no pager anywhere in the UI to even reach a second
+    // page once this got large. Mirrors getQuestions' paging above.
+    const [papers, total] = await Promise.all([
+      this.examPaperModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      this.examPaperModel.countDocuments(filter),
+    ]);
     // Real total marks per paper (sum of actual question marks), not a
     // separately-stored number that could silently drift out of sync
     // with the questions actually in the paper.
     const allQuestionIds = [...new Set(papers.flatMap((p: any) => p.sections.flatMap((s: any) => s.questionIds.map(String))))];
     const questions = await this.questionModel.find({ _id: { $in: allQuestionIds }, schoolSlug }).select('marks').lean();
     const marksById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
-    return papers.map((p: any) => ({
+    const data = papers.map((p: any) => ({
       ...p,
       totalMarks: p.sections.reduce((sum: number, s: any) => sum + s.questionIds.reduce((s2: number, qid: any) => s2 + (marksById.get(String(qid)) || 0), 0), 0),
       questionCount: p.sections.reduce((sum: number, s: any) => sum + s.questionIds.length, 0),
     }));
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
   async getExamPaperById(id: string, schoolSlug: string) {
