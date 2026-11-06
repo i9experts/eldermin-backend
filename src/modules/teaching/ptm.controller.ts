@@ -1,9 +1,9 @@
 import {
-  Controller, Get, Post, Patch,
+  Controller, Get, Post, Patch, Delete,
   Body, Param, Query, Request,
 } from '@nestjs/common';
 import { PTMService } from './ptm.service';
-import { STAFF_WRITE_ROLES } from '../../auth/role-sets';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../../auth/role-sets';
 import { projectForTeacher } from '../../students/teacher-student-projection.util';
 import { RolesOrModuleManage } from '../../roles/decorators/roles-or-module-manage.decorator';
 import { RequireModuleAccess } from '../../roles/decorators/require-module-access.decorator';
@@ -88,5 +88,16 @@ export class PTMController {
   @Patch(':id/cancel')
   async cancel(@Param('id') id: string, @Body() dto: { reason: string }, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.cancelMeeting(id, req.user.tenantId, dto?.reason, req.user.name, req.user));
+  }
+
+  // Admin-only: a meeting created by mistake (wrong student/teacher,
+  // duplicate, a test entry) - distinct from cancel, which a teacher can
+  // do to their own meetings and which keeps the record around with a
+  // cancelled status for the history view.
+  @RequireModuleAccess('teaching', 'ptm', 'manage')
+  @RolesOrModuleManage('teaching', TEACHING_ADMIN_ROLES)
+  @Delete(':id')
+  async remove(@Param('id') id: string, @Request() req: any) {
+    return this.service.deleteMeeting(id, req.user.tenantId);
   }
 }
