@@ -11,6 +11,12 @@ import { projectParentNazraReport } from '../parent-portal/parent-nazra.projecti
 // QaidaService/NazraService's getReportData() output - projectParentNazraReport
 // is pinned here; projectParentQaidaReport already has its own coverage.
 
+// The parent gate is `parentShared: { $ne: false }`: a record is hidden only when a teacher explicitly un-shared it; records that
+// predate the field (no parentShared at all) and new ones (default true) are visible.
+function hiddenFromParent(filter: any, progress: any): boolean {
+  return filter.parentShared?.$ne === false && progress.parentShared === false;
+}
+
 function makeQaidaProgress(overrides: Partial<any> = {}) {
   return {
     studentId: '507f1f77bcf86cd799439011',
@@ -25,7 +31,7 @@ function makeQaidaProgress(overrides: Partial<any> = {}) {
     overallRemarks: 'Doing well',
     recordType: 'full_history',
     priorRecordNote: 'Internal placement note',
-    parentShared: false,
+    parentShared: true,
     takhtis: [{ takhtiNumber: 1, status: 'mastered', startedDate: new Date(), masteredDate: new Date(), revisionCount: 0, attempts: [{ rating: 'mastered', remarks: 'great', assessedBy: 'Ms. Ayesha' }] }],
     currentTakhti: 2,
     overallStatus: 'in_progress',
@@ -37,7 +43,7 @@ function makeQaidaProgress(overrides: Partial<any> = {}) {
 function makeQaidaService(progress: any) {
   const progressModel: any = {
     findOne: jest.fn((filter: any) => {
-      const chain: any = { lean: () => Promise.resolve(filter.parentShared && !progress.parentShared ? null : progress) };
+      const chain: any = { lean: () => Promise.resolve(hiddenFromParent(filter, progress) ? null : progress) };
       return Object.assign(Promise.resolve(progress), chain);
     }),
   };
@@ -66,14 +72,19 @@ describe('QaidaService.updateParentShared', () => {
 });
 
 describe('QaidaService.getParentVisibleProgress', () => {
-  it('returns null when no progress has been shared', async () => {
+  it('returns null when the teacher has explicitly un-shared the progress', async () => {
     const progress = makeQaidaProgress({ parentShared: false });
     const service = makeQaidaService(progress);
     const result = await service.getParentVisibleProgress('507f1f77bcf86cd799439011', 'demo-school');
     expect(result).toBeNull();
   });
 
-  it('returns the progress doc once shared', async () => {
+  it('records that predate the share flag (no parentShared field) are visible to the parent', async () => {
+    const progress = makeQaidaProgress({ parentShared: undefined });
+    expect(await makeQaidaService(progress).getParentVisibleProgress('507f1f77bcf86cd799439011', 'demo-school')).toEqual(progress);
+  });
+
+  it('returns the progress doc when shared', async () => {
     const progress = makeQaidaProgress({ parentShared: true });
     const service = makeQaidaService(progress);
     const result = await service.getParentVisibleProgress('507f1f77bcf86cd799439011', 'demo-school');
@@ -95,7 +106,7 @@ function makeNazraProgress(overrides: Partial<any> = {}) {
     overallRemarks: 'Doing well',
     recordType: 'full_history',
     priorRecordNote: 'Internal placement note',
-    parentShared: false,
+    parentShared: true,
     paras: [{ paraNumber: 1, status: 'completed', startedDate: new Date(), completedDate: new Date(), revisionCount: 0, attempts: [{ rating: 'excellent', remarks: 'great' }] }],
     diaryEntries: [{ date: new Date(), sabaq: {} }],
     currentPara: 2,
@@ -108,7 +119,7 @@ function makeNazraProgress(overrides: Partial<any> = {}) {
 function makeNazraService(progress: any) {
   const progressModel: any = {
     findOne: jest.fn((filter: any) => {
-      const chain: any = { lean: () => Promise.resolve(filter.parentShared && !progress.parentShared ? null : progress) };
+      const chain: any = { lean: () => Promise.resolve(hiddenFromParent(filter, progress) ? null : progress) };
       return Object.assign(Promise.resolve(progress), chain);
     }),
   };
@@ -126,7 +137,12 @@ describe('NazraService.updateParentShared / getParentVisibleProgress', () => {
     expect(result.parentSharedDate).toBeInstanceOf(Date);
   });
 
-  it('getParentVisibleProgress returns null until shared', async () => {
+  it('getParentVisibleProgress: legacy records (no flag) are visible, an explicit un-share hides', async () => {
+    const legacy = makeNazraProgress({ parentShared: undefined });
+    expect(await makeNazraService(legacy).getParentVisibleProgress('507f1f77bcf86cd799439011', 'demo-school')).toEqual(legacy);
+  });
+
+  it('getParentVisibleProgress returns null once the teacher un-shares', async () => {
     const progress = makeNazraProgress({ parentShared: false });
     const service = makeNazraService(progress);
     expect(await service.getParentVisibleProgress('507f1f77bcf86cd799439011', 'demo-school')).toBeNull();

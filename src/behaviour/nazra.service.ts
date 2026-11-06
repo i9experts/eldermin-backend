@@ -266,7 +266,7 @@ export class NazraService {
   async getParentVisibleProgress(studentId: string, schoolSlug: string) {
     assertValidObjectId(studentId, 'student');
     const progress = await this.progressModel.findOne({
-      studentId: new Types.ObjectId(studentId), schoolSlug, parentShared: true,
+      studentId: new Types.ObjectId(studentId), schoolSlug, parentShared: { $ne: false },
     }).lean();
     return progress || null;
   }
