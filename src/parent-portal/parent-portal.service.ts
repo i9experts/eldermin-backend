@@ -51,6 +51,8 @@ import { ParentAccessControlService } from '../parent-access-control/parent-acce
 import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
 import { GamificationService } from '../gamification/gamification.service';
 import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
+import { QaidaService } from '../behaviour/qaida.service';
+import { projectParentQaidaReport } from './parent-qaida.projection';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
 export const MAX_DEVICES_PER_PARENT = 10;
@@ -101,6 +103,8 @@ export class ParentPortalService {
     // counts - see consent-request-results.spec.ts's own comment on this
     // fragility) keeps compiling and passing unchanged.
     @InjectModel(TermReportCard.name) private termReportCardModel: Model<TermReportCardDocument>,
+    // Qaida & Tajweed progress report - appended last for the same positional-construction reason as above.
+    private qaidaService: QaidaService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -726,6 +730,30 @@ export class ParentPortalService {
     if (!card) throw new NotFoundException('Result not found');
     return this.pdfService.generateExamReportCardPdf(
       schoolSlug, { assessmentId: String(card.assessmentId), studentId }, requestingUser.userId || 'parent');
+  }
+
+  // ── Qaida & Tajweed progress report ───────────────────────────
+  // Same data as the web's Qaida tracker report (QaidaService.getReportData), projected to a parent-safe shape. A child with no Qaida
+  // record yet is a normal state, not an error: `{ recorded: false }`.
+  async getQaidaReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
+    if (access.suspended) return { suspended: true, feature: 'tarbiyah_report', reason: access.reason || null };
+    // Tenant check: the guardian link is by id only; the child must also belong to this school.
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    try {
+      return { recorded: true, ...projectParentQaidaReport(await this.qaidaService.getReportData(studentId, schoolSlug)) };
+    } catch (e) {
+      if (e instanceof NotFoundException) return { recorded: false };
+      throw e;
+    }
+  }
+
+  /** The same PDF the web's Qaida tracker downloads (PdfService.generateQaidaReport). */
+  async downloadQaidaPdf(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    return this.pdfService.generateQaidaReport(schoolSlug, { studentId } as any, requestingUser.userId || 'parent');
   }
 
   // ── Dues ─────────────────────────────────────────────────────
