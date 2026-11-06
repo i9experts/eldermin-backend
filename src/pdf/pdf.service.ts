@@ -10,7 +10,7 @@ import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules
 import { FinanceService } from '../finance/finance.service';
 import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
-import { escapeHtml, renderRichTextField, urduFontFaceCss } from '../common/utils/rich-text.util';
+import { escapeHtml, renderRichTextField, urduFontFaceCss, containsArabicScript } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
 import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
@@ -359,6 +359,15 @@ const tarbiyahTraitLabel = (key: string): string =>
 const REPORT_CARD_TEMPLATE = (data: any) => {
   const included = data.sectionsIncluded || {};
   const esc = escapeHtml;
+  // Free-text fields here (teacher observations, invigilator remarks/names,
+  // home-tutoring notes, feedback) are staff-entered and can be Urdu rather
+  // than English. Without an explicit rtl wrap + a font that actually
+  // shapes Arabic script, Puppeteer/Chromium falls back to whatever font
+  // the container has for those codepoints, which renders each letter in
+  // its isolated form, unjoined and in raw (unreordered) storage order -
+  // exactly the "invigilator name not showing properly" symptom reported.
+  // Same fix already used for the Class Diary PDF (rich-text.util.ts).
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
 
   const gradeTone = (grade: string) => {
     const g = (grade || '').charAt(0).toUpperCase();
@@ -394,7 +403,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   }).join('');
 
   const tagList = (items: string[], cls: string) =>
-    `<div class="tags-row">${items.map((s) => `<span class="tag ${cls}">${esc(s)}</span>`).join('')}</div>`;
+    `<div class="tags-row">${items.map((s) => `<span class="tag ${cls}">${rtl(s)}</span>`).join('')}</div>`;
 
   const tarbiyahSection = included.tarbiyah ? (() => {
     const t = data.tarbiyah;
@@ -409,10 +418,10 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
       <div class="summary-card"><div class="summary-num">${t.overallPercentage ?? '—'}%</div><div class="summary-label">Percentage</div></div>
     </div>
     ${traitRows ? `<p class="note" style="margin-top:10px"><strong>Trait Scores</strong></p><div class="tarb-grid">${traitRows}</div>` : ''}
-    ${t.teacherObservations ? `<p class="note"><strong>Teacher's Observations:</strong> ${esc(t.teacherObservations)}</p>` : ''}
+    ${t.teacherObservations ? `<p class="note"><strong>Teacher's Observations:</strong> ${rtl(t.teacherObservations)}</p>` : ''}
     ${(t.areasOfStrength || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Areas of Strength</strong></p>${tagList(t.areasOfStrength, 'tag-strong')}` : ''}
     ${(t.areasForImprovement || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Areas for Improvement</strong></p>${tagList(t.areasForImprovement, 'tag-weak')}` : ''}
-    ${(t.recommendedActions || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Recommended Actions</strong></p><ul style="margin:0 0 12px 18px;padding:0">${t.recommendedActions.map((a: string) => `<li class="note" style="margin-bottom:2px">${esc(a)}</li>`).join('')}</ul>` : ''}
+    ${(t.recommendedActions || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Recommended Actions</strong></p><ul style="margin:0 0 12px 18px;padding:0">${t.recommendedActions.map((a: string) => `<li class="note" style="margin-bottom:2px">${rtl(a)}</li>`).join('')}</ul>` : ''}
     `;
   })() : '';
 
@@ -464,16 +473,16 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Invigilator Assessments</strong></p>
     ${invigilatorEntries.map((a: any) => `
       <div class="feedback-item">
-        <p class="feedback-text">${a.overallScore != null ? `<strong>${a.overallScore}</strong> · ` : ''}${esc(a.overallRemarks) || 'No remarks recorded'}</p>
-        <p class="feedback-meta">${esc(a.invigilatorName) || 'Invigilator'}${a.invigilatorType ? ` (${esc(a.invigilatorType)})` : ''} · ${fmtDate(a.visitDate)}</p>
+        <p class="feedback-text">${a.overallScore != null ? `<strong>${a.overallScore}</strong> · ` : ''}${rtl(a.overallRemarks) || 'No remarks recorded'}</p>
+        <p class="feedback-meta">${rtl(a.invigilatorName) || 'Invigilator'}${a.invigilatorType ? ` (${esc(a.invigilatorType)})` : ''} · ${fmtDate(a.visitDate)}</p>
       </div>`).join('')}
     ` : ''}
     ${homeLogEntries.length ? `
     <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Parent Home-Tutoring Log</strong></p>
     ${homeLogEntries.map((h: any) => `
       <div class="feedback-item">
-        <p class="feedback-text">${h.takhtiNumber ? `Takhti ${h.takhtiNumber}` : h.paraNumber ? `Para ${h.paraNumber}` : ''}${h.pageFrom ? ` · ${esc(h.pageFrom)}${h.pageTo ? `–${esc(h.pageTo)}` : ''}` : ''}${h.notes ? ` — ${esc(h.notes)}` : ''}</p>
-        <p class="feedback-meta">${esc(h.tutorName) || 'Home tutor'} · ${fmtDate(h.date)}</p>
+        <p class="feedback-text">${h.takhtiNumber ? `Takhti ${h.takhtiNumber}` : h.paraNumber ? `Para ${h.paraNumber}` : ''}${h.pageFrom ? ` · ${esc(h.pageFrom)}${h.pageTo ? `–${esc(h.pageTo)}` : ''}` : ''}${h.notes ? ` — ${rtl(h.notes)}` : ''}</p>
+        <p class="feedback-meta">${rtl(h.tutorName) || 'Home tutor'} · ${fmtDate(h.date)}</p>
       </div>`).join('')}
     ` : ''}` : '';
 
@@ -542,8 +551,8 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     <div class="section-title">Teacher Feedback This Term</div>
     ${entries.map((f: any) => `
       <div class="feedback-item">
-        <p class="feedback-text">${f.subject ? `<strong>${esc(f.subject)}:</strong> ` : ''}${esc(f.text)}</p>
-        <p class="feedback-meta">${esc(f.author) || 'Staff'}${f.date ? ' · ' + new Date(f.date).toLocaleDateString('en-GB') : ''}</p>
+        <p class="feedback-text">${f.subject ? `<strong>${esc(f.subject)}:</strong> ` : ''}${rtl(f.text)}</p>
+        <p class="feedback-meta">${rtl(f.author) || 'Staff'}${f.date ? ' · ' + new Date(f.date).toLocaleDateString('en-GB') : ''}</p>
       </div>`).join('')}`;
   })() : '';
 
@@ -562,8 +571,9 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
 <head>
 <meta charset="UTF-8"/>
 <style>
+  ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; background: #fff; }
+  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 297mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
   .content { padding: 14mm 16mm 16mm; }
@@ -721,10 +731,10 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
 
   ${data.remarks ? `
   <div class="section-title">Class Teacher Remarks</div>
-  <div class="remarks-box"><div class="remarks-text">${esc(data.remarks)}</div></div>` : ''}
+  <div class="remarks-box"><div class="remarks-text">${rtl(data.remarks)}</div></div>` : ''}
   ${data.principalRemarks ? `
   <div class="section-title">Principal's Remarks</div>
-  <div class="remarks-box"><div class="remarks-text">${esc(data.principalRemarks)}</div></div>` : ''}
+  <div class="remarks-box"><div class="remarks-text">${rtl(data.principalRemarks)}</div></div>` : ''}
 
   <div class="sig-row">
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
@@ -755,6 +765,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
  * progress ring for the headline percentage instead of a plain number. */
 const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   const esc = escapeHtml;
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
   const gradeTone = (grade: string) => {
     const g = (grade || '').charAt(0).toUpperCase();
     return g === 'A' ? { fg: '#15803D', bg: '#DCFCE7', bar: '#16A34A' }
@@ -795,8 +806,9 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
 <head>
 <meta charset="UTF-8"/>
 <style>
+  ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; background: #fff; }
+  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 297mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
   .content { padding: 14mm 16mm 16mm; }
@@ -950,9 +962,9 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
     </div>` : ''}
 
     ${data.classTeacherRemarks ? `
-    <div class="remarks-box"><div class="remarks-label">Class Teacher Remarks</div><div class="remarks-text">${esc(data.classTeacherRemarks)}</div></div>` : ''}
+    <div class="remarks-box"><div class="remarks-label">Class Teacher Remarks</div><div class="remarks-text">${rtl(data.classTeacherRemarks)}</div></div>` : ''}
     ${data.principalRemarks ? `
-    <div class="remarks-box"><div class="remarks-label">Principal's Remarks</div><div class="remarks-text">${esc(data.principalRemarks)}</div></div>` : ''}
+    <div class="remarks-box"><div class="remarks-label">Principal's Remarks</div><div class="remarks-text">${rtl(data.principalRemarks)}</div></div>` : ''}
 
     <div class="sig-row">
       <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>

@@ -161,4 +161,26 @@ describe('PdfService.generateReportCard', () => {
     expect(html).toContain('Month-by-Month');
     expect(html).toContain('September 2025');
   });
+
+  it('wraps Urdu/Arabic free text in dir="rtl" and embeds the Noto Nastaliq Urdu font, so letters shape and join correctly instead of rendering as disconnected isolated glyphs in whatever font the container happens to have', async () => {
+    const urdu = {
+      ...TERM_REPORT_CARD,
+      sectionsIncluded: { ...TERM_REPORT_CARD.sectionsIncluded, qaida: true },
+      tarbiyah: { ...TERM_REPORT_CARD.tarbiyah, teacherObservations: 'بہتر ہے مزید محنت کی ضرورت ہے۔' },
+      qaidaNazraExtras: {
+        invigilatorAssessments: [{ visitDate: '2025-09-25', invigilatorName: 'مولانا مسعود صاحب', invigilatorType: 'external', overallScore: 3.4, overallRemarks: 'بہتر ہے مزید محنت کی ضرورت ہے۔' }],
+        homeLog: [],
+      },
+      teacherFeedback: [{ source: 'tarbiyah', text: 'بہتر ہے مزید محنت کی ضرورت ہے۔', author: 'مولانا مسعود صاحب', date: '2025-09-25' }],
+      classTeacherRemarks: 'ماشاءاللہ بہت اچھا۔',
+    };
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: urdu });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain(`@font-face`);
+    expect(html).toContain(`'Noto Nastaliq Urdu'`);
+    expect(html).toContain(`<span dir="rtl">مولانا مسعود صاحب</span>`);
+    expect(html).toContain(`<span dir="rtl">بہتر ہے مزید محنت کی ضرورت ہے۔</span>`);
+    expect(html).toContain(`<div class="remarks-text"><span dir="rtl">ماشاءاللہ بہت اچھا۔</span></div>`);
+  });
 });
