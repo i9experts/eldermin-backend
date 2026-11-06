@@ -36,7 +36,10 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     };
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      exists: jest.fn().mockResolvedValue(null), // no profile yet
+      // Discriminate by filter shape: the tenant-wide "has anyone ever
+      // synced" check (no staffId key) says yes, so only the staffId-scoped
+      // self-heal check below is the one under test here.
+      exists: jest.fn((filter: any) => Promise.resolve(filter.staffId ? null : { _id: 'tenant-has-profiles' })),
       // Two different findOne() shapes the upsert path uses: a plain
       // await (existing-by-staffId check) and a .select().lean() chain
       // (duplicate-name check) - both resolve to "nothing found" here.
@@ -116,7 +119,7 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     };
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      exists: jest.fn().mockResolvedValue(null), // no profile yet
+      exists: jest.fn((filter: any) => Promise.resolve(filter.staffId ? null : { _id: 'tenant-has-profiles' })),
       findOne: jest.fn((filter: any) => {
         if (filter.$expr) return { select: () => ({ lean: () => Promise.resolve(null) }) };
         return Promise.resolve(null);
@@ -145,7 +148,11 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
   it('leaves the normal department-only filter in place when no staffId can be resolved at all', async () => {
     const teacherProfileModel: any = {
       updateMany: jest.fn().mockResolvedValue({}),
-      exists: jest.fn(),
+      // Only the tenant-wide "has anyone ever synced" check should run
+      // here - truthy, so the lazy full-sync path stays out of this test's
+      // way. No staffId-scoped call should happen since none could be
+      // resolved for this requester.
+      exists: jest.fn().mockResolvedValue({ _id: 'tenant-has-profiles' }),
       find: jest.fn().mockReturnValue(makeFindChain([])),
     };
     const staffModel: any = { findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }) };
@@ -154,6 +161,26 @@ describe('TeachingService.getTeacherProfiles — self-heal for the requesting te
     const requestingUser: any = { role: 'teacher', userId: String(new Types.ObjectId()), department: 'Secondary', campusId: String(new Types.ObjectId()) };
     await service.getTeacherProfiles(tenantId, requestingUser);
 
-    expect(teacherProfileModel.exists).not.toHaveBeenCalled();
+    const staffScopedCalls = teacherProfileModel.exists.mock.calls.filter((c: any) => c[0]?.staffId);
+    expect(staffScopedCalls.length).toBe(0);
+  });
+
+  it('lazily runs the equivalent of "Sync from HR" when this tenant has never had a single TeacherProfile, so a brand-new school\'s dropdowns are never permanently empty', async () => {
+    const teacherProfileModel: any = {
+      updateMany: jest.fn().mockResolvedValue({}),
+      exists: jest.fn().mockResolvedValue(null), // literally zero profiles tenant-wide
+      find: jest.fn().mockReturnValue(makeFindChain([{ _id: 'synced-profile', firstName: 'Synced', lastName: 'Teacher' }])),
+    };
+    const staffModel: any = { findOne: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(null) }) }) };
+
+    const service = makeService(staffModel, teacherProfileModel);
+    const syncSpy = jest.spyOn(service, 'syncTeacherProfilesFromHR').mockResolvedValue({ scanned: 1, created: 1, updated: 0, skippedPossibleDuplicates: [] } as any);
+
+    const requestingUser: any = { role: 'admin', userId: String(new Types.ObjectId()), campusId: String(new Types.ObjectId()) };
+    const result = await service.getTeacherProfiles(tenantId, requestingUser);
+
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+    expect(syncSpy).toHaveBeenCalledWith(tenantId, undefined);
+    expect(result).toEqual([{ _id: 'synced-profile', firstName: 'Synced', lastName: 'Teacher' }]);
   });
 });

@@ -208,6 +208,24 @@ export class TeachingService {
 
   async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
     const tid = this.tid(tenantId);
+
+    // Self-healing #0: nobody has ever clicked "Sync from HR" for this
+    // school yet, so every "pick a teacher" dropdown across the Teaching
+    // module (Class Diary, Homework, Syllabus, Timetable, PTM...) shows
+    // "No teacher profiles yet" even though HR's Staff roster already has
+    // real teachers on it - reported from the PTM "Schedule Meeting"
+    // dropdown, used by whoever is scheduling the meeting, not necessarily
+    // one of the teachers themselves, so the self-heal below (which only
+    // ever creates the REQUESTER's own profile) never fires for them. Runs
+    // the same upsert "Sync from HR" does, but only the one time this
+    // tenant has literally zero profiles - cheap after that, since this
+    // count stays above zero from then on (the self-heals below keep
+    // adding to it even if every profile were somehow deleted again).
+    const anyProfileExists = await this.teacherProfileModel.exists({ tenantId: tid });
+    if (!anyProfileExists) {
+      await this.syncTeacherProfilesFromHR(tenantId, (requestingUser as any)?.institutionId);
+    }
+
     // Self-healing: updateTeacherProfile used to $set whatever the Edit
     // Teaching Profile form sent for campusId with no sanitization at all
     // (unlike createTeacherProfile's ternary below) - clearing the Campus
