@@ -52,6 +52,8 @@ import { ParentFeatureKey } from '../parent-access-control/parent-feature.consta
 import { GamificationService } from '../gamification/gamification.service';
 import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
 import { QaidaService } from '../behaviour/qaida.service';
+import { NazraService } from '../behaviour/nazra.service';
+import { projectParentNazraReport } from './parent-nazra.projection';
 import { projectParentQaidaReport } from './parent-qaida.projection';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
@@ -105,6 +107,8 @@ export class ParentPortalService {
     @InjectModel(TermReportCard.name) private termReportCardModel: Model<TermReportCardDocument>,
     // Qaida & Tajweed progress report - appended last for the same positional-construction reason as above.
     private qaidaService: QaidaService,
+    // Nazra (Qur'an reading) progress report - appended last, same reason.
+    private nazraService: NazraService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -743,6 +747,22 @@ export class ParentPortalService {
     if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
     try {
       return { recorded: true, ...projectParentQaidaReport(await this.qaidaService.getReportData(studentId, schoolSlug)) };
+    } catch (e) {
+      if (e instanceof NotFoundException) return { recorded: false };
+      throw e;
+    }
+  }
+
+  // ── Nazra progress report ─────────────────────────────────────
+  // Same data as the web's Nazra tracker (NazraService.getReportData), projected to a parent-safe shape. A child who has not reached
+  // Nazra yet has no record: `{ recorded: false }`.
+  async getNazraReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
+    if (access.suspended) return { suspended: true, feature: 'tarbiyah_report', reason: access.reason || null };
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    try {
+      return { recorded: true, ...projectParentNazraReport(await this.nazraService.getReportData(studentId, schoolSlug)) };
     } catch (e) {
       if (e instanceof NotFoundException) return { recorded: false };
       throw e;

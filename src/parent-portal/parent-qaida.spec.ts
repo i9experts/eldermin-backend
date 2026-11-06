@@ -28,8 +28,9 @@ function build(opts: { studentInSchool?: boolean; suspended?: boolean; report?: 
   models[0] = studentModel;
   const parentAccess: any = { checkFeature: jest.fn(() => Promise.resolve(opts.suspended ? { suspended: true, reason: 'paused' } : { suspended: false })) };
   const qaidaService: any = { getReportData: jest.fn(opts.report ?? (() => Promise.resolve(fullReport()))) };
+  const nazraService: any = {};
   const pdfService: any = { generateQaidaReport: jest.fn(() => Promise.resolve(Buffer.from('%PDF-1.4'))) };
-  const svc: any = new (ParentPortalService as any)(...models, {}, {}, {}, pdfService, parentAccess, {}, {}, {}, {}, qaidaService);
+  const svc: any = new (ParentPortalService as any)(...models, {}, {}, {}, pdfService, parentAccess, {}, {}, {}, {}, qaidaService, nazraService);
   return { svc, qaidaService, pdfService, studentModel, parentAccess };
 }
 
