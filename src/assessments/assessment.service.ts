@@ -2544,7 +2544,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async getReportCards(schoolSlug: string, query: ReportCardQueryDto) {
-    const { page, limit, assessmentId, studentId, grade, academicYear, published } = query;
+    const { page, limit, assessmentId, studentId, grade, academicYear, published, search } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -2553,11 +2553,36 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     if (grade) filter.grade = grade;
     if (academicYear) filter.academicYear = academicYear;
     if (published !== undefined) filter.published = published;
+    // The "master search" on the Results list needs to reach every student
+    // across every page/assessment, not just whatever happens to already be
+    // loaded client-side - matched the same way Question Bank search does
+    // (escaped, case-insensitive, name or roll number).
+    if (search) {
+      const safeSearch = this.escapeRegex(search.trim());
+      filter.$or = [
+        { studentName: { $regex: safeSearch, $options: 'i' } },
+        { rollNumber: { $regex: safeSearch, $options: 'i' } },
+      ];
+    }
 
     const [data, total] = await Promise.all([
-      this.reportCardModel.find(filter).sort({ classPosition: 1 }).skip(skip).limit(limit!),
+      this.reportCardModel.find(filter).sort({ classPosition: 1 }).skip(skip).limit(limit!).lean(),
       this.reportCardModel.countDocuments(filter),
     ]);
+
+    // Report cards are a marks snapshot - they never stored a student photo.
+    // Join it in here (same denormalization pattern the PDF generator uses)
+    // so the Results list can show a real profile picture instead of only
+    // initials, without having to backfill/duplicate it onto every card.
+    if (data.length) {
+      const students = await this.studentModel
+        .find({ _id: { $in: data.map((rc: any) => rc.studentId) }, schoolSlug })
+        .select('photo')
+        .lean();
+      const photoByStudentId = new Map(students.map((s: any) => [String(s._id), s.photo]));
+      for (const rc of data as any[]) rc.studentPhoto = photoByStudentId.get(String(rc.studentId)) || null;
+    }
+
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit!) } };
   }
 

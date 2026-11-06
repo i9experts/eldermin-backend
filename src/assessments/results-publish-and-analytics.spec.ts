@@ -18,6 +18,7 @@ function makeService(overrides: Record<string, any> = {}) {
   svc.questionModel = overrides.questionModel ?? { find: () => ({ select: () => ({ lean: async () => [] }) }) };
   svc.reportCardModel = overrides.reportCardModel;
   svc.termReportCardModel = overrides.termReportCardModel;
+  svc.studentModel = overrides.studentModel ?? { find: () => ({ select: () => ({ lean: async () => [] }) }) };
   return svc;
 }
 
@@ -101,5 +102,62 @@ describe('AssessmentService — unpublishTermReportCards', () => {
     const svc = makeService({ termReportCardModel });
     await svc.unpublishTermReportCards({ schoolSlug: 's', academicYear: '2025-26', term: 'Term 1' });
     expect(capturedFilter).toEqual({ schoolSlug: 's', academicYear: '2025-26', term: 'Term 1' });
+  });
+});
+
+describe('AssessmentService — getReportCards master search + student photo', () => {
+  const leanChain = (v: any) => ({ sort: () => ({ skip: () => ({ limit: () => ({ lean: async () => v }) }) }) });
+
+  it('matches by student name or roll number, case-insensitively, when search is provided', async () => {
+    let capturedFilter: any = null;
+    const reportCardModel: any = {
+      find: (filter: any) => { capturedFilter = filter; return leanChain([]); },
+      countDocuments: async () => 0,
+    };
+    const svc = makeService({ reportCardModel });
+    await svc.getReportCards('demo-school', { search: 'abdullah', page: 1, limit: 20 } as any);
+    expect(capturedFilter.$or).toEqual([
+      { studentName: { $regex: 'abdullah', $options: 'i' } },
+      { rollNumber: { $regex: 'abdullah', $options: 'i' } },
+    ]);
+  });
+
+  it('escapes regex special characters in the search term so they are matched literally', async () => {
+    let capturedFilter: any = null;
+    const reportCardModel: any = {
+      find: (filter: any) => { capturedFilter = filter; return leanChain([]); },
+      countDocuments: async () => 0,
+    };
+    const svc = makeService({ reportCardModel });
+    await svc.getReportCards('demo-school', { search: 'a.b*c(d)', page: 1, limit: 20 } as any);
+    expect(capturedFilter.$or[0].studentName.$regex).toBe('a\\.b\\*c\\(d\\)');
+  });
+
+  it('leaves $or out of the filter entirely when no search term is given', async () => {
+    let capturedFilter: any = null;
+    const reportCardModel: any = {
+      find: (filter: any) => { capturedFilter = filter; return leanChain([]); },
+      countDocuments: async () => 0,
+    };
+    const svc = makeService({ reportCardModel });
+    await svc.getReportCards('demo-school', { page: 1, limit: 20 } as any);
+    expect(capturedFilter.$or).toBeUndefined();
+  });
+
+  it('joins each report card with its student photo, so the Results list can show a real profile picture', async () => {
+    const reportCardModel: any = {
+      find: () => leanChain([
+        { _id: 'rc1', studentId: 's1', studentName: 'Ayesha' },
+        { _id: 'rc2', studentId: 's2', studentName: 'Bilal' },
+      ]),
+      countDocuments: async () => 2,
+    };
+    const studentModel: any = {
+      find: () => ({ select: () => ({ lean: async () => [{ _id: 's1', photo: 'https://cdn/ayesha.jpg' }, { _id: 's2', photo: null }] }) }),
+    };
+    const svc = makeService({ reportCardModel, studentModel });
+    const result = await svc.getReportCards('demo-school', { page: 1, limit: 20 } as any);
+    expect(result.data[0].studentPhoto).toBe('https://cdn/ayesha.jpg');
+    expect(result.data[1].studentPhoto).toBeNull();
   });
 });
