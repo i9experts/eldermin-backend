@@ -384,6 +384,27 @@ export class BehaviourService {
     return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { ...stripProtectedFields(body), ...stampUpdate(requestingUser) } }, { new: true });
   }
 
+  /**
+   * DELETE /behaviour/records/:id. Same two-layer author-or-admin rule as updateRecord above (B0 denyOrLog policy, then the always-enforced
+   * D7 hard rule) - a teacher may only delete a record they themselves logged; admin roles and an elevated custom-role grant may delete any.
+   */
+  async deleteRecord(id: string, schoolSlug: string, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'behaviour record');
+    const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Record not found');
+    if (access?.isTeacher && !access.elevated && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
+      denyOrLog(access, requestingUser, 'teacher_deletes_other_record', 'You can only delete behaviour records you logged yourself.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated && !isOwnByAuthor(requestingUser as any, existing, 'reportedById', 'reportedBy')) {
+        throw new ForbiddenException('You can only delete behaviour records you logged yourself');
+      }
+    }
+    await this.recordModel.deleteOne({ _id: id, schoolSlug });
+    return { deleted: true };
+  }
+
   async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
     if (access?.isTeacher) {
@@ -770,6 +791,40 @@ export class BehaviourService {
       });
     }
     return updated;
+  }
+
+  /**
+   * DELETE /behaviour/tarbiyah/:id. Same author-or-admin-or-coordinator rule as updateTarbiyahAssessment above. A parent-shared assessment
+   * must be unshared first (same PUT this tab's own Share toggle already uses) - deleting it silently out from under a parent who has
+   * already seen it would leave them with a notification/report that now 404s with no explanation.
+   */
+  async deleteTarbiyahAssessment(id: string, schoolSlug: string, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'tarbiyah assessment');
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared campusId').lean();
+    if (!existing) throw new NotFoundException('Assessment not found');
+    if (existing.parentShared) {
+      throw new BadRequestException('This assessment is shared with the parent - unshare it first, then delete.');
+    }
+    const callerRole = (requestingUser as any)?.role || (requestingUser as any)?.primaryRole;
+    let coordinatorMayDelete = false;
+    if (callerRole === UserRole.ACADEMIC_COORDINATOR) {
+      const mine = (requestingUser as any)?.campusId ? String((requestingUser as any).campusId) : '';
+      if (mine && existing.campusId && String(existing.campusId) !== mine) {
+        throw new ForbiddenException('This assessment belongs to another campus.');
+      }
+      coordinatorMayDelete = true;
+    }
+    if (access && !access.elevated && !coordinatorMayDelete && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
+      denyOrLog(access, requestingUser, 'tarbiyah_delete_not_author_or_admin', 'Only the author of this assessment or an administrator can delete it.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated && !coordinatorMayDelete && !isOwnByAuthor(requestingUser as any, existing, 'assessedById', 'assessedBy')) {
+        throw new ForbiddenException('You can only delete Tarbiyah assessments you recorded yourself');
+      }
+    }
+    await this.tarbiyahModel.deleteOne({ _id: id, schoolSlug });
+    return { deleted: true };
   }
 
   // ============================================================

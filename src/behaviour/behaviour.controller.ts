@@ -100,6 +100,14 @@ export class BehaviourController {
   }
 
   @BehaviourAccess('record_write', 'records')
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Delete('records/:id')
+  async deleteRecord(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.deleteRecord(id, schoolSlug, requestingUser, access);
+  }
+
+  @BehaviourAccess('record_write', 'records')
   // D7: was unguarded (any token, parents and students included). Same guard as create / edit; the web's
   // Resolve button is shown to every role with the Behaviour page and keeps working for them.
   @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
@@ -189,6 +197,14 @@ export class BehaviourController {
   async updateTarbiyah(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug, requestingUser, access } = this.ctx(req);
     return this.service.updateTarbiyahAssessment(id, schoolSlug, dto, requestingUser, access);
+  }
+
+  @BehaviourAccess('record_write', 'tarbiyah')
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Delete('tarbiyah/:id')
+  async deleteTarbiyah(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser, access } = this.ctx(req);
+    return this.service.deleteTarbiyahAssessment(id, schoolSlug, requestingUser, access);
   }
 
   // ── Counselling ───────────────────────────────────────────────
