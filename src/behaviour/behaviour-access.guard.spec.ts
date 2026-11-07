@@ -60,8 +60,8 @@ afterEach(() => { warn.mockRestore(); if (ORIGINAL === undefined) delete process
 const events = () => warn.mock.calls.map(c => { try { return JSON.parse(String(c[0])); } catch { return null; } }).filter(e => e?.event === 'behaviour_guard');
 
 describe('BehaviourController route policy table', () => {
-  it('covers all 28 routes and every one has exactly one policy', () => {
-    expect(handlers.length).toBe(28);
+  it('covers all 30 routes and every one has exactly one policy', () => {
+    expect(handlers.length).toBe(30);
     for (const h of handlers) expect(policyOf(h)).toBeDefined();
   });
 
