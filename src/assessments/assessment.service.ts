@@ -1531,9 +1531,25 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       this.markModel.countDocuments(base),
     ]);
 
-    // Performance stats across all completed assessments
+    // Performance stats across finalized assessments only. MarkEntry has no
+    // status of its own - a teacher can enter marks as soon as an assessment
+    // is "ongoing", well before it's marked completed/result_published, and
+    // those entries used to count toward this summary immediately. That made
+    // the Dashboard's Grade-wise Performance look fully populated with real
+    // pass/fail numbers while the same assessments still sat as drafts/not
+    // yet generated in the Planner - confusing, and not a trustworthy "this
+    // is the finalized result" number. Join back to the assessment and only
+    // count marks whose assessment has actually been completed or published.
     const avgPerformance = await this.markModel.aggregate([
       { $match: { ...base, obtainedMarks: { $ne: null }, isAbsent: false } },
+      { $lookup: {
+        from: 'assessments',
+        localField: 'assessmentId',
+        foreignField: '_id',
+        as: 'assessment',
+      }},
+      { $unwind: '$assessment' },
+      { $match: { 'assessment.status': { $in: ['completed', 'result_published'] } } },
       { $group: {
         _id: '$grade',
         avgPct: { $avg: '$percentage' },
