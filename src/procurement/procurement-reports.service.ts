@@ -114,24 +114,32 @@ export class ProcurementReportsService {
     if (filters.campusId) poBase.campusId = filters.campusId;
     const prBase: any = { schoolSlug, ...dateRangeMatch(filters) };
     if (filters.campusId) prBase.campusId = filters.campusId;
+    // Spend/payment figures only count POs that are real committed spend -
+    // a draft nobody has approved yet, or a PO cancelled via Reverse PO,
+    // isn't money the school has actually spent or owes. `totalPOs` above
+    // deliberately still counts every PO regardless of status (it answers
+    // "how many POs exist", not "how much have we spent"); the Requisition
+    // Status report elsewhere in this file already tracks cancelled as its
+    // own distinct bucket, confirming the convention this was missing.
+    const spendBase: any = { ...poBase, status: { $nin: ['draft', 'cancelled'] } };
 
     const [totalPRs, totalPOs, activeVendors, totalSpendAgg, pendingPaymentsAgg, byCategory, byVendor] = await Promise.all([
       this.prModel.countDocuments(prBase),
       this.poModel.countDocuments(poBase),
       this.vendorModel.countDocuments({ schoolSlug, status: 'active' }),
-      this.poModel.aggregate([{ $match: poBase }, { $group: { _id: null, total: { $sum: '$totalAmount' } } }]),
+      this.poModel.aggregate([{ $match: spendBase }, { $group: { _id: null, total: { $sum: '$totalAmount' } } }]),
       this.poModel.aggregate([
-        { $match: { ...poBase, isPaid: false } },
+        { $match: { ...spendBase, isPaid: false } },
         { $group: { _id: null, total: { $sum: '$balanceDue' } } },
       ]),
       this.poModel.aggregate([
-        { $match: poBase },
+        { $match: spendBase },
         { $group: { _id: '$category', total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
         { $sort: { total: -1 } },
         { $limit: 10 },
       ]),
       this.poModel.aggregate([
-        { $match: poBase },
+        { $match: spendBase },
         { $group: { _id: '$vendorName', total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
         { $sort: { total: -1 } },
         { $limit: 10 },

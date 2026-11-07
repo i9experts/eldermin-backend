@@ -134,6 +134,22 @@ export class FinanceService {
     const monthStart = new Date(new Date().setDate(1));
     const monthEnd = new Date(new Date(monthStart).setMonth(monthStart.getMonth() + 1));
 
+    // Payment has no academicYear of its own (every payment is tied to an
+    // invoice via a required invoiceId, and inherits the year from there).
+    // Without this join, switching the dashboard's academic-year filter
+    // changed the invoiced/outstanding figures but left "Total Collected"
+    // as an all-time, all-years sum - for any school with more than one
+    // year of history the Fee Collection Rate (collected/invoiced) could
+    // silently exceed 100% or otherwise stop meaning anything. Skipped
+    // entirely when no year is selected, since there's nothing to join for.
+    const academicYearJoinStages: any[] = academicYear
+      ? [
+          { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'invoice' } },
+          { $unwind: '$invoice' },
+          { $match: { 'invoice.academicYear': academicYear } },
+        ]
+      : [];
+
     const [
       totalInvoiced, totalCollected, totalOutstanding,
       collectedThisMonth, expensesThisMonth, totalExpenses,
@@ -141,12 +157,20 @@ export class FinanceService {
       invoicesByStatus, recentPayments, expenseByCategory,
       bankBalances,
     ] = await Promise.all([
+      // Excludes cancelled/waived the same way the rest of this file does
+      // (e.g. resolveRollForward, generateInvoices below) - without it, a
+      // cancelled invoice or one a parent was waived out of still counted
+      // as real invoiced revenue, inflating the headline figure (and, with
+      // it, the Fee Collection Rate shown on the main Home dashboard).
+      // Drafts are excluded too - an invoice nobody has sent to a parent
+      // yet isn't revenue.
       this.invoiceModel.aggregate([
-        { $match: { ...base, isDeleted: { $ne: true } } },
+        { $match: { ...base, isDeleted: { $ne: true }, status: { $nin: ['draft', 'cancelled', 'waived'] } } },
         { $group: { _id: null, total: { $sum: '$totalAmount' } } },
       ]),
       this.paymentModel.aggregate([
         { $match: { schoolSlug, isRefunded: { $ne: true } } },
+        ...academicYearJoinStages,
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       // rolledForwardInto excluded - that invoice's balance is already
@@ -159,6 +183,7 @@ export class FinanceService {
       ]),
       this.paymentModel.aggregate([
         { $match: { schoolSlug, paymentDate: { $gte: monthStart, $lt: monthEnd }, isRefunded: { $ne: true } } },
+        ...academicYearJoinStages,
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.expenseModel.aggregate([
