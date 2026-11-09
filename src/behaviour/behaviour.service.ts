@@ -631,7 +631,7 @@ export class BehaviourService {
     const traitKeys = traitDefs.map((t: any) => t.key);
     const scaleMax = settings?.ratingScale?.max ?? 5;
 
-    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, periodTrendAgg] = await Promise.all([
+    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, sectionBreakdown, periodTrendAgg] = await Promise.all([
       this.tarbiyahModel.aggregate([
         { $match: filter },
         { $group: { _id: null, totalAssessments: { $sum: 1 }, totalStudents: { $addToSet: '$studentId' }, avgOverallScore: { $avg: '$overallScore' } } },
@@ -674,6 +674,26 @@ export class BehaviourService {
         } },
         { $project: { grade: '$_id.grade', section: '$_id.section', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, _id: 0 } },
         { $sort: { avgOverallScore: -1 } },
+      ]) : Promise.resolve(null),
+      // Grade picked, no specific section yet (the "All sections" consolidated
+      // view) - breaks the total down by each raw `section` value actually on
+      // file. TarbiyahAssessment.section is a free-text snapshot of the
+      // student's section at assessment time, not an FK to the Grade/Section
+      // master, so a student recorded under a section that's since been
+      // renamed/merged/removed from that master becomes invisible the moment
+      // staff filter down to a specific (current) section - counted in this
+      // grade's "All sections" total but absent from every section-specific
+      // one, with nothing on screen explaining the gap. The frontend already
+      // knows the grade's current real sections and flags whichever of these
+      // raw values doesn't match one of them.
+      (grade && !section) ? this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: {
+            _id: '$section',
+            avgOverallScore: { $avg: '$overallScore' }, studentIds: { $addToSet: '$studentId' }, assessmentCount: { $sum: 1 },
+        } },
+        { $project: { section: '$_id', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, assessmentCount: 1, _id: 0 } },
+        { $sort: { studentCount: -1 } },
       ]) : Promise.resolve(null),
       !period ? this.tarbiyahModel.aggregate([
         { $match: filter },
@@ -724,6 +744,7 @@ export class BehaviourService {
       traitLeaderboard,
       classComparison,
       periodTrend: periodTrendAgg ? periodTrendAgg.map((p: any) => ({ period: p._id, avgOverallScore: p.avgOverallScore || 0, assessmentCount: p.assessmentCount })) : null,
+      sectionBreakdown,
     };
   }
 
