@@ -38,3 +38,40 @@ describe('BehaviourService.getTarbiyahReportData grade/section filter tolerance'
     expect(filter.section.test('Grade 2B')).toBe(false);
   });
 });
+
+// Grade-1 "All sections" totals (45 students/47 assessments) didn't add up
+// against Grade 1A (28/28) + Grade 1B (9/11): some assessments' stored
+// `section` is a free-text snapshot that no longer matches any of the
+// grade's current real sections, so they vanish from every section-specific
+// filter while still counting in the grade-only total. sectionBreakdown
+// surfaces the raw per-section counts (including any orphaned value) so
+// that gap is visible instead of silent.
+describe('BehaviourService.getTarbiyahReportData sectionBreakdown', () => {
+  it('is populated with raw per-section counts when a grade is picked but no section is', async () => {
+    const rows = [{ section: 'Grade 1A', avgOverallScore: 3.8, studentCount: 28, assessmentCount: 28 }];
+    const { svc, tarbiyahModel } = build();
+    // Only the sectionBreakdown pipeline groups by '$section' - every other
+    // pipeline in this method groups by something else, so match on that to
+    // tell them apart without depending on call order.
+    tarbiyahModel.aggregate = jest.fn(async (pipeline: any[]) => {
+      const isSectionBreakdown = pipeline.some((stage) => stage.$group && stage.$group._id === '$section');
+      return isSectionBreakdown ? rows : [];
+    });
+    const result = await svc.getTarbiyahReportData('demo', { grade: 'Grade 1' });
+    expect(result.sectionBreakdown).toBe(rows);
+  });
+
+  it('is null when a section filter is already applied', async () => {
+    const { svc, tarbiyahModel } = build();
+    tarbiyahModel.aggregate = jest.fn(async () => []);
+    const result = await svc.getTarbiyahReportData('demo', { grade: 'Grade 1', section: 'A' });
+    expect(result.sectionBreakdown).toBeNull();
+  });
+
+  it('is null when no grade is picked at all', async () => {
+    const { svc, tarbiyahModel } = build();
+    tarbiyahModel.aggregate = jest.fn(async () => []);
+    const result = await svc.getTarbiyahReportData('demo', {});
+    expect(result.sectionBreakdown).toBeNull();
+  });
+});
