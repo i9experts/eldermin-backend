@@ -5,17 +5,18 @@ import { PdfService } from './pdf.service';
 // generateReportCard (which is actually the whole-TERM report, see
 // report-card.spec.ts). Deliberately has no published check.
 
-function makeService(overrides: { school?: any; reportCard?: any; student?: any }) {
+function makeService(overrides: { school?: any; reportCard?: any; student?: any; visibilitySettings?: any }) {
   const n: any = {};
   const studentModel: any = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve(overrides.student ?? null) }) }) };
   const schoolModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.school) }) };
   const reportCardModel: any = {
     findOne: () => ({ lean: () => Promise.resolve(overrides.reportCard ?? null) }),
   };
+  const visibilitySettingsModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.visibilitySettings ?? null) }) };
   // positions: pdfLog,student,invoice,school,assessment,behaviour,reportTemplate,
   // payment,expense,bankAccount,campus,groupInstitution,qaida,tarbiyah,
-  // characterSettings,financeService,termReportCard,reportCard
-  const args = [n, studentModel, n, schoolModel, n, n, n, n, n, n, n, n, n, n, n, n, n, reportCardModel];
+  // characterSettings,financeService,termReportCard,reportCard,visibilitySettings
+  const args = [n, studentModel, n, schoolModel, n, n, n, n, n, n, n, n, n, n, n, n, n, reportCardModel, visibilitySettingsModel];
   const PdfServiceAny: any = PdfService;
   const service = new PdfServiceAny(...args) as PdfService;
   let capturedHtml = '';
@@ -74,5 +75,15 @@ describe('PdfService.generateExamReportCardPdf', () => {
     await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
     expect(getHtml()).not.toContain('<script>alert(1)</script>');
     expect(getHtml()).toContain('&lt;script&gt;');
+  });
+
+  it('shows the school\'s custom Pass/Fail wording from Assessment Master Settings', async () => {
+    const { service, getHtml } = makeService({
+      school: SCHOOL,
+      reportCard: { ...REPORT_CARD, overallResult: 'fail' },
+      visibilitySettings: { passLabel: 'Promoted', failLabel: 'Needs Improvement' },
+    });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    expect(getHtml()).toContain('Needs Improvement');
   });
 });

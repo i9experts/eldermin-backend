@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleDestroy, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as puppeteer from 'puppeteer';
@@ -16,6 +16,7 @@ import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behavio
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
 import { TermReportCard } from '../assessments/schemas/term-report-card.schema';
 import { ReportCard } from '../assessments/schemas/assessment.schema';
+import { AssessmentVisibilitySettings } from '../assessments/schemas/assessment-visibility-settings.schema';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -359,6 +360,13 @@ const tarbiyahTraitLabel = (key: string): string =>
 const REPORT_CARD_TEMPLATE = (data: any) => {
   const included = data.sectionsIncluded || {};
   const esc = escapeHtml;
+  // Internally the result is always the literal 'pass' | 'fail' (sorting,
+  // filtering, pass-rate stats all key off that) - but some schools don't
+  // want that word shown verbatim on a report card a parent sees, so
+  // Assessment Master Settings lets them relabel it (e.g. "Promoted" /
+  // "Needs Improvement"). Always resolve the display text through that
+  // label rather than the raw value.
+  const resultLabel = !data.overallResult ? 'N/A' : data.overallResult === 'pass' ? (data.passLabel || 'Pass') : (data.failLabel || 'Fail');
   // Free-text fields here (teacher observations, invigilator remarks/names,
   // home-tutoring notes, feedback) are staff-entered and can be Urdu rather
   // than English. Without an explicit rtl wrap + a font that actually
@@ -677,7 +685,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     <div><div class="info-label">GR No</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
     <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
     <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `${positionMedal ? positionMedal + ' ' : ''}#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
-    <div><div class="info-label">Result</div><div class="info-value" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'};text-transform:uppercase">${esc(data.overallResult) || 'N/A'}</div></div>
+    <div><div class="info-label">Result</div><div class="info-value" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'};text-transform:uppercase">${esc(resultLabel)}</div></div>
     <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
     </div>
   </div>
@@ -712,7 +720,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     <div class="result-tiles">
       <div class="result-tile"><div class="result-tile-num">${data.totalObtained || 0} / ${data.totalMarks || 0}</div><div class="result-tile-label">Marks Obtained</div></div>
       <div class="result-tile" style="border-left-color:#F5A623"><div class="result-tile-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (GPA ${data.overallGPA})` : ''}</div><div class="result-tile-label">Final Grade</div></div>
-      <div class="result-tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="result-tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(data.overallResult?.toUpperCase()) || 'N/A'}</div><div class="result-tile-label">Result</div></div>
+      <div class="result-tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="result-tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(resultLabel)}</div><div class="result-tile-label">Result</div></div>
       <div class="result-tile" style="border-left-color:#7C3AED"><div class="result-tile-num" style="color:#7C3AED">${(data.subjects || []).length}</div><div class="result-tile-label">Subjects</div></div>
     </div>
   </div>
@@ -766,6 +774,8 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
 const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   const esc = escapeHtml;
   const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+  // See REPORT_CARD_TEMPLATE's own resultLabel comment - same per-school relabeling.
+  const resultLabel = !data.overallResult ? 'N/A' : data.overallResult === 'pass' ? (data.passLabel || 'Pass') : (data.failLabel || 'Fail');
   const gradeTone = (grade: string) => {
     const g = (grade || '').charAt(0).toUpperCase();
     return g === 'A' ? { fg: '#15803D', bg: '#DCFCE7', bar: '#16A34A' }
@@ -909,7 +919,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
         <div><div class="info-label">Roll Number</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
         <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
         <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `${positionMedal ? positionMedal + ' ' : ''}#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
-        <div><div class="info-label">Result</div><div class="info-value ${data.overallResult === 'pass' ? 'result-pass' : 'result-fail'}">${esc(data.overallResult?.toUpperCase()) || 'N/A'}</div></div>
+        <div><div class="info-label">Result</div><div class="info-value ${data.overallResult === 'pass' ? 'result-pass' : 'result-fail'}">${esc(resultLabel)}</div></div>
         <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div></div>
       </div>
     </div>
@@ -942,7 +952,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
       <div class="tiles">
         <div class="tile"><div class="tile-num">${data.totalObtainedMarks || 0} / ${data.totalMaxMarks || 0}</div><div class="tile-label">Marks Obtained</div></div>
         <div class="tile" style="border-left-color:#F5A623"><div class="tile-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (GPA ${data.overallGPA})` : ''}</div><div class="tile-label">Final Grade</div></div>
-        <div class="tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(data.overallResult?.toUpperCase()) || 'N/A'}</div><div class="tile-label">Result</div></div>
+        <div class="tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(resultLabel)}</div><div class="tile-label">Result</div></div>
         <div class="tile" style="border-left-color:#7C3AED"><div class="tile-num" style="color:#7C3AED">${(data.subjects || []).length}</div><div class="tile-label">Subjects</div></div>
       </div>
     </div>
@@ -1654,7 +1664,18 @@ export class PdfService implements OnModuleDestroy {
     private financeService: FinanceService,
     @InjectModel(TermReportCard.name) private termReportCardModel: Model<any>,
     @InjectModel(ReportCard.name) private reportCardModel: Model<any>,
+    // Same trailing-optional convention as AssessmentService's own
+    // visibilitySettingsModel - keeps every existing `new PdfService(...)`
+    // test construction (positional args) compiling unchanged.
+    @Optional() @InjectModel(AssessmentVisibilitySettings.name) private visibilitySettingsModel?: Model<any>,
   ) {}
+
+  /** Per-school display text for 'pass'/'fail' (Assessment Master Settings) - falls back to the plain words when unset or the settings collection isn't wired up (e.g. in a lean test construction). */
+  private async getResultLabels(schoolSlug: string): Promise<{ passLabel: string; failLabel: string }> {
+    if (!this.visibilitySettingsModel) return { passLabel: 'Pass', failLabel: 'Fail' };
+    const settings = await this.visibilitySettingsModel.findOne({ schoolSlug }).lean();
+    return { passLabel: (settings as any)?.passLabel || 'Pass', failLabel: (settings as any)?.failLabel || 'Fail' };
+  }
 
   /**
    * Puppeteer's own bundled Chromium download is skipped in this project's
@@ -1883,6 +1904,8 @@ export class PdfService implements OnModuleDestroy {
       );
     }
 
+    const { passLabel, failLabel } = await this.getResultLabels(schoolSlug);
+
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
@@ -1901,6 +1924,7 @@ export class PdfService implements OnModuleDestroy {
       overallGrade: trc.overallGrade || 'N/A',
       overallGPA: trc.overallGPA,
       overallResult: trc.overallResult,
+      passLabel, failLabel,
       classPosition: trc.classPosition,
       totalStudents: trc.totalStudents,
       strongestSubject: trc.strongestSubject,
@@ -1968,6 +1992,8 @@ export class PdfService implements OnModuleDestroy {
     ]);
     if (!card) throw new NotFoundException('Report card not found - generate report cards for this assessment first.');
 
+    const { passLabel, failLabel } = await this.getResultLabels(schoolSlug);
+
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
@@ -1987,6 +2013,7 @@ export class PdfService implements OnModuleDestroy {
       overallGrade: card.overallGrade || 'N/A',
       overallGPA: card.overallGPA,
       overallResult: card.overallResult,
+      passLabel, failLabel,
       classPosition: card.classPosition,
       totalStudents: card.totalStudents,
       classAveragePercentage: card.classAveragePercentage,
