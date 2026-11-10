@@ -119,7 +119,7 @@ describe('AssessmentService — Assessment Master Settings: parent visibility se
     const visibilitySettingsModel: any = { findOne: () => ({ lean: async () => null }) };
     const svc = makeService({ visibilitySettingsModel });
     const result = await svc.getVisibilitySettings('new-school');
-    expect(result).toEqual({ schoolSlug: 'new-school', shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false });
+    expect(result).toEqual({ schoolSlug: 'new-school', shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false, passLabel: 'Pass', failLabel: 'Fail' });
   });
 
   it('getVisibilitySettings returns the stored document when one exists', async () => {

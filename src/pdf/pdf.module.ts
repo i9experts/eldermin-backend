@@ -9,6 +9,7 @@ import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/orga
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
 import { AssessmentSchema, ReportCard, ReportCardSchema } from '../assessments/schemas/assessment.schema';
 import { TermReportCard, TermReportCardSchema } from '../assessments/schemas/term-report-card.schema';
+import { AssessmentVisibilitySettings, AssessmentVisibilitySettingsSchema } from '../assessments/schemas/assessment-visibility-settings.schema';
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema';
 import { CharacterProgramSettings, CharacterProgramSettingsSchema } from '../behaviour/schemas/character-program-settings.schema';
@@ -49,6 +50,10 @@ import { FinanceModule } from '../finance/finance.module';
       // Per-exam Report Card PDF (generateExamReportCardPdf) - the "print
       // preview before publish" path, separate from the whole-term one above.
       { name: ReportCard.name, schema: ReportCardSchema },
+      // Assessment Master Settings' Pass/Fail result relabeling - read
+      // alongside the above so a school's custom wording shows on the PDF,
+      // not just the web Results tab.
+      { name: AssessmentVisibilitySettings.name, schema: AssessmentVisibilitySettingsSchema },
       // behaviour_records under its OWN model name. This used to be registered as 'Behaviour', the name students.module uses for the legacy
       // student_behaviour store, so whichever module loaded first decided which collection BOTH services read and wrote (BB12).
       { name: BehaviourRecord.name, schema: BehaviourRecordSchema },

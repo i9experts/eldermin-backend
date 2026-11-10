@@ -102,6 +102,8 @@ export class UpdateAssessmentVisibilitySettingsDto {
   @IsOptional() @IsBoolean() shareSubjectBreakdown?: boolean;
   @IsOptional() @IsBoolean() shareClassPosition?: boolean;
   @IsOptional() @IsBoolean() shareClassAverage?: boolean;
+  @IsOptional() @IsString() passLabel?: string;
+  @IsOptional() @IsString() failLabel?: string;
 
   schoolSlug?: string;
   updatedBy?: string;

@@ -24,6 +24,16 @@ export class AssessmentVisibilitySettings {
   @Prop({ default: false }) shareClassPosition: boolean;
   @Prop({ default: false }) shareClassAverage: boolean;
 
+  // A student's overall/subject result is computed and stored internally as
+  // the literal 'pass' | 'fail' (sorting, filtering and pass-rate stats all
+  // key off that), but some schools don't want that word shown verbatim on
+  // a report card a parent sees - e.g. "Promoted" / "Needs Improvement"
+  // instead of "PASS" / "FAIL". These are display-only relabels: every
+  // report-card/PDF renderer reads them instead of hardcoding the words,
+  // but nothing downstream of computeMarkOutcome's result field changes.
+  @Prop({ default: 'Pass' }) passLabel: string;
+  @Prop({ default: 'Fail' }) failLabel: string;
+
   @Prop() updatedBy?: string;
 }
 

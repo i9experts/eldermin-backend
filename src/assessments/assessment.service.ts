@@ -256,11 +256,10 @@ export class AssessmentService {
   // ── Assessment Master Settings: Parent Visibility ────────────────
 
   async getVisibilitySettings(schoolSlug: string) {
-    if (!this.visibilitySettingsModel) {
-      return { schoolSlug, shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false };
-    }
+    const defaults = { schoolSlug, shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false, passLabel: 'Pass', failLabel: 'Fail' };
+    if (!this.visibilitySettingsModel) return defaults;
     const existing = await this.visibilitySettingsModel.findOne({ schoolSlug }).lean();
-    return existing ?? { schoolSlug, shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false };
+    return existing ?? defaults;
   }
 
   async updateVisibilitySettings(schoolSlug: string, dto: UpdateAssessmentVisibilitySettingsDto) {

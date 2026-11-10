@@ -9,17 +9,18 @@ import { PdfService } from './pdf.service';
 // already-computed TermReportCard (see AssessmentService.
 // generateTermReportCards, Phase 1) directly.
 
-function makeService(overrides: { student?: any; school?: any; termReportCard?: any }) {
+function makeService(overrides: { student?: any; school?: any; termReportCard?: any; visibilitySettings?: any }) {
   const n: any = {};
   const studentModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.student) }) };
   const schoolModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.school) }) };
   const termReportCardModel: any = {
     findOne: () => ({ sort: () => ({ lean: () => Promise.resolve(overrides.termReportCard ?? null) }) }),
   };
+  const visibilitySettingsModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.visibilitySettings ?? null) }) };
   // positions: pdfLog,student,invoice,school,assessment,behaviour,reportTemplate,
   // payment,expense,bankAccount,campus,groupInstitution,qaida,tarbiyah,
-  // characterSettings,financeService,termReportCard
-  const args = [n, studentModel, n, schoolModel, n, n, n, n, n, n, n, n, n, n, n, n, termReportCardModel];
+  // characterSettings,financeService,termReportCard,reportCard,visibilitySettings
+  const args = [n, studentModel, n, schoolModel, n, n, n, n, n, n, n, n, n, n, n, n, termReportCardModel, n, visibilitySettingsModel];
   const PdfServiceAny: any = PdfService;
   const service = new PdfServiceAny(...args) as PdfService;
   let capturedHtml = '';
@@ -182,5 +183,23 @@ describe('PdfService.generateReportCard', () => {
     expect(html).toContain(`<span dir="rtl">مولانا مسعود صاحب</span>`);
     expect(html).toContain(`<span dir="rtl">بہتر ہے مزید محنت کی ضرورت ہے۔</span>`);
     expect(html).toContain(`<div class="remarks-text"><span dir="rtl">ماشاءاللہ بہت اچھا۔</span></div>`);
+  });
+
+  it('shows the school\'s custom Pass/Fail wording from Assessment Master Settings instead of the literal word', async () => {
+    const { service, getHtml } = makeService({
+      student: STUDENT, school: SCHOOL,
+      termReportCard: { ...TERM_REPORT_CARD, overallResult: 'fail' },
+      visibilitySettings: { passLabel: 'Promoted', failLabel: 'Needs Improvement' },
+    });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('Needs Improvement');
+    expect(html).not.toContain('>FAIL<');
+  });
+
+  it('falls back to the plain "Pass"/"Fail" words when no custom labels are configured', async () => {
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD, visibilitySettings: null });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
+    expect(getHtml()).toContain('Pass');
   });
 });
