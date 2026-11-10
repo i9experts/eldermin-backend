@@ -75,4 +75,20 @@ describe('PdfService.generateExamReportCardPdf', () => {
     expect(getHtml()).not.toContain('<script>alert(1)</script>');
     expect(getHtml()).toContain('&lt;script&gt;');
   });
+
+  // A school reported the per-exam report card PDF spilling its signature
+  // row + footer onto an otherwise-blank second page. The template's own
+  // vertical spacing (content padding, header/section margins, table row
+  // padding, and especially the signature row's margin-top) was tightened
+  // so a single student/single-exam report fits on one A4 page; pin the
+  // tightened values here so they aren't casually widened back out.
+  it('uses the tightened one-page spacing (content padding, table row padding, signature row margin) instead of the old wider values that bled onto a second page', async () => {
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: REPORT_CARD });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('.content { padding: 10mm 16mm 10mm; }');
+    expect(html).toContain('.sig-row { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 4px; }');
+    expect(html).not.toContain('padding: 14mm 16mm 16mm');
+    expect(html).not.toContain('margin-top: 36px');
+  });
 });

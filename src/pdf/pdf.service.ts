@@ -811,13 +811,13 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 297mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
-  .content { padding: 14mm 16mm 16mm; }
+  .content { padding: 10mm 16mm 10mm; }
 
   .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
     background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
     padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
 
-  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 2px solid #EEF4FB; margin-bottom: 18px; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 2px solid #EEF4FB; margin-bottom: 12px; }
   .brand { display: flex; align-items: center; gap: 12px; }
   .logo { height: 46px; width: 46px; object-fit: contain; border-radius: 8px; }
   .school-name { font-size: 20px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
@@ -830,7 +830,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .status-published { color: #15803D; background: #DCFCE7; }
   .status-draft { color: #B45309; background: #FEF3C7; }
 
-  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
+  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 12px 18px; margin-bottom: 14px; }
   .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
   .student-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
   .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
@@ -839,11 +839,11 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .result-pass { color: #15803D; }
   .result-fail { color: #B91C1C; }
 
-  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
+  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 12px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
 
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  th { background: #1B4F8A; color: #fff; padding: 7px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 7px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
   tr:nth-child(even) td { background: #F9FBFD; }
   .num { text-align: right; white-space: nowrap; }
   .of-max { color: #94A3B8; font-weight: 400; }
@@ -852,7 +852,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .mastery-fill { height: 100%; border-radius: 4px; }
   .grade-pill { display: inline-block; min-width: 30px; text-align: center; font-weight: 800; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; }
 
-  .results-row { display: flex; gap: 16px; align-items: stretch; margin: 18px 0 6px; }
+  .results-row { display: flex; gap: 16px; align-items: stretch; margin: 12px 0 4px; }
   .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px; }
   .ring-pct { font-size: 20px; font-weight: 800; }
   .ring-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
@@ -861,23 +861,23 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .tile-num { font-size: 18px; font-weight: 800; color: #1B4F8A; }
   .tile-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
 
-  .compare { margin-top: 4px; margin-bottom: 18px; }
+  .compare { margin-top: 4px; margin-bottom: 10px; }
   .compare-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
   .compare-name { width: 110px; font-size: 10.5px; color: #3D5A7A; flex-shrink: 0; }
   .compare-track { flex: 1; height: 9px; border-radius: 5px; background: #EEF4FB; overflow: hidden; }
   .compare-fill { height: 100%; border-radius: 5px; }
   .compare-val { width: 44px; text-align: right; font-size: 10.5px; font-weight: 700; color: #1B4F8A; flex-shrink: 0; }
 
-  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 12px 14px; margin-bottom: 14px; }
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 10px 14px; margin-bottom: 10px; }
   .remarks-label { font-size: 9.5px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
   .remarks-text { font-size: 12.5px; color: #0D1F35; line-height: 1.55; }
 
-  .sig-row { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 4px; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 4px; }
   .sig-item { text-align: center; }
   .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: 30px; }
   .sig-label { font-size: 10.5px; color: #3D5A7A; font-weight: 700; }
 
-  .footer { text-align: center; margin-top: 22px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
+  .footer { text-align: center; margin-top: 12px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 8px; }
   .footer strong { color: #1B4F8A; }
 </style>
 </head>
@@ -1000,14 +1000,25 @@ const QAIDA_STATUS_STYLE: Record<string, { bg: string; text: string; label: stri
   not_started: { bg: '#F1F5F9', text: '#64748B', label: 'Not Started' },
 };
 
-const QAIDA_REPORT_TEMPLATE = (data: any) => `
+const QAIDA_REPORT_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  // Takhti titles, teacher remarks and sabaq notes are often Urdu rather
+  // than English - without an explicit rtl wrap + an embedded font that
+  // actually shapes Arabic script, Puppeteer/Chromium falls back to
+  // whatever font the container has for those codepoints, rendering each
+  // letter in its isolated form, unjoined and in raw (unreordered) storage
+  // order instead of a properly joined/reordered Urdu word. Same fix as
+  // the comprehensive report card template (REPORT_CARD_TEMPLATE).
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <style>
+  ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #2B2016; background: #fff; }
+  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
   .page { width: 210mm; min-height: 297mm; padding: 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #0E7C5A; margin-bottom: 18px; }
   .school-name { font-size: 22px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
@@ -1031,7 +1042,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
   td { padding: 7px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
   tr:nth-child(even) td { background: #FBF8F0; }
   .status-pill { display: inline-block; padding: 2px 9px; border-radius: 100px; font-size: 9.5px; font-weight: 700; }
-  .urdu { font-size: 12px; direction: rtl; color: #6B5B3E; font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif; }
+  .urdu { font-size: 12px; direction: rtl; color: #6B5B3E; font-family: 'Noto Nastaliq Urdu', 'Segoe UI', Arial, sans-serif; }
   .error-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
   .error-chip { background: #FEF3DC; border: 1px solid #F0D5A0; color: #8A5A0A; border-radius: 100px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
   .error-chip b { color: #C8811A; }
@@ -1048,8 +1059,8 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
 <div class="page">
   <div class="header">
     <div>
-      <div class="school-name">${data.schoolName}</div>
-      <div class="school-sub">${data.schoolAddress || ''}</div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
     </div>
     <div>
       <div class="doc-title">Qaida &amp; Tajweed Progress Report</div>
@@ -1058,9 +1069,9 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
   </div>
 
   <div class="student-box">
-    <div><div class="info-label">Student Name</div><div class="info-value">${data.studentName}</div></div>
-    <div><div class="info-label">Grade / Section</div><div class="info-value">${data.grade} ${data.section || ''}</div></div>
-    <div><div class="info-label">Qaida Teacher</div><div class="info-value">${data.currentTeacher || 'N/A'}</div></div>
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Qaida Teacher</div><div class="info-value">${esc(data.currentTeacher) || 'N/A'}</div></div>
     <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
   </div>
 
@@ -1078,7 +1089,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
       const style = QAIDA_STATUS_STYLE[t.status] || QAIDA_STATUS_STYLE.not_started;
       return `<div class="journey-tile" style="background:${style.bg}">
         <div class="journey-num" style="color:${style.text}">${t.number}</div>
-        <div class="journey-title" style="color:${style.text}">${t.titleEn}</div>
+        <div class="journey-title" style="color:${style.text}">${esc(t.titleEn)}</div>
       </div>`;
     }).join('')}
   </div>
@@ -1100,12 +1111,12 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
       ${data.takhtis.map((t: any) => {
         const style = QAIDA_STATUS_STYLE[t.status] || QAIDA_STATUS_STYLE.not_started;
         const sabaq = t.latestAttempt?.sabaqFrom
-          ? `<strong>${t.latestAttempt.sabaqFrom}${t.latestAttempt.sabaqTo && t.latestAttempt.sabaqTo !== t.latestAttempt.sabaqFrom ? ` → ${t.latestAttempt.sabaqTo}` : ''}</strong>`
+          ? `<strong>${esc(t.latestAttempt.sabaqFrom)}${t.latestAttempt.sabaqTo && t.latestAttempt.sabaqTo !== t.latestAttempt.sabaqFrom ? ` → ${esc(t.latestAttempt.sabaqTo)}` : ''}</strong>`
           : '';
-        const remarks = t.latestAttempt?.remarks || '';
+        const remarks = t.latestAttempt?.remarks ? rtl(t.latestAttempt.remarks) : '';
         return `<tr>
           <td><strong>${t.number}</strong></td>
-          <td><strong>${t.titleEn}</strong><div class="urdu">${t.titleUr}</div></td>
+          <td><strong>${esc(t.titleEn)}</strong><div class="urdu">${rtl(t.titleUr)}</div></td>
           <td><span class="status-pill" style="background:${style.bg};color:${style.text}">${style.label}${t.revisionCount > 0 ? ` ×${t.revisionCount + 1}` : ''}</span></td>
           <td>${t.startedDate ? new Date(t.startedDate).toLocaleDateString('en-GB') : '—'}</td>
           <td>${t.masteredDate ? new Date(t.masteredDate).toLocaleDateString('en-GB') : '—'}</td>
@@ -1124,18 +1135,19 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
 
   ${data.overallRemarks ? `
   <div class="section-title">Teacher's Overall Remarks</div>
-  <div class="remarks-box">${data.overallRemarks}</div>` : ''}
+  <div class="remarks-box">${rtl(data.overallRemarks)}</div>` : ''}
 
   <div class="sig-row">
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Qaida Teacher</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Academic Coordinator</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
   </div>
-  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${data.schoolName} · ${new Date().toLocaleDateString('en-GB')}</div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
 </div>
 </body>
 </html>
 `;
+};
 
 // Mirrors the frontend's TARBIYAH_RATING_CONFIG (src/pages/behaviour/types.ts)
 // so the PDF shows the exact same rating label/colour a teacher already
