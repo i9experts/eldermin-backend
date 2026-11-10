@@ -62,3 +62,25 @@ describe('PdfService.generateQaidaReport', () => {
     expect(html).toContain('1/16'); // overview stats still reflect the real 16-takhti total
   });
 });
+
+describe('PdfService.generateQaidaReport - Urdu text rendering', () => {
+  it('embeds the Noto Nastaliq Urdu font and wraps Urdu free text in dir="rtl", instead of rendering disconnected isolated glyphs in whatever font the container happens to have', async () => {
+    const urduProgress = {
+      ...PROGRESS,
+      overallRemarks: 'شاباش، بہت اچھا کام',
+      takhtis: [
+        { takhtiNumber: 1, status: 'mastered', startedDate: new Date(), masteredDate: new Date(), attempts: [{ remarks: 'شاباش', sabaqFrom: 'A', sabaqTo: 'B' }] },
+        { takhtiNumber: 2, status: 'in_progress', startedDate: new Date(), attempts: [] },
+      ],
+    };
+    const { service, getHtml } = makeService({ school: SCHOOL, progress: urduProgress });
+    await service.generateQaidaReport('demo-school', { studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('@font-face');
+    expect(html).toContain(`'Noto Nastaliq Urdu'`);
+    expect(html).toContain(`<span dir="rtl">شاباش</span>`);
+    expect(html).toContain(`<span dir="rtl">شاباش، بہت اچھا کام</span>`);
+    // Every Takhti title's own Urdu rendering (titleUr) is also wrapped, not just free text
+    expect(html).toMatch(/<div class="urdu"><span dir="rtl">.+<\/span><\/div>/);
+  });
+});
