@@ -133,7 +133,7 @@ describe('PdfService.generateExamReportCardPdf', () => {
     const { service, getHtml } = makeService({ school: SCHOOL, reportCard: { ...REPORT_CARD, subjects: manySubjects } });
     await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
     const html = getHtml();
-    // 10 subjects is 4 over the 6-subject baseline, so td/th padding and the
+    // 10 subjects is 6 over the 4-subject baseline, so td/th padding and the
     // signature row's margin-top must all be pulled in below their baseline
     // (unshrunk) values.
     expect(html).toMatch(/td \{ padding: (?!7px)[0-9.]+px 12px;/);
@@ -141,14 +141,34 @@ describe('PdfService.generateExamReportCardPdf', () => {
     expect(html).toMatch(/\.sig-row \{ display: flex; justify-content: space-between; margin-top: (?!18px)[0-9.]+px;/);
   });
 
-  it('keeps the untouched baseline spacing for a report at or under the 6-subject baseline', async () => {
-    const sixSubjects = Array.from({ length: 6 }, (_, i) => ({
+  // A report at exactly the old 6-subject baseline measured out to within a
+  // fraction of a millimeter of the 277mm printable-area limit - no real
+  // margin at all, so any small real-world variance (a longer assessment
+  // title, slightly different font metrics) was enough to tip it onto a
+  // near-blank 2nd page even though this exact combination had "passed"
+  // every earlier page-count check. The baseline that keeps the original,
+  // unshrunk spacing is now only the first 4 subjects, giving every report
+  // real breathing room instead of being tuned to the exact edge.
+  it('keeps the untouched baseline spacing for a report at or under the 4-subject baseline', async () => {
+    const fourSubjects = Array.from({ length: 4 }, (_, i) => ({
       subject: `Subject ${i + 1}`, obtainedMarks: 25, totalMarks: 30, percentage: 83.3, grade: 'A',
     }));
-    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: { ...REPORT_CARD, subjects: sixSubjects } });
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: { ...REPORT_CARD, subjects: fourSubjects } });
     await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
     const html = getHtml();
     expect(html).toContain('td { padding: 7px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }');
     expect(html).toContain('.sig-row { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 4px; }');
+  });
+
+  // A long assessment title (e.g. combining term, type, grade and year)
+  // used to wrap onto a 2nd line inside the fixed-width doc-title box,
+  // silently adding header height that no part of the subject-count-based
+  // overflow math accounted for. Truncate instead of wrapping.
+  it('truncates a long assessment title instead of letting it wrap onto a 2nd header line', async () => {
+    const longTitle = 'Term 1 - Summative Assessment, Grade 7 - Academic Year 2026-27 (Final)';
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: { ...REPORT_CARD, assessmentTitle: longTitle } });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('white-space: nowrap; overflow: hidden; text-overflow: ellipsis;');
   });
 });
