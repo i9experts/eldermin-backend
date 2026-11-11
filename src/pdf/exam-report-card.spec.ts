@@ -1,16 +1,45 @@
 import { PdfService } from './pdf.service';
+import { PDFDocument } from 'pdf-lib';
 
 // Regression coverage for PdfService.generateExamReportCardPdf - the
 // per-exam "print preview before publishing" PDF, separate from
 // generateReportCard (which is actually the whole-TERM report, see
 // report-card.spec.ts). Deliberately has no published check.
 
-function makeService(overrides: { school?: any; reportCard?: any; student?: any; visibilitySettings?: any }) {
+// generateBulkExamReportCardsPdf merges each student's PDF with pdf-lib, so
+// the mocked htmlToPdf has to return bytes pdf-lib can actually load - a
+// placeholder string like the old 'fake-pdf' buffer would make every bulk
+// test fail on the merge step, not on anything this file is meant to cover.
+async function fakePdfBuffer(): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  doc.addPage([200, 200]);
+  return Buffer.from(await doc.save());
+}
+
+function makeService(overrides: { school?: any; reportCard?: any; reportCards?: any[]; student?: any; visibilitySettings?: any }) {
   const n: any = {};
   const studentModel: any = { findOne: () => ({ select: () => ({ lean: () => Promise.resolve(overrides.student ?? null) }) }) };
   const schoolModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.school) }) };
   const reportCardModel: any = {
-    findOne: () => ({ lean: () => Promise.resolve(overrides.reportCard ?? null) }),
+    findOne: (filter: any) => ({
+      lean: () => Promise.resolve(
+        overrides.reportCards
+          ? overrides.reportCards.find((c: any) => String(c.assessmentId) === String(filter.assessmentId) && String(c.studentId) === String(filter.studentId)) || null
+          : (overrides.reportCard ?? null),
+      ),
+    }),
+    find: (filter: any) => ({
+      sort: () => ({
+        select: () => ({
+          lean: () => Promise.resolve((overrides.reportCards || []).filter((c: any) => {
+            if (filter.assessmentId && String(c.assessmentId) !== String(filter.assessmentId)) return false;
+            if (filter.section && c.section !== filter.section) return false;
+            if (filter.overallResult && c.overallResult !== filter.overallResult) return false;
+            return true;
+          })),
+        }),
+      }),
+    }),
   };
   const visibilitySettingsModel: any = { findOne: () => ({ lean: () => Promise.resolve(overrides.visibilitySettings ?? null) }) };
   // positions: pdfLog,student,invoice,school,assessment,behaviour,reportTemplate,
@@ -22,7 +51,7 @@ function makeService(overrides: { school?: any; reportCard?: any; student?: any;
   let capturedHtml = '';
   jest.spyOn(service as any, 'htmlToPdf').mockImplementation(async (html: any) => {
     capturedHtml = html;
-    return Buffer.from('fake-pdf');
+    return fakePdfBuffer();
   });
   jest.spyOn(service as any, 'logPdf').mockResolvedValue(undefined);
   return { service, getHtml: () => capturedHtml };
@@ -187,5 +216,68 @@ describe('PdfService.generateExamReportCardPdf', () => {
     const html = getHtml();
     expect(html).toContain("font-family: 'Inter';");
     expect(html).toContain("body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif;");
+  });
+});
+
+// Regression coverage for PdfService.generateBulkExamReportCardsPdf - lets
+// a staff member download every student's report card for an assessment in
+// one combined PDF, instead of the Results tab's one-at-a-time download
+// button school admins were complaining about.
+describe('PdfService.generateBulkExamReportCardsPdf', () => {
+  const makeCard = (overrides: any) => ({
+    assessmentId: 'a1', studentId: overrides.studentId,
+    assessmentTitle: 'Term 1', academicYear: '2025-26', term: 'Term 1',
+    studentName: overrides.studentName, rollNumber: overrides.rollNumber, grade: 'Grade 1', section: overrides.section,
+    subjects: [{ subject: 'Math', obtainedMarks: 90, totalMarks: 100, percentage: 90, grade: 'A+' }],
+    totalObtainedMarks: 90, totalMaxMarks: 100, overallPercentage: 90, overallGrade: 'A+', overallGPA: 4,
+    overallResult: overrides.overallResult, classPosition: 1, totalStudents: 3,
+    published: false,
+    ...overrides,
+  });
+
+  const CARDS = [
+    makeCard({ studentId: 's1', studentName: 'Ayesha Khan', rollNumber: 'R-101', section: 'A', overallResult: 'pass' }),
+    makeCard({ studentId: 's2', studentName: 'Bilal Ahmed', rollNumber: 'R-102', section: 'A', overallResult: 'fail' }),
+    makeCard({ studentId: 's3', studentName: 'Sara Malik', rollNumber: 'R-103', section: 'B', overallResult: 'pass' }),
+  ];
+
+  it('merges every matching report card into one combined PDF, in class-position order', async () => {
+    const { service } = makeService({ school: SCHOOL, reportCards: CARDS });
+    const pdf = await service.generateBulkExamReportCardsPdf('demo-school', { assessmentId: 'a1' } as any, 'user1');
+    const merged = await PDFDocument.load(pdf);
+    expect(merged.getPageCount()).toBe(3);
+  });
+
+  it('narrows the merge to a specific section', async () => {
+    const { service } = makeService({ school: SCHOOL, reportCards: CARDS });
+    const pdf = await service.generateBulkExamReportCardsPdf('demo-school', { assessmentId: 'a1', section: 'A' } as any, 'user1');
+    const merged = await PDFDocument.load(pdf);
+    expect(merged.getPageCount()).toBe(2);
+  });
+
+  it('narrows the merge to a specific result', async () => {
+    const { service } = makeService({ school: SCHOOL, reportCards: CARDS });
+    const pdf = await service.generateBulkExamReportCardsPdf('demo-school', { assessmentId: 'a1', result: 'fail' } as any, 'user1');
+    const merged = await PDFDocument.load(pdf);
+    expect(merged.getPageCount()).toBe(1);
+  });
+
+  it('throws a clear error instead of generating anything when no report cards match', async () => {
+    const { service } = makeService({ school: SCHOOL, reportCards: CARDS });
+    await expect(
+      service.generateBulkExamReportCardsPdf('demo-school', { assessmentId: 'a1', section: 'Z' } as any, 'user1'),
+    ).rejects.toThrow('No report cards match these filters.');
+  });
+
+  // A school accidentally requesting an entire campus at once should get a
+  // clear "narrow your filters" error, not a request that renders 100s of
+  // PDFs one by one and ties up the server for minutes.
+  it('refuses a batch larger than the configured cap instead of silently rendering all of it', async () => {
+    const manyCards = Array.from({ length: 101 }, (_, i) =>
+      makeCard({ studentId: `s${i}`, studentName: `Student ${i}`, rollNumber: `R-${i}`, section: 'A', overallResult: 'pass' }));
+    const { service } = makeService({ school: SCHOOL, reportCards: manyCards });
+    await expect(
+      service.generateBulkExamReportCardsPdf('demo-school', { assessmentId: 'a1' } as any, 'user1'),
+    ).rejects.toThrow(/narrow them/);
   });
 });
