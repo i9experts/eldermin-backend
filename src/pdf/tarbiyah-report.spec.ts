@@ -64,4 +64,20 @@ describe('PdfService.generateTarbiyahReport', () => {
     expect(html).toContain('.page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }');
     expect(html).not.toContain('padding: 16mm; }');
   });
+
+  // A school's Qaida report (the same shared layout as this template)
+  // spilled a near-empty trailing page holding only "Areas Needing
+  // Attention" + the signature row, wasting a sheet when duplex-printed.
+  // Its header/student-box/section-title/table-row/signature-row spacing
+  // was trimmed throughout (same change applied to QAIDA_REPORT_TEMPLATE
+  // and TARBIYAH_AGGREGATE_REPORT_TEMPLATE, which share this CSS) so a
+  // fixed-size document like this one reliably fits without a trailing page.
+  it('uses the tightened header/table-row/signature-row spacing', async () => {
+    const { service, getHtml } = makeService({ school: SCHOOL, assessment: ASSESSMENT });
+    await service.generateTarbiyahReport('demo-school', { assessmentId: 'ta1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('td { padding: 4px 10px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }');
+    expect(html).toContain('.sig-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 8px; border-top: 1px solid #EEF2F8; }');
+    expect(html).not.toContain('margin-top: 34px');
+  });
 });

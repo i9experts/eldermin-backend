@@ -61,6 +61,22 @@ describe('PdfService.generateQaidaReport', () => {
     expect(html).not.toContain('Huroof-e-Muqatta'); // takhti 3's title must not appear
     expect(html).toContain('1/16'); // overview stats still reflect the real 16-takhti total
   });
+
+  // A school reported this report printing with a near-empty 3rd page
+  // holding only "Areas Needing Attention" + the signature row - wasteful
+  // on a duplex (front/back) print, and the knock-on effect of the earlier
+  // 2nd-page-margin fix slightly increasing the top/bottom margin on every
+  // page. The full 16-Takhti table is a fixed size, so tightening the
+  // header/student-box/section-title/table-row/signature-row spacing
+  // reliably brings a full report back down to 2 pages.
+  it('uses the tightened header/table-row/signature-row spacing instead of the old wider values that pushed a near-empty 3rd page', async () => {
+    const { service, getHtml } = makeService({ school: SCHOOL, progress: PROGRESS });
+    await service.generateQaidaReport('demo-school', { studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('td { padding: 4px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }');
+    expect(html).toContain('.sig-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 8px; border-top: 1px solid #EADFC4; }');
+    expect(html).not.toContain('margin-top: 34px');
+  });
 });
 
 describe('PdfService.generateQaidaReport - Urdu text rendering', () => {
