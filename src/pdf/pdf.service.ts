@@ -584,7 +584,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 297mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
-  .content { padding: 14mm 16mm 16mm; }
+  .content { padding: 4mm 16mm 6mm; }
   .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
     background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
     padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
@@ -821,7 +821,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 297mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
-  .content { padding: 10mm 16mm 10mm; }
+  .content { padding: 0 16mm; }
 
   .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
     background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
@@ -1029,7 +1029,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => {
   ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
+  .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #0E7C5A; margin-bottom: 18px; }
   .school-name { font-size: 22px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
   .school-sub { font-size: 12px; color: #6B5B3E; margin-top: 2px; }
@@ -1190,7 +1190,7 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
+  .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
@@ -1336,7 +1336,7 @@ const TARBIYAH_AGGREGATE_REPORT_TEMPLATE = (data: any) => `
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
+  .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
@@ -1707,10 +1707,23 @@ export class PdfService implements OnModuleDestroy {
       const page = await browser.newPage();
       try {
         await page.setContent(html, { waitUntil: 'load' });
+        // A nonzero top/bottom margin here (rather than baking all spacing
+        // into each template's own .page/.content CSS padding) is what
+        // makes a SECOND printed page start with a real inset instead of
+        // flush against the paper edge: a template's own top padding only
+        // ever applies once, at the very start of the HTML's continuous
+        // flow - Chromium's print pagination just cuts that flow every
+        // 297mm, so any page after the first inherits none of it. A
+        // Puppeteer-level page margin, by contrast, is re-applied to every
+        // physical page the content spans. Each of the 6 templates that
+        // share this method (report card, exam report card, Qaida report,
+        // Tarbiyah report, Tarbiyah class/school report) has had its own
+        // top/bottom padding reduced by this same 10mm so a single-page
+        // document still looks exactly as before.
         const pdfBuffer = await page.pdf({
           format: 'A4',
           printBackground: true,
-          margin: { top: '0', right: '0', bottom: '0', left: '0' },
+          margin: { top: '10mm', right: '0', bottom: '10mm', left: '0' },
         });
         return pdfBuffer as Buffer;
       } finally {
