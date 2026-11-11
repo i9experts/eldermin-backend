@@ -91,6 +91,59 @@ export function urduFontFaceCss(): string {
   }`;
 }
 
+const cachedLatinFontDataUris: Record<string, string> = {};
+
+/**
+ * Base64 `data:` URI for one weight of the Inter font, read once per
+ * weight and cached. A template whose layout math was tuned against
+ * whatever sans-serif font happened to be installed on the machine it was
+ * tuned on (e.g. 'Segoe UI', which doesn't even exist outside Windows)
+ * renders with a DIFFERENT fallback font - with different line-height and
+ * character-width metrics - on whatever machine Puppeteer/Chromium
+ * actually runs on in production, silently making every line of text a
+ * little taller or wider than the font the layout was tuned against. On a
+ * report already fitted tightly to one printable page, that's enough to
+ * push its last line onto an otherwise-blank 2nd page - and because it
+ * depends on host font availability, it reproduces inconsistently between
+ * a developer's machine and the production container, exactly what made
+ * this class of bug so hard to pin down. Embedding a specific font
+ * directly, the same way getUrduFontDataUri() already does for Urdu text,
+ * removes that dependency on the host's installed fonts entirely so the
+ * layout is pixel-identical everywhere this code runs.
+ */
+export function getLatinFontDataUri(weight: 400 | 700): string {
+  const key = String(weight);
+  if (!cachedLatinFontDataUris[key]) {
+    const fontPath = require.resolve(`@fontsource/inter/files/inter-latin-${weight}-normal.woff2`);
+    const bytes = readFileSync(fontPath);
+    cachedLatinFontDataUris[key] = `data:font/woff2;base64,${bytes.toString('base64')}`;
+  }
+  return cachedLatinFontDataUris[key];
+}
+
+/** The @font-face CSS needed to make a template's Latin text render in a
+ * specific, embedded font instead of whatever sans-serif the host
+ * happens to have installed - see getLatinFontDataUri() for why that
+ * matters for any template whose layout is tuned to fit one printable
+ * page. Include once per template's <style> block, then list 'Inter'
+ * first in that template's font-family stacks. */
+export function latinFontFaceCss(): string {
+  return `@font-face {
+    font-family: 'Inter';
+    src: url(${getLatinFontDataUri(400)}) format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: 'Inter';
+    src: url(${getLatinFontDataUri(700)}) format('woff2');
+    font-weight: 700;
+    font-style: normal;
+    font-display: block;
+  }`;
+}
+
 /** Renders a diary field's stored value as safe HTML for a Puppeteer PDF
  * template. Values saved by the rich-text editor are already (sanitized)
  * HTML and are trusted as block-level content, re-sanitized here only as

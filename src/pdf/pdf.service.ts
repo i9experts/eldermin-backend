@@ -10,7 +10,7 @@ import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules
 import { FinanceService } from '../finance/finance.service';
 import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
-import { escapeHtml, renderRichTextField, urduFontFaceCss, containsArabicScript } from '../common/utils/rich-text.util';
+import { escapeHtml, renderRichTextField, urduFontFaceCss, latinFontFaceCss, containsArabicScript } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
 import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
@@ -604,8 +604,9 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
 <meta charset="UTF-8"/>
 <style>
   ${urduFontFaceCss()}
+  ${latinFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
+  body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 277mm; position: relative; }
   .accent-bar { height: 6px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
   .content { padding: 2mm 13mm 3mm; zoom: ${zoom}; }
@@ -872,8 +873,9 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
 <meta charset="UTF-8"/>
 <style>
   ${urduFontFaceCss()}
+  ${latinFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
+  body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 277mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
   .content { padding: 0 16mm; }
@@ -1773,6 +1775,15 @@ export class PdfService implements OnModuleDestroy {
       const page = await browser.newPage();
       try {
         await page.setContent(html, { waitUntil: 'load' });
+        // Every embedded @font-face here is a data: URI (no network round
+        // trip), but the browser's font-loading pipeline is still
+        // asynchronous - without this wait, a template whose layout
+        // depends on a specific embedded font's exact metrics (rather than
+        // whatever fallback font the host happens to have installed) could
+        // occasionally get measured/printed before that font finished
+        // swapping in, silently reintroducing host-font-dependent height
+        // differences this embedding was meant to eliminate.
+        await page.evaluate(() => (document as any).fonts.ready);
         // A nonzero top/bottom margin here (rather than baking all spacing
         // into each template's own .page/.content CSS padding) is what
         // makes a SECOND printed page start with a real inset instead of

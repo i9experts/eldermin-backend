@@ -120,6 +120,20 @@ describe('PdfService.generateReportCard', () => {
     expect(getHtml()).toContain('#2 of 30');
   });
 
+  // See exam-report-card.spec.ts's own version of this test for why: this
+  // template's layout math is just as dependent on 'Segoe UI' (a
+  // Windows-only font) not actually being present wherever Puppeteer/
+  // Chromium runs, which silently substitutes a differently-sized font and
+  // reintroduces exactly the page-bleed class of bug the min-height and
+  // density fixes above were meant to close for good.
+  it('embeds a specific Latin font instead of depending on whatever sans-serif font the host happens to have installed', async () => {
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26', term: 'Term 1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain("font-family: 'Inter';");
+    expect(html).toContain("body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif;");
+  });
+
   it('renders each optional section only when sectionsIncluded flags it', async () => {
     const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
     await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');

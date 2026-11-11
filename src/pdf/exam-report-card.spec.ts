@@ -171,4 +171,21 @@ describe('PdfService.generateExamReportCardPdf', () => {
     const html = getHtml();
     expect(html).toContain('white-space: nowrap; overflow: hidden; text-overflow: ellipsis;');
   });
+
+  // A report measured out to under the printable-area limit on one machine
+  // but still bled its last line onto a 2nd page in production, with no
+  // other difference in the underlying data - traced to 'Segoe UI' (the
+  // font this template's layout math was originally tuned against) not
+  // existing outside Windows, so Puppeteer/Chromium quietly substitutes
+  // whatever sans-serif font the host container happens to have, which
+  // renders every line of text at a slightly different height/width than
+  // what the layout was tuned against. Embedding a specific font (the same
+  // technique already used for Urdu text) removes that host dependency.
+  it('embeds a specific Latin font instead of depending on whatever sans-serif font the host happens to have installed', async () => {
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: REPORT_CARD });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain("font-family: 'Inter';");
+    expect(html).toContain("body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif;");
+  });
 });
