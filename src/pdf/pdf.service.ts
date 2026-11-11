@@ -582,7 +582,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; position: relative; }
+  .page { width: 210mm; min-height: 277mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
   .content { padding: 4mm 16mm 6mm; }
   .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
@@ -840,7 +840,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; position: relative; }
+  .page { width: 210mm; min-height: 277mm; position: relative; }
   .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
   .content { padding: 0 16mm; }
 
@@ -1063,7 +1063,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => {
   ${urduFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 5px; border-bottom: 3px solid #0E7C5A; margin-bottom: 6px; }
   .school-name { font-size: 20px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
   .school-sub { font-size: 11px; color: #6B5B3E; margin-top: 2px; }
@@ -1222,7 +1222,7 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #1e3a5f; margin-bottom: 10px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
@@ -1368,7 +1368,7 @@ const TARBIYAH_AGGREGATE_REPORT_TEMPLATE = (data: any) => `
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
   .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #1e3a5f; margin-bottom: 10px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
@@ -1745,13 +1745,26 @@ export class PdfService implements OnModuleDestroy {
         // flush against the paper edge: a template's own top padding only
         // ever applies once, at the very start of the HTML's continuous
         // flow - Chromium's print pagination just cuts that flow every
-        // 297mm, so any page after the first inherits none of it. A
-        // Puppeteer-level page margin, by contrast, is re-applied to every
-        // physical page the content spans. Each of the 6 templates that
-        // share this method (report card, exam report card, Qaida report,
-        // Tarbiyah report, Tarbiyah class/school report) has had its own
-        // top/bottom padding reduced by this same 10mm so a single-page
-        // document still looks exactly as before.
+        // PRINTABLE-area height, so any page after the first inherits none
+        // of a template's own top padding. A Puppeteer-level page margin,
+        // by contrast, is re-applied to every physical page the content
+        // spans. Each of the 6 templates that share this method (report
+        // card, exam report card, Qaida report, Tarbiyah report, Tarbiyah
+        // class/school report) has had its own top/bottom padding reduced
+        // by this same 10mm so a single-page document still looks exactly
+        // as before.
+        //
+        // IMPORTANT for any template using this method: with a 10mm top +
+        // 10mm bottom margin, the printable area per A4 page is only
+        // 297mm - 20mm = 277mm tall, NOT the full 297mm page size. Every
+        // one of these templates' top-level `.page` div had `min-height:
+        // 297mm` (the full page), which forced `.page` to be at least
+        // 20mm TALLER than what actually fits in the printable area on
+        // every single print, regardless of how little real content it
+        // held - guaranteeing a near-blank continuation page every time.
+        // `.page`'s min-height must always equal the printable area
+        // (pageHeight - top margin - bottom margin), not the raw page
+        // size, or this same bug reappears.
         const pdfBuffer = await page.pdf({
           format: 'A4',
           printBackground: true,

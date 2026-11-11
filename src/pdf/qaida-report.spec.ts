@@ -80,6 +80,21 @@ describe('PdfService.generateQaidaReport', () => {
     expect(html).not.toContain('margin-top: 16px; padding-top: 8px');
   });
 
+  // The real root cause behind this report bleeding onto extra pages at
+  // all, even before the compact-layout redesign above: htmlToPdf() prints
+  // with a 10mm top + 10mm bottom Puppeteer page margin, so the printable
+  // area per A4 page is only 277mm (297mm - 20mm), not the full 297mm -
+  // but `.page` declared `min-height: 297mm`, forcing it 20mm taller than
+  // what fits regardless of actual content, guaranteeing a near-blank
+  // continuation page on every print.
+  it("sizes .page's min-height to the printable area, not the raw A4 page size", async () => {
+    const { service, getHtml } = makeService({ school: SCHOOL, progress: PROGRESS });
+    await service.generateQaidaReport('demo-school', { studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('.page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }');
+    expect(html).not.toContain('min-height: 297mm');
+  });
+
   it('renders "Areas Needing Attention" as a single compact line instead of a row of pill chips', async () => {
     const progressWithErrors = {
       ...PROGRESS,
