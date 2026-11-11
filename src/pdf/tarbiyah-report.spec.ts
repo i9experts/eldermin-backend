@@ -61,7 +61,7 @@ describe('PdfService.generateTarbiyahReport', () => {
     const { service, getHtml } = makeService({ school: SCHOOL, assessment: ASSESSMENT });
     await service.generateTarbiyahReport('demo-school', { assessmentId: 'ta1' } as any, 'user1');
     const html = getHtml();
-    expect(html).toContain('.page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }');
+    expect(html).toContain('.page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }');
     expect(html).not.toContain('padding: 16mm; }');
   });
 

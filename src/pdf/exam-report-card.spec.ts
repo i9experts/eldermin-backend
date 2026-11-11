@@ -103,6 +103,22 @@ describe('PdfService.generateExamReportCardPdf', () => {
     expect(html).not.toContain('margin-top: 36px');
   });
 
+  // Root cause behind every one of this report's page-bleed reports, even
+  // after trimming the content spacing above: htmlToPdf() renders with a
+  // 10mm top + 10mm bottom Puppeteer page margin, so the real printable
+  // area on an A4 page is only 297mm - 20mm = 277mm tall - but this
+  // template's own `.page` div declared `min-height: 297mm` (the full,
+  // un-inset page size), forcing it to be at least 20mm taller than what
+  // actually fits, which alone guarantees a near-blank continuation page
+  // on every single print regardless of how little content there was.
+  it("sizes .page's min-height to the printable area (pageHeight minus the Puppeteer margin), not the raw A4 page size", async () => {
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: REPORT_CARD });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('.page { width: 210mm; min-height: 277mm; position: relative; }');
+    expect(html).not.toContain('min-height: 297mm');
+  });
+
   // A student with a larger subject load than the 2-subject fixture above
   // reported the same bleed: the table alone pushed the fixed-size score
   // ring/tiles/class-average/signature sections below it onto a second,

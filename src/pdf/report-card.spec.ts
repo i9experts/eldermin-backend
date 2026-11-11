@@ -65,6 +65,19 @@ describe('PdfService.generateReportCard', () => {
     expect(html).not.toContain('>0</div><div class="summary-label">Total Obtained');
   });
 
+  // htmlToPdf() prints with a 10mm top + 10mm bottom Puppeteer page
+  // margin, so the printable area per A4 page is only 277mm (297mm -
+  // 20mm), not the full 297mm - but `.page` declared `min-height: 297mm`,
+  // forcing it 20mm taller than what actually fits regardless of content,
+  // which alone guaranteed a near-blank continuation page on every print.
+  it("sizes .page's min-height to the printable area, not the raw A4 page size", async () => {
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26', term: 'Term 1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('.page { width: 210mm; min-height: 277mm; position: relative; }');
+    expect(html).not.toContain('min-height: 297mm');
+  });
+
   it('includes the term-wide class position, not a single-exam one', async () => {
     const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
     await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
