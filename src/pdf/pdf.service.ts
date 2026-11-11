@@ -844,10 +844,19 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   // genuinely variable one), shrink the table's own row spacing/font-size
   // and trim the fixed sections' margins in proportion to how far the real
   // subject count exceeds that baseline, so the report keeps fitting one
-  // page as the subject count keeps growing. At the baseline (<=6 subjects,
-  // `overflow` is 0) every value below resolves to the original constant.
+  // page as the subject count keeps growing.
+  //
+  // A report at exactly the old 6-subject baseline (unshrunk spacing)
+  // measured out to within a fraction of a millimeter of the 277mm
+  // printable-area limit - no real margin at all, so any small real-world
+  // variance (a longer assessment title wrapping onto a 2nd line, slightly
+  // different font metrics) was enough to tip it onto a near-blank 2nd
+  // page, which is exactly what kept being reported even after the
+  // min-height and subject-count fixes above. Starting the shrink 2
+  // subjects earlier gives every report, baseline included, real breathing
+  // room instead of being tuned to the exact edge.
   const subjectCount = (data.subjects || []).length;
-  const BASELINE_SUBJECTS = 6;
+  const BASELINE_SUBJECTS = 4;
   const overflow = Math.max(0, subjectCount - BASELINE_SUBJECTS);
   const clamp = (min: number, max: number, v: number) => Math.max(min, Math.min(max, v));
   const tdPadV = clamp(3, 7, 7 - overflow * 0.8);
@@ -880,7 +889,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .school-sub { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
   .doc-meta { text-align: right; }
   .doc-eyebrow { font-size: 9.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
-  .doc-title { font-size: 14px; font-weight: 700; color: #1B4F8A; margin-top: 2px; max-width: 260px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #1B4F8A; margin-top: 2px; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .doc-year { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
   .status-pill { display: inline-block; margin-top: 6px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 3px 11px; }
   .status-published { color: #15803D; background: #DCFCE7; }
