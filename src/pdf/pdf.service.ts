@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as puppeteer from 'puppeteer';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import { IsString, IsOptional, IsMongoId, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsMongoId, IsInt, IsIn, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules/report-templates/procurement-report-sections';
@@ -290,6 +290,17 @@ export class GenerateReportCardDto {
 export class GenerateExamReportCardDto {
   @IsMongoId() assessmentId: string;
   @IsMongoId() studentId: string;
+}
+
+/** Download every matching student's per-exam report card as one combined
+ * PDF, instead of the Results tab's staff having to click "Download" once
+ * per row - the complaint this was built to fix. section/result mirror the
+ * same client-side filters the Results tab's own list already applies, so
+ * "download all" always means exactly the rows currently shown there. */
+export class BulkExamReportCardsDto {
+  @IsMongoId() assessmentId: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @IsIn(['pass', 'fail']) result?: string;
 }
 
 export class GenerateInvoiceDto {
@@ -2150,6 +2161,58 @@ export class PdfService implements OnModuleDestroy {
     });
 
     return pdf;
+  }
+
+  /** Caps how many students a single "Download All" request will render,
+   * so a school accidentally requesting an entire campus at once gets a
+   * clear error (narrow the filters) instead of a request that ties up a
+   * Puppeteer page for minutes or runs the container out of memory. */
+  private static readonly MAX_BULK_REPORT_CARDS = 100;
+
+  /**
+   * Download every report card matching an assessment (optionally narrowed
+   * by section/result, the same two filters the Results tab's own list
+   * already applies) as a single combined PDF - school admins were
+   * downloading these one student at a time otherwise. Reuses
+   * generateExamReportCardPdf as-is for each student (so a bulk download is
+   * byte-for-byte the same per-student pages as the single-download button,
+   * including every page-fit fix already made to that template) and merges
+   * the resulting PDFs together with pdf-lib rather than re-deriving the
+   * template's data/HTML here.
+   */
+  async generateBulkExamReportCardsPdf(
+    schoolSlug: string,
+    dto: BulkExamReportCardsDto,
+    userId: string,
+  ): Promise<Buffer> {
+    const filter: any = { schoolSlug, assessmentId: dto.assessmentId };
+    if (dto.section) filter.section = dto.section;
+    if (dto.result) filter.overallResult = dto.result;
+
+    const cards: any[] = await this.reportCardModel
+      .find(filter)
+      .sort({ classPosition: 1 })
+      .select('assessmentId studentId')
+      .lean();
+    if (!cards.length) throw new NotFoundException('No report cards match these filters.');
+    if (cards.length > PdfService.MAX_BULK_REPORT_CARDS) {
+      throw new BadRequestException(
+        `${cards.length} report cards match these filters - narrow them (e.g. by section) to ${PdfService.MAX_BULK_REPORT_CARDS} or fewer at a time.`,
+      );
+    }
+
+    const merged = await PDFDocument.create();
+    for (const card of cards) {
+      const pdf = await this.generateExamReportCardPdf(
+        schoolSlug,
+        { assessmentId: String(card.assessmentId), studentId: String(card.studentId) },
+        userId,
+      );
+      const doc = await PDFDocument.load(pdf);
+      const copiedPages = await merged.copyPages(doc, doc.getPageIndices());
+      for (const page of copiedPages) merged.addPage(page);
+    }
+    return Buffer.from(await merged.save());
   }
 
   /**
