@@ -573,6 +573,30 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   // for a plain notice instead of a misleading 0%/F grade/position.
   const hasAcademicData = data.hasAcademicData !== false;
 
+  // This report's length isn't driven by subject count alone the way a
+  // single-exam result is - it's a whole-term summary that can carry up to
+  // six optional sections (Tarbiyah, Qaida, Nazra, Attendance, Parent
+  // Engagement, Teacher Feedback) plus class teacher/principal remarks, each
+  // with its own free-text and list content. A fixed-size layout tuned to
+  // one combination of these (e.g. 5 subjects + 3 sections) reliably bleeds
+  // onto a near-blank 2nd page the moment a student has more sections
+  // enabled, more feedback entries, or a longer remark - exactly what kept
+  // being reported even after the printable-area min-height fix. Rather than
+  // hand-tuning dozens of CSS values against every possible combination,
+  // scale the whole content box down with CSS `zoom` (which, unlike
+  // `transform: scale`, actually reduces Chromium's print-layout flow, not
+  // just the visual appearance) in proportion to how much is actually on
+  // the page.
+  const sectionCount = ['tarbiyah', 'qaida', 'nazra', 'attendance', 'parentEngagement', 'teacherFeedback']
+    .filter((k) => included[k]).length;
+  const subjectCount = (data.subjects || []).length;
+  const feedbackCount = (data.teacherFeedback || []).length;
+  const remarksBlocks = (data.remarks ? 1 : 0) + (data.principalRemarks ? 1 : 0);
+  const BASELINE_DENSITY = 5 /* subjects */ + 3 /* sections */ + 1 /* feedback entry */ + 1 /* one remarks block */;
+  const density = subjectCount + sectionCount + feedbackCount + remarksBlocks;
+  const overflow = Math.max(0, density - BASELINE_DENSITY);
+  const zoom = Math.max(0.75, 1 - overflow * 0.028);
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -583,79 +607,80 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
   .page { width: 210mm; min-height: 277mm; position: relative; }
-  .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
-  .content { padding: 4mm 16mm 6mm; }
+  .accent-bar { height: 6px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
+  .content { padding: 2mm 13mm 3mm; zoom: ${zoom}; }
   .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
     background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
     padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
-  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 2px solid #EEF4FB; margin-bottom: 18px; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .logo { height: 46px; width: 46px; object-fit: contain; border-radius: 8px; }
-  .school-name { font-size: 20px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
-  .school-sub { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; margin-bottom: 6px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { height: 36px; width: 36px; object-fit: contain; border-radius: 8px; }
+  .school-name { font-size: 16px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
+  .school-sub { font-size: 9.5px; color: #7A9AB8; margin-top: 1px; }
   .doc-meta { text-align: right; }
-  .doc-eyebrow { font-size: 9.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
-  .doc-title { font-size: 14px; font-weight: 700; color: #1B4F8A; margin-top: 2px; }
-  .doc-year { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
-  .status-pill { display: inline-block; margin-top: 6px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 3px 11px; }
+  .doc-eyebrow { font-size: 8.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
+  .doc-title { font-size: 12px; font-weight: 700; color: #1B4F8A; margin-top: 1px; }
+  .doc-year { font-size: 9.5px; color: #7A9AB8; margin-top: 1px; }
+  .status-pill { display: inline-block; margin-top: 3px; font-size: 8.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 2px 9px; }
   .status-published { color: #15803D; background: #DCFCE7; }
   .status-draft { color: #B45309; background: #FEF3C7; }
-  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; }
-  .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
+  .student-card { display: flex; align-items: center; gap: 12px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 6px 12px; margin-bottom: 6px; }
+  .avatar { flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; }
   .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
-  .student-box { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
-  .info-label { font-size: 9.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
-  .info-value { font-size: 14px; font-weight: 700; color: #0D1F35; }
-  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
+  .student-box { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px 14px; }
+  .info-label { font-size: 8.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1px; }
+  .info-value { font-size: 11.5px; font-weight: 700; color: #0D1F35; }
+  .section-title { font-size: 10.5px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 6px 0 4px; padding-bottom: 2px; border-bottom: 2px solid #EEF4FB; }
   .section-title:first-of-type { margin-top: 0; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 12.5px; }
-  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11px; }
+  th { background: #1B4F8A; color: #fff; padding: 4px 8px; text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 3px 8px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
   tr:nth-child(even) td { background: #F9FBFD; }
   .num { text-align: right; white-space: nowrap; }
   .of-max { color: #94A3B8; font-weight: 400; }
-  .absent-tag { color: #DC2626; font-size: 9.5px; font-weight: 700; margin-left: 4px; }
-  .mastery-track { width: 100px; height: 6px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
+  .absent-tag { color: #DC2626; font-size: 9px; font-weight: 700; margin-left: 4px; }
+  .mastery-track { width: 90px; height: 5px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
   .mastery-fill { height: 100%; border-radius: 4px; }
-  .grade-pill { display: inline-block; min-width: 30px; text-align: center; font-weight: 800; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; }
+  .grade-pill { display: inline-block; min-width: 28px; text-align: center; font-weight: 800; font-size: 10px; border-radius: 999px; padding: 1px 8px; }
   .grade-a { color: #16A34A; font-weight: 700; }
   .grade-b { color: #2563EB; font-weight: 700; }
   .grade-c { color: #D97706; font-weight: 700; }
   .grade-d { color: #DC2626; font-weight: 700; }
-  .results-row { display: flex; gap: 16px; align-items: stretch; margin: 18px 0 6px; }
-  .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px; }
-  .ring-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
-  .result-tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .result-tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 10px; padding: 12px 14px; }
-  .result-tile-num { font-size: 18px; font-weight: 800; color: #1B4F8A; }
-  .result-tile-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
-  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 12px; text-align: center; }
-  .summary-num { font-size: 22px; font-weight: 800; color: #1B4F8A; }
-  .summary-label { font-size: 10px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
-  .tags-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-  .tag { font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; }
+  .results-row { display: flex; gap: 10px; align-items: stretch; margin: 5px 0 3px; }
+  .ring-card { flex: 0 0 90px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; }
+  .ring-card svg { width: 68px; height: 68px; }
+  .ring-label { font-size: 8.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
+  .result-tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+  .result-tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 8px; padding: 5px 8px; }
+  .result-tile-num { font-size: 14px; font-weight: 800; color: #1B4F8A; }
+  .result-tile-label { font-size: 8.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 4px; }
+  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 8px; padding: 4px; text-align: center; }
+  .summary-num { font-size: 16px; font-weight: 800; color: #1B4F8A; }
+  .summary-label { font-size: 8.5px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  .tags-row { display: flex; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+  .tag { font-size: 9.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
   .tag-strong { background: #ECFDF5; color: #16A34A; }
   .tag-weak { background: #FEF3DC; color: #B45309; }
-  .bar-item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .bar-name { font-size: 11px; color: #3D5A7A; width: 130px; flex-shrink: 0; }
-  .bar-wrap { flex: 1; background: #EEF4FB; border-radius: 4px; height: 8px; overflow: hidden; }
+  .bar-item { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .bar-name { font-size: 9.5px; color: #3D5A7A; width: 110px; flex-shrink: 0; }
+  .bar-wrap { flex: 1; background: #EEF4FB; border-radius: 4px; height: 6px; overflow: hidden; }
   .bar-fill { height: 100%; border-radius: 4px; background: #1B4F8A; }
-  .bar-score { font-size: 11px; font-weight: 700; color: #1B4F8A; width: 36px; text-align: right; flex-shrink: 0; }
-  .tarb-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 20px; margin-bottom: 10px; }
-  .list-item { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #F7FAFD; }
-  .note { font-size: 12px; color: #3D5A7A; line-height: 1.5; margin-bottom: 8px; }
-  .muted { font-size: 12px; color: #9CA7B8; font-style: italic; margin-bottom: 14px; }
-  .feedback-item { background: #F7FAFD; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
-  .feedback-text { font-size: 12px; color: #0D1F35; }
-  .feedback-meta { font-size: 10px; color: #9CA7B8; margin-top: 2px; }
-  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 12px 14px; margin-bottom: 14px; }
-  .remarks-text { font-size: 12.5px; color: #0D1F35; line-height: 1.55; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 4px; }
+  .bar-score { font-size: 9.5px; font-weight: 700; color: #1B4F8A; width: 32px; text-align: right; flex-shrink: 0; }
+  .tarb-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px 18px; margin-bottom: 3px; }
+  .list-item { display: flex; justify-content: space-between; font-size: 10.5px; padding: 1px 0; border-bottom: 1px solid #F7FAFD; }
+  .note { font-size: 10.5px; color: #3D5A7A; line-height: 1.35; margin-bottom: 3px; }
+  .muted { font-size: 10.5px; color: #9CA7B8; font-style: italic; margin-bottom: 4px; }
+  .feedback-item { background: #F7FAFD; border-radius: 6px; padding: 4px 8px; margin-bottom: 2px; }
+  .feedback-text { font-size: 10.5px; color: #0D1F35; }
+  .feedback-meta { font-size: 9px; color: #9CA7B8; margin-top: 1px; }
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 6px 10px; margin-bottom: 4px; }
+  .remarks-text { font-size: 10.5px; color: #0D1F35; line-height: 1.4; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 2px; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: 30px; }
-  .sig-label { font-size: 10.5px; color: #3D5A7A; font-weight: 700; }
-  .footer { text-align: center; margin-top: 22px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
+  .sig-line { width: 120px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 3px; height: 18px; }
+  .sig-label { font-size: 9.5px; color: #3D5A7A; font-weight: 700; }
+  .footer { text-align: center; margin-top: 6px; font-size: 8.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 4px; }
   .footer strong { color: #1B4F8A; }
 </style>
 </head>

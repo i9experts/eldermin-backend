@@ -78,6 +78,42 @@ describe('PdfService.generateReportCard', () => {
     expect(html).not.toContain('min-height: 297mm');
   });
 
+  // The min-height fix above wasn't enough on its own: unlike the per-exam
+  // report card, this whole-term report can carry up to six optional
+  // sections (Tarbiyah/Qaida/Nazra/Attendance/Parent Engagement/Teacher
+  // Feedback) plus remarks, each with its own free text - so a student with
+  // only a handful of subjects but several sections enabled, or a couple of
+  // feedback entries, still overflowed onto a near-blank 2nd page. Rather
+  // than one fixed layout, the content box is scaled down (via CSS `zoom`,
+  // which actually shrinks Chromium's print layout, not just a visual
+  // transform) in proportion to how much is really on the page.
+  it('does not shrink a light report (few subjects/sections) below full size', async () => {
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26', term: 'Term 1' } as any, 'user1');
+    expect(getHtml()).toContain('.content { padding: 2mm 13mm 3mm; zoom: 1; }');
+  });
+
+  it('shrinks a dense report (many subjects, every section, multiple feedback entries) to keep it on one page', async () => {
+    const denseReportCard = {
+      ...TERM_REPORT_CARD,
+      subjects: Array.from({ length: 8 }, (_, i) => ({ subject: `Subject ${i + 1}`, obtainedMarks: 80, totalMarks: 100, percentage: 80, grade: 'A' })),
+      sectionsIncluded: { tarbiyah: true, qaida: true, nazra: true, attendance: true, teacherFeedback: true, parentEngagement: true },
+      teacherFeedback: [
+        { subject: 'English', text: 'Great progress', author: 'Ms. A', date: '2025-10-01' },
+        { subject: 'Math', text: 'Strong problem solving', author: 'Mr. B', date: '2025-10-10' },
+      ],
+      principalRemarks: 'Well done this term.',
+      qaida: { overallStatus: 'in_progress', currentTakhti: 10, totalTakhtis: 16, masteryPct: 60 },
+      nazra: { overallStatus: 'in_progress', currentPara: 5, totalParas: 30, completionPct: 17 },
+    };
+    const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: denseReportCard });
+    await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26', term: 'Term 1' } as any, 'user1');
+    const html = getHtml();
+    const zoomMatch = html.match(/\.content \{ padding: 2mm 13mm 3mm; zoom: ([0-9.]+); \}/);
+    expect(zoomMatch).not.toBeNull();
+    expect(Number(zoomMatch![1])).toBeLessThan(1);
+  });
+
   it('includes the term-wide class position, not a single-exam one', async () => {
     const { service, getHtml } = makeService({ student: STUDENT, school: SCHOOL, termReportCard: TERM_REPORT_CARD });
     await service.generateReportCard('demo-school', { studentId: 's1', academicYear: '2025-26' } as any, 'user1');
