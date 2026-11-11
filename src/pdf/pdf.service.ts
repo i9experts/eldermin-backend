@@ -1041,6 +1041,35 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => {
   // order instead of a properly joined/reordered Urdu word. Same fix as
   // the comprehensive report card template (REPORT_CARD_TEMPLATE).
   const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+
+  // The Takhti table itself is a fixed 16 rows, so PR #299's padding trim
+  // reliably brought a short-remarks report down to 2 pages - but a real
+  // student's per-takhti teacher remarks, the "Areas Needing Attention"
+  // error chips, and the overall-remarks paragraph are all genuinely
+  // variable-length free text, not fixed-size content. A student with
+  // longer recorded remarks on several takhtis, more than a couple of
+  // common errors, or a longer overall remark wraps those sections onto
+  // extra lines that PR #299 never accounted for, bleeding onto a 3rd page
+  // again. Estimate how much extra text this report carries over the short
+  // baseline that trim was tuned against, and shrink spacing further in
+  // proportion - same approach as the exam report card's subject-count fix.
+  const remarksChars = (data.takhtis || []).reduce((sum: number, t: any) => {
+    const r = String(t.latestAttempt?.remarks || '');
+    const from = String(t.latestAttempt?.sabaqFrom || '');
+    const to = String(t.latestAttempt?.sabaqTo || '');
+    return sum + r.length + from.length + to.length;
+  }, 0);
+  const commonErrorsCount = (data.commonErrors || []).length;
+  const overallRemarksLen = String(data.overallRemarks || '').length;
+  const clamp = (min: number, max: number, v: number) => Math.max(min, Math.min(max, v));
+  const overflow =
+    Math.max(0, (remarksChars - 150) / 80) +
+    Math.max(0, commonErrorsCount) * 0.4 +
+    Math.max(0, overallRemarksLen - 60) / 100;
+  const tdPadV = clamp(2, 4, 4 - overflow * 0.6);
+  const thPadV = clamp(4, 6, 6 - overflow * 0.4);
+  const rowFontSize = clamp(10, 11.5, 11.5 - overflow * 0.3);
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -1051,38 +1080,38 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => {
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
   .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #0E7C5A; margin-bottom: 10px; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: ${clamp(5, 8, 8 - overflow * 0.6)}px; border-bottom: 3px solid #0E7C5A; margin-bottom: ${clamp(6, 10, 10 - overflow)}px; }
   .school-name { font-size: 22px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
   .school-sub { font-size: 12px; color: #6B5B3E; margin-top: 2px; }
   .doc-title { font-size: 15px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
   .doc-sub { font-size: 11px; color: #6B5B3E; text-align: right; margin-top: 2px; }
-  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 10px; margin-bottom: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: ${clamp(6, 10, 10 - overflow * 0.6)}px; margin-bottom: ${clamp(8, 12, 12 - overflow)}px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .info-label { font-size: 10px; font-weight: 700; color: #9C8A66; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
   .info-value { font-size: 14px; font-weight: 600; color: #2B2016; }
-  .section-title { font-size: 13px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; margin-top: 12px; padding-bottom: 6px; border-bottom: 2px solid #EAF5F0; }
+  .section-title { font-size: 13px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: ${clamp(4, 6, 6 - overflow * 0.4)}px; margin-top: ${clamp(8, 12, 12 - overflow)}px; padding-bottom: ${clamp(4, 6, 6 - overflow * 0.4)}px; border-bottom: 2px solid #EAF5F0; }
   .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 4px; }
-  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 8px; text-align: center; }
+  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: ${clamp(6, 8, 8 - overflow * 0.4)}px; text-align: center; }
   .summary-num { font-size: 24px; font-weight: 800; color: #0E7C5A; }
   .summary-label { font-size: 10px; color: #9C8A66; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
   .journey-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
-  .journey-tile { border-radius: 8px; padding: 6px 4px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
+  .journey-tile { border-radius: 8px; padding: ${clamp(4, 6, 6 - overflow * 0.4)}px 4px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
   .journey-num { font-size: 15px; font-weight: 800; }
   .journey-title { font-size: 8px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11.5px; }
-  th { background: #0E7C5A; color: #fff; padding: 6px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 4px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: ${rowFontSize}px; }
+  th { background: #0E7C5A; color: #fff; padding: ${thPadV}px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: ${tdPadV}px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
   tr:nth-child(even) td { background: #FBF8F0; }
   .status-pill { display: inline-block; padding: 2px 9px; border-radius: 100px; font-size: 9.5px; font-weight: 700; }
   .urdu { font-size: 12px; direction: rtl; color: #6B5B3E; font-family: 'Noto Nastaliq Urdu', 'Segoe UI', Arial, sans-serif; }
   .error-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
   .error-chip { background: #FEF3DC; border: 1px solid #F0D5A0; color: #8A5A0A; border-radius: 100px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
   .error-chip b { color: #C8811A; }
-  .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 8px; border-top: 1px solid #EADFC4; }
+  .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: ${clamp(8, 14, 14 - overflow * 1.5)}px; font-size: 13px; line-height: 1.6; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: ${clamp(8, 16, 16 - overflow * 2)}px; padding-top: ${clamp(4, 8, 8 - overflow)}px; border-top: 1px solid #EADFC4; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 6px; height: 32px; }
+  .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 6px; height: ${clamp(24, 32, 32 - overflow * 2)}px; }
   .sig-label { font-size: 11px; color: #6B5B3E; font-weight: 600; }
-  .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #9C8A66; border-top: 1px solid #EAF5F0; padding-top: 10px; }
+  .footer { text-align: center; margin-top: ${clamp(10, 20, 20 - overflow * 2)}px; font-size: 10px; color: #9C8A66; border-top: 1px solid #EAF5F0; padding-top: ${clamp(5, 10, 10 - overflow)}px; }
   .footer strong { color: #0E7C5A; }
 </style>
 </head>
