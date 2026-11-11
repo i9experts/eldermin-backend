@@ -1030,26 +1030,26 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => {
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
   .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #0E7C5A; margin-bottom: 18px; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #0E7C5A; margin-bottom: 10px; }
   .school-name { font-size: 22px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
   .school-sub { font-size: 12px; color: #6B5B3E; margin-top: 2px; }
   .doc-title { font-size: 15px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
   .doc-sub { font-size: 11px; color: #6B5B3E; text-align: right; margin-top: 2px; }
-  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 10px; margin-bottom: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .info-label { font-size: 10px; font-weight: 700; color: #9C8A66; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
   .info-value { font-size: 14px; font-weight: 600; color: #2B2016; }
-  .section-title { font-size: 13px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EAF5F0; }
+  .section-title { font-size: 13px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; margin-top: 12px; padding-bottom: 6px; border-bottom: 2px solid #EAF5F0; }
   .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 4px; }
-  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 12px; text-align: center; }
+  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 8px; text-align: center; }
   .summary-num { font-size: 24px; font-weight: 800; color: #0E7C5A; }
   .summary-label { font-size: 10px; color: #9C8A66; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
   .journey-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
-  .journey-tile { border-radius: 8px; padding: 8px 4px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
+  .journey-tile { border-radius: 8px; padding: 6px 4px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
   .journey-num { font-size: 15px; font-weight: 800; }
   .journey-title { font-size: 8px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11.5px; }
-  th { background: #0E7C5A; color: #fff; padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 7px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
+  th { background: #0E7C5A; color: #fff; padding: 6px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 4px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
   tr:nth-child(even) td { background: #FBF8F0; }
   .status-pill { display: inline-block; padding: 2px 9px; border-radius: 100px; font-size: 9.5px; font-weight: 700; }
   .urdu { font-size: 12px; direction: rtl; color: #6B5B3E; font-family: 'Noto Nastaliq Urdu', 'Segoe UI', Arial, sans-serif; }
@@ -1057,7 +1057,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => {
   .error-chip { background: #FEF3DC; border: 1px solid #F0D5A0; color: #8A5A0A; border-radius: 100px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
   .error-chip b { color: #C8811A; }
   .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 34px; padding-top: 16px; border-top: 1px solid #EADFC4; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 8px; border-top: 1px solid #EADFC4; }
   .sig-item { text-align: center; }
   .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 6px; height: 32px; }
   .sig-label { font-size: 11px; color: #6B5B3E; font-weight: 600; }
@@ -1191,17 +1191,17 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
   .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #1e3a5f; margin-bottom: 10px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
   .school-name { font-size: 22px; font-weight: 800; color: #1e3a5f; letter-spacing: -0.5px; }
   .school-sub { font-size: 12px; color: #5B7290; margin-top: 2px; }
   .doc-title { font-size: 15px; font-weight: 700; color: #B45309; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
   .doc-sub { font-size: 11px; color: #5B7290; text-align: right; margin-top: 2px; }
-  .student-box { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .student-box { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 10px; margin-bottom: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .info-label { font-size: 10px; font-weight: 700; color: #8295AE; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
   .info-value { font-size: 14px; font-weight: 600; color: #1E2A3A; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
+  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; margin-top: 12px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
   .hero { display: flex; align-items: center; gap: 24px; background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 12px; padding: 20px; }
   .hero-score { font-size: 42px; font-weight: 900; color: #1e3a5f; line-height: 1; }
   .hero-max { font-size: 14px; color: #8295AE; font-weight: 600; }
@@ -1211,8 +1211,8 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
   .rating-pill { display: inline-block; padding: 4px 14px; border-radius: 100px; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
   .share-pill { display: inline-block; padding: 3px 10px; border-radius: 100px; font-size: 10.5px; font-weight: 700; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11.5px; }
-  th { background: #1e3a5f; color: #fff; padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 7px 10px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
+  th { background: #1e3a5f; color: #fff; padding: 6px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 4px 10px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
   tr:nth-child(even) td { background: #F9FAFC; }
   .cat-chip { display: inline-block; padding: 1px 8px; border-radius: 100px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
   .local-script { direction: rtl; font-size: 13px; color: #5B7290; font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif; }
@@ -1221,7 +1221,7 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
   .list-card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
   .list-item { font-size: 12px; margin-bottom: 5px; display: flex; justify-content: space-between; }
   .remarks-box { background: #F9FAFC; border: 1px solid #EEF2F8; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 34px; padding-top: 16px; border-top: 1px solid #EEF2F8; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 8px; border-top: 1px solid #EEF2F8; }
   .sig-item { text-align: center; }
   .sig-line { width: 140px; border-bottom: 1.5px solid #1E2A3A; margin-bottom: 6px; height: 32px; }
   .sig-label { font-size: 11px; color: #5B7290; font-weight: 600; }
@@ -1337,7 +1337,7 @@ const TARBIYAH_AGGREGATE_REPORT_TEMPLATE = (data: any) => `
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
   .page { width: 210mm; min-height: 297mm; padding: 6mm 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #1e3a5f; margin-bottom: 10px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
   .school-name { font-size: 22px; font-weight: 800; color: #1e3a5f; letter-spacing: -0.5px; }
@@ -1348,10 +1348,10 @@ const TARBIYAH_AGGREGATE_REPORT_TEMPLATE = (data: any) => `
   .summary-tile { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 14px; text-align: center; }
   .summary-tile .num { font-size: 24px; font-weight: 800; color: #1e3a5f; }
   .summary-tile .label { font-size: 10px; font-weight: 700; color: #8295AE; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
+  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; margin-top: 12px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11px; }
-  th { background: #1e3a5f; color: #fff; padding: 7px 9px; text-align: left; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
-  td { padding: 6px 9px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
+  th { background: #1e3a5f; color: #fff; padding: 5px 9px; text-align: left; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+  td { padding: 4px 9px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
   tr:nth-child(even) td { background: #F9FAFC; }
   .local-script { direction: rtl; font-size: 12px; color: #5B7290; font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif; }
   .cat-chip { display: inline-block; padding: 1px 8px; border-radius: 100px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
