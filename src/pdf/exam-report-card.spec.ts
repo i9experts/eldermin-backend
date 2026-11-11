@@ -97,7 +97,7 @@ describe('PdfService.generateExamReportCardPdf', () => {
     const { service, getHtml } = makeService({ school: SCHOOL, reportCard: REPORT_CARD });
     await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
     const html = getHtml();
-    expect(html).toContain('.content { padding: 10mm 16mm 10mm; }');
+    expect(html).toContain('.content { padding: 0 16mm; }');
     expect(html).toContain('.sig-row { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 4px; }');
     expect(html).not.toContain('padding: 14mm 16mm 16mm');
     expect(html).not.toContain('margin-top: 36px');
