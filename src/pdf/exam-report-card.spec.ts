@@ -102,4 +102,37 @@ describe('PdfService.generateExamReportCardPdf', () => {
     expect(html).not.toContain('padding: 14mm 16mm 16mm');
     expect(html).not.toContain('margin-top: 36px');
   });
+
+  // A student with a larger subject load than the 2-subject fixture above
+  // reported the same bleed: the table alone pushed the fixed-size score
+  // ring/tiles/class-average/signature sections below it onto a second,
+  // near-empty page. The one-size spacing trim above was tuned against a
+  // short table and doesn't hold as the real subject count grows, so row
+  // spacing/font-size and the fixed sections' margins now shrink in
+  // proportion to how many subjects exceed the untouched baseline.
+  it('shrinks table row spacing and trims section margins as the subject count grows past the baseline, to keep a many-subject report on one page', async () => {
+    const manySubjects = Array.from({ length: 10 }, (_, i) => ({
+      subject: `Subject ${i + 1}`, obtainedMarks: 25, totalMarks: 30, percentage: 83.3, grade: 'A',
+    }));
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: { ...REPORT_CARD, subjects: manySubjects } });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    // 10 subjects is 4 over the 6-subject baseline, so td/th padding and the
+    // signature row's margin-top must all be pulled in below their baseline
+    // (unshrunk) values.
+    expect(html).toMatch(/td \{ padding: (?!7px)[0-9.]+px 12px;/);
+    expect(html).toMatch(/th \{ background: #1B4F8A; color: #fff; padding: (?!7px)[0-9.]+px 12px;/);
+    expect(html).toMatch(/\.sig-row \{ display: flex; justify-content: space-between; margin-top: (?!18px)[0-9.]+px;/);
+  });
+
+  it('keeps the untouched baseline spacing for a report at or under the 6-subject baseline', async () => {
+    const sixSubjects = Array.from({ length: 6 }, (_, i) => ({
+      subject: `Subject ${i + 1}`, obtainedMarks: 25, totalMarks: 30, percentage: 83.3, grade: 'A',
+    }));
+    const { service, getHtml } = makeService({ school: SCHOOL, reportCard: { ...REPORT_CARD, subjects: sixSubjects } });
+    await service.generateExamReportCardPdf('demo-school', { assessmentId: 'a1', studentId: 's1' } as any, 'user1');
+    const html = getHtml();
+    expect(html).toContain('td { padding: 7px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }');
+    expect(html).toContain('.sig-row { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 4px; }');
+  });
 });

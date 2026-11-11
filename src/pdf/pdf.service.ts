@@ -810,6 +810,27 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
 
   const positionMedal = data.classPosition === 1 ? '🥇' : data.classPosition === 2 ? '🥈' : data.classPosition === 3 ? '🥉' : null;
 
+  // The sections below the subjects table (score ring, tiles, class-average
+  // bars, remarks, signatures) are fixed-size, but the table itself grows
+  // with the student's real subject count - a student with more subjects
+  // than the ~6 this single-page layout was tuned against pushes everything
+  // below the table onto an otherwise near-blank second page. Rather than a
+  // one-size padding trim (fine for a fixed-length document, not for a
+  // genuinely variable one), shrink the table's own row spacing/font-size
+  // and trim the fixed sections' margins in proportion to how far the real
+  // subject count exceeds that baseline, so the report keeps fitting one
+  // page as the subject count keeps growing. At the baseline (<=6 subjects,
+  // `overflow` is 0) every value below resolves to the original constant.
+  const subjectCount = (data.subjects || []).length;
+  const BASELINE_SUBJECTS = 6;
+  const overflow = Math.max(0, subjectCount - BASELINE_SUBJECTS);
+  const clamp = (min: number, max: number, v: number) => Math.max(min, Math.min(max, v));
+  const tdPadV = clamp(3, 7, 7 - overflow * 0.8);
+  const thPadV = clamp(4, 7, 7 - overflow * 0.6);
+  const rowFontSize = clamp(10.5, 12.5, 12.5 - overflow * 0.3);
+  const masteryWidth = clamp(70, 100, 100 - overflow * 4);
+  const trim = clamp(0, 8, overflow * 1.2);
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -827,7 +848,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
     background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
     padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
 
-  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 2px solid #EEF4FB; margin-bottom: 12px; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: ${clamp(6, 10, 10 - overflow * 0.6)}px; border-bottom: 2px solid #EEF4FB; margin-bottom: ${clamp(6, 12, 12 - trim)}px; }
   .brand { display: flex; align-items: center; gap: 12px; }
   .logo { height: 46px; width: 46px; object-fit: contain; border-radius: 8px; }
   .school-name { font-size: 20px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
@@ -840,7 +861,7 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .status-published { color: #15803D; background: #DCFCE7; }
   .status-draft { color: #B45309; background: #FEF3C7; }
 
-  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: 12px 18px; margin-bottom: 14px; }
+  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: ${clamp(8, 12, 12 - overflow * 0.6)}px 18px; margin-bottom: ${clamp(6, 14, 14 - trim)}px; }
   .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
   .student-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
   .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
@@ -849,45 +870,45 @@ const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
   .result-pass { color: #15803D; }
   .result-fail { color: #B91C1C; }
 
-  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 12px 0 8px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
+  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: ${clamp(6, 12, 12 - trim * 0.7)}px 0 ${clamp(4, 8, 8 - overflow * 0.4)}px; padding-bottom: ${clamp(3, 6, 6 - overflow * 0.3)}px; border-bottom: 2px solid #EEF4FB; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th { background: #1B4F8A; color: #fff; padding: 7px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 7px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  table { width: 100%; border-collapse: collapse; font-size: ${rowFontSize}px; }
+  th { background: #1B4F8A; color: #fff; padding: ${thPadV}px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: ${tdPadV}px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
   tr:nth-child(even) td { background: #F9FBFD; }
   .num { text-align: right; white-space: nowrap; }
   .of-max { color: #94A3B8; font-weight: 400; }
   .absent-tag { color: #DC2626; font-size: 9.5px; font-weight: 700; margin-left: 4px; }
-  .mastery-track { width: 100px; height: 6px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
+  .mastery-track { width: ${masteryWidth}px; height: 6px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
   .mastery-fill { height: 100%; border-radius: 4px; }
   .grade-pill { display: inline-block; min-width: 30px; text-align: center; font-weight: 800; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; }
 
-  .results-row { display: flex; gap: 16px; align-items: stretch; margin: 12px 0 4px; }
-  .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 14px; }
+  .results-row { display: flex; gap: 16px; align-items: stretch; margin: ${clamp(6, 12, 12 - trim * 0.7)}px 0 4px; }
+  .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: ${clamp(8, 14, 14 - overflow * 0.6)}px; }
   .ring-pct { font-size: 20px; font-weight: 800; }
   .ring-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
   .tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 10px; padding: 12px 14px; }
+  .tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 10px; padding: ${clamp(8, 12, 12 - overflow * 0.4)}px 14px; }
   .tile-num { font-size: 18px; font-weight: 800; color: #1B4F8A; }
   .tile-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
 
-  .compare { margin-top: 4px; margin-bottom: 10px; }
-  .compare-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .compare { margin-top: 4px; margin-bottom: ${clamp(4, 10, 10 - trim * 0.6)}px; }
+  .compare-row { display: flex; align-items: center; gap: 10px; margin-top: ${clamp(4, 6, 6 - overflow * 0.2)}px; }
   .compare-name { width: 110px; font-size: 10.5px; color: #3D5A7A; flex-shrink: 0; }
   .compare-track { flex: 1; height: 9px; border-radius: 5px; background: #EEF4FB; overflow: hidden; }
   .compare-fill { height: 100%; border-radius: 5px; }
   .compare-val { width: 44px; text-align: right; font-size: 10.5px; font-weight: 700; color: #1B4F8A; flex-shrink: 0; }
 
-  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 10px 14px; margin-bottom: 10px; }
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: ${clamp(6, 10, 10 - overflow * 0.4)}px 14px; margin-bottom: ${clamp(4, 10, 10 - trim * 0.6)}px; }
   .remarks-label { font-size: 9.5px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
   .remarks-text { font-size: 12.5px; color: #0D1F35; line-height: 1.55; }
 
-  .sig-row { display: flex; justify-content: space-between; margin-top: 18px; padding-top: 4px; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: ${clamp(8, 18, 18 - trim * 1.2)}px; padding-top: 4px; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: 30px; }
+  .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: ${clamp(20, 30, 30 - overflow)}px; }
   .sig-label { font-size: 10.5px; color: #3D5A7A; font-weight: 700; }
 
-  .footer { text-align: center; margin-top: 12px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 8px; }
+  .footer { text-align: center; margin-top: ${clamp(6, 12, 12 - trim * 0.5)}px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: ${clamp(4, 8, 8 - overflow * 0.4)}px; }
   .footer strong { color: #1B4F8A; }
 </style>
 </head>
