@@ -12,6 +12,7 @@ import { TermReportCard, TermReportCardSchema } from '../assessments/schemas/ter
 import { AssessmentVisibilitySettings, AssessmentVisibilitySettingsSchema } from '../assessments/schemas/assessment-visibility-settings.schema';
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema';
+import { NazraProgressSchema } from '../behaviour/schemas/nazra-progress.schema';
 import { CharacterProgramSettings, CharacterProgramSettingsSchema } from '../behaviour/schemas/character-program-settings.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
 import { FinanceModule } from '../finance/finance.module';
@@ -58,6 +59,7 @@ import { FinanceModule } from '../finance/finance.module';
       // student_behaviour store, so whichever module loaded first decided which collection BOTH services read and wrote (BB12).
       { name: BehaviourRecord.name, schema: BehaviourRecordSchema },
       { name: 'QaidaProgress', schema: QaidaProgressSchema },
+      { name: 'NazraProgress', schema: NazraProgressSchema },
       { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
       { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },
       { name: 'ReportTemplate', schema: ReportTemplateSchema },
