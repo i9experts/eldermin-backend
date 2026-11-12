@@ -218,6 +218,71 @@ export class GuidedReadingService {
     return { justCompleted: true, reader, completedCount: updated?.completedReaders.length || 0 };
   }
 
+  // ---- Reporting / analytics (Phase 5) ----
+
+  // Staff-facing school-wide snapshot: how many readers/students sit at
+  // each level, which readers are actually getting finished, and the
+  // totals a school would want on a dashboard. All derived from the same
+  // three collections the rest of this service already reads - no
+  // separate aggregation/cache table, since a school's reading data is
+  // small enough to recompute on every request.
+  async getAnalytics(schoolSlug: string) {
+    const [levels, readers, progresses] = await Promise.all([
+      this.levelModel.find({ schoolSlug }).sort({ order: 1 }).lean(),
+      this.readerModel.find({ schoolSlug }).select('title levelId').lean(),
+      this.progressModel.find({ schoolSlug }).lean(),
+    ]);
+
+    const readerById = new Map(readers.map((r: any) => [String(r._id), r]));
+    const readersByLevel = new Map<string, number>();
+    for (const r of readers as any[]) {
+      const key = String(r.levelId);
+      readersByLevel.set(key, (readersByLevel.get(key) || 0) + 1);
+    }
+    const studentsByLevel = new Map<string, number>();
+    const completionCounts = new Map<string, number>();
+    let totalCompletions = 0;
+    let totalPointsAwarded = 0;
+    for (const p of progresses as any[]) {
+      if (p.currentLevelId) {
+        const key = String(p.currentLevelId);
+        studentsByLevel.set(key, (studentsByLevel.get(key) || 0) + 1);
+      }
+      for (const c of p.completedReaders || []) {
+        totalCompletions += 1;
+        totalPointsAwarded += c.pointsAwarded || 0;
+        const key = String(c.readerId);
+        completionCounts.set(key, (completionCounts.get(key) || 0) + 1);
+      }
+    }
+
+    const levelBreakdown = (levels as any[]).map((l) => ({
+      levelId: l._id,
+      name: l.name,
+      order: l.order,
+      readerCount: readersByLevel.get(String(l._id)) || 0,
+      studentsAssigned: studentsByLevel.get(String(l._id)) || 0,
+    }));
+
+    const topReaders = Array.from(completionCounts.entries())
+      .map(([readerId, completions]) => ({
+        readerId,
+        title: readerById.get(readerId)?.title || 'Untitled reader',
+        completions,
+      }))
+      .sort((a, b) => b.completions - a.completions)
+      .slice(0, 10);
+
+    return {
+      levelBreakdown,
+      totalReaders: readers.length,
+      totalStudentsAssigned: progresses.filter((p: any) => p.currentLevelId).length,
+      totalCompletions,
+      totalPointsAwarded,
+      topReaders,
+    };
+  }
+
   private translateError(err: any): Error {
     if (err.name === 'ValidationError') {
       const firstIssue = Object.values(err.errors || {})[0] as any;

@@ -111,4 +111,13 @@ export class GuidedReadingController {
     const { schoolSlug } = this.ctx(req);
     return this.guidedReadingService.getStudentProgress(studentId, schoolSlug);
   }
+
+  // ---- Reporting / analytics (Phase 5) ----
+
+  /** GET /api/v1/guided-reading/analytics */
+  @Get('analytics')
+  async getAnalytics(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.guidedReadingService.getAnalytics(schoolSlug);
+  }
 }

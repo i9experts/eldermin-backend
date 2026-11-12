@@ -13,6 +13,7 @@ import { studentFullName } from '../common/utils/student-name.util';
 import { escapeHtml, renderRichTextField, urduFontFaceCss, latinFontFaceCss, containsArabicScript } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
 import { NAZRA_PARAS, NAZRA_PARA_COUNT } from '../behaviour/schemas/nazra-progress.schema';
+import { BADGE_BY_KEY } from '../gamification/badge-catalog';
 import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
 import { TermReportCard } from '../assessments/schemas/term-report-card.schema';
@@ -337,6 +338,10 @@ export class GenerateNazraReportDto {
 
 export class GenerateTarbiyahReportDto {
   @IsMongoId() assessmentId: string;
+}
+
+export class GenerateGuidedReadingReportDto {
+  @IsMongoId() studentId: string;
 }
 
 // Shared filter shape for both the class-wise and school-wide aggregate
@@ -1278,6 +1283,116 @@ const NAZRA_REPORT_TEMPLATE = (data: any) => {
 `;
 };
 
+const GUIDED_READING_REPORT_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  ${latinFontFaceCss()}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; color: #2B2016; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 5px; border-bottom: 3px solid #0C447C; margin-bottom: 6px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #0C447C; letter-spacing: -0.5px; }
+  .school-sub { font-size: 11px; color: #6B5B3E; margin-top: 2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-sub { font-size: 10px; color: #6B5B3E; text-align: right; margin-top: 2px; }
+  .student-box { background: #F3F7FB; border: 1px solid #D7E4F0; border-radius: 10px; padding: 6px 8px; margin-bottom: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .info-label { font-size: 9px; font-weight: 700; color: #7A93AC; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 13px; font-weight: 600; color: #2B2016; }
+  .section-title { font-size: 12px; font-weight: 700; color: #0C447C; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; margin-top: 10px; padding-bottom: 3px; border-bottom: 2px solid #EAF1F8; }
+  .section-title:first-of-type { margin-top: 0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 3px; }
+  .summary-card { background: #F3F7FB; border: 1px solid #D7E4F0; border-radius: 8px; padding: 8px; text-align: center; }
+  .summary-num { font-size: 20px; font-weight: 800; color: #0C447C; }
+  .summary-label { font-size: 9px; color: #7A93AC; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3px; font-size: 10.5px; }
+  th { background: #0C447C; color: #fff; padding: 4px 8px; text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 3px 8px; border-bottom: 1px solid #EAF1F8; vertical-align: top; }
+  tr:nth-child(even) td { background: #F8FAFC; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .badge-chip { display: flex; align-items: center; gap: 5px; background: #F3F7FB; border: 1px solid #D7E4F0; border-radius: 100px; padding: 3px 10px; font-size: 10px; font-weight: 600; color: #2B2016; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 14px; padding-top: 6px; border-top: 1px solid #D7E4F0; }
+  .sig-item { text-align: center; }
+  .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 4px; height: 24px; }
+  .sig-label { font-size: 10px; color: #6B5B3E; font-weight: 600; }
+  .footer { text-align: center; margin-top: 10px; font-size: 9px; color: #9C8A66; border-top: 1px solid #EAF1F8; padding-top: 6px; }
+  .footer strong { color: #0C447C; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
+    </div>
+    <div>
+      <div class="doc-title">Guided Reading Progress Report</div>
+      <div class="doc-sub">Listen · Read · Learn Keywords</div>
+    </div>
+  </div>
+
+  <div class="student-box">
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Current Reading Level</div><div class="info-value">${esc(data.currentLevelName) || 'Not assigned'}</div></div>
+    <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div></div>
+  </div>
+
+  <div class="section-title">Progress Overview</div>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-num">${data.completedCount}</div><div class="summary-label">Readers Completed</div></div>
+    <div class="summary-card"><div class="summary-num">${data.totalPoints}</div><div class="summary-label">Points Earned</div></div>
+    <div class="summary-card"><div class="summary-num">${data.keywordsLearnedCount}</div><div class="summary-label">Keywords Learned</div></div>
+  </div>
+
+  ${data.badges && data.badges.length > 0 ? `
+  <div class="section-title">Badges Earned</div>
+  <div class="badge-row">
+    ${data.badges.map((b: any) => `<div class="badge-chip"><span>${esc(b.icon)}</span>${esc(b.label)}</div>`).join('')}
+  </div>` : ''}
+
+  <div class="section-title">Readers Completed</div>
+  ${data.completedReaders.length === 0 ? '<p style="font-size:11px;color:#6B5B3E;">No readers completed yet.</p>' : `
+  <table>
+    <thead>
+      <tr>
+        <th style="width:5%">#</th>
+        <th style="width:32%">Title</th>
+        <th style="width:20%">Author</th>
+        <th style="width:15%">Keywords Learned</th>
+        <th style="width:14%">Points</th>
+        <th style="width:14%">Completed</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${data.completedReaders.map((r: any, i: number) => `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${esc(r.title)}</strong></td>
+        <td>${esc(r.author) || '—'}</td>
+        <td>${r.keywordsLookedUp.length}</td>
+        <td>+${r.pointsAwarded}</td>
+        <td>${new Date(r.completedAt).toLocaleDateString('en-GB')}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`}
+
+  <div class="sig-row">
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Academic Coordinator</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+  </div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+</div>
+</body>
+</html>
+`;
+};
+
 const QAIDA_REPORT_TEMPLATE = (data: any) => {
   const esc = escapeHtml;
   // Takhti titles, teacher remarks and sabaq notes are often Urdu rather
@@ -1963,6 +2078,10 @@ export class PdfService implements OnModuleDestroy {
     // keeps every existing `new PdfService(...)` test construction
     // (positional args) compiling unchanged.
     @Optional() @InjectModel('NazraProgress') private nazraModel?: Model<any>,
+    // Guided Reading Phase 5 report - trailing-optional, same convention as nazraModel above.
+    @Optional() @InjectModel('ReadingLevel') private readingLevelModel?: Model<any>,
+    @Optional() @InjectModel('Reader') private guidedReaderModel?: Model<any>,
+    @Optional() @InjectModel('StudentReadingProgress') private readingProgressModel?: Model<any>,
   ) {}
 
   /** Per-school display text for 'pass'/'fail' (Assessment Master Settings) - falls back to the plain words when unset or the settings collection isn't wired up (e.g. in a lean test construction). */
@@ -2624,6 +2743,88 @@ export class PdfService implements OnModuleDestroy {
     await this.logPdf({
       schoolSlug,
       type: 'nazra-report',
+      referenceId: dto.studentId,
+      referenceName: data.studentName,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  // Guided Reading Phase 5: per-student progress report, modeled on the
+  // Qaida/Nazra reports above since this is the same "reading program
+  // progress" report shape, just for the Guided Reading module instead of
+  // the Qur'an-reading tracker.
+  async generateGuidedReadingReport(
+    schoolSlug: string,
+    dto: GenerateGuidedReadingReportDto,
+    userId: string,
+  ): Promise<Buffer> {
+    if (!this.readingProgressModel || !this.guidedReaderModel || !this.readingLevelModel) {
+      throw new NotFoundException('Guided Reading is not available.');
+    }
+    const school = await this.getSchool(schoolSlug);
+    const student = await this.studentModel.findOne({ _id: dto.studentId, schoolSlug }).lean();
+    if (!student) throw new NotFoundException('Student not found');
+
+    const progress: any = await this.readingProgressModel.findOne({ studentId: dto.studentId, schoolSlug }).lean();
+    const completedEntries: any[] = progress?.completedReaders || [];
+
+    const [level, readers] = await Promise.all([
+      progress?.currentLevelId
+        ? this.readingLevelModel.findOne({ _id: progress.currentLevelId, schoolSlug }).lean()
+        : Promise.resolve(null),
+      this.guidedReaderModel.find({
+        schoolSlug, _id: { $in: completedEntries.map((c: any) => c.readerId) },
+      }).lean(),
+    ]);
+    const readerById = new Map(readers.map((r: any) => [String(r._id), r]));
+
+    const completedReaders = completedEntries
+      .slice()
+      .sort((a: any, b: any) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
+      .map((c: any) => {
+        const reader = readerById.get(String(c.readerId));
+        return {
+          title: reader?.title || 'Untitled reader',
+          author: reader?.author || '',
+          keywordsLookedUp: c.keywordsLookedUp || [],
+          pointsAwarded: c.pointsAwarded || 0,
+          completedAt: c.completedAt,
+        };
+      });
+
+    const totalPoints = completedEntries.reduce((sum: number, c: any) => sum + (c.pointsAwarded || 0), 0);
+    const keywordsLearnedCount = new Set(completedEntries.flatMap((c: any) => c.keywordsLookedUp || [])).size;
+    // Mirrors ParentPortalService.completeMyReading's own award logic: the
+    // "Bookworm" badge is given exactly once, the moment a student's
+    // completedReaders count first reaches 1 - so "has completed at least
+    // one reader" is the same condition as "has this badge", with no
+    // separate AwardedBadge lookup needed.
+    const badges = completedEntries.length > 0 ? [BADGE_BY_KEY.first_reader] : [];
+
+    const data = {
+      schoolName: (school as any).name,
+      schoolAddress: this.formatSchoolAddress(school),
+      studentName: studentFullName(student as any),
+      grade: (student as any).currentGrade,
+      section: (student as any).currentSection,
+      currentLevelName: (level as any)?.name || null,
+      completedCount: completedEntries.length,
+      totalPoints,
+      keywordsLearnedCount,
+      badges,
+      completedReaders,
+    };
+
+    const html = GUIDED_READING_REPORT_TEMPLATE(data);
+    const pdf = await this.htmlToPdf(html);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'guided-reading-report',
       referenceId: dto.studentId,
       referenceName: data.studentName,
       generatedBy: userId,

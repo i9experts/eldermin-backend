@@ -211,3 +211,31 @@ describe('GuidedReadingService — Student reading player (Phase 3)', () => {
     );
   });
 });
+
+describe('GuidedReadingService — Analytics (Phase 5)', () => {
+  it('aggregates reader/student counts per level and school-wide totals', async () => {
+    const levelModel: any = { find: () => ({ sort: () => ({ lean: async () => [{ _id: 'l1', name: 'Level 1', order: 1 }, { _id: 'l2', name: 'Level 2', order: 2 }] }) }) };
+    const readerModel: any = { find: () => ({ select: () => ({ lean: async () => [
+      { _id: 'r1', title: 'Book A', levelId: 'l1' },
+      { _id: 'r2', title: 'Book B', levelId: 'l1' },
+      { _id: 'r3', title: 'Book C', levelId: 'l2' },
+    ] }) }) };
+    const progressModel: any = { find: () => ({ lean: async () => [
+      { currentLevelId: 'l1', completedReaders: [{ readerId: 'r1', pointsAwarded: 15 }, { readerId: 'r1', pointsAwarded: 15 }] },
+      { currentLevelId: 'l2', completedReaders: [{ readerId: 'r3', pointsAwarded: 15 }] },
+      { currentLevelId: null, completedReaders: [] },
+    ] }) };
+    const svc = makeService({ levelModel, readerModel, progressModel });
+    const result = await svc.getAnalytics('school-a');
+
+    expect(result.totalReaders).toBe(3);
+    expect(result.totalStudentsAssigned).toBe(2);
+    expect(result.totalCompletions).toBe(3);
+    expect(result.totalPointsAwarded).toBe(45);
+    expect(result.levelBreakdown).toEqual([
+      { levelId: 'l1', name: 'Level 1', order: 1, readerCount: 2, studentsAssigned: 1 },
+      { levelId: 'l2', name: 'Level 2', order: 2, readerCount: 1, studentsAssigned: 1 },
+    ]);
+    expect(result.topReaders[0]).toEqual({ readerId: 'r1', title: 'Book A', completions: 2 });
+  });
+});

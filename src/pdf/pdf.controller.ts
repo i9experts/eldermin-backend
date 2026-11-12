@@ -9,7 +9,7 @@ import {
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SchoolGuard } from '../auth/school.guard';
-import { PdfService, GenerateReportCardDto, GenerateExamReportCardDto, BulkExamReportCardsDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateNazraReportDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto } from './pdf.service';
+import { PdfService, GenerateReportCardDto, GenerateExamReportCardDto, BulkExamReportCardsDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateNazraReportDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto, GenerateGuidedReadingReportDto } from './pdf.service';
 import { IsArray, IsIn, IsMongoId, IsObject, IsOptional, IsString } from 'class-validator';
 import { REPORT_TEMPLATE_TYPES } from '../modules/report-templates/schemas/report-template.schema';
 
@@ -123,6 +123,22 @@ export class PdfController {
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="nazra-report-${dto.studentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('guided-reading-report')
+  async generateGuidedReadingReport(
+    @Body() dto: GenerateGuidedReadingReportDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateGuidedReadingReport(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="guided-reading-report-${dto.studentId}.pdf"`,
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);
