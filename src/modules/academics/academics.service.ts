@@ -9,6 +9,8 @@ import { SubjectGroup, SubjectGroupDocument } from './schemas/subject-group.sche
 import { Curriculum, CurriculumDocument } from './schemas/curriculum.schema';
 import { Syllabus, SyllabusDocument } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookDocument } from './schemas/book.schema';
+import { BookCategory, BookCategoryDocument } from './schemas/book-category.schema';
+import { DEWEY_DECIMAL_CATEGORIES } from './dewey-decimal-categories';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
 import { LibrarySettings, LibrarySettingsDocument } from './schemas/library-settings.schema';
 import { Reservation, ReservationDocument } from './schemas/reservation.schema';
@@ -47,6 +49,11 @@ export class AcademicsService {
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    // Appended last so every existing positional `new AcademicsService(...)`
+    // test construction (see curriculum-teacher.spec.ts) keeps compiling
+    // unchanged - same trailing-param convention used elsewhere (e.g.
+    // PdfService's nazraModel).
+    @InjectModel(BookCategory.name) private bookCategoryModel: Model<BookCategoryDocument>,
   ) {}
 
   private tid(t: string) { return t; }
@@ -349,6 +356,70 @@ export class AcademicsService {
       names.push(result!.name);
     }
     return { message: `${defaults.length} default subject categories seeded`, count: defaults.length, names };
+  }
+
+  // ─── LIBRARY BOOK CATEGORIES ───────────────────────────────────────────────────
+  // Same shape/convention as Subject Categories above - a school-editable
+  // catalog, normally started from the standard Dewey Decimal Classification
+  // (seedDefaultBookCategories) rather than typed in from scratch. Kept as
+  // its own collection, independent of Book.category's existing hardcoded
+  // enum, so adopting it is opt-in and doesn't disturb existing catalogue data.
+
+  async getBookCategories(tenantId: string, query: any = {}) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.isActive !== undefined) {
+      filter.isActive = query.isActive !== 'false';
+    } else if (query.includeInactive !== 'true') {
+      filter.isActive = true;
+    }
+    return this.bookCategoryModel.find(filter).sort({ order: 1, code: 1 }).lean();
+  }
+
+  async createBookCategory(tenantId: string, institutionId: string, data: any) {
+    try {
+      return await this.bookCategoryModel.create({
+        ...data,
+        tenantId: this.tid(tenantId),
+        institutionId: institutionId ? this.oid(institutionId) : undefined,
+      });
+    } catch (e: any) { throw new BadRequestException(e.message); }
+  }
+
+  async updateBookCategory(tenantId: string, id: string, data: any) {
+    const doc = await this.bookCategoryModel
+      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: data }, { new: true })
+      .lean();
+    if (!doc) throw new NotFoundException('Library category not found');
+    return doc;
+  }
+
+  async deleteBookCategory(tenantId: string, id: string) {
+    const deleted = await this.bookCategoryModel.findOneAndDelete({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!deleted) throw new NotFoundException('Library category not found');
+    return { deleted: true };
+  }
+
+  /**
+   * POST /academics/library/categories/seed-defaults - seeds the 100
+   * standard Dewey Decimal Classification entries (10 main classes + their
+   * 10 subdivisions each) as this school's starting, editable/extensible
+   * library category catalog. Idempotent upsert-by-code, same pattern as
+   * seedDefaultSubjectCategories - safe to call more than once; running it
+   * again just refreshes the seeded copies rather than duplicating them.
+   */
+  async seedDefaultBookCategories(tenantId: string, institutionId: string) {
+    const tid = this.tid(tenantId);
+    const names: string[] = [];
+    for (let i = 0; i < DEWEY_DECIMAL_CATEGORIES.length; i++) {
+      const cat = DEWEY_DECIMAL_CATEGORIES[i];
+      const result = await this.bookCategoryModel.findOneAndUpdate(
+        { tenantId: tid, code: cat.code },
+        { $set: { name: cat.name, code: cat.code, order: i, tenantId: tid, institutionId: institutionId ? this.oid(institutionId) : undefined, isActive: true } },
+        { upsert: true, new: true },
+      );
+      names.push(result!.name);
+    }
+    return { message: `${DEWEY_DECIMAL_CATEGORIES.length} default library categories seeded`, count: DEWEY_DECIMAL_CATEGORIES.length, names };
   }
 
   // ─── SUBJECT GROUPS ───────────────────────────────────────────────────────────
