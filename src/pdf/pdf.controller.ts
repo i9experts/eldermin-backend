@@ -9,7 +9,7 @@ import {
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SchoolGuard } from '../auth/school.guard';
-import { PdfService, GenerateReportCardDto, GenerateExamReportCardDto, BulkExamReportCardsDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateNazraReportDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto, GenerateGuidedReadingReportDto } from './pdf.service';
+import { PdfService, GenerateReportCardDto, GenerateExamReportCardDto, BulkExamReportCardsDto, BulkTermReportCardsPdfDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateNazraReportDto, BulkNazraReportsPdfDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto, GenerateGuidedReadingReportDto } from './pdf.service';
 import { IsArray, IsIn, IsMongoId, IsObject, IsOptional, IsString } from 'class-validator';
 import { REPORT_TEMPLATE_TYPES } from '../modules/report-templates/schemas/report-template.schema';
 
@@ -92,6 +92,22 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @Post('report-card/bulk')
+  async generateBulkTermReportCards(
+    @Body() dto: BulkTermReportCardsPdfDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateBulkTermReportCardsPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="report-cards${dto.term ? '-' + dto.term : ''}${dto.section ? '-' + dto.section : ''}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
   @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('qaida-report')
   async generateQaidaReport(
@@ -123,6 +139,24 @@ export class PdfController {
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="nazra-report-${dto.studentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
+  @Post('nazra-report/bulk')
+  async generateBulkNazraReports(
+    @Body() dto: BulkNazraReportsPdfDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate the Nazra report
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateBulkNazraReportsPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="nazra-reports-${dto.grade}${dto.section ? '-' + dto.section : ''}.pdf"`,
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);
