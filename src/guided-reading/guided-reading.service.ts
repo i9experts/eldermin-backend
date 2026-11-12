@@ -3,7 +3,7 @@
 // Eldermin ERP | NestJS
 // ============================================================
 
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ReadingLevel, ReadingLevelDocument } from './schemas/reading-level.schema';
@@ -13,6 +13,11 @@ import {
 } from './schemas/student-reading-progress.schema';
 import { CreateReadingLevelDto, UpdateReadingLevelDto } from './dto/reading-level.dto';
 import { CreateReaderDto, UpdateReaderDto } from './dto/reader.dto';
+
+// Points awarded on a student's first completion of a given reader -
+// mirrors LMS lesson_completion's flat per-event amount (10 pts); a
+// reader is a bigger activity (listen + read + keywords) so slightly more.
+export const READER_COMPLETION_POINTS = 15;
 
 @Injectable()
 export class GuidedReadingService {
@@ -124,6 +129,93 @@ export class GuidedReadingService {
     return progress || {
       studentId, schoolSlug, currentLevelId: null, completedReaders: [],
     };
+  }
+
+  // ---- Student-facing reading player (Phase 3) ----
+
+  // The student's "shelf": the reading level staff assigned them, and every
+  // reader at that level (with a completed flag) - the ladder only moves
+  // forward when staff advances the student's level, never automatically.
+  async getReadingHome(studentId: string, schoolSlug: string) {
+    const progress = await this.getStudentProgress(studentId, schoolSlug);
+    if (!progress.currentLevelId) {
+      return { level: null, readers: [], completedCount: 0 };
+    }
+    const [level, readers] = await Promise.all([
+      this.levelModel.findOne({ _id: progress.currentLevelId, schoolSlug }).lean(),
+      this.readerModel.find({ schoolSlug, levelId: progress.currentLevelId, isActive: true })
+        .select('title author synopsis coverImageUrl audioUrl estimatedMinutes pages keywords')
+        .sort({ title: 1 })
+        .lean(),
+    ]);
+    const completedIds = new Set((progress.completedReaders || []).map((c: any) => String(c.readerId)));
+    return {
+      level: level || null,
+      completedCount: completedIds.size,
+      readers: readers.map((r: any) => ({
+        _id: r._id,
+        title: r.title,
+        author: r.author,
+        synopsis: r.synopsis,
+        coverImageUrl: r.coverImageUrl,
+        estimatedMinutes: r.estimatedMinutes,
+        pageCount: (r.pages || []).length,
+        keywordCount: (r.keywords || []).length,
+        hasAudio: !!r.audioUrl,
+        isCompleted: completedIds.has(String(r._id)),
+      })),
+    };
+  }
+
+  // Full reader content (pages/audio/keywords) for the player - gated to
+  // the student's own assigned level, or a reader they've already
+  // completed (so finished books stay re-readable after the level moves on).
+  async getReaderForStudent(readerId: string, studentId: string, schoolSlug: string) {
+    const reader = await this.readerModel.findOne({ _id: readerId, schoolSlug, isActive: true }).lean();
+    if (!reader) throw new NotFoundException('Reader not found');
+
+    const progress = await this.getStudentProgress(studentId, schoolSlug);
+    const alreadyCompleted = (progress.completedReaders || []).some((c: any) => String(c.readerId) === String(readerId));
+    const isAssignedLevel = progress.currentLevelId && String(progress.currentLevelId) === String(reader.levelId);
+    if (!isAssignedLevel && !alreadyCompleted) {
+      throw new ForbiddenException('This reader is not part of your current reading level.');
+    }
+    return { ...reader, isCompleted: alreadyCompleted };
+  }
+
+  // Marks a reader complete for a student - idempotent (re-completing an
+  // already-finished reader is a no-op, same convention as
+  // PointsTransaction's own sourceType/sourceId dedup) so the caller can
+  // safely award points only on the real, first completion.
+  async completeReaderForStudent(
+    readerId: string, studentId: string, schoolSlug: string, keywordsLookedUp: string[] = [],
+  ): Promise<{ justCompleted: boolean; reader: ReaderDocument; completedCount: number }> {
+    const reader = await this.readerModel.findOne({ _id: readerId, schoolSlug, isActive: true });
+    if (!reader) throw new NotFoundException('Reader not found');
+
+    const existing = await this.progressModel.findOne({ studentId, schoolSlug });
+    const alreadyCompleted = (existing?.completedReaders || []).some((c) => String(c.readerId) === String(readerId));
+    if (alreadyCompleted) {
+      return { justCompleted: false, reader, completedCount: existing!.completedReaders.length };
+    }
+
+    const isAssignedLevel = existing?.currentLevelId && String(existing.currentLevelId) === String(reader.levelId);
+    if (!isAssignedLevel) {
+      throw new ForbiddenException('This reader is not part of your current reading level.');
+    }
+
+    const updated = await this.progressModel.findOneAndUpdate(
+      { studentId, schoolSlug },
+      {
+        $push: {
+          completedReaders: {
+            readerId: reader._id, completedAt: new Date(), keywordsLookedUp, pointsAwarded: READER_COMPLETION_POINTS,
+          },
+        },
+      },
+      { new: true },
+    );
+    return { justCompleted: true, reader, completedCount: updated?.completedReaders.length || 0 };
   }
 
   private translateError(err: any): Error {

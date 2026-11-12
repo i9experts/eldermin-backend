@@ -59,6 +59,7 @@ import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { GamificationModule } from '../gamification/gamification.module';
 import { BehaviourModule } from '../behaviour/behaviour.module';
+import { GuidedReadingModule } from '../guided-reading/guided-reading.module';
 
 @Module({
   imports: [
@@ -118,6 +119,7 @@ import { BehaviourModule } from '../behaviour/behaviour.module';
     BehaviourModule,
     HomeTasksModule,
     ParentAccessControlModule,
+    GuidedReadingModule,
   ],
   controllers: [ParentPortalController, ParentAuthController, ParentEarlyYearsController],
   providers: [ParentPortalService, ParentAuthService, ParentEarlyYearsService, GuardianRefreshInterceptor, GeocodingService],

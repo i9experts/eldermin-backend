@@ -1,5 +1,5 @@
-import { GuidedReadingService } from './guided-reading.service';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { GuidedReadingService, READER_COMPLETION_POINTS } from './guided-reading.service';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 // Guided Reading Phase 1: ReadingLevel/Reader CRUD + student level
 // assignment. No real Mongo - each test wires in just the model methods
@@ -119,5 +119,95 @@ describe('GuidedReadingService — Student assignment / progress', () => {
     const result = await svc.getStudentProgress('student-1', 'school-a');
     expect(result.completedReaders).toEqual([]);
     expect(result.currentLevelId).toBeNull();
+  });
+});
+
+describe('GuidedReadingService — Student reading player (Phase 3)', () => {
+  it('getReadingHome returns an empty shelf when no level is assigned yet', async () => {
+    const progressModel: any = { findOne: () => ({ lean: async () => null }) };
+    const svc = makeService({ progressModel });
+    const result = await svc.getReadingHome('student-1', 'school-a');
+    expect(result).toEqual({ level: null, readers: [], completedCount: 0 });
+  });
+
+  it('getReadingHome lists only readers at the assigned level, flagging completed ones', async () => {
+    const progressModel: any = {
+      findOne: () => ({
+        lean: async () => ({
+          studentId: 'student-1', currentLevelId: 'level-1',
+          completedReaders: [{ readerId: 'reader-1', completedAt: new Date(), keywordsLookedUp: [], pointsAwarded: 15 }],
+        }),
+      }),
+    };
+    const levelModel: any = { findOne: () => ({ lean: async () => ({ _id: 'level-1', name: 'Level 1' }) }) };
+    const readers = [
+      { _id: 'reader-1', title: 'Book One', pages: [{}, {}], keywords: [{}], audioUrl: 'a.mp3' },
+      { _id: 'reader-2', title: 'Book Two', pages: [{}], keywords: [], audioUrl: undefined },
+    ];
+    const readerModel: any = { find: () => ({ select: () => ({ sort: () => ({ lean: async () => readers }) }) }) };
+    const svc = makeService({ progressModel, levelModel, readerModel });
+    const result = await svc.getReadingHome('student-1', 'school-a');
+    expect(result.level.name).toBe('Level 1');
+    expect(result.completedCount).toBe(1);
+    expect(result.readers.find((r: any) => r._id === 'reader-1').isCompleted).toBe(true);
+    expect(result.readers.find((r: any) => r._id === 'reader-2').isCompleted).toBe(false);
+    expect(result.readers.find((r: any) => r._id === 'reader-2').pageCount).toBe(1);
+  });
+
+  it('getReaderForStudent refuses a reader outside the student\'s assigned level', async () => {
+    const readerModel: any = { findOne: () => ({ lean: async () => ({ _id: 'reader-9', levelId: 'level-2' }) }) };
+    const progressModel: any = { findOne: () => ({ lean: async () => ({ currentLevelId: 'level-1', completedReaders: [] }) }) };
+    const svc = makeService({ readerModel, progressModel });
+    await expect(svc.getReaderForStudent('reader-9', 'student-1', 'school-a')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('getReaderForStudent allows re-reading an already-completed reader even after the level moved on', async () => {
+    const readerModel: any = { findOne: () => ({ lean: async () => ({ _id: 'reader-1', levelId: 'level-1', title: 'Book One' }) }) };
+    const progressModel: any = {
+      findOne: () => ({ lean: async () => ({ currentLevelId: 'level-2', completedReaders: [{ readerId: 'reader-1' }] }) }),
+    };
+    const svc = makeService({ readerModel, progressModel });
+    const result = await svc.getReaderForStudent('reader-1', 'student-1', 'school-a');
+    expect(result.isCompleted).toBe(true);
+  });
+
+  it('completeReaderForStudent refuses a reader outside the assigned level', async () => {
+    const readerModel: any = { findOne: jest.fn(async () => ({ _id: 'reader-9', levelId: 'level-2' })) };
+    const progressModel: any = { findOne: async () => ({ currentLevelId: 'level-1', completedReaders: [] }) };
+    const svc = makeService({ readerModel, progressModel });
+    await expect(svc.completeReaderForStudent('reader-9', 'student-1', 'school-a')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('completeReaderForStudent is idempotent - re-completing an already-finished reader awards nothing new', async () => {
+    const readerModel: any = { findOne: jest.fn(async () => ({ _id: 'reader-1', levelId: 'level-1' })) };
+    const progressModel: any = {
+      findOne: async () => ({ currentLevelId: 'level-1', completedReaders: [{ readerId: 'reader-1' }] }),
+      findOneAndUpdate: jest.fn(),
+    };
+    const svc = makeService({ readerModel, progressModel });
+    const result = await svc.completeReaderForStudent('reader-1', 'student-1', 'school-a');
+    expect(result.justCompleted).toBe(false);
+    expect(progressModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('completeReaderForStudent records the first completion with its keywords and point value', async () => {
+    const readerModel: any = { findOne: jest.fn(async () => ({ _id: 'reader-1', levelId: 'level-1', title: 'Book One' })) };
+    const progressModel: any = {
+      findOne: async () => ({ currentLevelId: 'level-1', completedReaders: [] }),
+      findOneAndUpdate: jest.fn(async (_filter: any, update: any) => ({
+        completedReaders: [update.$push.completedReaders],
+      })),
+    };
+    const svc = makeService({ readerModel, progressModel });
+    const result = await svc.completeReaderForStudent('reader-1', 'student-1', 'school-a', ['apple', 'big']);
+    expect(result.justCompleted).toBe(true);
+    expect(result.completedCount).toBe(1);
+    expect(progressModel.findOneAndUpdate).toHaveBeenCalledWith(
+      { studentId: 'student-1', schoolSlug: 'school-a' },
+      expect.objectContaining({
+        $push: { completedReaders: expect.objectContaining({ keywordsLookedUp: ['apple', 'big'], pointsAwarded: READER_COMPLETION_POINTS }) },
+      }),
+      expect.objectContaining({ new: true }),
+    );
   });
 });
