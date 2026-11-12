@@ -15,13 +15,19 @@ export class ReaderKeyword {
 }
 export const ReaderKeywordSchema = SchemaFactory.createForClass(ReaderKeyword);
 
-// One page of the reader's text, shown alongside the narrated audio so a
-// student can follow along while listening.
+// One page of the reader's text and illustration. `audioUrl`/`audioKey` are
+// this page's own narration clip (most readers are narrated page-by-page,
+// not as one long whole-book track) - the player falls back to the
+// reader-level audioUrl below for a page that has none of its own, so a
+// short/simple reader can still just use one single clip for the whole book.
 @Schema({ _id: false })
 export class ReaderPage {
   @Prop({ required: true }) pageNumber: number;
   @Prop({ required: true }) text: string;
   @Prop() imageUrl?: string;
+  @Prop() imageKey?: string;
+  @Prop() audioUrl?: string;
+  @Prop() audioKey?: string;
 }
 export const ReaderPageSchema = SchemaFactory.createForClass(ReaderPage);
 

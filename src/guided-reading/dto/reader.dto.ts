@@ -15,6 +15,9 @@ export class ReaderPageDto {
   @IsNumber() pageNumber: number;
   @IsString() text: string;
   @IsOptional() @IsString() imageUrl?: string;
+  @IsOptional() @IsString() imageKey?: string;
+  @IsOptional() @IsString() audioUrl?: string;
+  @IsOptional() @IsString() audioKey?: string;
 }
 
 export class CreateReaderDto {
