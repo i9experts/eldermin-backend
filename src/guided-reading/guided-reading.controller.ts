@@ -11,7 +11,7 @@ import { SchoolGuard } from '../auth/school.guard';
 import { GuidedReadingService } from './guided-reading.service';
 import { CreateReadingLevelDto, UpdateReadingLevelDto } from './dto/reading-level.dto';
 import { CreateReaderDto, UpdateReaderDto } from './dto/reader.dto';
-import { AssignStudentLevelDto } from './dto/assign-level.dto';
+import { AssignStudentLevelDto, AssignClassLevelDto } from './dto/assign-level.dto';
 
 @Controller('guided-reading')
 @UseGuards(JwtAuthGuard, SchoolGuard)
@@ -110,6 +110,13 @@ export class GuidedReadingController {
   async getStudentProgress(@Param('studentId') studentId: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.guidedReadingService.getStudentProgress(studentId, schoolSlug);
+  }
+
+  /** POST /api/v1/guided-reading/class-assignments - assign a level to every student in a grade/section(/campus) */
+  @Post('class-assignments')
+  async assignClassLevel(@Body() dto: AssignClassLevelDto, @Request() req: any) {
+    const { schoolSlug, userId } = this.ctx(req);
+    return this.guidedReadingService.assignClassLevel(schoolSlug, dto.levelId, dto.grade, dto.section, dto.campusId, userId);
   }
 
   // ---- Reporting / analytics (Phase 5) ----

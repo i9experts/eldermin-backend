@@ -11,6 +11,7 @@ function makeService(overrides: Record<string, any> = {}) {
   svc.levelModel = overrides.levelModel;
   svc.readerModel = overrides.readerModel;
   svc.progressModel = overrides.progressModel;
+  svc.studentModel = overrides.studentModel;
   return svc;
 }
 
@@ -237,5 +238,47 @@ describe('GuidedReadingService — Analytics (Phase 5)', () => {
       { levelId: 'l2', name: 'Level 2', order: 2, readerCount: 1, studentsAssigned: 1 },
     ]);
     expect(result.topReaders[0]).toEqual({ readerId: 'r1', title: 'Book A', completions: 2 });
+  });
+});
+
+describe('GuidedReadingService — Bulk class-level assignment', () => {
+  it('rejects a level that does not exist for this school', async () => {
+    const levelModel: any = { exists: async () => false };
+    const studentModel: any = { find: jest.fn() };
+    const svc = makeService({ levelModel, studentModel });
+    await expect(svc.assignClassLevel('school-a', 'bad-level', 'Grade 3', undefined, undefined, 'teacher-1'))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(studentModel.find).not.toHaveBeenCalled();
+  });
+
+  it('matches students by grade only when no section/campus is given', async () => {
+    const levelModel: any = { exists: async () => true };
+    const find = jest.fn(() => ({ select: () => ({ lean: async () => [{ _id: 's1' }, { _id: 's2' }] }) }));
+    const studentModel: any = { find };
+    const progressModel: any = { bulkWrite: async () => ({ modifiedCount: 1, upsertedCount: 1 }) };
+    const svc = makeService({ levelModel, studentModel, progressModel });
+    const result = await svc.assignClassLevel('school-a', 'level-1', 'Grade 3', undefined, undefined, 'teacher-1');
+    expect(find).toHaveBeenCalledWith({ schoolSlug: 'school-a', currentGrade: 'Grade 3' });
+    expect(result).toEqual({ matchedCount: 2, assignedCount: 2 });
+  });
+
+  it('narrows by section and campus when given', async () => {
+    const levelModel: any = { exists: async () => true };
+    const find = jest.fn(() => ({ select: () => ({ lean: async () => [{ _id: 's1' }] }) }));
+    const studentModel: any = { find };
+    const progressModel: any = { bulkWrite: async () => ({ modifiedCount: 1, upsertedCount: 0 }) };
+    const svc = makeService({ levelModel, studentModel, progressModel });
+    await svc.assignClassLevel('school-a', 'level-1', 'Grade 3', 'A', 'campus-1', 'teacher-1');
+    expect(find).toHaveBeenCalledWith({ schoolSlug: 'school-a', currentGrade: 'Grade 3', currentSection: 'A', campusId: 'campus-1' });
+  });
+
+  it('returns zero counts without writing when no student matches the class', async () => {
+    const levelModel: any = { exists: async () => true };
+    const studentModel: any = { find: () => ({ select: () => ({ lean: async () => [] }) }) };
+    const progressModel: any = { bulkWrite: jest.fn() };
+    const svc = makeService({ levelModel, studentModel, progressModel });
+    const result = await svc.assignClassLevel('school-a', 'level-1', 'Grade 9', undefined, undefined, 'teacher-1');
+    expect(result).toEqual({ matchedCount: 0, assignedCount: 0 });
+    expect(progressModel.bulkWrite).not.toHaveBeenCalled();
   });
 });

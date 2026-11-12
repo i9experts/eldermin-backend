@@ -26,6 +26,7 @@ export class GuidedReadingService {
     @InjectModel(Reader.name) private readerModel: Model<ReaderDocument>,
     @InjectModel(StudentReadingProgress.name)
     private progressModel: Model<StudentReadingProgressDocument>,
+    @InjectModel('Student') private studentModel: Model<any>,
   ) {}
 
   // ---- Reading Levels ----
@@ -128,6 +129,39 @@ export class GuidedReadingService {
     const progress = await this.progressModel.findOne({ studentId, schoolSlug }).lean();
     return progress || {
       studentId, schoolSlug, currentLevelId: null, completedReaders: [],
+    };
+  }
+
+  // Bulk version of assignStudentLevel - every student in a grade (and,
+  // optionally, a single section/campus of it) gets the same level in one
+  // action, instead of a teacher repeating the one-student picker for an
+  // entire class. Already-completed readers are untouched; this only ever
+  // moves currentLevelId, same as the single-student path.
+  async assignClassLevel(
+    schoolSlug: string, levelId: string, grade: string, section: string | undefined, campusId: string | undefined, assignedBy: string,
+  ) {
+    await this.assertLevelExists(levelId, schoolSlug);
+
+    const studentFilter: Record<string, any> = { schoolSlug, currentGrade: grade };
+    if (section) studentFilter.currentSection = section;
+    if (campusId) studentFilter.campusId = campusId;
+    const students = await this.studentModel.find(studentFilter).select('_id').lean();
+    if (students.length === 0) {
+      return { matchedCount: 0, assignedCount: 0 };
+    }
+
+    const now = new Date();
+    const ops: any[] = students.map((s: any) => ({
+      updateOne: {
+        filter: { studentId: s._id, schoolSlug },
+        update: { $set: { currentLevelId: levelId, assignedBy, assignedAt: now } },
+        upsert: true,
+      },
+    }));
+    const result = await this.progressModel.bulkWrite(ops);
+    return {
+      matchedCount: students.length,
+      assignedCount: (result.modifiedCount || 0) + (result.upsertedCount || 0),
     };
   }
 
