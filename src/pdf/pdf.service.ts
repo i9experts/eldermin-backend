@@ -321,6 +321,15 @@ export class BulkReportCardDto {
   @IsOptional() @IsString() term?: string;
 }
 
+/** Download every term report card matching the Results tab's own Term/
+ * Section filters as one combined PDF, same reasoning and convention as
+ * BulkExamReportCardsDto above - "download all" always means exactly the
+ * rows currently shown in TermReportCardsView, not a separate scope. */
+export class BulkTermReportCardsPdfDto {
+  @IsOptional() @IsString() term?: string;
+  @IsOptional() @IsString() section?: string;
+}
+
 export class GenerateQaidaReportDto {
   @IsMongoId() studentId: string;
   // Lets the admin print only up to a specific Takhti instead of always
@@ -333,6 +342,17 @@ export class GenerateQaidaReportDto {
 export class GenerateNazraReportDto {
   @IsMongoId() studentId: string;
   // Same reasoning as GenerateQaidaReportDto.upToTakhti, for Nazra's 30 Paras.
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) upToPara?: number;
+}
+
+/** Download every tracked student's Nazra progress report in a class as
+ * one combined PDF - grade/section mirror the exact filters the Nazra
+ * tab's own class roster already applies (NazraController.getClassProgress),
+ * same "download all means exactly these rows" convention as
+ * BulkExamReportCardsDto/BulkTermReportCardsPdfDto above. */
+export class BulkNazraReportsPdfDto {
+  @IsString() grade: string;
+  @IsOptional() @IsString() section?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) upToPara?: number;
 }
 
@@ -2539,6 +2559,51 @@ export class PdfService implements OnModuleDestroy {
   }
 
   /**
+   * Download every whole-term report card matching the Results tab's
+   * Term/Section filters as one combined PDF - same reasoning and
+   * pdf-lib merge convention as generateBulkExamReportCardsPdf above,
+   * just reading TermReportCard instead of the per-exam ReportCard
+   * collection. Reuses generateReportCard as-is per student (same
+   * academicYear/term the single "View" download already uses, read off
+   * each matching TermReportCard rather than passed in), so a bulk
+   * download is byte-for-byte the same per-student pages.
+   */
+  async generateBulkTermReportCardsPdf(
+    schoolSlug: string,
+    dto: BulkTermReportCardsPdfDto,
+    userId: string,
+  ): Promise<Buffer> {
+    const filter: any = { schoolSlug };
+    if (dto.term) filter.term = dto.term;
+    if (dto.section) filter.section = dto.section;
+
+    const cards: any[] = await this.termReportCardModel
+      .find(filter)
+      .sort({ grade: 1, section: 1, classPosition: 1 })
+      .select('studentId academicYear term')
+      .lean();
+    if (!cards.length) throw new NotFoundException('No term report cards match these filters.');
+    if (cards.length > PdfService.MAX_BULK_REPORT_CARDS) {
+      throw new BadRequestException(
+        `${cards.length} term report cards match these filters - narrow them (e.g. by section) to ${PdfService.MAX_BULK_REPORT_CARDS} or fewer at a time.`,
+      );
+    }
+
+    const merged = await PDFDocument.create();
+    for (const card of cards) {
+      const pdf = await this.generateReportCard(
+        schoolSlug,
+        { studentId: String(card.studentId), academicYear: card.academicYear, term: card.term },
+        userId,
+      );
+      const doc = await PDFDocument.load(pdf);
+      const copiedPages = await merged.copyPages(doc, doc.getPageIndices());
+      for (const page of copiedPages) merged.addPage(page);
+    }
+    return Buffer.from(await merged.save());
+  }
+
+  /**
    * Qaida & Tajweed progress report - the full 16-Takhti journey map plus
    * per-board status/attempt history and aggregated common errors. Reads
    * QaidaProgress directly (same convention as generateReportCard reading
@@ -2751,6 +2816,49 @@ export class PdfService implements OnModuleDestroy {
     });
 
     return pdf;
+  }
+
+  /**
+   * Download every tracked student's Nazra progress report in a class as
+   * one combined PDF - grade/section match exactly how the Nazra tab's
+   * own class roster is filtered (NazraController.getClassProgress),
+   * same pdf-lib merge convention as generateBulkExamReportCardsPdf/
+   * generateBulkTermReportCardsPdf above. Reuses generateNazraReport
+   * as-is per student.
+   */
+  async generateBulkNazraReportsPdf(
+    schoolSlug: string,
+    dto: BulkNazraReportsPdfDto,
+    userId: string,
+  ): Promise<Buffer> {
+    if (!this.nazraModel) throw new NotFoundException('Nazra progress tracking is not available.');
+    const filter: any = { schoolSlug, grade: dto.grade };
+    if (dto.section) filter.section = dto.section;
+
+    const progresses: any[] = await this.nazraModel
+      .find(filter)
+      .sort({ studentName: 1 })
+      .select('studentId')
+      .lean();
+    if (!progresses.length) throw new NotFoundException('No Nazra progress recorded for this class yet.');
+    if (progresses.length > PdfService.MAX_BULK_REPORT_CARDS) {
+      throw new BadRequestException(
+        `${progresses.length} students match this class - narrow it (e.g. by section) to ${PdfService.MAX_BULK_REPORT_CARDS} or fewer at a time.`,
+      );
+    }
+
+    const merged = await PDFDocument.create();
+    for (const progress of progresses) {
+      const pdf = await this.generateNazraReport(
+        schoolSlug,
+        { studentId: String(progress.studentId), upToPara: dto.upToPara } as any,
+        userId,
+      );
+      const doc = await PDFDocument.load(pdf);
+      const copiedPages = await merged.copyPages(doc, doc.getPageIndices());
+      for (const page of copiedPages) merged.addPage(page);
+    }
+    return Buffer.from(await merged.save());
   }
 
   // Guided Reading Phase 5: per-student progress report, modeled on the
