@@ -12,6 +12,7 @@ import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
 import { escapeHtml, renderRichTextField, urduFontFaceCss, latinFontFaceCss, containsArabicScript } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
+import { NAZRA_PARAS, NAZRA_PARA_COUNT } from '../behaviour/schemas/nazra-progress.schema';
 import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
 import { TermReportCard } from '../assessments/schemas/term-report-card.schema';
@@ -326,6 +327,12 @@ export class GenerateQaidaReportDto {
   // that's mostly 14 "Not Started" rows otherwise, which the school
   // raised as making the report look odd/unfinished.
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(QAIDA_TAKHTI_COUNT) upToTakhti?: number;
+}
+
+export class GenerateNazraReportDto {
+  @IsMongoId() studentId: string;
+  // Same reasoning as GenerateQaidaReportDto.upToTakhti, for Nazra's 30 Paras.
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) upToPara?: number;
 }
 
 export class GenerateTarbiyahReportDto {
@@ -1078,6 +1085,199 @@ const QAIDA_STATUS_STYLE: Record<string, { bg: string; text: string; label: stri
   not_started: { bg: '#F1F5F9', text: '#64748B', label: 'Not Started' },
 };
 
+// Human-readable labels for NAZRA_COMMON_ERRORS keys (nazra-progress.schema.ts) -
+// same convention as QAIDA_ERROR_LABELS above.
+const NAZRA_ERROR_LABELS: Record<string, string> = {
+  makhraj_confusion: 'Makhraj confusion (similar-sounding letters)',
+  missed_ghunna: 'Ghunna (nasalization) missed',
+  madd_too_short: 'Madd (elongation) held too short',
+  madd_too_long: 'Madd (elongation) held too long',
+  qalqalah_missed: 'Qalqalah (echoing bounce) missed',
+  idgham_missed: 'Idgham (merging) missed',
+  ikhfa_missed: 'Ikhfa (concealment) missed',
+  izhar_missed: 'Izhar (clear pronunciation) missed',
+  iqlab_missed: 'Iqlab (conversion to meem sound) missed',
+  waqf_ignored: 'Waqf (stop sign) ignored',
+  tashdeed_not_doubled: 'Tashdeed not doubled',
+  fluency_too_slow: 'Fluency too slow',
+  word_misread: 'Word misread',
+};
+
+// Nazra's status set is a superset of Qaida's (adds 'completed' instead of
+// 'mastered', plus 'not_tracked' for a Para never taught at this school -
+// see NazraProgress.recordType/NazraParaStatus) so it needs its own style map.
+const NAZRA_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+  completed: { bg: '#DCFCE7', text: '#16A34A', label: 'Completed' },
+  in_progress: { bg: '#DBEAFE', text: '#2563EB', label: 'In Progress' },
+  needs_revision: { bg: '#FEF3DC', text: '#C8811A', label: 'Needs Revision' },
+  not_started: { bg: '#F1F5F9', text: '#64748B', label: 'Not Started' },
+  not_tracked: { bg: '#F1F5F9', text: '#94A3B8', label: 'Not Tracked' },
+};
+
+/**
+ * Nazra (Qur'an reading) progress report - the 30-Para journey map plus
+ * per-Para status/attempt history, a recent Sabaq/Sabqi/Manzil diary log,
+ * and aggregated common errors. Modeled directly on QAIDA_REPORT_TEMPLATE
+ * (same layout conventions, embedded fonts, and compact-density spacing
+ * already hardened against page-bleed this session), since Nazra is the
+ * same program's next stage after Qaida - see generateNazraReport.
+ */
+const NAZRA_REPORT_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  ${urduFontFaceCss()}
+  ${latinFontFaceCss()}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 5px; border-bottom: 3px solid #0E7C5A; margin-bottom: 6px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
+  .school-sub { font-size: 11px; color: #6B5B3E; margin-top: 2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-sub { font-size: 10px; color: #6B5B3E; text-align: right; margin-top: 2px; }
+  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 6px 8px; margin-bottom: 6px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .info-label { font-size: 9px; font-weight: 700; color: #9C8A66; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 13px; font-weight: 600; color: #2B2016; }
+  .section-title { font-size: 12px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; margin-top: 7px; padding-bottom: 3px; border-bottom: 2px solid #EAF5F0; }
+  .section-title:first-of-type { margin-top: 0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 3px; }
+  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 5px; text-align: center; }
+  .summary-num { font-size: 18px; font-weight: 800; color: #0E7C5A; }
+  .summary-label { font-size: 9px; color: #9C8A66; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  .journey-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+  .journey-tile { border-radius: 6px; padding: 2px 1px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
+  .journey-num { font-size: 11px; font-weight: 800; }
+  .journey-title { font-size: 6px; font-weight: 600; margin-top: 1px; line-height: 1.05; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3px; font-size: 10px; }
+  th { background: #0E7C5A; color: #fff; padding: 3px 7px; text-align: left; font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 2px 7px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
+  tr:nth-child(even) td { background: #FBF8F0; }
+  .status-pill { display: inline-block; padding: 1.5px 7px; border-radius: 100px; font-size: 8.5px; font-weight: 700; }
+  .urdu { font-size: 10px; direction: rtl; color: #6B5B3E; font-family: 'Noto Nastaliq Urdu', 'Inter', Arial, sans-serif; }
+  .error-note { font-size: 9.5px; color: #6B5B3E; line-height: 1.45; margin-bottom: 3px; }
+  .error-note b { color: #C8811A; font-weight: 700; }
+  .diary-item { display: flex; justify-content: space-between; font-size: 9.5px; padding: 1.5px 0; border-bottom: 1px solid #FBF8F0; }
+  .diary-tag { font-size: 8px; font-weight: 700; text-transform: uppercase; padding: 0 5px; border-radius: 100px; margin-right: 3px; }
+  .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 6px; font-size: 11px; line-height: 1.4; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 4px; border-top: 1px solid #EADFC4; }
+  .sig-item { text-align: center; }
+  .sig-line { width: 130px; border-bottom: 1.5px solid #2B2016; margin-bottom: 3px; height: 18px; }
+  .sig-label { font-size: 9.5px; color: #6B5B3E; font-weight: 600; }
+  .footer { text-align: center; margin-top: 6px; font-size: 8.5px; color: #9C8A66; border-top: 1px solid #EAF5F0; padding-top: 4px; }
+  .footer strong { color: #0E7C5A; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
+    </div>
+    <div>
+      <div class="doc-title">Nazra (Qur'an Reading) Progress Report</div>
+      <div class="doc-sub">30-Para Programme</div>
+    </div>
+  </div>
+
+  <div class="student-box">
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Nazra Teacher</div><div class="info-value">${esc(data.currentTeacher) || 'N/A'}</div></div>
+    <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
+  </div>
+
+  <div class="section-title">Progress Overview</div>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-num">${data.completedCount}/${data.totalParas}</div><div class="summary-label">Paras Completed</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:${data.completionPct >= 80 ? '#16A34A' : data.completionPct >= 40 ? '#C8811A' : '#DC2626'}">${data.completionPct}%</div><div class="summary-label">Overall Completion</div></div>
+    <div class="summary-card"><div class="summary-num" style="font-size:16px">Para ${data.currentPara}</div><div class="summary-label">Currently On</div></div>
+    <div class="summary-card"><div class="summary-num" style="font-size:16px;text-transform:capitalize">${(data.overallStatus || '').replace(/_/g, ' ')}</div><div class="summary-label">Status</div></div>
+  </div>
+
+  <div class="section-title">${data.journeyHeading}</div>
+  <div class="journey-grid">
+    ${data.paras.map((p: any) => {
+      const style = NAZRA_STATUS_STYLE[p.status] || NAZRA_STATUS_STYLE.not_started;
+      return `<div class="journey-tile" style="background:${style.bg}">
+        <div class="journey-num" style="color:${style.text}">${p.number}</div>
+        <div class="journey-title" style="color:${style.text}">${esc(p.titleEn)}</div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <div class="section-title">Detailed Breakdown</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:4%">#</th>
+        <th style="width:24%">Para</th>
+        <th style="width:13%">Status</th>
+        <th style="width:11%">Started</th>
+        <th style="width:11%">Completed</th>
+        <th style="width:9%">Attempts</th>
+        <th style="width:28%">Latest Sabaq / Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${data.paras.map((p: any) => {
+        const style = NAZRA_STATUS_STYLE[p.status] || NAZRA_STATUS_STYLE.not_started;
+        const sabaq = p.latestAttempt?.pageFrom
+          ? `<strong>p.${esc(p.latestAttempt.pageFrom)}${p.latestAttempt.pageTo && p.latestAttempt.pageTo !== p.latestAttempt.pageFrom ? ` → p.${esc(p.latestAttempt.pageTo)}` : ''}</strong>`
+          : '';
+        const remarks = p.latestAttempt?.remarks ? rtl(p.latestAttempt.remarks) : '';
+        return `<tr>
+          <td><strong>${p.number}</strong></td>
+          <td><strong>${esc(p.titleEn)}</strong><div class="urdu">${rtl(p.titleAr)}</div></td>
+          <td><span class="status-pill" style="background:${style.bg};color:${style.text}">${style.label}${p.revisionCount > 0 ? ` ×${p.revisionCount + 1}` : ''}</span></td>
+          <td>${p.startedDate ? new Date(p.startedDate).toLocaleDateString('en-GB') : '—'}</td>
+          <td>${p.completedDate ? new Date(p.completedDate).toLocaleDateString('en-GB') : '—'}</td>
+          <td>${p.attemptCount}</td>
+          <td>${[sabaq, remarks].filter(Boolean).join(' — ') || '—'}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+
+  ${data.diaryLog && data.diaryLog.length > 0 ? `
+  <div class="section-title">Recent Diary — Sabaq / Sabqi / Manzil</div>
+  ${data.diaryLog.map((e: any) => {
+    const sabaqText = `Para ${e.sabaq.paraNumber}${e.sabaq.pageFrom ? ` · p.${esc(e.sabaq.pageFrom)}${e.sabaq.pageTo ? `–${esc(e.sabaq.pageTo)}` : ''}` : ''}`;
+    const tags = [
+      `<span class="diary-tag" style="background:#DBEAFE;color:#2563EB">Sabaq</span>${sabaqText} (${esc((e.sabaq.rating || '').replace(/_/g, ' '))})`,
+      e.sabqi ? `<span class="diary-tag" style="background:#FEF3DC;color:#C8811A">Sabqi</span>Para ${e.sabqi.paraNumber} (${esc((e.sabqi.rating || '').replace(/_/g, ' '))})` : '',
+      e.manzil ? `<span class="diary-tag" style="background:#DCFCE7;color:#16A34A">Manzil</span>Para ${e.manzil.paraNumber} (${esc((e.manzil.rating || '').replace(/_/g, ' '))})` : '',
+    ].filter(Boolean).join(' &nbsp; ');
+    return `<div class="diary-item"><span>${tags}</span><span>${new Date(e.date).toLocaleDateString('en-GB')}</span></div>`;
+  }).join('')}` : ''}
+
+  ${data.commonErrors && data.commonErrors.length > 0 ? `
+  <div class="section-title">Areas Needing Attention</div>
+  <p class="error-note">${data.commonErrors.map((e: any) => `${esc(NAZRA_ERROR_LABELS[e.error] || e.error)} <b>×${e.count}</b>`).join(', ')}</p>` : ''}
+
+  ${data.overallRemarks ? `
+  <div class="section-title">Teacher's Overall Remarks</div>
+  <div class="remarks-box">${rtl(data.overallRemarks)}</div>` : ''}
+
+  <div class="sig-row">
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Nazra Teacher</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Academic Coordinator</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+  </div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+</div>
+</body>
+</html>
+`;
+};
+
 const QAIDA_REPORT_TEMPLATE = (data: any) => {
   const esc = escapeHtml;
   // Takhti titles, teacher remarks and sabaq notes are often Urdu rather
@@ -1759,6 +1959,10 @@ export class PdfService implements OnModuleDestroy {
     // visibilitySettingsModel - keeps every existing `new PdfService(...)`
     // test construction (positional args) compiling unchanged.
     @Optional() @InjectModel(AssessmentVisibilitySettings.name) private visibilitySettingsModel?: Model<any>,
+    // Trailing-optional, same convention as visibilitySettingsModel above -
+    // keeps every existing `new PdfService(...)` test construction
+    // (positional args) compiling unchanged.
+    @Optional() @InjectModel('NazraProgress') private nazraModel?: Model<any>,
   ) {}
 
   /** Per-school display text for 'pass'/'fail' (Assessment Master Settings) - falls back to the plain words when unset or the settings collection isn't wired up (e.g. in a lean test construction). */
@@ -2300,6 +2504,126 @@ export class PdfService implements OnModuleDestroy {
     await this.logPdf({
       schoolSlug,
       type: 'qaida-report',
+      referenceId: dto.studentId,
+      referenceName: data.studentName,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Nazra (Qur'an reading) progress report - the 30-Para journey map plus
+   * per-Para status/attempt history, a recent Sabaq/Sabqi/Manzil diary log,
+   * and aggregated common errors. Reads NazraProgress directly rather than
+   * depending on BehaviourModule's NazraService, same one-directional,
+   * model-only convention as generateQaidaReport above - the aggregation
+   * logic here deliberately mirrors NazraService.getReportData (see
+   * nazra.service.ts, which is commented as the "single source of truth
+   * for both the JSON report view and the (future) PDF generator"), just
+   * re-derived here rather than imported.
+   */
+  async generateNazraReport(
+    schoolSlug: string,
+    dto: GenerateNazraReportDto,
+    userId: string,
+  ): Promise<Buffer> {
+    if (!this.nazraModel) throw new NotFoundException('Nazra progress tracking is not available.');
+    const school = await this.getSchool(schoolSlug);
+    const progress: any = await this.nazraModel.findOne({
+      studentId: dto.studentId, schoolSlug,
+    }).lean();
+    if (!progress) throw new NotFoundException('No Nazra progress recorded for this student yet');
+
+    const paras = NAZRA_PARAS.map((def) => {
+      const record = (progress.paras || []).find((p: any) => p.paraNumber === def.number);
+      const latestAttempt = record?.attempts?.[record.attempts.length - 1];
+      return {
+        ...def,
+        status: record?.status || 'not_started',
+        startedDate: record?.startedDate,
+        completedDate: record?.completedDate,
+        revisionCount: record?.revisionCount || 0,
+        attemptCount: record?.attempts?.length || 0,
+        latestAttempt: latestAttempt ? {
+          pageFrom: latestAttempt.pageFrom,
+          pageTo: latestAttempt.pageTo,
+          remarks: latestAttempt.remarks,
+        } : null,
+      };
+    });
+    const completedCount = paras.filter((p) => p.status === 'completed').length;
+
+    // Aggregate every error tag ever noted, across Sabaq attempts and
+    // diary Sabqi/Manzil revisions - same aggregation NazraService.
+    // getReportData does for the JSON report view.
+    const errorCounts = new Map<string, number>();
+    for (const record of progress.paras || []) {
+      for (const attempt of record.attempts || []) {
+        for (const err of attempt.errorsNoted || []) {
+          errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+        }
+      }
+    }
+    for (const entry of progress.diaryEntries || []) {
+      for (const err of entry.sabqi?.errorsNoted || []) {
+        errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+      }
+      for (const err of entry.manzil?.errorsNoted || []) {
+        errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+      }
+    }
+    const commonErrors = Array.from(errorCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([error, count]) => ({ error, count }));
+
+    // Most recent 8 diary entries first - the full history can run to
+    // hundreds of entries over a school year, which would bleed the
+    // report onto many pages; a printed report needs a recent snapshot,
+    // not the entire diary (the full diary stays available in the app).
+    const diaryLog = (progress.diaryEntries || [])
+      .slice()
+      .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 8)
+      .map((e: any) => ({ date: e.date, sabaq: e.sabaq, sabqi: e.sabqi || null, manzil: e.manzil || null }));
+
+    // Printing all 30 Paras for a student who has only just started
+    // produces a report that's mostly "Not Started" rows - same reasoning
+    // as Qaida's upToTakhti. The overview stats above always stay against
+    // the true 30-Para total; only the journey grid/table listing is narrowed.
+    const upToPara = dto.upToPara;
+    const shownParas = upToPara ? paras.filter((p) => p.number <= upToPara) : paras;
+    const journeyHeading = upToPara
+      ? `The Learning Journey — Paras 1–${upToPara} of ${NAZRA_PARA_COUNT}`
+      : `The Learning Journey — All ${NAZRA_PARA_COUNT} Paras`;
+
+    const data = {
+      schoolName: (school as any).name,
+      schoolAddress: this.formatSchoolAddress(school),
+      studentName: progress.studentName,
+      grade: progress.grade,
+      section: progress.section,
+      currentTeacher: progress.currentTeacher,
+      currentPara: progress.currentPara,
+      overallStatus: progress.overallStatus,
+      overallRemarks: progress.overallRemarks,
+      completedCount,
+      totalParas: NAZRA_PARA_COUNT,
+      completionPct: Math.round((completedCount / NAZRA_PARA_COUNT) * 100),
+      journeyHeading,
+      paras: shownParas,
+      diaryLog,
+      commonErrors,
+    };
+
+    const html = NAZRA_REPORT_TEMPLATE(data);
+    const pdf = await this.htmlToPdf(html);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'nazra-report',
       referenceId: dto.studentId,
       referenceName: data.studentName,
       generatedBy: userId,

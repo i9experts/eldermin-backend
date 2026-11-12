@@ -14,7 +14,7 @@ describe('PdfLog schema', () => {
   it("accepts every PDF type PdfService.logPdf actually logs", () => {
     const enumValues: string[] = (PdfLogSchema.path('type') as any).enumValues;
     const typesLoggedByPdfService = [
-      'report-card', 'exam-report-card', 'qaida-report', 'tarbiyah-report',
+      'report-card', 'exam-report-card', 'qaida-report', 'nazra-report', 'tarbiyah-report',
       'tarbiyah-class-report', 'tarbiyah-school-report', 'invoice',
       'fee-revenue-report', 'timetable', 'class_diary', 'meeting_minutes',
       'fee_receipt',
