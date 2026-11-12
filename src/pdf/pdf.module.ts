@@ -15,6 +15,9 @@ import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema'
 import { NazraProgressSchema } from '../behaviour/schemas/nazra-progress.schema';
 import { CharacterProgramSettings, CharacterProgramSettingsSchema } from '../behaviour/schemas/character-program-settings.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
+import { ReadingLevel, ReadingLevelSchema } from '../guided-reading/schemas/reading-level.schema';
+import { Reader, ReaderSchema } from '../guided-reading/schemas/reader.schema';
+import { StudentReadingProgress, StudentReadingProgressSchema } from '../guided-reading/schemas/student-reading-progress.schema';
 import { FinanceModule } from '../finance/finance.module';
 
 @Module({
@@ -65,6 +68,12 @@ import { FinanceModule } from '../finance/finance.module';
       { name: 'ReportTemplate', schema: ReportTemplateSchema },
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
+      // Guided Reading Phase 5 report - the staff CRUD module's own
+      // schemas, registered directly rather than importing
+      // GuidedReadingModule, same convention as QaidaProgress/NazraProgress above.
+      { name: 'ReadingLevel', schema: ReadingLevelSchema },
+      { name: 'Reader', schema: ReaderSchema },
+      { name: 'StudentReadingProgress', schema: StudentReadingProgressSchema },
     ]),
   ],
   controllers: [PdfController],

@@ -14,7 +14,7 @@ export class PdfLog {
       'payslip', 'result_card', 'attendance_sheet', 'custom', 'fee-revenue-report',
       'timetable', 'class_diary', 'qaida-report', 'exam-report-card',
       'tarbiyah-class-report', 'tarbiyah-school-report', 'meeting_minutes',
-      'nazra-report',
+      'nazra-report', 'guided-reading-report',
     ],
   })
   type: string;

@@ -21,6 +21,7 @@ export const BADGE_CATALOG: BadgeDefinition[] = [
   { key: 'course_complete', label: 'Course Champion', description: 'Completed 100% of a course.', icon: '🏆' },
   { key: 'quiz_ace', label: 'Quiz Ace', description: 'Scored 90% or higher on a self-paced quiz.', icon: '⭐' },
   { key: 'forum_contributor', label: 'Discussion Starter', description: 'Posted your first message in a course forum.', icon: '💬' },
+  { key: 'first_reader', label: 'Bookworm', description: 'Finished your first guided reader.', icon: '📖' },
   { key: 'points_100', label: 'Rising Star', description: 'Earned 100 points.', icon: '🌟' },
   { key: 'points_500', label: 'High Achiever', description: 'Earned 500 points.', icon: '🚀' },
   { key: 'points_1000', label: 'LMS Legend', description: 'Earned 1000 points.', icon: '👑' },

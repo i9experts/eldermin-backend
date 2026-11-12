@@ -17,7 +17,7 @@ describe('PdfLog schema', () => {
       'report-card', 'exam-report-card', 'qaida-report', 'nazra-report', 'tarbiyah-report',
       'tarbiyah-class-report', 'tarbiyah-school-report', 'invoice',
       'fee-revenue-report', 'timetable', 'class_diary', 'meeting_minutes',
-      'fee_receipt',
+      'fee_receipt', 'guided-reading-report',
     ];
     for (const type of typesLoggedByPdfService) {
       expect(enumValues).toContain(type);

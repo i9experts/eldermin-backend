@@ -305,6 +305,31 @@ export class ParentPortalController {
     return this.service.markLessonProgress(studentId, requestingUser, tenantId, schoolSlug, dto);
   }
 
+  // ── Guided Reading: student player (Phase 3) ────────────────────
+  @Get('students/:studentId/reading')
+  async getMyReadingHome(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyReadingHome(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/reading/:readerId')
+  async getMyReader(@Param('studentId') studentId: string, @Param('readerId') readerId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyReader(studentId, readerId, requestingUser, schoolSlug);
+  }
+
+  @Post('students/:studentId/reading/:readerId/complete')
+  @HttpCode(HttpStatus.OK)
+  async completeMyReading(
+    @Param('studentId') studentId: string,
+    @Param('readerId') readerId: string,
+    @Body() dto: { keywordsLookedUp?: string[] },
+    @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.completeMyReading(studentId, readerId, requestingUser, schoolSlug, tenantId, dto?.keywordsLookedUp || []);
+  }
+
   // ── LMS Phase 2: self-paced online quizzes ─────────────────────
   @Get('students/:studentId/quizzes')
   async listMyQuizzes(@Param('studentId') studentId: string, @Request() req: any) {

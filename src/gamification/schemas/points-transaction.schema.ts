@@ -17,6 +17,7 @@ export type PointsTransactionDocument = PointsTransaction & Document;
 
 export const POINTS_SOURCE_TYPES = [
   'lesson_completion', 'course_completion', 'quiz_attempt', 'forum_post', 'manual_award',
+  'reader_completion', 'keyword_lookup',
 ] as const;
 export type PointsSourceType = typeof POINTS_SOURCE_TYPES[number];
 

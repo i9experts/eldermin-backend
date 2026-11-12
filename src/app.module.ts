@@ -27,6 +27,7 @@ import { EmailModule } from './email/email.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { PdfModule } from './pdf/pdf.module';
 import { ReportTemplatesModule } from './modules/report-templates/report-templates.module';
+import { GuidedReadingModule } from './guided-reading/guided-reading.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ModulesModule } from './modules/modules.module';
 import { FamiliesModule } from './families/families.module';
@@ -110,6 +111,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     ComplianceModule,
     PdfModule,
     ReportTemplatesModule,
+    GuidedReadingModule,
     OnboardingModule,
     ModulesModule,
     FamiliesModule,

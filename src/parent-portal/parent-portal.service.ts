@@ -57,6 +57,7 @@ import { QaidaService } from '../behaviour/qaida.service';
 import { NazraService } from '../behaviour/nazra.service';
 import { projectParentQaidaReport } from './parent-qaida.projection';
 import { projectParentNazraReport } from './parent-nazra.projection';
+import { GuidedReadingService, READER_COMPLETION_POINTS } from '../guided-reading/guided-reading.service';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
 export const MAX_DEVICES_PER_PARENT = 10;
@@ -110,6 +111,8 @@ export class ParentPortalService {
     // Qaida & Nazra progress report - appended last for the same positional-construction reason as above.
     private qaidaService: QaidaService,
     private nazraService: NazraService,
+    // Guided Reading student player (Phase 3) - appended last for the same positional-construction reason as above.
+    private guidedReadingService: GuidedReadingService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -456,13 +459,14 @@ export class ParentPortalService {
   // business logic, just one call site for all four.
   async getMyLearning(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
-    const [courses, assignments, quizzes, certificates] = await Promise.all([
+    const [courses, assignments, quizzes, certificates, reading] = await Promise.all([
       this.getMyCourses(studentId, requestingUser, tenantId, schoolSlug),
       this.getHomework(studentId, requestingUser, tenantId, schoolSlug),
       this.listMyQuizzes(studentId, requestingUser, schoolSlug),
       this.certificatesService.getIssuedForStudent(schoolSlug, studentId),
+      this.guidedReadingService.getReadingHome(studentId, schoolSlug),
     ]);
-    return { courses, assignments, quizzes, certificates };
+    return { courses, assignments, quizzes, certificates, reading };
   }
 
   // ── LMS Phase 4: course discussion forum (student/parent side) ──────
@@ -663,6 +667,45 @@ export class ParentPortalService {
       }
     }
     return updated;
+  }
+
+  // ── Guided Reading: student player (Phase 3) ────────────────────
+  async getMyReadingHome(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.guidedReadingService.getReadingHome(studentId, schoolSlug);
+  }
+
+  async getMyReader(studentId: string, readerId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.guidedReadingService.getReaderForStudent(readerId, studentId, schoolSlug);
+  }
+
+  async completeMyReading(
+    studentId: string, readerId: string, requestingUser: ScopedUser, schoolSlug: string,
+    tenantId: string, keywordsLookedUp: string[] = [],
+  ) {
+    assertStudentAccess(requestingUser, studentId);
+    const result = await this.guidedReadingService.completeReaderForStudent(readerId, studentId, schoolSlug, keywordsLookedUp);
+
+    // Same non-blocking convention as markLessonProgress's gamification
+    // hook above - a points/badge hiccup never blocks the student's own
+    // completion from saving.
+    if (result.justCompleted) {
+      try {
+        await this.gamificationService.awardPoints(
+          schoolSlug, studentId, READER_COMPLETION_POINTS, `Finished reading: ${result.reader.title}`,
+          'reader_completion', String(result.reader._id), { tenantId },
+        );
+        if (result.completedCount === 1) {
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'first_reader', {
+            tenantId, sourceType: 'reader_completion', sourceId: String(result.reader._id),
+          });
+        }
+      } catch {
+        // never let a gamification hiccup block the student's own progress from saving
+      }
+    }
+    return result;
   }
 
   // ── LMS Phase 2: self-paced online quizzes ─────────────────────
