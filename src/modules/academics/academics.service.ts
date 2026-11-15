@@ -346,15 +346,22 @@ export class AcademicsService {
       { name: 'Other',          code: 'other',          order: 9 },
     ];
     const tid = this.tid(tenantId);
-    const names: string[] = [];
-    for (const cat of defaults) {
-      const result = await this.subjectCategoryModel.findOneAndUpdate(
-        { tenantId: tid, code: cat.code },
-        { $set: { ...cat, tenantId: tid, institutionId: institutionId ? this.oid(institutionId) : undefined, isActive: true } },
-        { upsert: true, new: true },
+    const iid = institutionId ? this.oid(institutionId) : undefined;
+    // Single bulkWrite rather than N sequential findOneAndUpdate calls -
+    // same fix as seedDefaultBookCategories above, applied here too so
+    // this doesn't regress into the same timeout risk if this list grows.
+    try {
+      await this.subjectCategoryModel.bulkWrite(
+        defaults.map((cat) => ({
+          updateOne: {
+            filter: { tenantId: tid, code: cat.code },
+            update: { $set: { ...cat, tenantId: tid, institutionId: iid, isActive: true } },
+            upsert: true,
+          },
+        })) as any[],
       );
-      names.push(result!.name);
-    }
+    } catch (e: any) { throw new BadRequestException(e.message); }
+    const names = defaults.map((cat) => cat.name);
     return { message: `${defaults.length} default subject categories seeded`, count: defaults.length, names };
   }
 
@@ -406,19 +413,34 @@ export class AcademicsService {
    * library category catalog. Idempotent upsert-by-code, same pattern as
    * seedDefaultSubjectCategories - safe to call more than once; running it
    * again just refreshes the seeded copies rather than duplicating them.
+   *
+   * A single bulkWrite (one round trip) rather than 100 sequential
+   * findOneAndUpdate calls - the original loop awaited each of the 100
+   * upserts one at a time, which on anything but a near-zero-latency DB
+   * connection comfortably exceeded the frontend's 15s request timeout
+   * (see src/lib/api.ts), surfacing as an opaque "Internal server
+   * error"/timeout toast with no indication the seed had actually been
+   * running fine, just slowly. seedDefaultSubjectCategories's identical
+   * loop never hit this in practice only because it seeds 9 entries, not
+   * 100. Wrapped in try/catch, matching createBookCategory's convention,
+   * so a genuine write failure (e.g. a non-ObjectId tenantId/
+   * institutionId) surfaces as a clear 400 instead of an unhandled 500.
    */
   async seedDefaultBookCategories(tenantId: string, institutionId: string) {
     const tid = this.tid(tenantId);
-    const names: string[] = [];
-    for (let i = 0; i < DEWEY_DECIMAL_CATEGORIES.length; i++) {
-      const cat = DEWEY_DECIMAL_CATEGORIES[i];
-      const result = await this.bookCategoryModel.findOneAndUpdate(
-        { tenantId: tid, code: cat.code },
-        { $set: { name: cat.name, code: cat.code, order: i, tenantId: tid, institutionId: institutionId ? this.oid(institutionId) : undefined, isActive: true } },
-        { upsert: true, new: true },
+    const iid = institutionId ? this.oid(institutionId) : undefined;
+    try {
+      await this.bookCategoryModel.bulkWrite(
+        DEWEY_DECIMAL_CATEGORIES.map((cat, i) => ({
+          updateOne: {
+            filter: { tenantId: tid, code: cat.code },
+            update: { $set: { name: cat.name, code: cat.code, order: i, tenantId: tid, institutionId: iid, isActive: true } },
+            upsert: true,
+          },
+        })) as any[],
       );
-      names.push(result!.name);
-    }
+    } catch (e: any) { throw new BadRequestException(e.message); }
+    const names = DEWEY_DECIMAL_CATEGORIES.map((cat) => cat.name);
     return { message: `${DEWEY_DECIMAL_CATEGORIES.length} default library categories seeded`, count: DEWEY_DECIMAL_CATEGORIES.length, names };
   }
 

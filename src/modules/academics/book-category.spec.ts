@@ -13,18 +13,35 @@ function makeService(overrides: Record<string, any> = {}) {
 }
 
 describe('AcademicsService — Library book categories', () => {
-  it('seedDefaultBookCategories upserts all 100 Dewey entries by code, scoped to the tenant', async () => {
-    const findOneAndUpdate = jest.fn(async (filter: any, update: any) => ({ name: update.$set.name }));
-    const bookCategoryModel: any = { findOneAndUpdate };
+  // One bulkWrite round trip rather than 100 sequential findOneAndUpdate
+  // calls - the sequential version could exceed the frontend's request
+  // timeout on anything but a near-zero-latency DB connection (see the
+  // comment on seedDefaultBookCategories).
+  it('seedDefaultBookCategories upserts all 100 Dewey entries by code in a single bulkWrite, scoped to the tenant', async () => {
+    const bulkWrite = jest.fn(async (ops: any[]) => ({ nUpserted: ops.length }));
+    const bookCategoryModel: any = { bulkWrite };
     const svc = makeService({ bookCategoryModel });
     const result = await svc.seedDefaultBookCategories('tenant-1', '507f1f77bcf86cd799439011');
     expect(result.count).toBe(100);
-    expect(findOneAndUpdate).toHaveBeenCalledTimes(100);
-    expect(findOneAndUpdate).toHaveBeenCalledWith(
-      { tenantId: 'tenant-1', code: '000' },
-      expect.objectContaining({ $set: expect.objectContaining({ name: 'Computer science, knowledge & systems', code: '000', tenantId: 'tenant-1' }) }),
-      expect.objectContaining({ upsert: true, new: true }),
-    );
+    expect(result.names).toHaveLength(100);
+    expect(bulkWrite).toHaveBeenCalledTimes(1);
+    const ops = bulkWrite.mock.calls[0][0];
+    expect(ops).toHaveLength(100);
+    expect(ops[0]).toEqual(expect.objectContaining({
+      updateOne: expect.objectContaining({
+        filter: { tenantId: 'tenant-1', code: '000' },
+        update: { $set: expect.objectContaining({ name: 'Computer science, knowledge & systems', code: '000', tenantId: 'tenant-1' }) },
+        upsert: true,
+      }),
+    }));
+  });
+
+  it('seedDefaultBookCategories surfaces a clear error instead of an unhandled 500 when the write fails', async () => {
+    const bulkWrite = jest.fn(async () => { throw new Error('Cast to ObjectId failed'); });
+    const bookCategoryModel: any = { bulkWrite };
+    const svc = makeService({ bookCategoryModel });
+    await expect(svc.seedDefaultBookCategories('tenant-1', '507f1f77bcf86cd799439011'))
+      .rejects.toThrow('Cast to ObjectId failed');
   });
 
   it('seedDefaultBookCategories is idempotent - calling it twice still only ever has 100 distinct Dewey codes', () => {
