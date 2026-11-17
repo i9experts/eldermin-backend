@@ -58,6 +58,9 @@ export class CostCenter {
   @Prop({ required: true }) name: string;
   @Prop({ enum: ['campus', 'department', 'other'], default: 'other' }) type: string;
   @Prop({ type: Types.ObjectId, ref: 'CostCenter', default: null }) parentId: Types.ObjectId | null;
+  // Plain string id, mirroring Department's own campusId convention — not a Mongoose ref,
+  // since Department lives in a different module/collection.
+  @Prop({ type: String, default: null }) departmentId: string | null;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ required: true, index: true }) schoolSlug: string;
 }
