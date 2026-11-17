@@ -7,10 +7,23 @@
 // statutory/institutional attendance-rate threshold, school-wide and
 // per-campus.
 //
-// Tenancy wrinkle: StudentAttendance/StaffAttendance are keyed on
-// tenantId (ref Tenant), not schoolSlug like the rest of Compliance -
-// schoolSlug must be resolved to the real Tenant._id first, exactly
-// like AuthService.getTenantContext / OnboardingService do
+// BUG FIX (student side showed zero data no matter how much attendance
+// was marked): this service used to read student attendance from
+// `modules/students/schemas/student-attendance.schema` (collection
+// `studentAttendance`, keyed on tenantId) - a legacy schema that NOTHING
+// in the app writes to. The real teacher-facing marking screen
+// (StudentsService.markAttendance/bulkMarkAttendance) writes to
+// `students/schemas/student-supporting.schema`'s StudentAttendance
+// (collection `student_attendance`, keyed on schoolSlug). The two
+// collections were never the same data, so this dashboard was
+// permanently blind to real attendance regardless of how much a teacher
+// entered - now reads the live, schoolSlug-keyed collection directly,
+// with no Tenant resolution required for the student side.
+//
+// Tenancy wrinkle (staff side only): StaffAttendance is genuinely keyed
+// on tenantId (ref Tenant), written that way by HrService - schoolSlug
+// must be resolved to the real Tenant._id first, exactly like
+// AuthService.getTenantContext / OnboardingService do
 // (tenantModel.findOne({ slug: schoolSlug })).
 // ============================================================
 
@@ -18,8 +31,8 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Tenant, TenantDocument } from '../modules/organization/schemas/tenant.schema';
-import { Student, StudentDocument } from '../modules/students/schemas/student.schema';
-import { StudentAttendance, StudentAttendanceDocument } from '../modules/students/schemas/student-attendance.schema';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { StaffAttendance, StaffAttendanceDocument } from '../modules/hr/schemas/staff-attendance.schema';
 import { Campus, CampusDocument } from '../organization/schemas/organization.schema';
@@ -95,37 +108,32 @@ export class AttendanceComplianceService {
     const from = query.from ? new Date(query.from) : win.from;
     const to = query.to ? new Date(query.to) : win.to;
     const settings = await this.getSettings(schoolSlug);
-
-    const tenantId = await this.resolveTenantId(schoolSlug);
-    if (!tenantId) {
-      return {
-        window: { from, to },
-        settings,
-        hasTenant: false,
-        students: emptySideResult(),
-        staff: emptySideResult(),
-      };
-    }
-
     const campusNames = await this.campusNameMap(schoolSlug);
 
+    // Only the staff side needs Tenant resolution (StaffAttendance is
+    // genuinely tenantId-keyed) - the student side reads the live,
+    // schoolSlug-keyed collection directly, so a school with no resolvable
+    // Tenant record still sees its real student attendance data instead of
+    // the whole dashboard going blank for an unrelated reason.
+    const tenantId = await this.resolveTenantId(schoolSlug);
+
     const [studentRows, staffRows] = await Promise.all([
-      this.computeStudentRates(tenantId, from, to),
-      this.computeStaffRates(tenantId, from, to),
+      this.computeStudentRates(schoolSlug, from, to),
+      tenantId ? this.computeStaffRates(tenantId, from, to) : Promise.resolve([]),
     ]);
 
     return {
       window: { from, to },
       settings,
-      hasTenant: true,
+      hasTenant: !!tenantId,
       students: summarizeSide(studentRows, settings.minStudentAttendancePercent, campusNames),
       staff: summarizeSide(staffRows, settings.minStaffAttendancePercent, campusNames),
     };
   }
 
-  private async computeStudentRates(tenantId: Types.ObjectId, from: Date, to: Date): Promise<PersonRateRow[]> {
+  private async computeStudentRates(schoolSlug: string, from: Date, to: Date): Promise<PersonRateRow[]> {
     const grouped = await this.studentAttendanceModel.aggregate([
-      { $match: { tenantId, date: { $gte: from, $lte: to } } },
+      { $match: { schoolSlug, date: { $gte: from, $lte: to } } },
       { $group: { _id: '$studentId', statuses: { $push: '$status' } } },
     ]);
     if (grouped.length === 0) return [];
@@ -133,7 +141,7 @@ export class AttendanceComplianceService {
     const studentIds = grouped.map((g) => g._id);
     const students = await this.studentModel
       .find({ _id: { $in: studentIds } })
-      .select('personal.firstName personal.lastName admissionNo campusId')
+      .select('firstName lastName grNo admissionNumber campusId')
       .lean();
     const byId = new Map(students.map((s: any) => [String(s._id), s]));
 
@@ -146,8 +154,8 @@ export class AttendanceComplianceService {
       const absences = countable.filter((s: string) => studentDayWeight(s) === 0).length;
       rows.push({
         id: String(g._id),
-        name: student ? `${student.personal?.firstName || ''} ${student.personal?.lastName || ''}`.trim() || student.admissionNo : String(g._id),
-        campusId: student?.campusId ? String(student.campusId) : null,
+        name: student ? `${student.firstName || ''} ${student.lastName || ''}`.trim() || student.grNo || student.admissionNumber || String(g._id) : String(g._id),
+        campusId: student?.campusId || null,
         ratePercent: rate,
         absences,
         daysCounted: countable.length,

@@ -15,20 +15,27 @@ import { AssessmentService } from './assessment.service';
 import {
   CreateAssessmentDto, UpdateAssessmentDto, AssessmentQueryDto,
   CreateQuestionDto, QuestionQueryDto,
-  BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
+  BulkMarkEntryDto, VerifyMarksDto, UpdateMarkEntryDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
-  PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  PublishResultDto, UnpublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto, UnpublishTermReportCardsDto,
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
+  CreateGradingScaleDto, UpdateGradingScaleDto, UpdateAssessmentVisibilitySettingsDto,
 } from './dto/assessment.dto';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { NON_STAFF_ROLES } from '../auth/admin-role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
 // Read-only routes stay open to any authenticated role (matches the rest of
-// this codebase's convention of broad-permissive backend access).
+// this codebase's convention of broad-permissive backend access), EXCEPT a
+// single exam paper and its PDF, which carry the answer key: those are
+// staff-only (every role except parent, student and the reseller roles).
 const QUESTION_BANK_EDITOR_ROLES = STAFF_WRITE_ROLES;
+export const EXAM_PAPER_READ_ROLES: UserRole[] = Object.values(UserRole).filter((r) => !NON_STAFF_ROLES.includes(r));
 
 @Controller('assessments')
 export class AssessmentController {
@@ -37,7 +44,7 @@ export class AssessmentController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
     };
@@ -134,15 +141,73 @@ export class AssessmentController {
     return this.service.publishResults({ ...dto, schoolSlug, publishedBy: userName });
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('report-cards/unpublish')
+  async unpublishResults(@Body() dto: UnpublishResultDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unpublishResults({ ...dto, schoolSlug });
+  }
+
+  // ── Term Report Cards (comprehensive, whole-term report; static before :id) ──
+  @Get('term-report-cards')
+  async getTermReportCards(@Request() req: any, @Query() query: TermReportCardQueryDto) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCards(schoolSlug, query);
+  }
+
+  @Get('term-report-cards/:id')
+  async getTermReportCard(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCard(id, schoolSlug);
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/generate')
+  async generateTermReportCards(@Body() dto: GenerateTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.generateTermReportCards({ ...dto, schoolSlug, generatedBy: userName });
+  }
+
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('term-report-cards/:id/remarks')
+  async updateTermReportCardRemarks(
+    @Param('id') id: string,
+    @Body() dto: UpdateReportCardRemarksDto,
+    @Request() req: any,
+  ) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateTermReportCardRemarks(id, schoolSlug, dto, requestingUser);
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/publish')
+  async publishTermReportCards(@Body() dto: PublishTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.publishTermReportCards({ ...dto, schoolSlug, publishedBy: userName });
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/unpublish')
+  async unpublishTermReportCards(@Body() dto: UnpublishTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unpublishTermReportCards({ ...dto, schoolSlug });
+  }
+
   // ── Analytics ─────────────────────────────────────────────────
   @Get('analytics/performance')
   async getAnalytics(
     @Request() req: any,
-    @Query('academicYear') academicYear: string,
+    @Query('academicYear') academicYear?: string,
     @Query('grade') grade?: string,
+    @Query('section') section?: string,
+    @Query('subject') subject?: string,
+    @Query('term') term?: string,
+    @Query('type') type?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     const { schoolSlug } = this.ctx(req);
-    return this.service.getPerformanceAnalytics(schoolSlug, academicYear, grade);
+    return this.service.getPerformanceAnalytics(schoolSlug, { academicYear, grade, section, subject, term, type, dateFrom, dateTo });
   }
 
   // ── Examination Timetable (combined route is static, must precede :id) ──
@@ -193,6 +258,54 @@ export class AssessmentController {
     return this.service.getExamPapers(schoolSlug, query);
   }
 
+  // ── Assessment Master Settings (must stay registered before the
+  // 'settings/...' and ':id' routes below for the same reason as 'papers'
+  // above - every one of these is a static first path segment). ──────────
+  @Get('settings/grading-scales/presets')
+  getGradingScalePresets() {
+    return this.service.getGradingScalePresets();
+  }
+
+  @Get('settings/grading-scales')
+  async listGradingScales(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.listGradingScales(schoolSlug);
+  }
+
+  @Post('settings/grading-scales')
+  @Roles(...STAFF_WRITE_ROLES)
+  async createGradingScale(@Body() dto: CreateGradingScaleDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createGradingScale({ ...dto, schoolSlug, updatedBy: userName });
+  }
+
+  @Patch('settings/grading-scales/:id')
+  @Roles(...STAFF_WRITE_ROLES)
+  async updateGradingScale(@Param('id') id: string, @Body() dto: UpdateGradingScaleDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateGradingScale(id, schoolSlug, { ...dto, updatedBy: userName });
+  }
+
+  @Delete('settings/grading-scales/:id')
+  @Roles(...STAFF_WRITE_ROLES)
+  async deleteGradingScale(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteGradingScale(id, schoolSlug);
+  }
+
+  @Get('settings/visibility')
+  async getVisibilitySettings(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVisibilitySettings(schoolSlug);
+  }
+
+  @Patch('settings/visibility')
+  @Roles(...STAFF_WRITE_ROLES)
+  async updateVisibilitySettings(@Body() dto: UpdateAssessmentVisibilitySettingsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateVisibilitySettings(schoolSlug, { ...dto, updatedBy: userName });
+  }
+
   // ── Dynamic :id (must come AFTER all static GET routes) ───────
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req: any) {
@@ -231,14 +344,17 @@ export class AssessmentController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  // Was open to any token and accepted any string. Now staff only (same guard as marks entry), the value must be a real status, and the
+  // publish / unpublish transition (result_published) belongs to the admin roles, exactly like report-card publish (TEACHING_ADMIN_ROLES).
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Patch(':id/status')
   async updateStatus(
     @Param('id') id: string,
     @Body('status') status: string,
     @Request() req: any,
   ) {
-    const { schoolSlug } = this.ctx(req);
-    return this.service.updateStatus(id, schoolSlug, status);
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateStatus(id, schoolSlug, status, requestingUser);
   }
 
   @Post('questions')
@@ -277,7 +393,7 @@ export class AssessmentController {
   }
 
   // ── Exam Papers (continued) ───────────────────────────────────
-  @Get('papers/:id') async getExamPaperById(@Param('id') id: string, @Request() req: any) {
+  @Get('papers/:id') @Roles(...EXAM_PAPER_READ_ROLES) async getExamPaperById(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getExamPaperById(id, schoolSlug);
   }
@@ -300,6 +416,7 @@ export class AssessmentController {
   }
 
   @Get('papers/:id/pdf')
+  @Roles(...EXAM_PAPER_READ_ROLES)
   async downloadExamPaperPdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
     const { schoolSlug } = this.ctx(req);
     const pdf = await this.service.generateExamPaperPdf(id, schoolSlug);
@@ -361,5 +478,25 @@ export class AssessmentController {
   async verifyMarks(@Body() dto: VerifyMarksDto, @Request() req: any) {
     const { schoolSlug, userName } = this.ctx(req);
     return this.service.verifyMarks({ ...dto, schoolSlug, verifiedBy: userName });
+  }
+
+  // Edits one already-saved mark - the Mark Sheet's "Edit" action. Same
+  // role gate as bulk entry (STAFF_WRITE_ROLES): a teacher correcting their
+  // own just-entered mark is the common case, not just an admin action.
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('marks/:id')
+  async updateMarkEntry(@Param('id') id: string, @Body() dto: UpdateMarkEntryDto, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateMarkEntry(id, schoolSlug, dto, requestingUser);
+  }
+
+  // Deletes one mark entry - gated stricter than editing (admin-type roles
+  // only), since removing a result outright is more consequential than
+  // correcting it.
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Delete('marks/:id')
+  async deleteMarkEntry(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteMarkEntry(id, schoolSlug);
   }
 }

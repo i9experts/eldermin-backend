@@ -7,6 +7,7 @@ import { Model } from 'mongoose';
 import { AppModule } from '../app.module';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Grade, GradeDocument } from '../organization/schemas/organization.schema';
+import { computeClassSectionRepair } from '../common/utils/class-section-repair.util';
 
 // ============================================================
 // REPAIR: Student.currentGrade/currentSection drift from the Institution
@@ -39,8 +40,6 @@ function arg(name: string): string | undefined {
   return hit.includes('=') ? hit.slice(hit.indexOf('=') + 1) : 'true';
 }
 
-const normalize = (s: string) => String(s || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-
 async function run() {
   const schoolSlug = arg('schoolSlug');
   const apply = arg('apply') === 'true';
@@ -60,78 +59,28 @@ async function run() {
       return;
     }
 
-    const gradeByNorm = new Map<string, string>(); // normalized grade name -> canonical name
-    const sectionIndex = new Map<string, { gradeName: string; sectionName: string }>(); // normalized section name -> owning grade + canonical section name
-    for (const g of grades) {
-      gradeByNorm.set(normalize(g.name), g.name);
-      for (const s of g.sections || []) {
-        if ((s as any).isActive === false || !s.name) continue;
-        sectionIndex.set(normalize(s.name), { gradeName: g.name, sectionName: s.name });
+    const students = await studentModel.find({ schoolSlug }).select('_id firstName lastName currentGrade currentSection').lean();
+    const { fixes, unresolved } = computeClassSectionRepair(
+      grades.map((g: any) => ({ name: g.name, sections: g.sections })),
+      students.map((s: any) => ({ id: String(s._id), name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), currentGrade: s.currentGrade, currentSection: s.currentSection })),
+    );
+
+    for (const f of fixes) {
+      console.log(`Student ${f.studentId}: "${f.oldGrade}"/"${f.oldSection}" -> "${f.newGrade || f.oldGrade}"/"${f.newSection || f.oldSection}"`);
+      if (apply) {
+        const update: any = {};
+        if (f.newGrade) update.currentGrade = f.newGrade;
+        if (f.newSection) update.currentSection = f.newSection;
+        await studentModel.updateOne({ _id: f.studentId }, { $set: update });
       }
     }
 
-    const students = await studentModel.find({ schoolSlug }).select('_id currentGrade currentSection').lean();
-    let fixed = 0;
-    const unresolved: { id: string; currentGrade: string; currentSection: string }[] = [];
-
-    for (const s of students) {
-      const rawGrade = s.currentGrade || '';
-      const rawSection = s.currentSection || '';
-      let newGrade: string | undefined = gradeByNorm.get(normalize(rawGrade));
-      let newSection: string | undefined;
-
-      if (newGrade) {
-        // Grade resolved normally — look up the canonical section name
-        // under the same grade, if the student's section string matches.
-        const grade = grades.find((g) => g.name === newGrade);
-        const match = (grade?.sections || []).find((sec: any) => normalize(sec.name) === normalize(rawSection));
-        newSection = match?.name;
-      } else {
-        // Grade field doesn't match any Grade.name — check whether it's
-        // actually a full class label (grade+section mixed into the
-        // grade field), by matching it against the Section master instead.
-        const bySection = sectionIndex.get(normalize(rawGrade));
-        if (bySection) {
-          newGrade = bySection.gradeName;
-          newSection = bySection.sectionName;
-        }
-      }
-
-      if (!newSection) {
-        // Still try resolving the section on its own even if the grade
-        // didn't change, in case only the section string has drifted.
-        const direct = sectionIndex.get(normalize(rawSection));
-        if (direct && (!newGrade || direct.gradeName === newGrade)) {
-          newGrade = newGrade || direct.gradeName;
-          newSection = direct.sectionName;
-        }
-      }
-
-      const gradeChanged = newGrade && newGrade !== rawGrade;
-      const sectionChanged = newSection && newSection !== rawSection;
-
-      if (gradeChanged || sectionChanged) {
-        console.log(
-          `Student ${s._id}: "${rawGrade}"/"${rawSection}" -> "${newGrade || rawGrade}"/"${newSection || rawSection}"`,
-        );
-        fixed++;
-        if (apply) {
-          const update: any = {};
-          if (gradeChanged) update.currentGrade = newGrade;
-          if (sectionChanged) update.currentSection = newSection;
-          await studentModel.updateOne({ _id: s._id }, { $set: update });
-        }
-      } else if (!newGrade) {
-        unresolved.push({ id: String(s._id), currentGrade: rawGrade, currentSection: rawSection });
-      }
-    }
-
-    console.log(`\n${apply ? 'Applied' : 'Would apply'} ${fixed} fix(es) out of ${students.length} student(s) for school ${schoolSlug}.`);
+    console.log(`\n${apply ? 'Applied' : 'Would apply'} ${fixes.length} fix(es) out of ${students.length} student(s) for school ${schoolSlug}.`);
     if (unresolved.length > 0) {
       console.log(`\n${unresolved.length} student(s) could not be matched to any master Grade/Section — needs manual review:`);
-      for (const u of unresolved) console.log(`  ${u.id}: currentGrade="${u.currentGrade}" currentSection="${u.currentSection}"`);
+      for (const u of unresolved) console.log(`  ${u.studentId}: currentGrade="${u.currentGrade}" currentSection="${u.currentSection}"`);
     }
-    if (!apply && fixed > 0) {
+    if (!apply && fixes.length > 0) {
       console.log('\nThis was a dry run — re-run with --apply to write these changes.');
     }
   } finally {

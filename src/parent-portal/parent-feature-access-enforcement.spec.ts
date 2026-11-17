@@ -8,19 +8,25 @@ import { ParentPortalService } from './parent-portal.service';
 
 function stubModel() { return {} as any; }
 
-// ParentPortalService takes 26 positional model injections, then 4 service
-// injections, then ParentAccessControlService - rather than hand-count 31
+// ParentPortalService takes 27 positional model injections, then 4 service
+// injections, then ParentAccessControlService - rather than hand-count 32
 // positional args (fragile against constructor reordering), build the
 // model list, slot the one model this test actually needs in at the
 // reportCardModel position, and spread everything through `new`.
-const MODEL_COUNT = 26;
+const MODEL_COUNT = 28;
 const REPORT_CARD_MODEL_INDEX = 4; // 0-based: studentModel, attendanceModel, invoiceModel, markModel, reportCardModel, ...
 
 function buildService(parentAccess: any) {
   const reportCardModel = { find: jest.fn(() => ({ sort: () => ({ lean: () => Promise.resolve([{ _id: 'rc1' }]) }) })) };
   const models = Array.from({ length: MODEL_COUNT }, () => stubModel());
   models[REPORT_CARD_MODEL_INDEX] = reportCardModel as any;
-  const services = [stubModel(), stubModel(), stubModel(), stubModel()]; // assessmentService, certificatesService, uploadService, pdfService
+  // getResults also reads Assessment Master Settings' parent-visibility
+  // allowlist via assessmentService.getVisibilitySettings - defaults match
+  // AssessmentService's own fallback when no settings doc exists yet.
+  const assessmentService = {
+    getVisibilitySettings: jest.fn(() => Promise.resolve({ shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false })),
+  };
+  const services = [assessmentService, stubModel(), stubModel(), stubModel()]; // assessmentService, certificatesService, uploadService, pdfService
   return new (ParentPortalService as any)(...models, ...services, parentAccess);
 }
 

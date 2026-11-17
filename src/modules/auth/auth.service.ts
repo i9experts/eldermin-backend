@@ -12,6 +12,7 @@ import { TeacherProfile, TeacherProfileDocument } from '../teaching/schemas/teac
 import { Reseller, ResellerDocument } from '../../resellers/schemas/reseller.schema';
 import { PlatformRole, PlatformRoleDocument } from '../../super-admin/schemas/platform-role.schema';
 import { UsageLog, UsageLogDocument } from '../../super-admin/schemas/super-admin.schema';
+import { OnboardingSession, OnboardingSessionDocument } from '../../onboarding/schemas/onboarding-session.schema';
 import { recordLoginUsage } from '../../common/utils/usage-log.util';
 import { UploadService } from '../../upload/upload.service';
 import { RolesService } from '../../roles/roles.service';
@@ -22,7 +23,7 @@ import { AuthStateService } from './auth-state.service';
 
 // Compared against when no active account matches the e-mail, so an unknown or
 // deactivated account costs the same as a wrong password (no timing oracle).
-import { SCHOOL_SUSPENDED_MESSAGE } from '../../common/constants/school-suspended';
+import { SCHOOL_SUSPENDED_MESSAGE, schoolSuspendedException } from '../../common/constants/school-suspended';
 export { SCHOOL_SUSPENDED_MESSAGE };
 
 const DUMMY_BCRYPT_HASH = bcrypt.hashSync('not-a-real-password-for-timing-only', 10);
@@ -38,6 +39,7 @@ export class AuthService {
     @InjectModel(Reseller.name) private resellerModel: Model<ResellerDocument>,
     @InjectModel(PlatformRole.name) private platformRoleModel: Model<PlatformRoleDocument>,
     @InjectModel(UsageLog.name) private usageLogModel: Model<UsageLogDocument>,
+    @InjectModel(OnboardingSession.name) private onboardingSessionModel: Model<OnboardingSessionDocument>,
     private jwtService: JwtService,
     private uploadService: UploadService,
     private rolesService: RolesService,
@@ -210,7 +212,7 @@ export class AuthService {
     } else if (slugToUse) {
       tenant = await this.tenantModel.findOne({ slug: slugToUse }).lean();
     }
-    if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+    if (tenant?.status === 'suspended') throw schoolSuspendedException();
 
     const tenantId = tenant?._id?.toString() || user.tenantId?.toString() || slugToUse || user._id.toString();
 
@@ -221,6 +223,22 @@ export class AuthService {
 
     const schoolSlug = tenant?.slug || slugToUse || null;
     await recordLoginUsage(this.usageLogModel, schoolSlug);
+
+    // Setup Wizard gating: Tenant.isSetupComplete defaults to false and is
+    // only ever flipped true by the self-service wizard's own completion
+    // step (OnboardingService.complete). A school Super Admin activates
+    // directly (CRM "Activate Institution") never goes through that wizard
+    // at all - Super Admin already does the equivalent setup work itself -
+    // so isSetupComplete sits stuck at false forever for every one of
+    // those schools, and the frontend would otherwise keep showing the
+    // Setup Wizard link/button on an already fully-active account with no
+    // real wizard step left to complete. An OnboardingSession document
+    // only ever gets created by the self-service signup flow
+    // (OnboardingService.register) - its absence is a reliable signal that
+    // this school was never meant to see the wizard in the first place,
+    // regardless of the stored flag's value.
+    const isSetupComplete = tenant?.isSetupComplete === true
+      || !(schoolSlug && await this.onboardingSessionModel.exists({ schoolSlug }));
     const permissions = await this.rolesService.getPermissionsForUser(user._id.toString());
     // Only ever computed for super_admin - every other role has no
     // customPlatformRoleId and this resolves to undefined for them,
@@ -319,6 +337,7 @@ export class AuthService {
         slug: tenant?.slug || slugToUse || null,
         plan: tenant?.plan || null,
         activeModules,
+        isSetupComplete,
       },
     };
   }
@@ -400,7 +419,7 @@ export class AuthService {
     // token+slug login (the web stores the token and calls /auth/me): a suspended school is refused here too
     if (tenantId) {
       const tenant: any = await this.tenantModel.findOne({ _id: idForms(tenantId) }).select('status').lean();
-      if (tenant?.status === 'suspended') throw new ForbiddenException(SCHOOL_SUSPENDED_MESSAGE);
+      if (tenant?.status === 'suspended') throw schoolSuspendedException();
     }
     const permissions = await this.rolesService.getPermissionsForUser(userId);
     // Self-healing single-campus fallback isn't critical here (unlike
@@ -420,5 +439,21 @@ export class AuthService {
     ).select('-passwordHash');
     if (!user) throw new UnauthorizedException('User not found');
     return { avatarUrl: url };
+  }
+
+  // "Show Me Around" product tour. scope 'global' marks the one-time
+  // sidebar/topbar orientation tour (finished or skipped - either way the
+  // frontend won't auto-start it again); a module key (e.g. 'finance')
+  // records that module's own mini-tour as seen, independent of every
+  // other module's tour state.
+  async updateTourState(userId: string, tenantId: string, scope: string) {
+    const update = scope === 'global'
+      ? { $set: { globalTourCompleted: true, globalTourCompletedAt: new Date() } }
+      : { $addToSet: { moduleToursSeen: scope } };
+    const user = await this.userModel.findOneAndUpdate(
+      { _id: userId, tenantId }, update, { new: true },
+    ).select('globalTourCompleted globalTourCompletedAt moduleToursSeen');
+    if (!user) throw new UnauthorizedException('User not found');
+    return user;
   }
 }

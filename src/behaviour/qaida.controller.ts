@@ -4,21 +4,25 @@
 // ============================================================
 
 import {
-  Controller, Get, Post, Patch, Body, Param, Query, Request,
+  Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards,
 } from '@nestjs/common';
 import { QaidaService } from './qaida.service';
 import { InitQaidaProgressDto, RecordTakhtiAttemptDto, UpdateTakhtiStatusDto } from './dto/qaida.dto';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
+// B0.2: parent / student / reseller tokens are denied on every route (both guard modes); staff access unchanged.
 @Controller('behaviour/qaida')
+@UseGuards(BehaviourStaffOnlyGuard)
 export class QaidaController {
   constructor(private readonly service: QaidaService) {}
 
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       userId: req?.user?.userId,
       requestingUser: req?.user,
@@ -102,5 +106,16 @@ export class QaidaController {
   ) {
     const { schoolSlug } = this.ctx(req);
     return this.service.updateOverallRemarks(studentId, schoolSlug, dto.remarks);
+  }
+
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('students/:studentId/share')
+  async updateParentShared(
+    @Param('studentId') studentId: string,
+    @Body() dto: { parentShared: boolean },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.updateParentShared(studentId, schoolSlug, !!dto.parentShared);
   }
 }

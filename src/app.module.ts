@@ -27,6 +27,7 @@ import { EmailModule } from './email/email.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { PdfModule } from './pdf/pdf.module';
 import { ReportTemplatesModule } from './modules/report-templates/report-templates.module';
+import { GuidedReadingModule } from './guided-reading/guided-reading.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ModulesModule } from './modules/modules.module';
 import { FamiliesModule } from './families/families.module';
@@ -36,6 +37,8 @@ import { SupportModule } from './support/support.module';
 import { RolesModule } from './roles/roles.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { NonStaffGuard } from './auth/non-staff.guard';
+import { ResellerScopeGuard } from './auth/reseller-scope.guard';
 import { AuditLogModule } from './common/audit-log.module';
 import { SyllabusModule } from './syllabus/syllabus.module';
 import { EceModule } from './ece/ece.module';
@@ -50,6 +53,9 @@ import { CertificatesModule } from './modules/certificates/certificates.module';
 import { AccountingIntegrationsModule } from './modules/accounting-integrations/accounting-integrations.module';
 import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
+import { LmsModule } from './lms/lms.module';
+import { GamificationModule } from './gamification/gamification.module';
+import { AppVersionModule } from './app-version/app-version.module';
 
 import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-match.selftest';
 @Module({
@@ -85,6 +91,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     AccountingIntegrationsModule,
     SchoolCalendarModule,
     EventsModule,
+    AppVersionModule,
     ProcurementModule,
     StudentsModule,
     TeachingModule,
@@ -104,6 +111,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     ComplianceModule,
     PdfModule,
     ReportTemplatesModule,
+    GuidedReadingModule,
     OnboardingModule,
     ModulesModule,
     FamiliesModule,
@@ -121,6 +129,8 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     KnowledgeBaseModule,
     IdCardsModule,
     CertificatesModule,
+    LmsModule,
+    GamificationModule,
   ],
   controllers: [AppController],
   providers: [
@@ -128,6 +138,10 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     IdMatchSelfTest,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    // Must stay directly after JwtAuthGuard/RolesGuard: it reads req.user set by JwtAuthGuard.
+    { provide: APP_GUARD, useClass: NonStaffGuard },
+    // Must stay AFTER JwtAuthGuard (it reads req.user). Partner accounts are limited to /reseller-portal and the auth routes.
+    { provide: APP_GUARD, useClass: ResellerScopeGuard },
   ],
 })
 export class AppModule {}

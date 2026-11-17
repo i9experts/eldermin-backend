@@ -62,7 +62,7 @@ export class RolesOrModuleManageGuard implements CanActivate {
       if (!u?.customRoleId) throw denied();
       const r = await this.roleModel.findById(u.customRoleId).select('moduleAccess').lean();
       if (!r) throw denied();
-      if (customRoleGrants(r.moduleAccess as any, req.moduleKey, req.level, req.allowModuleWide)) return true;
+      if (customRoleGrants(r.moduleAccess as any, req.moduleKey, req.level, req.allowModuleWide, req.subModuleKey)) return true;
     } catch (err) {
       if (err instanceof ForbiddenException) throw err;
       this.logger.error(`Custom role lookup failed: ${(err as Error)?.message}`);

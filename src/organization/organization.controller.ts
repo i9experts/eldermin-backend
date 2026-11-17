@@ -233,6 +233,22 @@ export class OrganizationController {
     return this.service.recomputeAllClassTeacherAssignments(schoolSlug, req?.user?.tenantId);
   }
 
+  /** Read-only preview of students whose currentGrade/currentSection has
+   * drifted from the Institution Setup Grade/Section master (the root
+   * cause behind "my class shows 0 students" reports - see
+   * class-section-repair.util.ts). */
+  @Get('class-section-repair/preview')
+  async previewClassSectionRepair(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.previewClassSectionRepair(schoolSlug);
+  }
+
+  @Post('class-section-repair/apply')
+  async applyClassSectionRepair(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.applyClassSectionRepair(schoolSlug);
+  }
+
   // Departments
   @Get('departments') async getDepts(@Request() req: any, @Query('campusId') campusId?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);

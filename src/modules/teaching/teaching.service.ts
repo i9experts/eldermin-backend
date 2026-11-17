@@ -1,6 +1,8 @@
 import { Optional, Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException, BadGatewayException, InternalServerErrorException } from '@nestjs/common';
 import { assertValidObjectId } from '../../common/utils/object-id.util';
+import { idForms } from '../../common/utils/id-forms.util';
 import { notifyGuardiansOfStudents, schoolSlugForTenant } from '../../common/utils/notify-guardians.util';
+import { sanitizeRichText } from '../../common/utils/rich-text.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -21,7 +23,7 @@ import { BehaviourNote, BehaviourNoteDocument } from './schemas/behaviour-note.s
 import { ElectiveGroup, ElectiveGroupDocument } from './schemas/elective-group.schema';
 import { DutyRoster, DutyRosterDocument } from './schemas/duty-roster.schema';
 import { ClassDiaryEntry, ClassDiaryEntryDocument } from './schemas/class-diary.schema';
-import { AttendanceSettings, AttendanceSettingsDocument } from './schemas/attendance-settings.schema';
+import { ClassAttendanceSettings, ClassAttendanceSettingsDocument } from './schemas/class-attendance-settings.schema';
 import { Staff, StaffDocument } from '../hr/schemas/staff.schema';
 import { User, UserDocument } from '../organization/schemas/user.schema';
 import { Notification, NotificationDocument } from '../../parent-portal/schemas/notification-and-message.schema';
@@ -31,8 +33,25 @@ import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
 import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { GradeSubmissionDto } from './dto/assignment.dto';
 import {
-  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, isOwnTeacherRef, TeacherIdentity, teacherIdsMatch,
 } from '../../staff-portal/teacher-identity.util';
+import { teacherClassAccessOf, mayTeacherAccessClassSubject } from '../../staff-portal/teacher-class-access.util';
+import { teacherScopeVerdict } from '../../auth/teacher-scope-verdict';
+
+/** description/classworkDescription/homeworkDescription arrive from the
+ * frontend's rich-text editor as HTML - sanitized here (not just trusted
+ * from the request body) since this content is later rendered as real
+ * HTML, unescaped, both in the downloaded Class Diary PDF and anywhere a
+ * shared entry is shown to parents/other staff. */
+function sanitizeDiaryPeriods(periods: any): any {
+  if (!Array.isArray(periods)) return periods;
+  return periods.map((p: any) => (p && typeof p === 'object') ? {
+    ...p,
+    description: sanitizeRichText(p.description),
+    classworkDescription: sanitizeRichText(p.classworkDescription),
+    homeworkDescription: sanitizeRichText(p.homeworkDescription),
+  } : p);
+}
 
 @Injectable()
 export class TeachingService {
@@ -51,7 +70,7 @@ export class TeachingService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Notification.name) private notificationModel: Model<NotificationDocument>,
-    @InjectModel(AttendanceSettings.name) private attendanceSettingsModel: Model<AttendanceSettingsDocument>,
+    @InjectModel(ClassAttendanceSettings.name) private attendanceSettingsModel: Model<ClassAttendanceSettingsDocument>,
     private readonly pdfService: PdfService,
     private readonly configService: ConfigService,
     @Optional() private readonly staffNotifier?: StaffNotifier,
@@ -101,10 +120,130 @@ export class TeachingService {
     };
   }
 
+  // Institution Overview dashboard's "Homework Summary" widget - which
+  // class+subject combinations have (and haven't) been given homework for
+  // a given day. Nothing previously cross-referenced Timetable (the only
+  // source of "what subjects/teachers are actually taught in this class
+  // today") against Assignment (whether homework was actually created for
+  // it), so there was no way to answer "which classes still need homework
+  // assigned today" at a glance.
+  //
+  // Assignment has no separate "published" flag - status is the closest
+  // proxy (product decision): 'draft' = created but not yet published to
+  // students, 'assigned'/'submitted'/'graded'/'overdue' = published. No
+  // Assignment row at all for a class+subject = not assigned yet.
+  private static readonly HOMEWORK_PUBLISHED_STATUSES = new Set(['assigned', 'submitted', 'graded', 'overdue']);
+  private static readonly HOMEWORK_NON_TEACHING_PERIOD_TYPES = new Set(['break', 'assembly', 'free']);
+
+  async getHomeworkSummary(tenantId: string, dateStr?: string, campusId?: string) {
+    const tid = this.tid(tenantId);
+    const date = dateStr ? new Date(dateStr) : new Date();
+    const dayOfWeek = date.getDay();
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const timetableFilter: any = { tenantId: tid, status: 'active' };
+    if (campusId) timetableFilter.campusId = campusId;
+
+    const [timetables, assignments] = await Promise.all([
+      this.timetableModel.find(timetableFilter).select('gradeLevel sectionName periods').lean(),
+      this.assignmentModel.find({
+        tenantId: tid, type: 'homework', assignedDate: { $gte: dayStart, $lt: dayEnd },
+        ...(campusId ? { campusId } : {}),
+      }).select('gradeLevel sectionName subject status').lean(),
+    ]);
+
+    const assignmentStatusByKey = new Map<string, string>();
+    for (const a of assignments as any[]) {
+      assignmentStatusByKey.set(`${a.gradeLevel}|${a.sectionName || ''}|${a.subject}`, a.status);
+    }
+
+    type SubjectRow = { subject: string; teacherName: string; assigned: boolean; published: boolean };
+    const classes: { grade: string; section: string; subjects: SubjectRow[] }[] = [];
+
+    for (const tt of timetables as any[]) {
+      const seenSubjects = new Set<string>();
+      const subjects: SubjectRow[] = [];
+      for (const p of tt.periods || []) {
+        if (p.day !== dayOfWeek) continue;
+        if (!p.subject || TeachingService.HOMEWORK_NON_TEACHING_PERIOD_TYPES.has(p.type)) continue;
+        if (seenSubjects.has(p.subject)) continue;
+        seenSubjects.add(p.subject);
+        const status = assignmentStatusByKey.get(`${tt.gradeLevel}|${tt.sectionName || ''}|${p.subject}`);
+        subjects.push({
+          subject: p.subject,
+          teacherName: p.teacherName || '',
+          assigned: !!status,
+          published: !!status && TeachingService.HOMEWORK_PUBLISHED_STATUSES.has(status),
+        });
+      }
+      if (subjects.length > 0) classes.push({ grade: tt.gradeLevel, section: tt.sectionName || '', subjects });
+    }
+    classes.sort((a, b) => a.grade.localeCompare(b.grade) || a.section.localeCompare(b.section));
+
+    const totals = { total: 0, assigned: 0, published: 0, unassigned: 0, unpublished: 0 };
+    let classesWithHomework = 0;
+    for (const c of classes) {
+      let classHasAny = false;
+      for (const s of c.subjects) {
+        totals.total++;
+        if (s.assigned) { totals.assigned++; classHasAny = true; } else totals.unassigned++;
+        if (s.published) totals.published++; else totals.unpublished++;
+      }
+      if (classHasAny) classesWithHomework++;
+    }
+
+    return {
+      date: dayStart.toISOString().slice(0, 10),
+      classesAssignedHomework: classesWithHomework,
+      totalClasses: classes.length,
+      totals,
+      classes,
+    };
+  }
+
   // ── TEACHER PROFILES ──────────────────────────────────────────────────────────
 
   async getTeacherProfiles(tenantId: string, requestingUser?: ScopedUser) {
     const tid = this.tid(tenantId);
+
+    // Self-healing #0: "Sync from HR" was never clicked for this school (or
+    // was clicked once, long ago, before most of today's teaching staff
+    // were even added to HR), so every "pick a teacher" dropdown across the
+    // Teaching module (Class Diary, Homework, Syllabus, Timetable, PTM...)
+    // is missing some or all real teachers - reported from the PTM
+    // "Schedule Meeting" dropdown, used by whoever is scheduling the
+    // meeting, not necessarily one of the teachers themselves, so the
+    // per-requester self-heal below (which only ever creates the
+    // REQUESTER's own profile) never fires for them. A first version of
+    // this only checked "does this tenant have ANY profile at all", which
+    // missed the (very common) case of a school that already has a handful
+    // of profiles - e.g. from admins' own self-heals below - but still has
+    // most of its real teaching staff unsynced: that first profile existing
+    // short-circuited the gate and the rest of the roster stayed invisible
+    // forever. Instead, diff the actual teacher-eligible Staff ids against
+    // the TeacherProfile ids on file and only upsert what's missing -
+    // self-correcting on every read (new hires show up without needing
+    // another manual sync) while staying cheap once caught up, since the
+    // diff is then empty and nothing further is written.
+    const [staffIdAndRole, existingProfileStaffIds] = await Promise.all([
+      this.staffModel.find({ tenantId: tid }, { _id: 1, erpRole: 1 }).lean(),
+      this.teacherProfileModel.find({ tenantId: tid }, { staffId: 1 }).lean(),
+    ]);
+    const knownStaffIds = new Set((existingProfileStaffIds as any[]).map((p) => String(p.staffId)));
+    const missingTeacherStaffIds = (staffIdAndRole as any[])
+      .filter((s) => this.isTeacherErpRole(s.erpRole) && !knownStaffIds.has(String(s._id)))
+      .map((s) => s._id);
+    if (missingTeacherStaffIds.length) {
+      const missingStaff = await this.staffModel.find({ _id: { $in: missingTeacherStaffIds }, tenantId: tid }).lean();
+      const institutionId = (requestingUser as any)?.institutionId;
+      for (const staff of missingStaff as any[]) {
+        await this.upsertTeacherProfileFromStaff(staff, tid, staff.institutionId ? String(staff.institutionId) : institutionId);
+      }
+    }
+
     // Self-healing: updateTeacherProfile used to $set whatever the Edit
     // Teaching Profile form sent for campusId with no sanitization at all
     // (unlike createTeacherProfile's ternary below) - clearing the Campus
@@ -118,6 +257,44 @@ export class TeachingService {
     // Cheap, idempotent, and scoped to this tenant only - a no-op once no
     // document matches.
     await this.teacherProfileModel.updateMany({ tenantId: tid, campusId: '' }, { $set: { campusId: null } });
+
+    // Self-healing #2: a teacher whose HR Staff record was added after the
+    // last manual "Sync from HR" click (or if it was never clicked at all)
+    // has no TeacherProfile row yet, so they can't appear in - or select
+    // themselves from - any of the "pick a teacher" dropdowns across the
+    // Teaching module (Class Diary, Homework, Syllabus, Timetable, etc.),
+    // all of which call this same method. Rather than re-scanning the
+    // entire staff roster on every fetch (what the full "Sync from HR"
+    // button does), lazily upsert just the requester's own profile here -
+    // cheap (one Staff lookup) and guarantees they can always find
+    // themselves without an admin having to remember to sync first.
+    //
+    // staffId is resolved live from the DB rather than trusted from the
+    // JWT claim alone - same reasoning as resolveTeacherIdentity ("the
+    // JWT's staffId claim is never trusted; a stale token must not act for
+    // a removed/changed staff member"). A teacher whose Staff<->login link
+    // was created (or fixed) AFTER their current token was issued would
+    // otherwise have no staffId claim and never self-heal even after
+    // logging out and back in, if the token happened to be refreshed from
+    // a cache rather than a fresh login. idForms() guards against the
+    // documented string-vs-ObjectId storage drift on Staff.userId
+    // (B0_ID_TYPING.md) the same way the login-time resolution does.
+    let staffId = requestingUser?.staffId;
+    if (!staffId && requestingUser?.userId) {
+      const ownStaffByLogin = await this.staffModel
+        .findOne({ tenantId: tid, userId: idForms(requestingUser.userId), isActive: { $ne: false } })
+        .select('_id')
+        .lean();
+      if (ownStaffByLogin) staffId = String((ownStaffByLogin as any)._id);
+    }
+    if (staffId) {
+      const hasProfile = await this.teacherProfileModel.exists({ tenantId: tid, staffId: new Types.ObjectId(staffId) });
+      if (!hasProfile) {
+        const ownStaff = await this.staffModel.findOne({ _id: staffId, tenantId: tid }).lean();
+        if (ownStaff) await this.upsertTeacherProfileFromStaff(ownStaff, tid, ownStaff.institutionId ? String(ownStaff.institutionId) : undefined);
+      }
+    }
+
     const filter: any = { tenantId: tid };
     if (requestingUser) {
       // Inclusive, not a hard filter: syncTeacherProfilesFromHR (below)
@@ -135,8 +312,21 @@ export class TeachingService {
       const effectiveDepartment = resolveDepartmentScope(requestingUser, undefined);
       if (effectiveDepartment) filter.department = effectiveDepartment;
     }
+
+    // Guarantee the requester always sees their own profile, even if its
+    // `department` field doesn't exactly match their own department claim
+    // (free-text drift between HR's Staff.department and the Teaching
+    // Profile's denormalized copy - the same class of mismatch documented
+    // elsewhere in this codebase, e.g. Students currentGrade/currentSection).
+    // A dropdown whose entire purpose is "let me identify myself" must
+    // never exclude the person using it; department/campus scoping for
+    // every OTHER teacher's visibility is unaffected.
+    const query = staffId
+      ? { $or: [filter, { tenantId: tid, staffId: new Types.ObjectId(staffId) }] }
+      : filter;
+
     return this.teacherProfileModel
-      .find(filter)
+      .find(query)
       .populate('campusId', 'name code')
       .sort({ lastName: 1 })
       .lean();
@@ -235,12 +425,20 @@ export class TeachingService {
    * nothing was actually written to the Teaching module's TeacherProfile
    * collection - the one Question Bank/Syllabus's "assignedOnly" filter
    * actually reads. Now genuinely upserts a TeacherProfile per teacher
-   * Staff record, merging in whatever subjects/grades HR has on file.
-   * Deliberately additive/non-destructive: HR's own Teacher Profile
-   * section is frequently left blank even for real teachers (subjects are
-   * more often assigned directly via Teaching -> Teachers instead), so
-   * this only ever adds to an existing profile's subjects/grades, never
-   * clears them back to empty just because HR's copy is blank. */
+   * Staff record, writing whatever subjects/grades HR has on file.
+   * Non-destructive only in the one direction that matters: a blank HR
+   * copy never clears an existing profile value (see the `?.length`
+   * guards below) - but once HR DOES have a real list, it REPLACES the
+   * profile's value rather than merging with it, since HR's own section
+   * is frequently left blank even for real teachers (subjects are more
+   * often assigned directly via Teaching -> Teachers instead). This used
+   * to merge ([...existing, ...fromHR]) instead of replace, which meant
+   * every click of this button permanently appended HR's value on top of
+   * whatever was already there - a grade reassignment or a casing fix
+   * made on the HR side left BOTH the old and new values forever,
+   * compounding with every sync into exactly the kind of
+   * "Grade 1, Grade 2, GRADE-2, Grade-1 +1" garbage reported on the
+   * Teacher Directory. */
   async syncTeacherProfilesFromHR(tenantId: string, institutionId: string) {
     const tid = this.tid(tenantId);
     const teacherStaff = await this.staffModel.find({ tenantId: tid }).lean();
@@ -248,68 +446,94 @@ export class TeachingService {
     let created = 0;
     let updated = 0;
     let skippedPossibleDuplicates: Array<{ staffId: string; name: string; matchedProfileId: string }> = [];
-    const normalizeName = (s: any) => `${s.firstName || ''} ${s.lastName || ''}`.trim().toLowerCase().replace(/\s+/g, ' ');
     for (const staff of teacherStaff as any[]) {
-      const erpRole = (staff.erpRole || '').toLowerCase().trim();
-      // Mirrors HrService.resolvePrimaryRole's own default: an erpRole
-      // that isn't one of the other recognized roles defaults to teacher.
-      const OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
-        'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
-      const isTeacher = !OTHER_ROLES.includes(erpRole);
-      if (!isTeacher) continue;
-
-      const existing = await this.teacherProfileModel.findOne({ tenantId: tid, staffId: staff._id });
-      const tp = staff.teacherProfile || {};
-      const fields: any = {
-        tenantId: tid,
-        institutionId: staff.institutionId || new Types.ObjectId(institutionId),
-        employeeId: staff.employeeId,
-        firstName: staff.firstName,
-        lastName: staff.lastName,
-        designation: staff.designation,
-        department: staff.department,
-        campusId: staff.campusId || null,
-      };
-      if (tp.subjectsCanTeach?.length) {
-        fields.subjectsCanTeach = [...new Set([...(existing?.subjectsCanTeach || []), ...tp.subjectsCanTeach])];
-      }
-      if (tp.gradeLevelsCanTeach?.length) {
-        fields.gradeLevelsCanTeach = [...new Set([...(existing?.gradeLevelsCanTeach || []), ...tp.gradeLevelsCanTeach])];
-      }
-      if (tp.maxPeriodsPerDay) fields.maxPeriodsPerDay = tp.maxPeriodsPerDay;
-      if (tp.maxPeriodsPerWeek) fields.maxPeriodsPerWeek = tp.maxPeriodsPerWeek;
-      if (typeof tp.isClassTeacher === 'boolean' && !existing) fields.isClassTeacher = tp.isClassTeacher;
-
-      if (existing) {
-        await this.teacherProfileModel.updateOne({ _id: existing._id }, { $set: fields });
-        updated++;
-      } else {
-        // Before creating a brand-new TeacherProfile, check whether one
-        // already exists under a DIFFERENT Staff record with the same
-        // name in this tenant - a second Staff document for the same
-        // physical person (re-entered by mistake, e.g. during a later
-        // "add a role" attempt) otherwise silently got its own TeacherProfile
-        // here, showing that person twice in the Teacher Directory with one
-        // row blank. Flagged for manual review instead of auto-created.
-        const name = normalizeName(staff);
-        const possibleDuplicate = name
-          ? await this.teacherProfileModel.findOne({
-              tenantId: tid,
-              staffId: { $ne: staff._id },
-              $expr: {
-                $eq: [{ $toLower: { $trim: { input: { $concat: ['$firstName', ' ', '$lastName'] } } } }, name],
-              },
-            }).select('_id').lean()
-          : null;
-        if (possibleDuplicate) {
-          skippedPossibleDuplicates.push({ staffId: String(staff._id), name: `${staff.firstName} ${staff.lastName}`, matchedProfileId: String(possibleDuplicate._id) });
-          continue;
-        }
-        await this.teacherProfileModel.create({ ...fields, staffId: staff._id });
-        created++;
-      }
+      const result = await this.upsertTeacherProfileFromStaff(staff, tid, institutionId);
+      if (result === 'created') created++;
+      else if (result === 'updated') updated++;
+      else if (result) skippedPossibleDuplicates.push(result);
     }
     return { scanned: teacherStaff.length, created, updated, skippedPossibleDuplicates };
+  }
+
+  /** Upserts a single Staff record's TeacherProfile - the per-record unit
+   * of work `syncTeacherProfilesFromHR` loops over, extracted so it can
+   * also be run for just one teacher (see `getTeacherProfiles`'s lazy
+   * self-heal) without re-scanning the entire staff roster. Returns
+   * 'created' | 'updated' | a skipped-duplicate record | undefined (not a
+   * teacher role, nothing to do). */
+  // Mirrors HrService.resolvePrimaryRole's own default: an erpRole that
+  // isn't one of the other recognized roles defaults to teacher. Shared by
+  // upsertTeacherProfileFromStaff and getTeacherProfiles's lazy "which
+  // teaching staff still have no TeacherProfile row" self-heal below, so
+  // both agree on who counts as a teacher.
+  private static readonly OTHER_ROLES = ['super_admin', 'institution_owner', 'principal', 'vice_principal', 'admin',
+    'academic_coordinator', 'finance_manager', 'hr_manager', 'librarian', 'parent', 'student', 'support_staff'];
+  private isTeacherErpRole(erpRole: any): boolean {
+    return !TeachingService.OTHER_ROLES.includes((erpRole || '').toLowerCase().trim());
+  }
+
+  private async upsertTeacherProfileFromStaff(
+    staff: any, tid: string, institutionId?: string,
+  ): Promise<'created' | 'updated' | { staffId: string; name: string; matchedProfileId: string } | undefined> {
+    if (!this.isTeacherErpRole(staff.erpRole)) return undefined;
+
+    const existing = await this.teacherProfileModel.findOne({ tenantId: tid, staffId: staff._id });
+    const tp = staff.teacherProfile || {};
+    const fields: any = {
+      tenantId: tid,
+      institutionId: staff.institutionId || (institutionId ? new Types.ObjectId(institutionId) : undefined),
+      employeeId: staff.employeeId,
+      firstName: staff.firstName,
+      lastName: staff.lastName,
+      designation: staff.designation,
+      department: staff.department,
+      campusId: staff.campusId || null,
+    };
+    // Replace, not merge with `existing` - a grade reassignment, or simply
+    // correcting a casing typo on the HR side ("Grade-1" -> "GRADE-1"), used
+    // to leave BOTH the old and new values on the profile forever,
+    // compounding further with every subsequent sync (garbage like "Grade
+    // 1, Grade 2, GRADE-2, Grade-1 +1" on the Teacher Directory). A blank
+    // HR copy still leaves the existing profile value untouched (the
+    // `?.length` guard below).
+    if (tp.subjectsCanTeach?.length) {
+      fields.subjectsCanTeach = [...new Set(tp.subjectsCanTeach)];
+    }
+    if (tp.gradeLevelsCanTeach?.length) {
+      fields.gradeLevelsCanTeach = [...new Set(tp.gradeLevelsCanTeach)];
+    }
+    if (tp.maxPeriodsPerDay) fields.maxPeriodsPerDay = tp.maxPeriodsPerDay;
+    if (tp.maxPeriodsPerWeek) fields.maxPeriodsPerWeek = tp.maxPeriodsPerWeek;
+    if (typeof tp.isClassTeacher === 'boolean' && !existing) fields.isClassTeacher = tp.isClassTeacher;
+
+    if (existing) {
+      await this.teacherProfileModel.updateOne({ _id: existing._id }, { $set: fields });
+      return 'updated';
+    }
+
+    // Before creating a brand-new TeacherProfile, check whether one
+    // already exists under a DIFFERENT Staff record with the same
+    // name in this tenant - a second Staff document for the same
+    // physical person (re-entered by mistake, e.g. during a later
+    // "add a role" attempt) otherwise silently got its own TeacherProfile
+    // here, showing that person twice in the Teacher Directory with one
+    // row blank. Flagged for manual review instead of auto-created.
+    const normalizeName = (s: any) => `${s.firstName || ''} ${s.lastName || ''}`.trim().toLowerCase().replace(/\s+/g, ' ');
+    const name = normalizeName(staff);
+    const possibleDuplicate = name
+      ? await this.teacherProfileModel.findOne({
+          tenantId: tid,
+          staffId: { $ne: staff._id },
+          $expr: {
+            $eq: [{ $toLower: { $trim: { input: { $concat: ['$firstName', ' ', '$lastName'] } } } }, name],
+          },
+        }).select('_id').lean()
+      : null;
+    if (possibleDuplicate) {
+      return { staffId: String(staff._id), name: `${staff.firstName} ${staff.lastName}`, matchedProfileId: String(possibleDuplicate._id) };
+    }
+    await this.teacherProfileModel.create({ ...fields, staffId: staff._id });
+    return 'created';
   }
 
   // ── ATTENDANCE SETTINGS ───────────────────────────────────────────────────────
@@ -355,7 +579,7 @@ export class TeachingService {
     // wins regardless of what (if anything) was requested.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.lessonPlanModel.find(filter).sort({ planDate: -1 }).limit(100).lean();
   }
@@ -1110,7 +1334,7 @@ Rules:
     // assignments/homework, never a caller-suppliable or absent filter.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.assignmentModel.find(filter).sort({ dueDate: -1 }).lean();
   }
@@ -1252,6 +1476,23 @@ Rules:
 
   // ── ASSIGNMENT SUBMISSIONS (grading) ────────────────────────────────────────────
 
+  /**
+   * BB6: a TEACHER may only view / grade the submissions of homework in their own classes and subjects: the owner of the assignment (either of
+   * my ids, legacy admin-created rows hold the TeacherProfile id) or the class teacher of its class (all subjects) or the subject teacher of
+   * its class + subject (same rule as quiz attempts and marks entry). Under TEACHER_SCOPE_GUARD_MODE: log = would_deny line only, enforce = 403.
+   * Other staff roles keep today's behaviour. Parents/students never reach these routes (class-level staff-only guard on the controller;
+   * they use /parent-portal/students/:id/homework for their own child).
+   */
+  private async assertTeacherMayHandleSubmissions(requestingUser: ScopedUser | undefined, assignment: any, route: string): Promise<void> {
+    if (!isTeacherCaller(requestingUser)) return;
+    const me = await this.teacherIdentity(requestingUser!);
+    if (isOwnTeacherRef(me, assignment.teacherId)) return;
+    const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+      .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments currentAssignments').lean();
+    if (mayTeacherAccessClassSubject(teacherClassAccessOf(profile), { grade: assignment.gradeLevel, section: assignment.sectionName, subject: assignment.subject })) return;
+    teacherScopeVerdict(requestingUser, route, 'teacher_submissions_outside_classes', 'You can only handle homework of your own classes and subjects.');
+  }
+
   async getSubmissionsForAssignment(tenantId: string, assignmentId: string, requestingUser?: ScopedUser) {
     assertValidObjectId(assignmentId, 'assignment');
     const assignment = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
@@ -1262,6 +1503,7 @@ Rules:
         throw new ForbiddenException('This assignment belongs to a different campus.');
       }
     }
+    await this.assertTeacherMayHandleSubmissions(requestingUser, assignment, 'GET /teaching/assignments/:id/submissions');
     const submissions = await this.submissionModel.find({ tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) })
       .sort({ studentName: 1 }).lean();
     return { assignment, submissions };
@@ -1272,6 +1514,17 @@ Rules:
     assertValidObjectId(submissionId, 'submission');
     const submission = await this.submissionModel.findOne({ _id: submissionId, tenantId: this.tid(tenantId), assignmentId: new Types.ObjectId(assignmentId) });
     if (!submission) throw new NotFoundException('Submission not found');
+    // the assignment this submission belongs to: same campus rule as the read, then the teacher class/subject rule (BB6)
+    const parent: any = await this.assignmentModel.findOne({ _id: assignmentId, tenantId: this.tid(tenantId) }).lean();
+    if (parent) {
+      if (requestingUser) {
+        const effectiveCampusId = resolveCampusScope(requestingUser, undefined);
+        if (effectiveCampusId && String(parent.campusId || '') !== String(effectiveCampusId)) {
+          throw new ForbiddenException('This assignment belongs to a different campus.');
+        }
+      }
+      await this.assertTeacherMayHandleSubmissions(requestingUser, parent, 'PATCH /teaching/assignments/:id/submissions/:submissionId');
+    }
     if (dto.grade > submission.maxGrade) {
       throw new BadRequestException(`Grade cannot exceed this assignment's maximum of ${submission.maxGrade}.`);
     }
@@ -1353,7 +1606,7 @@ Rules:
     // note at their campus.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.reportedBy = new Types.ObjectId(me.staffId);
+      filter.reportedBy = teacherIdsMatch(me);
     }
     return this.behaviourModel.find(filter).sort({ incidentDate: -1 }).limit(100).lean();
   }
@@ -1446,7 +1699,7 @@ Rules:
     }
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.reportedBy = new Types.ObjectId(me.staffId);
+      filter.reportedBy = teacherIdsMatch(me);
     }
     const page = Math.max(1, parseInt(query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 20));
@@ -1476,7 +1729,7 @@ Rules:
     // their own class diary entries.
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.classDiaryModel.find(filter).sort({ diaryDate: -1 }).lean();
   }
@@ -1495,6 +1748,7 @@ Rules:
     const { teacherId, ...rest } = data;
     const payload: any = {
       ...rest,
+      periods: sanitizeDiaryPeriods(rest.periods),
       // Required on the schema but never set here before - the client
       // correctly never sends this (tenant/school scoping must come from
       // the authenticated request, not the body), but nothing filled it
@@ -1534,6 +1788,7 @@ Rules:
     // after the fact - require explicit re-share for a parent to see
     // edits made once it's already gone out.
     const { shared, sharedAt, sharedBy, notifiedGuardianCount, teacherId, ...editable } = data;
+    if (editable.periods) editable.periods = sanitizeDiaryPeriods(editable.periods);
     Object.assign(existing, editable);
     if (isTeacherCaller(requestingUser) && 'teacherId' in data) {
       const me = await this.teacherIdentity(requestingUser!);

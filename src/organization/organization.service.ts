@@ -17,6 +17,7 @@ import {
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { buildClassTeacherOfName } from './utils/class-teacher-label.util';
+import { computeClassSectionRepair } from '../common/utils/class-section-repair.util';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
@@ -25,6 +26,7 @@ import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { AppStoreConnectService } from '../integrations/app-store-connect/app-store-connect.service';
+import { ParentDevice, ParentDeviceDocument } from '../parent-portal/schemas/parent-device.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -43,6 +45,7 @@ export class OrganizationService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(ParentDevice.name) private parentDeviceModel: Model<ParentDeviceDocument>,
     private uploadService: UploadService,
     private appStoreConnectService: AppStoreConnectService,
   ) {}
@@ -663,6 +666,39 @@ export class OrganizationService {
     return { schoolSlug, teachersProcessed: userIds.size, results };
   }
 
+  /** Read-only preview of what `applyClassSectionRepair` would change for
+   * this school - see class-section-repair.util.ts for why this matters
+   * (a class teacher's own Attendance register reading as empty is the
+   * most commonly reported symptom of this drift). */
+  async previewClassSectionRepair(schoolSlug: string) {
+    const [grades, students] = await Promise.all([
+      this.gradeModel.find({ schoolSlug, isActive: true }).select('name sections').lean(),
+      this.studentModel.find({ schoolSlug }).select('firstName lastName currentGrade currentSection').lean(),
+    ]);
+    if (grades.length === 0) return { totalStudents: students.length, fixes: [], unresolved: [] };
+    return computeClassSectionRepair(
+      grades.map((g: any) => ({ name: g.name, sections: g.sections })),
+      students.map((s: any) => ({ id: String(s._id), name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), currentGrade: s.currentGrade, currentSection: s.currentSection })),
+    );
+  }
+
+  /** Writes the fixes `previewClassSectionRepair` reports - each student's
+   * currentGrade/currentSection rewritten to the canonical Grade/Section
+   * master spelling. A student the preview could not resolve is left
+   * untouched for manual review, exactly as the preview reports it. */
+  async applyClassSectionRepair(schoolSlug: string) {
+    const report = await this.previewClassSectionRepair(schoolSlug);
+    if (report.fixes.length === 0) return { fixedCount: 0, unresolvedCount: report.unresolved.length };
+    const ops = report.fixes.map((f) => ({
+      updateOne: {
+        filter: { _id: f.studentId, schoolSlug },
+        update: { $set: { ...(f.newGrade ? { currentGrade: f.newGrade } : {}), ...(f.newSection ? { currentSection: f.newSection } : {}) } },
+      },
+    }));
+    await this.studentModel.bulkWrite(ops);
+    return { fixedCount: report.fixes.length, unresolvedCount: report.unresolved.length };
+  }
+
   async bulkCreateGrades(schoolSlug: string) {
     const defaultGrades = [
       'Pre-Nursery', 'Nursery', 'KG-1', 'KG-2',
@@ -941,7 +977,25 @@ export class OrganizationService {
       for (const sid of u.guardianOfStudentIds || []) activatedStudentIds.add(String(sid));
     }
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const recentlyActiveParents = (parentUsers as any[]).filter((u: any) => u.lastLoginAt && new Date(u.lastLoginAt) >= sevenDaysAgo).length;
+
+    // Real install proxy: devices the app itself pinged us about (on login
+    // and on every cold start) - unlike `lastLoginAt`, this isn't a single
+    // overwritten timestamp, it's one row per device the parent actually
+    // has the app on, so it survives even if this particular parent hasn't
+    // logged in again recently.
+    const parentUserIds = (parentUsers as any[]).map((u: any) => u._id);
+    const devices = parentUserIds.length > 0
+      ? await this.parentDeviceModel.find({ userId: { $in: parentUserIds } }).select('platform firstSeenAt lastSeenAt').lean()
+      : [];
+    const totalDevicesRegistered = devices.length;
+    const devicesActiveLast7Days = (devices as any[]).filter((d: any) => new Date(d.lastSeenAt) >= sevenDaysAgo).length;
+    const devicesActiveLast30Days = (devices as any[]).filter((d: any) => new Date(d.lastSeenAt) >= thirtyDaysAgo).length;
+    const devicesByPlatform = (devices as any[]).reduce((acc: Record<string, number>, d: any) => {
+      acc[d.platform] = (acc[d.platform] || 0) + 1;
+      return acc;
+    }, {});
 
     const staffByCampus = tenantId
       ? await this.staffModel.aggregate([
@@ -975,13 +1029,16 @@ export class OrganizationService {
     }
 
     return {
-      overall: { ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents },
+      overall: {
+        ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents,
+        totalDevicesRegistered, devicesActiveLast7Days, devicesActiveLast30Days, devicesByPlatform,
+      },
       campuses: campusRows,
       appleAppStoreDownloads,
       notes: {
         downloads: appleAppStoreDownloads.configured
-          ? 'Apple App Store downloads are now connected (via App Store Connect) and shown separately below - a download is not the same as activation, since a parent can install the app without ever logging in. Google Play download counts still aren’t connected yet. "Activated Parents" and "Activation Rate" above reflect actual parent app logins (a real, already-tracked signal), independent of either store’s download count.'
-          : 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads.',
+          ? 'Apple App Store downloads are now connected (via App Store Connect) and shown separately below - a download is not the same as activation, since a parent can install the app without ever logging in. Google Play download counts still aren’t connected yet. "Activated Parents" and "Activation Rate" above reflect actual parent app logins (a real, already-tracked signal), independent of either store’s download count. "Devices Registered" is the app’s own install signal: it pings us on every login and app open.'
+          : 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads. "Devices Registered" is the app’s own install signal: it pings us on every login and app open.',
         staffApp: 'Staff currently access Eldermin through the web dashboard - there is no separate staff mobile app login yet to measure activation for, so staff numbers above are headcount only.',
       },
     };

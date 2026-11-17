@@ -7,16 +7,19 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import type { Response } from 'express';
 import { SyllabusService } from './syllabus.service';
+import { ForumService } from './forum.service';
 import {
   CreateSyllabusDto, UpdateSyllabusDto, MarkTopicDto, MarkSubTopicDto, ApproveSyllabusDto, CreateSloTemplateDto, SyllabusQueryDto,
   CreateLessonDto, UpdateLessonDto, DeleteLessonDto, SetPublishedDto,
+  SetEnrollmentModeDto, EnrollStudentsDto,
+  CreateForumThreadDto, CreateForumReplyDto, SetThreadModerationDto,
 } from './dto/syllabus.dto';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 
 @Controller('syllabus')
 export class SyllabusController {
-  constructor(private readonly service: SyllabusService) {}
+  constructor(private readonly service: SyllabusService, private readonly forumService: ForumService) {}
 
   @Get('dashboard')
   getDashboard(@Request() req: any, @Query('academicYear') academicYear?: string) {
@@ -33,7 +36,7 @@ export class SyllabusController {
    * assigned to, computed against the school's actual academic calendar. */
   @Get('weekly-planner')
   getTeacherWeeklyPlanner(@Request() req: any, @Query('teacherId') teacherId: string) {
-    return this.service.getTeacherWeeklyPlanner(req.user.tenantId, req.user.schoolSlug, teacherId);
+    return this.service.getTeacherWeeklyPlanner(req.user.tenantId, req.user.schoolSlug, teacherId, req.user);
   }
 
   /** SLO Templates - reusable, sourced curriculum content applied to
@@ -177,5 +180,86 @@ export class SyllabusController {
   @Patch(':id/publish')
   setPublished(@Request() req: any, @Param('id') id: string, @Body() dto: SetPublishedDto) {
     return this.service.setPublished(req.user.tenantId, id, dto.published, req.user.name, req.user);
+  }
+
+  // ── LMS Phase 1: explicit enrollment ────────────────────────────
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch(':id/enrollment-mode')
+  setEnrollmentMode(@Request() req: any, @Param('id') id: string, @Body() dto: SetEnrollmentModeDto) {
+    return this.service.setEnrollmentMode(req.user.tenantId, id, dto.enrollmentMode, req.user);
+  }
+
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Get(':id/enrollments')
+  listEnrollments(@Request() req: any, @Param('id') id: string) {
+    return this.service.listEnrollments(req.user.tenantId, id, req.user);
+  }
+
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Post(':id/enrollments')
+  @HttpCode(HttpStatus.CREATED)
+  enrollStudents(@Request() req: any, @Param('id') id: string, @Body() dto: EnrollStudentsDto) {
+    return this.service.enrollStudents(req.user.tenantId, req.user.schoolSlug, id, dto.studentIds, req.user.name, req.user);
+  }
+
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Delete(':id/enrollments/:studentId')
+  unenrollStudent(@Request() req: any, @Param('id') id: string, @Param('studentId') studentId: string) {
+    return this.service.unenrollStudent(req.user.tenantId, id, studentId, req.user);
+  }
+
+  // ── LMS Phase 4: course discussion forum (staff side) ───────────────
+  // Read/post open to any staff role (same "broad-permissive backend
+  // access" convention as the rest of this controller's reads) - the
+  // thread/reply itself is scoped to this one syllabus already.
+  @Get(':id/forum/threads')
+  listForumThreads(@Request() req: any, @Param('id') id: string) {
+    return this.forumService.listThreads(req.user.tenantId, id);
+  }
+
+  @Get('forum/threads/:threadId')
+  getForumThread(@Request() req: any, @Param('threadId') threadId: string) {
+    return this.forumService.getThread(req.user.tenantId, threadId);
+  }
+
+  @Post(':id/forum/threads')
+  @HttpCode(HttpStatus.CREATED)
+  createForumThread(@Request() req: any, @Param('id') id: string, @Body() dto: CreateForumThreadDto) {
+    return this.forumService.createThread(
+      req.user.tenantId, req.user.schoolSlug, id,
+      { type: 'staff', id: req.user.userId, name: req.user.name }, dto.title, dto.body,
+    );
+  }
+
+  @Post('forum/threads/:threadId/replies')
+  @HttpCode(HttpStatus.CREATED)
+  createForumReply(@Request() req: any, @Param('threadId') threadId: string, @Body() dto: CreateForumReplyDto) {
+    return this.forumService.createReply(
+      req.user.tenantId, req.user.schoolSlug, threadId,
+      { type: 'staff', id: req.user.userId, name: req.user.name }, dto.body,
+    );
+  }
+
+  // Moderation (pin/lock) is staff-only, scoped to the course's own
+  // teacher or any other staff role - never a plain "any authenticated
+  // user", hence @RolesOrModuleManage here but not on the read/post routes above.
+  @RolesOrModuleManage('academics', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('forum/threads/:threadId/moderate')
+  setForumThreadModeration(@Request() req: any, @Param('threadId') threadId: string, @Body() dto: SetThreadModerationDto) {
+    return this.forumService.setThreadModeration(req.user.tenantId, threadId, dto, req.user);
+  }
+
+  @Delete('forum/threads/:threadId')
+  deleteForumThread(@Request() req: any, @Param('threadId') threadId: string) {
+    return this.forumService.deleteThread(req.user.tenantId, threadId, {
+      staff: req.user, author: { type: 'staff', id: req.user.userId, name: req.user.name },
+    });
+  }
+
+  @Delete('forum/replies/:replyId')
+  deleteForumReply(@Request() req: any, @Param('replyId') replyId: string) {
+    return this.forumService.deleteReply(req.user.tenantId, replyId, {
+      staff: req.user, author: { type: 'staff', id: req.user.userId, name: req.user.name },
+    });
   }
 }

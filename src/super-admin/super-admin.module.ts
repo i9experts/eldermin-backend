@@ -5,6 +5,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { SuperAdminController } from './super-admin.controller';
 import { SuperAdminService } from './super-admin.service';
+import { GoogleAnalyticsService } from './google-analytics.service';
 import { PlatformStaffController } from './platform-staff.controller';
 import { PlatformStaffService } from './platform-staff.service';
 import { PlatformRoleGuard } from './guards/platform-role.guard';
@@ -66,6 +67,7 @@ import { ModulesModule } from '../modules/modules.module';
   providers: [
     SuperAdminService,
     PlatformStaffService,
+    GoogleAnalyticsService,
     PlatformRoleGuard,
     // Registered as a global guard here (same convention as
     // RolesModule/CustomRoleGuard) - safe to run globally since it's a

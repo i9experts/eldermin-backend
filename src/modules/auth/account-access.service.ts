@@ -11,6 +11,7 @@ import { AuthStateService } from './auth-state.service';
 
 export type DeactivationOutcome = 'deactivated' | 'demoted' | 'already' | 'no_user' | 'protected' | 'not_staff';
 export type ReactivationOutcome = 'reactivated' | 'noop' | 'no_user';
+export type BaseRoleChangeOutcome = 'changed' | 'noop' | 'no_user' | 'protected' | 'not_staff' | 'invalid_role';
 
 export interface AccessActor { userId?: string; name?: string; schoolSlug?: string }
 
@@ -178,6 +179,44 @@ export class AccountAccessService {
         outcome = r.modifiedCount ? 'reactivated' : 'noop';
         if (r.modifiedCount) this.authState.invalidate(user._id);
         return { outcome, reason };
+      },
+    );
+    return { outcome };
+  }
+
+  /**
+   * D4: the ONE place that changes a user's base role (primaryRole). The role is read from the JWT
+   * (RolesGuard), so without a token bump the old role keeps working until the token expires.
+   * Changing the role bumps User.tokenVersion (existing tokens stop working, the person signs in
+   * again and gets the new role) and is FAIL-CLOSED audited. owner / super_admin accounts and
+   * parent / student / reseller accounts are never changed here, and neither is a change to one of
+   * those roles. A custom-role change (RolesService.assignRole) does NOT call this: custom roles are
+   * read live from the database on every guarded request, so it needs no token bump.
+   */
+  async changeBaseRole(userId: any, newRole: string, reason: string, actorId: string, actor?: AccessActor): Promise<{ outcome: BaseRoleChangeOutcome }> {
+    if (!userId) return { outcome: 'no_user' };
+    if (!Object.values(UserRole).includes(newRole as UserRole)) return { outcome: 'invalid_role' };
+    if (PROTECTED_ROLES.has(newRole) || NOT_STAFF_ROLES.has(newRole)) return { outcome: 'protected' };
+    const user: any = await this.userModel.findOne({ _id: userId }).select('primaryRole tenantId').lean();
+    if (!user) return { outcome: 'no_user' };
+    if (PROTECTED_ROLES.has(user.primaryRole)) return { outcome: 'protected' };
+    if (NOT_STAFF_ROLES.has(user.primaryRole)) return { outcome: 'not_staff' };
+    if (user.primaryRole === newRole) return { outcome: 'noop' };
+
+    const schoolSlug = await this.schoolSlugFor(user, actor);
+    let outcome: BaseRoleChangeOutcome = 'noop';
+    await this.criticalAudit.run(
+      { schoolSlug: schoolSlug as string, userId: actorId, name: actor?.name },
+      { module: 'Account Access', action: 'Change base role', type: 'update', resourceType: 'User', resourceId: String(user._id), requested: { from: user.primaryRole, to: newRole, reason } },
+      async () => ({ primaryRole: user.primaryRole }),
+      async () => {
+        const r = await this.userModel.updateOne(
+          { _id: user._id, primaryRole: user.primaryRole },
+          { $set: { primaryRole: newRole }, $inc: { tokenVersion: 1 } },
+        );
+        outcome = r.modifiedCount ? 'changed' : 'noop';
+        if (r.modifiedCount) this.authState.invalidate(user._id);
+        return { outcome, primaryRole: newRole };
       },
     );
     return { outcome };

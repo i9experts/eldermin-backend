@@ -23,6 +23,9 @@ export const ASSIGNABLE_MODULES = [
   { key: 'analytics', label: 'Analytics & Intelligence' },
   { key: 'apps', label: 'Apps & Modules' },
   { key: 'report-templates', label: 'Report Templates' },
+  { key: 'early-years', label: 'Early Years' },
+  { key: 'school-calendar', label: 'School Calendar' },
+  { key: 'events', label: 'Events' },
 ] as const;
 
 export type ModuleAccessLevel = 'none' | 'view' | 'manage';
@@ -61,6 +64,7 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'meetings', label: 'Meetings' },
     { key: 'workflows', label: 'Workflows' },
     { key: 'audit', label: 'Audit Logs' },
+    { key: 'preferences', label: 'Preferences' },
   ],
   governance: [
     { key: 'dashboard', label: 'Dashboard' },
@@ -87,6 +91,7 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'notifications', label: 'Notifications' },
     { key: 'audit', label: 'Audit Trail' },
     { key: 'permissions', label: 'Permissions' },
+    { key: 'detail', label: 'Document Detail' },
   ],
   hr: [
     { key: 'dashboard', label: 'Dashboard' },
@@ -107,6 +112,7 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'worksummary', label: 'Work Summary' },
     { key: 'expenses', label: 'Expense Claims' },
     { key: 'reports', label: 'Reports' },
+    { key: 'staffReports', label: 'Staff & Attendance Reports' },
   ],
   teaching: [
     { key: 'dashboard', label: 'Dashboard' },
@@ -120,7 +126,9 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'assessments', label: 'Assessments' },
     { key: 'behaviour', label: 'Behaviour' },
     { key: 'homework', label: 'Homework' },
+    { key: 'class-diary', label: 'Class Diary' },
     { key: 'attendance', label: 'Attendance' },
+    { key: 'attendance-settings', label: 'Attendance Settings' },
     { key: 'appraisal', label: 'Appraisal' },
     { key: 'analytics', label: 'Analytics' },
   ],
@@ -153,6 +161,7 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'inventory', label: 'Inventory' },
     { key: 'assets', label: 'Assets' },
     { key: 'reports', label: 'Reports' },
+    { key: 'settings', label: 'Master Settings' },
   ],
   campus: [
     { key: 'dashboard', label: 'Dashboard' },
@@ -180,6 +189,9 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'guardians', label: 'Guardians' },
     { key: 'families', label: 'Families' },
     { key: 'attendance', label: 'Attendance' },
+    { key: 'engagement', label: 'Parent Engagement' },
+    { key: 'hygiene', label: 'Hygiene' },
+    { key: 'parentAccess', label: 'Parent App Access' },
   ],
   academics: [
     { key: 'dashboard', label: 'Dashboard' },
@@ -201,6 +213,8 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
     { key: 'dashboard', label: 'Dashboard' },
     { key: 'records', label: 'Records' },
     { key: 'tarbiyah', label: 'Tarbiyah' },
+    { key: 'qaida', label: 'Qaida & Tajweed' },
+    { key: 'nazra', label: 'Nazra Quran' },
     { key: 'counselling', label: 'Counselling' },
     { key: 'interventions', label: 'Interventions' },
     { key: 'reports', label: 'Reports' },
@@ -218,6 +232,13 @@ export const SUB_MODULES: Record<string, { key: string; label: string }[]> = {
   // sub-module matching the module itself rather than a forced breakdown.
   apps: [{ key: 'apps', label: 'Apps & Modules' }],
   'report-templates': [{ key: 'report-templates', label: 'Report Templates' }],
+  'early-years': [{ key: 'early-years', label: 'Early Years' }],
+  'school-calendar': [
+    { key: 'calendar', label: 'Academic Calendar' },
+    { key: 'circulars', label: 'Circulars & Notices' },
+    { key: 'consent', label: 'Parent Consent' },
+  ],
+  events: [{ key: 'events', label: 'Events' }],
 };
 
 @Schema({ timestamps: true, collection: 'roles' })
