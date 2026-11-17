@@ -212,7 +212,19 @@ export class RolesService {
    * filter made every assign 404 for string-tenant users.
    */
   static tenantMatch(tenantId: string) {
-    return { $in: [String(tenantId), new Types.ObjectId(String(tenantId))] };
+    const asString = String(tenantId);
+    // `new Types.ObjectId(...)` throws a BSONError for anything that isn't
+    // a valid 24-char hex string - GET /roles started 500ing outright
+    // whenever the caller's tenantId happened to be one of those (an
+    // empty/placeholder value, a non-ObjectId legacy id, etc.), for every
+    // role in the school, not just for that one caller. A tenantId that
+    // isn't a real ObjectId can't equal any user's ObjectId-typed tenantId
+    // anyway, so falling back to a string-only match is still correct - it
+    // just can't also match the ObjectId-typed form, which is fine since
+    // there's no valid ObjectId to build from it in the first place.
+    return Types.ObjectId.isValid(asString)
+      ? { $in: [asString, new Types.ObjectId(asString)] }
+      : asString;
   }
 
   private tenantMatchFor(tenantId: string) {

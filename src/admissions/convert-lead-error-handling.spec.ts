@@ -1,0 +1,231 @@
+import { BadRequestException, ConflictException } from '@nestjs/common';
+import { AdmissionsService } from './admissions.service';
+
+// Regression test: converting a Lead to an Applicant could fail with a
+// generic 500 "Internal server error" because convertLead's two Mongoose
+// writes (`applicant.save()`, `lead.save()`) were never wrapped in a
+// try/catch, so any ValidationError/CastError, or a random collision on the
+// auto-generated `applicationNumber` (a random 4-digit suffix with a unique
+// index), propagated uncaught to the global exception filter.
+
+// A valid-format Mongo ObjectId, since convertLead now validates the id
+// shape before querying (see "rejects a malformed lead id" below).
+const LEAD_ID = '507f1f77bcf86cd799439011';
+
+function mongoDuplicateKeyError() {
+  const err: any = new Error('E11000 duplicate key error collection: eldermin.admission_applicants index: applicationNumber_1 dup key');
+  err.code = 11000;
+  return err;
+}
+
+function mongoValidationError() {
+  const err: any = new Error('Applicant validation failed: gender: `other` is not a valid enum value');
+  err.name = 'ValidationError';
+  return err;
+}
+
+function makeLead(overrides: Record<string, any> = {}) {
+  return {
+    _id: LEAD_ID,
+    firstName: 'Ali',
+    lastName: 'Khan',
+    email: 'ali@example.com',
+    phone: '0300-1234567',
+    assignedTo: 'Old Assignee',
+    assignedToId: 'oldStaffId',
+    status: 'new',
+    convertedToApplicantId: undefined,
+    lastContactedAt: undefined,
+    save: jest.fn(async function (this: any) { return this; }),
+    ...overrides,
+  };
+}
+
+function makeApplicantModel({ saveImpl, saveAttempts }: {
+  saveImpl?: (this: any) => Promise<any>;
+  saveAttempts?: Array<() => Promise<any>>;
+} = {}) {
+  let callCount = 0;
+  const ctor: any = jest.fn().mockImplementation(function (this: any, data: any) {
+    Object.assign(this, data);
+    this._id = 'applicant1';
+    this.save = jest.fn(async function (this: any) {
+      if (saveAttempts) {
+        const impl = saveAttempts[Math.min(callCount, saveAttempts.length - 1)];
+        callCount++;
+        return impl.call(this);
+      }
+      if (saveImpl) return saveImpl.call(this);
+      return this;
+    });
+  });
+  return ctor;
+}
+
+function makeService({ leadModel, applicantModel }: { leadModel: any; applicantModel: any }) {
+  const n: any = {};
+  // Constructor order: leadModel, applicantModel, testModel, interviewModel,
+  // enrollmentModel, retentionModel, studentsService, uploadService.
+  return new AdmissionsService(leadModel, applicantModel, n, n, n, n, n, n);
+}
+
+describe('AdmissionsService.convertLead: error handling', () => {
+  it('converts a lead successfully, setting assignedTo and assignedToId from the dto', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel();
+    const svc = makeService({ leadModel, applicantModel });
+
+    const result = await svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+      motherName: 'Amina',
+      campusId: 'campus1',
+      assignedTo: 'Hiba Javaid',
+      assignedToId: 'staff123',
+      notes: 'Online test',
+    } as any);
+
+    expect(result.applicant.assignedTo).toBe('Hiba Javaid');
+    expect(result.applicant.assignedToId).toBe('staff123');
+    expect(lead.status).toBe('converted');
+    expect(lead.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the lead\'s own assignedTo/assignedToId when the dto omits them', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel();
+    const svc = makeService({ leadModel, applicantModel });
+
+    const result = await svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any);
+
+    expect(result.applicant.assignedTo).toBe('Old Assignee');
+    expect(result.applicant.assignedToId).toBe('oldStaffId');
+  });
+
+  it('retries a random applicationNumber collision and succeeds within the retry budget', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel({
+      saveAttempts: [
+        async () => { throw mongoDuplicateKeyError(); },
+        async function (this: any) { return this; },
+      ],
+    });
+    const svc = makeService({ leadModel, applicantModel });
+
+    const result = await svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any);
+
+    expect(result.applicant).toBeDefined();
+  });
+
+  it('gives up with a clear ConflictException after exhausting retries on repeated collisions', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel({
+      saveImpl: async () => { throw mongoDuplicateKeyError(); },
+    });
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('converts a Mongoose ValidationError into a clear 400, not a raw 500', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel({
+      saveImpl: async () => { throw mongoValidationError(); },
+    });
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'other',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('surfaces an unexpected applicant.save() error with its real message instead of swallowing it', async () => {
+    const lead = makeLead();
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel({
+      saveImpl: async () => { throw new Error('connection pool exhausted'); },
+    });
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toMatchObject({
+      response: { message: expect.stringContaining('connection pool exhausted') },
+    });
+  });
+
+  it('surfaces an unexpected lead.save() error with its real message instead of swallowing it', async () => {
+    const lead = makeLead({
+      save: jest.fn(async () => { throw new Error('replica set step-down'); }),
+    });
+    const leadModel = { findOne: jest.fn(async () => lead) };
+    const applicantModel = makeApplicantModel();
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead(LEAD_ID, 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toMatchObject({
+      response: { message: expect.stringContaining('replica set step-down') },
+    });
+  });
+
+  // Regression test: the frontend's Convert Lead modal sent the literal
+  // string "undefined" as the lead id (a stale `.id` reference on a Lead
+  // object that only ever carries Mongo's `_id`), producing an unguarded
+  // Mongoose CastError on the initial findOne() lookup, BEFORE the
+  // try/catch blocks above (which only wrap the later save() calls) could
+  // help — surfacing as a bare 500 regardless of this file's other fixes.
+  it('rejects a malformed lead id with a clear 400 instead of an unhandled CastError', async () => {
+    const leadModel = { findOne: jest.fn() };
+    const applicantModel = makeApplicantModel();
+    const svc = makeService({ leadModel, applicantModel });
+
+    await expect(svc.convertLead('undefined', 's', {
+      gradeApplied: 'Grade 3',
+      academicYear: '2026-27',
+      dateOfBirth: '2018-06-12',
+      gender: 'male',
+      fatherName: 'Abdullah',
+    } as any)).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(leadModel.findOne).not.toHaveBeenCalled();
+  });
+});

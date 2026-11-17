@@ -76,6 +76,16 @@ export class School {
   // reports, tables) - day-first is the Pakistani/most-of-the-world
   // standard, so it's the default rather than the US-only MM/DD/YYYY.
   @Prop({ enum: ['DD/MM/YYYY', 'MM/DD/YYYY'], default: 'DD/MM/YYYY' }) dateFormat: string;
+  // Opt-in: shows the equivalent Hijri (Islamic lunar) date alongside the
+  // Gregorian one on the School Calendar, Circulars and Consent Requests -
+  // off by default since not every school wants it, same opt-in shape as
+  // the feature toggles below (hostelEnabled, transportEnabled, ...).
+  @Prop({ default: false }) showHijriDates: boolean;
+  // A pure tabular Hijri calendar can land a day off from the locally
+  // observed/Umm al-Qura calendar for a given region - lets a school
+  // nudge the displayed Hijri date by a day or two instead of it being
+  // permanently off. See common/utils/hijri-date.util.ts.
+  @Prop({ default: 0, min: -2, max: 2 }) hijriDayAdjustment: number;
 
   // Academic settings
   @Prop({ default: 3 }) termsPerYear: number;
@@ -191,6 +201,17 @@ export class AcademicYear {
   @Prop({ type: [TermSchema], default: [] }) terms: Term[];
   @Prop({ default: false }) isCurrent: boolean;
   @Prop() totalWorkingDays: number;
+  // Which days of the week count as school days - the master setting a
+  // school admin sets once here, which both the teacher attendance screen
+  // and the attendance write path (StudentsService.checkSchoolDay) read to
+  // decide which dates a teacher may mark attendance on. Day codes match
+  // JS Date.getDay() via WEEKDAY_CODES in students.service.ts. Defaults to
+  // Mon-Fri, same default already used for staff leave day-counting in
+  // modules/hr/schemas/attendance-settings.schema.ts, so an existing
+  // school that never touches this setting sees unchanged behavior until
+  // an admin deliberately opts into a narrower/wider week.
+  @Prop({ type: [String], default: ['mon', 'tue', 'wed', 'thu', 'fri'] })
+  workingDays: string[];
   @Prop() remarks: string;
   @Prop({ required: true, index: true }) schoolSlug: string;
   // Optional scope narrowing — mirrors Campus.institutionId / Grade.campusId.

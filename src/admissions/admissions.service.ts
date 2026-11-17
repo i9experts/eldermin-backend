@@ -4,7 +4,7 @@
 // ============================================================
 
 import {
-  Injectable, NotFoundException, BadRequestException, ConflictException,
+  Injectable, Logger, NotFoundException, BadRequestException, ConflictException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -29,6 +29,7 @@ import {
   CreateRetentionDto, UpdateRetentionDto,
 } from './dto/admissions.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { UploadService } from '../upload/upload.service';
 
 // ── Helper ────────────────────────────────────────────────────
 const buildPagination = (page = 1, limit = 20) => ({
@@ -38,6 +39,7 @@ const buildPagination = (page = 1, limit = 20) => ({
 
 @Injectable()
 export class AdmissionsService {
+  private logger = new Logger('AdmissionsService');
 
   constructor(
     @InjectModel(Lead.name) private leadModel: Model<LeadDocument>,
@@ -47,6 +49,7 @@ export class AdmissionsService {
     @InjectModel(Enrollment.name) private enrollmentModel: Model<EnrollmentDocument>,
     @InjectModel(Retention.name) private retentionModel: Model<RetentionDocument>,
     private studentsService: StudentsService,
+    private uploadService: UploadService,
   ) {}
 
   // ============================================================
@@ -55,16 +58,17 @@ export class AdmissionsService {
   async getDashboardStats(schoolSlug: string, academicYear?: string) {
     const baseFilter: any = { schoolSlug };
     if (academicYear) baseFilter.academicYear = academicYear;
+    const leadFilter: any = { ...baseFilter, isActive: true };
 
     const [
       totalLeads, leadsThisMonth,
       totalApplications, underReview, shortlisted, accepted, rejected, enrolled,
-      testsScheduled, testsCompleted, interviewsCompleted,
+      testsScheduled, testsCompleted, interviewsCompleted, interviewsScheduled,
       atRiskRetention,
     ] = await Promise.all([
-      this.leadModel.countDocuments(baseFilter),
+      this.leadModel.countDocuments(leadFilter),
       this.leadModel.countDocuments({
-        ...baseFilter,
+        ...leadFilter,
         createdAt: { $gte: new Date(new Date().setDate(1)) },
       }),
       this.applicantModel.countDocuments(baseFilter),
@@ -76,12 +80,13 @@ export class AdmissionsService {
       this.testModel.countDocuments({ ...baseFilter, status: 'scheduled' }),
       this.testModel.countDocuments({ ...baseFilter, status: 'completed' }),
       this.interviewModel.countDocuments({ ...baseFilter, status: 'completed' }),
+      this.interviewModel.countDocuments({ ...baseFilter, status: 'scheduled' }),
       this.retentionModel.countDocuments({ ...baseFilter, status: 'at_risk' }),
     ]);
 
     // Lead source breakdown
     const sourceBreakdown = await this.leadModel.aggregate([
-      { $match: baseFilter },
+      { $match: leadFilter },
       { $group: { _id: '$source', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
     ]);
@@ -91,7 +96,7 @@ export class AdmissionsService {
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
     const monthlyLeads = await this.leadModel.aggregate([
-      { $match: { ...baseFilter, createdAt: { $gte: sixMonthsAgo } } },
+      { $match: { ...leadFilter, createdAt: { $gte: sixMonthsAgo } } },
       {
         $group: {
           _id: {
@@ -150,7 +155,7 @@ export class AdmissionsService {
         totalLeads, leadsThisMonth,
         totalApplications, underReview, shortlisted,
         accepted, rejected, enrolled,
-        testsScheduled, testsCompleted, interviewsCompleted,
+        testsScheduled, testsCompleted, interviewsCompleted, interviewsScheduled,
         atRiskRetention,
         conversionRate,
         leadToApplicationRate,
@@ -250,6 +255,9 @@ export class AdmissionsService {
   }
 
   async convertLead(id: string, schoolSlug: string, dto: ConvertLeadDto) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid lead id');
+    }
     const lead = await this.leadModel.findOne({ _id: id, schoolSlug });
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.status === 'converted') {
@@ -270,6 +278,7 @@ export class AdmissionsService {
       motherName: dto.motherName,
       campusId: dto.campusId,
       assignedTo: dto.assignedTo || lead.assignedTo,
+      assignedToId: dto.assignedToId || lead.assignedToId,
       notes: dto.notes,
       leadId: lead._id,
       status: 'submitted',
@@ -277,13 +286,55 @@ export class AdmissionsService {
       submittedAt: new Date(),
       schoolSlug,
     });
-    await applicant.save();
+
+    // applicationNumber is auto-generated from a random 4-digit suffix
+    // (applicant.schema.ts pre('validate')), so a duplicate-key hit here is
+    // a random collision, not a real conflict the caller caused — retry a
+    // few times with a freshly generated number before giving up.
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await applicant.save();
+        break;
+      } catch (err: any) {
+        if (err.name === 'ValidationError' || err.name === 'CastError' || err.name === 'BSONError') {
+          throw new BadRequestException(err.message);
+        }
+        if (err.code === 11000) {
+          if (attempt === MAX_ATTEMPTS) {
+            throw new ConflictException('Could not generate a unique application number, please try again.');
+          }
+          applicant.applicationNumber = undefined as any;
+          continue;
+        }
+        this.logger.error(
+          `convertLead: unexpected error creating applicant for lead ${id}: ${err?.name || err?.constructor?.name}: ${err?.message}`,
+          err?.stack,
+        );
+        throw new BadRequestException(
+          `Could not create applicant from lead: ${err?.message || 'unexpected error'}`,
+        );
+      }
+    }
 
     // Mark lead as converted
-    lead.status = 'converted';
-    lead.convertedToApplicantId = applicant._id as Types.ObjectId;
-    lead.lastContactedAt = new Date();
-    await lead.save();
+    try {
+      lead.status = 'converted';
+      lead.convertedToApplicantId = applicant._id as Types.ObjectId;
+      lead.lastContactedAt = new Date();
+      await lead.save();
+    } catch (err: any) {
+      if (err.name === 'ValidationError' || err.name === 'CastError' || err.name === 'BSONError') {
+        throw new BadRequestException(err.message);
+      }
+      this.logger.error(
+        `convertLead: unexpected error marking lead ${id} converted: ${err?.name || err?.constructor?.name}: ${err?.message}`,
+        err?.stack,
+      );
+      throw new BadRequestException(
+        `Applicant was created, but could not update the lead record: ${err?.message || 'unexpected error'}`,
+      );
+    }
 
     return { lead, applicant };
   }
@@ -361,7 +412,38 @@ export class AdmissionsService {
     return applicant;
   }
 
+  async addDocument(
+    id: string,
+    schoolSlug: string,
+    file: Express.Multer.File,
+    name: string,
+    type: string,
+  ) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid applicant id');
+    }
+    const applicant = await this.applicantModel.findOne({ _id: id, schoolSlug });
+    if (!applicant) throw new NotFoundException('Applicant not found');
+
+    const uploaded = await this.uploadService.uploadFile(file, 'applicant-documents', schoolSlug);
+
+    const doc = {
+      name: name || file.originalname,
+      type: type || 'other',
+      status: 'pending',
+      uploadedAt: new Date(),
+      fileUrl: uploaded.url,
+    };
+
+    applicant.documents.push(doc as any);
+    await applicant.save();
+    return applicant;
+  }
+
   async updateDocumentStatus(id: string, schoolSlug: string, dto: UpdateDocumentDto) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException('Invalid applicant id');
+    }
     const applicant = await this.applicantModel.findOne({ _id: id, schoolSlug });
     if (!applicant) throw new NotFoundException('Applicant not found');
 

@@ -5,7 +5,9 @@
 
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { UserRole } from '../auth/roles.enum';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 
@@ -21,8 +23,28 @@ import {
   CharacterProgramSettings, CharacterProgramSettingsDocument,
 } from './schemas/character-program-settings.schema';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
+import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
+import { resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
+import { BehaviourAccessContext, denyOrLog, logBehaviourGuard } from './behaviour-access';
+import { gradeMatcher, normalizeSectionName } from '../common/utils/class-match.util';
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+import { classIncludes, classScopeFilter, isOwnByAuthor, stripProtectedFields } from './behaviour-teacher-scope';
+import { sectionMatcher } from '../common/utils/class-match.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
+
+/** B1: page / limit from a query string (page >= 1; limit 1..MAX_PAGE_SIZE, junk or non-positive -> default 20). */
+export const MAX_PAGE_SIZE = 500;
+export function pageParams(page: any, limit: any): { page: number; limit: number; skip: number } {
+  const p0 = parseInt(String(page), 10);
+  const l0 = parseInt(String(limit), 10);
+  const p = p0 > 0 ? p0 : 1;
+  const l = l0 > 0 ? Math.min(MAX_PAGE_SIZE, l0) : 20; // junk / non-positive -> the default, absurd -> the cap
+  return { page: p, limit: l, skip: (p - 1) * l };
+}
 
 // Percentage-based rather than a raw 1-5 average, so this works
 // correctly regardless of a school's actual configured rating scale.
@@ -37,6 +59,15 @@ const getTarbiyahRating = (pct: number): string => {
   return 'critical';
 };
 
+/** Who edited a behaviour record / Tarbiyah assessment last (the author fields are never rewritten). */
+function stampUpdate(user: any): { updatedBy?: string; updatedById?: any } {
+  // updatedAt is stamped by the schema's `timestamps: true` on findOneAndUpdate
+  const out: any = {};
+  if (user?.name) out.updatedBy = String(user.name);
+  if (user?.userId && Types.ObjectId.isValid(String(user.userId))) out.updatedById = new Types.ObjectId(String(user.userId));
+  return out;
+}
+
 @Injectable()
 export class BehaviourService {
   constructor(
@@ -46,7 +77,63 @@ export class BehaviourService {
     @InjectModel(Intervention.name) private interventionModel: Model<InterventionDocument>,
     @InjectModel(BehaviourContract.name) private contractModel: Model<BehaviourContractDocument>,
     @InjectModel(CharacterProgramSettings.name) private characterSettingsModel: Model<CharacterProgramSettingsDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
+    @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
   ) {}
+
+  // ============================================================
+  // TEACHER CLASS SCOPING (B0, BEHAVIOUR_GUARD_MODE)
+  // A TEACHER sees/acts on records of the classes they teach (class-teacher
+  // sections + currentAssignments, resolved from the DB, never the JWT).
+  // enforce: lists are narrowed, single records outside the scope 403.
+  // log (default): nothing changes, a would-deny/would-narrow event is logged.
+  // Other roles are never scoped here (campus scoping is unchanged).
+  // ============================================================
+  private async teacherClassScope(user: ScopedUser | undefined, access?: BehaviourAccessContext): Promise<TeacherClassRef[] | null> {
+    if (!access?.isTeacher || !user) return null;
+    try {
+      const me = await resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user);
+      const profile: any = await this.teacherProfileModel.findOne({ staffId: new Types.ObjectId(me.staffId) })
+        .select('isClassTeacher classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments currentAssignments').lean();
+      return teacherClassesOf(profile);
+    } catch (err) {
+      if (access.enforce) throw err;
+      denyOrLog(access, user, 'teacher_identity_unresolved', 'No staff profile is linked to this account.');
+      return [];
+    }
+  }
+
+  private checkTeacherClass(user: ScopedUser | undefined, access: BehaviourAccessContext | undefined, classes: TeacherClassRef[] | null, grade: unknown, section: unknown, reason: string): void {
+    if (!classes || !access) return;
+    if (classIncludes(classes, grade, section)) return;
+    denyOrLog(access, user, reason, 'Access denied. This student is not in one of your classes.');
+  }
+
+  /** Log mode only: how many returned rows a teacher would NOT have seen under enforce. */
+  private logWouldNarrow(user: ScopedUser | undefined, access: BehaviourAccessContext | undefined, classes: TeacherClassRef[] | null, rows: any[]): void {
+    if (!classes || !access || access.enforce) return;
+    const outside = rows.filter(r => !classIncludes(classes, r.grade, r.section)).length;
+    if (outside > 0) {
+      logBehaviourGuard({
+        mode: access.mode, decision: 'would_deny', reason: `teacher_scope_would_narrow:${outside}/${rows.length}`,
+        role: access.role, method: access.method, route: access.route, user,
+      });
+    }
+  }
+
+  private async studentClassOf(studentId: any, schoolSlug: string): Promise<{ grade?: string; section?: string } | null> {
+    if (!studentId || !Types.ObjectId.isValid(String(studentId))) return null;
+    const s: any = await this.studentModel.findOne({ _id: new Types.ObjectId(String(studentId)), schoolSlug }).select('currentGrade currentSection').lean();
+    return s ? { grade: s.currentGrade, section: s.currentSection } : null;
+  }
+
+  private async checkTeacherStudent(user: ScopedUser | undefined, access: BehaviourAccessContext | undefined, classes: TeacherClassRef[] | null, studentId: any, schoolSlug: string): Promise<void> {
+    if (!classes || !access) return;
+    const c = await this.studentClassOf(studentId, schoolSlug);
+    if (!c) return denyOrLog(access, user, 'teacher_unknown_student', 'Access denied. This student is not in one of your classes.');
+    this.checkTeacherClass(user, access, classes, c.grade, c.section, 'teacher_student_outside_classes');
+  }
 
   // ============================================================
   // DASHBOARD
@@ -158,7 +245,13 @@ export class BehaviourService {
   // ============================================================
   // BEHAVIOUR RECORDS
   // ============================================================
-  async createRecord(data: any, requestingUser?: ScopedUser) {
+  async createRecord(data: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    // The body is not DTO-validated: a malformed studentId / campusId or a missing required field used to surface as a 500.
+    if (data?.studentId) assertValidObjectId(String(data.studentId), 'student');
+    if (data?.campusId) assertValidObjectId(String(data.campusId), 'campus');
+    if (!data?.date || Number.isNaN(new Date(data.date).getTime())) throw new BadRequestException('A valid date is required.');
+    const classes = await this.teacherClassScope(requestingUser, access);
+    await this.checkTeacherStudent(requestingUser, access, classes, data.studentId, data.schoolSlug);
     const record = new this.recordModel({
       ...data,
       studentId: data.studentId ? new Types.ObjectId(data.studentId) : data.studentId,
@@ -166,7 +259,13 @@ export class BehaviourService {
       followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    const saved: any = await record.save();
+    let saved: any;
+    try {
+      saved = await record.save();
+    } catch (err: any) {
+      if (err?.name === 'ValidationError') throw new BadRequestException(`Invalid behaviour record: ${Object.keys(err.errors || {}).join(', ') || err.message}`);
+      throw err;
+    }
     if (saved.parentNotified) {
       await notifyGuardiansOfStudents(this.recordModel.db, [saved.studentId], {
         schoolSlug: saved.schoolSlug, type: 'behaviour',
@@ -177,16 +276,31 @@ export class BehaviourService {
     return saved;
   }
 
-  async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
-    const { page = 1, limit = 20, type, category, severity, grade, studentId,
+  async getRecords(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
+    const { type, category, severity, grade, section, mine, studentId,
       resolved, from, to, followUpOverdue, campusId } = query;
-    const { skip } = paged(page, limit);
+    const { page, limit, skip } = pageParams(query.page, query.limit);
 
     const filter: any = { schoolSlug };
     if (type) filter.type = type;
     if (category) filter.category = category;
     if (severity) filter.severity = severity;
     if (grade) filter.grade = grade;
+    // B1: per-class paging (the teacher app used to fetch a whole grade and re-scope client-side).
+    if (section) filter.section = sectionMatcher(section);
+    // B1: "My entries" server-side. By user id; a legacy record with no reportedById falls back to the display name.
+    if (mine === 'true' && requestingUser?.userId) {
+      const myName = (requestingUser as any).name;
+      const nameRe = myName
+        ? new RegExp(`^\\s*${String(myName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i') : null;
+      filter.$and = [...(filter.$and || []), {
+        $or: [
+          { reportedById: new Types.ObjectId(String(requestingUser.userId)) },
+          ...(nameRe ? [{ reportedById: null, reportedBy: nameRe }] : []),
+        ],
+      }];
+    }
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (resolved !== undefined) filter.resolved = resolved === 'true';
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
@@ -209,36 +323,110 @@ export class BehaviourService {
       ];
     }
 
+    if (classes && access?.enforce) filter.$and = [...(filter.$and || []), classScopeFilter(classes)];
+
     const [data, total] = await Promise.all([
-      this.recordModel.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
+      this.recordModel.find(filter).sort({ date: -1, _id: -1 }).skip(skip).limit(limit),
       this.recordModel.countDocuments(filter),
     ]);
+    this.logWouldNarrow(requestingUser, access, classes, data);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
-  async getRecordById(id: string, schoolSlug: string) {
+  async getRecordById(id: string, schoolSlug: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
     const r = await this.recordModel.findOne({ _id: id, schoolSlug });
     if (!r) throw new NotFoundException('Record not found');
+    const classes = await this.teacherClassScope(requestingUser, access);
+    this.checkTeacherClass(requestingUser, access, classes, r.grade, r.section, 'teacher_record_outside_classes');
     return r;
   }
 
-  async updateRecord(id: string, schoolSlug: string, data: any) {
-    assertValidObjectId(id, 'behaviour record');
-    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+  /** Saves a new document; a Mongoose ValidationError (bad enum, missing required field) is a 400 naming the fields, never a 500. */
+  private async saveOr400<T extends { save(): Promise<any> }>(doc: T, what: string): Promise<any> {
+    try {
+      return await doc.save();
+    } catch (err: any) {
+      if (err?.name === 'ValidationError') throw new BadRequestException(`Invalid ${what}: ${Object.keys(err.errors || {}).join(', ') || err.message}`);
+      throw err;
+    }
   }
 
-  async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string) {
+  /** Fields only an admin role may write through PUT: ownership/tenancy and the resolve/verify workflow (resolve has its own route). */
+  static readonly ADMIN_ONLY_RECORD_FIELDS = ['reportedBy', 'reportedById', 'schoolSlug', 'campusId', 'verifiedBy', 'verified', 'resolved', 'resolvedDate', 'resolvedNote', '_id'];
+
+  /**
+   * PUT /behaviour/records/:id. Two layers, both enforced: (1) the B0 teacher policy (denyOrLog: log or enforce per BEHAVIOUR_GUARD_MODE) and
+   * (2) D7, always enforced: admin roles (TEACHING_ADMIN_ROLES) keep today's behaviour; everyone else (a teacher, or a custom-role user whose
+   * base role is not an admin role) may edit only a record they authored (reportedById == own userId, or the display name for a legacy record without reportedById) and cannot write ownership, tenancy or resolve/verify fields. Missing id -> 404.
+   */
+  async updateRecord(id: string, schoolSlug: string, data: any, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
-    return this.recordModel.findOneAndUpdate(
+    const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Record not found');
+    if (access?.isTeacher && !access.elevated && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
+      denyOrLog(access, requestingUser, 'teacher_edits_other_record', 'You can only edit behaviour records you logged yourself.');
+    }
+    let body = data;
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      // admin roles, or a custom role holding the behaviour MANAGE grant (access.elevated), may edit any record
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated) {
+        // always enforced (independent of BEHAVIOUR_GUARD_MODE); id match, or the display name for legacy records without reportedById
+        if (!isOwnByAuthor(requestingUser as any, existing, 'reportedById', 'reportedBy')) {
+          throw new ForbiddenException('You can only edit behaviour records you logged yourself');
+        }
+        body = { ...data };
+        for (const f of BehaviourService.ADMIN_ONLY_RECORD_FIELDS) delete body[f];
+      }
+    }
+    // A raw $set of schoolSlug/campusId would move a record to another school/campus. Who edited it last is stamped.
+    return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { ...stripProtectedFields(body), ...stampUpdate(requestingUser) } }, { new: true });
+  }
+
+  /**
+   * DELETE /behaviour/records/:id. Same two-layer author-or-admin rule as updateRecord above (B0 denyOrLog policy, then the always-enforced
+   * D7 hard rule) - a teacher may only delete a record they themselves logged; admin roles and an elevated custom-role grant may delete any.
+   */
+  async deleteRecord(id: string, schoolSlug: string, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'behaviour record');
+    const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Record not found');
+    if (access?.isTeacher && !access.elevated && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
+      denyOrLog(access, requestingUser, 'teacher_deletes_other_record', 'You can only delete behaviour records you logged yourself.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated && !isOwnByAuthor(requestingUser as any, existing, 'reportedById', 'reportedBy')) {
+        throw new ForbiddenException('You can only delete behaviour records you logged yourself');
+      }
+    }
+    await this.recordModel.deleteOne({ _id: id, schoolSlug });
+    return { deleted: true };
+  }
+
+  async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'behaviour record');
+    if (access?.isTeacher) {
+      const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).select('grade section').lean();
+      if (existing) {
+        const classes = await this.teacherClassScope(requestingUser, access);
+        this.checkTeacherClass(requestingUser, access, classes, existing.grade, existing.section, 'teacher_record_outside_classes');
+      }
+    }
+    const updated = await this.recordModel.findOneAndUpdate(
       { _id: id, schoolSlug },
       { $set: { resolved: true, resolvedDate: new Date(), resolvedNote: note, verifiedBy: resolvedBy } },
       { new: true },
     );
+    if (!updated) throw new NotFoundException('Record not found');
+    return updated;
   }
 
-  async getStudentBehaviourProfile(studentId: string, schoolSlug: string, academicYear?: string) {
+  async getStudentBehaviourProfile(studentId: string, schoolSlug: string, academicYear?: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(studentId, 'student');
+    const classes = await this.teacherClassScope(requestingUser, access);
+    await this.checkTeacherStudent(requestingUser, access, classes, studentId, schoolSlug);
     const filter: any = { studentId: new Types.ObjectId(studentId), schoolSlug };
     if (academicYear) filter.academicYear = academicYear;
 
@@ -293,7 +481,7 @@ export class BehaviourService {
   async updateCharacterSettings(schoolSlug: string, dto: any) {
     return this.characterSettingsModel.findOneAndUpdate(
       { schoolSlug },
-      { $set: dto },
+      { $set: stripProtectedFields(dto) },
       { upsert: true, new: true },
     );
   }
@@ -301,7 +489,11 @@ export class BehaviourService {
   // ============================================================
   // TARBIYAH ASSESSMENTS
   // ============================================================
-  async createTarbiyahAssessment(schoolSlug: string, data: any, requestingUser?: ScopedUser) {
+  async createTarbiyahAssessment(schoolSlug: string, data: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
+    await this.checkTeacherStudent(requestingUser, access, classes, data.studentId, schoolSlug);
+    // Authorship comes from the token, never the body (needed for "author or admin" edits).
+    if (requestingUser?.userId && Types.ObjectId.isValid(String(requestingUser.userId))) data = { ...data, assessedById: String(requestingUser.userId) };
     const settings = await this.getCharacterSettings(schoolSlug);
     const { min, max } = settings.ratingScale;
     const traits = data.traits || [];
@@ -327,25 +519,35 @@ export class BehaviourService {
       overallRating: getTarbiyahRating(overallPercentage),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return assessment.save();
+    return this.saveOr400(assessment, 'Tarbiyah assessment');
   }
 
-  async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
-    const { page = 1, limit = 20, grade, studentId, period, periodType, campusId } = query;
-    const { skip } = paged(page, limit);
+  async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
+    const classes = await this.teacherClassScope(requestingUser, access);
+    const { grade, section, studentId, period, periodType, campusId, academicYear } = query;
+    const { page, limit, skip } = pageParams(query.page, query.limit);
 
     const filter: any = { schoolSlug };
     if (grade) filter.grade = grade;
+    if (section) filter.section = sectionMatcher(section);
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (period) filter.period = period;
     if (periodType) filter.periodType = periodType;
+    // Term Report Card (assessments module) needs "this student's Tarbiyah
+    // for this academic year" without knowing the school's own free-text
+    // period naming convention - academicYear was on the schema already
+    // but never exposed as a filter here until now.
+    if (academicYear) filter.academicYear = academicYear;
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
+
+    if (classes && access?.enforce) filter.$and = [...(filter.$and || []), classScopeFilter(classes)];
 
     const [data, total] = await Promise.all([
       this.tarbiyahModel.find(filter).sort({ assessmentDate: -1 }).skip(skip).limit(limit),
       this.tarbiyahModel.countDocuments(filter),
     ]);
+    this.logWouldNarrow(requestingUser, access, classes, data);
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
@@ -400,8 +602,26 @@ export class BehaviourService {
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
 
     const filter: any = { schoolSlug };
-    if (grade) filter.grade = grade;
-    if (section) filter.section = section;
+    // TarbiyahAssessment.grade/section are copied verbatim from
+    // Student.currentGrade/currentSection at assessment creation time
+    // (AddTarbiyahModal), which is free-text with no FK to the real
+    // Grade/Section master - the same drift documented in
+    // students.service.ts's getStudents filter. The Reports tab's Grade/
+    // Section filters now come from that real master (GradeLevelDropdown/
+    // SectionDropdown), e.g. "Grade 2"/"A", so an exact-match filter here
+    // would silently return zero rows against assessments stored as
+    // "GRADE-2"/"Grade 2A". gradeMatcher handles the grade side the same
+    // way getStudents already does; section additionally needs a
+    // trailing-match fallback because some schools' legacy section values
+    // bake the grade into the section string ("Grade 2A") rather than
+    // storing the bare section ("A") - sectionMatcher's prefix-only
+    // tolerance doesn't cover that, so match section values that simply
+    // end with the selected (normalized) section too.
+    if (grade) filter.grade = gradeMatcher(grade);
+    if (section) {
+      const bareSection = normalizeSectionName(section);
+      filter.section = bareSection ? new RegExp(`${escapeRegExp(bareSection)}\\s*$`, 'i') : section;
+    }
     if (period) filter.period = period;
     if (effectiveCampusId) filter.campusId = new Types.ObjectId(effectiveCampusId);
 
@@ -411,7 +631,7 @@ export class BehaviourService {
     const traitKeys = traitDefs.map((t: any) => t.key);
     const scaleMax = settings?.ratingScale?.max ?? 5;
 
-    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, periodTrendAgg] = await Promise.all([
+    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, sectionBreakdown, periodTrendAgg] = await Promise.all([
       this.tarbiyahModel.aggregate([
         { $match: filter },
         { $group: { _id: null, totalAssessments: { $sum: 1 }, totalStudents: { $addToSet: '$studentId' }, avgOverallScore: { $avg: '$overallScore' } } },
@@ -454,6 +674,26 @@ export class BehaviourService {
         } },
         { $project: { grade: '$_id.grade', section: '$_id.section', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, _id: 0 } },
         { $sort: { avgOverallScore: -1 } },
+      ]) : Promise.resolve(null),
+      // Grade picked, no specific section yet (the "All sections" consolidated
+      // view) - breaks the total down by each raw `section` value actually on
+      // file. TarbiyahAssessment.section is a free-text snapshot of the
+      // student's section at assessment time, not an FK to the Grade/Section
+      // master, so a student recorded under a section that's since been
+      // renamed/merged/removed from that master becomes invisible the moment
+      // staff filter down to a specific (current) section - counted in this
+      // grade's "All sections" total but absent from every section-specific
+      // one, with nothing on screen explaining the gap. The frontend already
+      // knows the grade's current real sections and flags whichever of these
+      // raw values doesn't match one of them.
+      (grade && !section) ? this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: {
+            _id: '$section',
+            avgOverallScore: { $avg: '$overallScore' }, studentIds: { $addToSet: '$studentId' }, assessmentCount: { $sum: 1 },
+        } },
+        { $project: { section: '$_id', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, assessmentCount: 1, _id: 0 } },
+        { $sort: { studentCount: -1 } },
       ]) : Promise.resolve(null),
       !period ? this.tarbiyahModel.aggregate([
         { $match: filter },
@@ -504,10 +744,48 @@ export class BehaviourService {
       traitLeaderboard,
       classComparison,
       periodTrend: periodTrendAgg ? periodTrendAgg.map((p: any) => ({ period: p._id, avgOverallScore: p.avgOverallScore || 0, assessmentCount: p.assessmentCount })) : null,
+      sectionBreakdown,
     };
   }
 
-  async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any) {
+  /** Ownership/tenancy fields a non-admin author can never write through PUT (the traits, remarks and the parent-share toggle stay editable). */
+  static readonly TARBIYAH_ADMIN_ONLY_FIELDS = ['assessedBy', 'assessedById', 'schoolSlug', 'campusId', 'studentId', 'studentName', '_id'];
+
+  /**
+   * Author or admin only, two layers both enforced: the B0 policy (denyOrLog) and the D7 hard rule: admin roles (TEACHING_ADMIN_ROLES) keep
+   * today's behaviour; everyone else may edit only an assessment they recorded (assessedById == own userId, or the display name for a legacy one without assessedById). Unknown id -> 404.
+   */
+  async updateTarbiyahAssessment(id: string, schoolSlug: string, data: any, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'tarbiyah assessment');
+    // Never re-home or re-attribute an assessment through a raw $set; only admins may rewrite the display name.
+    data = stripProtectedFields(data, ['studentId', 'assessedById', ...(access?.elevated === false ? ['assessedBy'] : [])]);
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared campusId').lean();
+    if (!existing) throw new NotFoundException('Assessment not found');
+    // D2: an academic coordinator may edit ANY Tarbiyah assessment of their school; with a campus on both sides, only their own campus.
+    const callerRole = (requestingUser as any)?.role || (requestingUser as any)?.primaryRole;
+    let coordinatorMayEdit = false;
+    if (callerRole === UserRole.ACADEMIC_COORDINATOR) {
+      const mine = (requestingUser as any)?.campusId ? String((requestingUser as any).campusId) : '';
+      if (mine && existing.campusId && String(existing.campusId) !== mine) {
+        throw new ForbiddenException('This assessment belongs to another campus.');
+      }
+      coordinatorMayEdit = true;
+    }
+    // Author or admin: a non-author teacher may not edit someone else's assessment.
+    if (access && !access.elevated && !coordinatorMayEdit && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
+      denyOrLog(access, requestingUser, 'tarbiyah_edit_not_author_or_admin', 'Only the author of this assessment or an administrator can edit it.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated) {
+        // always enforced (independent of BEHAVIOUR_GUARD_MODE); id match, or the display name for legacy assessments without assessedById
+        if (!isOwnByAuthor(requestingUser as any, existing, 'assessedById', 'assessedBy')) {
+          throw new ForbiddenException('You can only edit Tarbiyah assessments you recorded yourself');
+        }
+        data = { ...data };
+        for (const f of BehaviourService.TARBIYAH_ADMIN_ONLY_FIELDS) delete data[f];
+      }
+    }
     if (data.traits) {
       const settings = await this.getCharacterSettings(schoolSlug);
       const { min, max } = settings.ratingScale;
@@ -525,8 +803,8 @@ export class BehaviourService {
       data.overallRating = getTarbiyahRating(overallPercentage);
     }
     if (data.parentShared === true) data.parentSharedDate = new Date();
-    const before: any = data.parentShared === true ? await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('parentShared').lean() : null;
-    const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    const before: any = data.parentShared === true ? existing : null;
+    const updated: any = await this.tarbiyahModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { ...data, ...stampUpdate(requestingUser) } }, { new: true });
     if (updated && data.parentShared === true && !before?.parentShared) {
       await notifyGuardiansOfStudents(this.tarbiyahModel.db, [updated.studentId], {
         schoolSlug, type: 'behaviour', title: 'New character development report',
@@ -534,6 +812,40 @@ export class BehaviourService {
       });
     }
     return updated;
+  }
+
+  /**
+   * DELETE /behaviour/tarbiyah/:id. Same author-or-admin-or-coordinator rule as updateTarbiyahAssessment above. A parent-shared assessment
+   * must be unshared first (same PUT this tab's own Share toggle already uses) - deleting it silently out from under a parent who has
+   * already seen it would leave them with a notification/report that now 404s with no explanation.
+   */
+  async deleteTarbiyahAssessment(id: string, schoolSlug: string, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'tarbiyah assessment');
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared campusId').lean();
+    if (!existing) throw new NotFoundException('Assessment not found');
+    if (existing.parentShared) {
+      throw new BadRequestException('This assessment is shared with the parent - unshare it first, then delete.');
+    }
+    const callerRole = (requestingUser as any)?.role || (requestingUser as any)?.primaryRole;
+    let coordinatorMayDelete = false;
+    if (callerRole === UserRole.ACADEMIC_COORDINATOR) {
+      const mine = (requestingUser as any)?.campusId ? String((requestingUser as any).campusId) : '';
+      if (mine && existing.campusId && String(existing.campusId) !== mine) {
+        throw new ForbiddenException('This assessment belongs to another campus.');
+      }
+      coordinatorMayDelete = true;
+    }
+    if (access && !access.elevated && !coordinatorMayDelete && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
+      denyOrLog(access, requestingUser, 'tarbiyah_delete_not_author_or_admin', 'Only the author of this assessment or an administrator can delete it.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated && !coordinatorMayDelete && !isOwnByAuthor(requestingUser as any, existing, 'assessedById', 'assessedBy')) {
+        throw new ForbiddenException('You can only delete Tarbiyah assessments you recorded yourself');
+      }
+    }
+    await this.tarbiyahModel.deleteOne({ _id: id, schoolSlug });
+    return { deleted: true };
   }
 
   // ============================================================
@@ -547,7 +859,7 @@ export class BehaviourService {
       nextSessionDate: data.nextSessionDate ? new Date(data.nextSessionDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return session.save();
+    return this.saveOr400(session, 'counselling session');
   }
 
   async getCounsellingSessions(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -575,7 +887,7 @@ export class BehaviourService {
   }
 
   async updateCounsellingSession(id: string, schoolSlug: string, data: any) {
-    return this.counsellingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    return this.counsellingModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: stripProtectedFields(data) }, { new: true });
   }
 
   async completeCounsellingSession(id: string, schoolSlug: string, completionData: any) {
@@ -608,7 +920,7 @@ export class BehaviourService {
       reviewDate: data.reviewDate ? new Date(data.reviewDate) : undefined,
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return intervention.save();
+    return this.saveOr400(intervention, 'intervention');
   }
 
   async getInterventions(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -635,7 +947,7 @@ export class BehaviourService {
   }
 
   async updateIntervention(id: string, schoolSlug: string, data: any) {
-    return this.interventionModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true });
+    return this.interventionModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: stripProtectedFields(data) }, { new: true });
   }
 
   async addProgressNote(id: string, schoolSlug: string, note: string, addedBy: string) {
@@ -671,7 +983,7 @@ export class BehaviourService {
       reviewDate: new Date(data.reviewDate),
       campusId: requestingUser?.campusId ? new Types.ObjectId(requestingUser.campusId) : (data.campusId ? new Types.ObjectId(data.campusId) : null),
     });
-    return contract.save();
+    return this.saveOr400(contract, 'behaviour contract');
   }
 
   async getContracts(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
@@ -690,6 +1002,7 @@ export class BehaviourService {
   }
 
   async signContract(id: string, schoolSlug: string, signedBy: 'student' | 'parent' | 'teacher') {
+    if (!['student', 'parent', 'teacher'].includes(signedBy)) throw new BadRequestException('signedBy must be student, parent or teacher');
     const update: any = {};
     update[`${signedBy}Signed`] = true;
     update[`${signedBy}SignedDate`] = new Date();

@@ -45,6 +45,36 @@ export class Book {
   @Prop() language: string;
   @Prop() location: string;
   @Prop() shelfNo: string;
+  // Structured Zone -> Bookcase/Bay -> Shelf hierarchy, modelled on a
+  // physical library shelf-labelling scheme. Additive to location/shelfNo
+  // above (kept for backward compatibility with existing free-text data) -
+  // the catalogue UI prefers these when present and falls back to
+  // location/shelfNo otherwise. zoneName is free text but normally picked
+  // from LibrarySettings.zones once a school has configured its zones.
+  @Prop() zoneName: string;
+  @Prop() bay: string;
+  @Prop() shelfRange: string;
+  // Parallel-language title, shown on bilingual shelf signage/labels -
+  // distinct from the free-text `language` tag above, which just records
+  // which language the book itself is written in.
+  @Prop() urduTitle: string;
+  // Drives the "Reference / Teachers" age band, which (per the guide) isn't
+  // a class range - it applies to books meant for staff/reference use
+  // regardless of gradeLevels.
+  @Prop({ default: false }) isReferenceOnly: boolean;
+  // Flags the Mushaf (the Qur'an itself) among category:'islamic' books, so
+  // it can be surfaced for the guide's "keep separate on the top shelf,
+  // nothing placed above or on it" handling - a data flag only, no
+  // physical automation.
+  @Prop({ default: false }) isMushaf: boolean;
+  // One of ISLAMIC_SUBSCHEME's codes (library-age-band.util.ts), e.g.
+  // "297.63" for Seerah - a proposed local scheme the librarian approves,
+  // not a verified published Dewey edition.
+  @Prop() islamicSubCode: string;
+  // One of PICTURE_CODES (library-age-band.util.ts) - used instead of a
+  // call number for Early-Years-band books, which are shelved into
+  // picture-matched bins rather than filed by classification.
+  @Prop() pictureCode: string;
   // Per-copy records (accession no, barcode, individual status). Lazily
   // backfilled from the legacy aggregate counters below for books that
   // existed before this field - see AcademicsService.ensureCopies.

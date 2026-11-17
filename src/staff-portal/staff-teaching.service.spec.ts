@@ -12,11 +12,12 @@ const same = (a: any, b: any) => String(a) === String(b);
 function matches(doc: any, m: any): boolean {
   return Object.entries(m).every(([k, cond]: [string, any]) => {
     if (cond && typeof cond === 'object' && !(cond instanceof Types.ObjectId) && '$ne' in cond) return !same(doc[k], cond.$ne);
+    if (cond && typeof cond === 'object' && !(cond instanceof Types.ObjectId) && '$in' in cond) return cond.$in.some((c: any) => same(doc[k], c));
     return same(doc[k], cond);
   });
 }
 
-function setup(opts: { staff?: any; assignments?: any[]; submissions?: any[]; timetables?: any[] } = {}) {
+function setup(opts: { staff?: any; assignments?: any[]; submissions?: any[]; timetables?: any[]; profileId?: Types.ObjectId } = {}) {
   const tenantId = oid();
   const user = { userId: oid().toString(), schoolSlug: 'demo', role: 'teacher' };
   const staff = opts.staff === undefined ? { _id: oid(), tenantId, campusId: null } : opts.staff;
@@ -42,8 +43,9 @@ function setup(opts: { staff?: any; assignments?: any[]; submissions?: any[]; ti
   const timetableModel: any = {
     find: jest.fn((f: any) => ({ lean: () => Promise.resolve((opts.timetables || []).filter((t) => t.status === 'active')) })),
   };
-  const service = new StaffTeachingService(staffModel, assignmentModel, timetableModel);
-  return { service, user, staff, tenantId, assignmentModel, timetableModel, staffModel };
+  const profileModel: any = { findOne: jest.fn(() => ({ select: () => ({ lean: async () => (opts.profileId ? { _id: opts.profileId } : null) }) })) };
+  const service = new StaffTeachingService(staffModel, assignmentModel, timetableModel, profileModel);
+  return { service, user, staff, tenantId, assignmentModel, timetableModel, staffModel, profileModel };
 }
 
 describe('StaffTeachingService.pendingGrading', () => {
@@ -97,8 +99,22 @@ describe('StaffTeachingService.pendingGrading', () => {
     expect(r.items.map((i) => i.title)).toEqual(['HW']);
     expect(r.total).toBe(1);
     const match = s.assignmentModel.aggregate.mock.calls[0][0][0].$match;
-    expect(String(match.teacherId)).toBe(String(staff._id));
+    expect(match.teacherId.$in.map(String)).toContain(String(staff._id));
     expect(String(match.tenantId)).toBe(String(staff.tenantId));
+  });
+
+  it('BB2: homework an admin created for me through the web (keyed by my TeacherProfile id) is counted too; another teacher\'s is not', async () => {
+    const staff = { _id: oid(), tenantId: oid() };
+    const profileId = oid();
+    const viaStaff = mk(staff, { title: 'ByMe' });
+    const viaProfile = mk(staff, { teacherId: profileId, title: 'ByAdminForMe' });
+    const theirs = mk(staff, { teacherId: oid(), title: 'Other' });
+    const s = setup({ staff, profileId, assignments: [viaStaff, viaProfile, theirs], submissions: [viaStaff, viaProfile, theirs].map((a) => sub(a, 'submitted', '2026-10-02T00:00:00Z')) });
+    const r = await s.service.pendingGrading(s.user as any);
+    expect(r.items.map((i) => i.title).sort()).toEqual(['ByAdminForMe', 'ByMe']);
+    const ids = s.assignmentModel.aggregate.mock.calls[0][0][0].$match.teacherId.$in;
+    expect(ids.map(String)).toEqual(expect.arrayContaining([String(staff._id), String(profileId)]));
+    expect(ids.some((x: any) => typeof x === 'string')).toBe(true);     // string-stored ids match inside an aggregation too
   });
 
   it('excludes draft assignments', async () => {

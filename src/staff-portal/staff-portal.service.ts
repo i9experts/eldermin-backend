@@ -79,10 +79,16 @@ export class StaffPortalService {
     return this.profileModel.findOne({ staffId }).lean();
   }
 
-  /** Classes this staff member may act on: class-teacher assignment + current teaching assignments. */
+  /** Classes this staff member may act on: every class-teacher section
+   * (a teacher can legitimately be class teacher of more than one, common
+   * in Early Years) + current teaching assignments. */
   private classesOf(profile: any): ClassRef[] {
     const out: ClassRef[] = [];
-    if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
+    if (profile?.classTeacherAssignments?.length) {
+      for (const a of profile.classTeacherAssignments) {
+        if (a?.gradeName) out.push({ grade: a.gradeName, section: a.sectionName || undefined });
+      }
+    } else if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
       out.push({ grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined });
     }
     for (const a of profile?.currentAssignments || []) {
@@ -98,14 +104,18 @@ export class StaffPortalService {
     );
   }
 
-  private async classTeacherClassOrThrow(staff: StaffDocument): Promise<ClassRef> {
+  private async classTeacherClassesOrThrow(staff: StaffDocument): Promise<ClassRef[]> {
     const profile: any = await this.profileModel
       .findOne({ staffId: staff._id, isClassTeacher: true })
-      .select('classTeacherOfGradeName classTeacherOfSectionName').lean();
-    if (!profile?.classTeacherOfGradeName) {
+      .select('classTeacherOfGradeName classTeacherOfSectionName classTeacherAssignments').lean();
+    const classes: ClassRef[] = profile?.classTeacherAssignments?.length
+      ? profile.classTeacherAssignments.map((a: any) => ({ grade: a.gradeName, section: a.sectionName || undefined }))
+      : (profile?.classTeacherOfGradeName
+        ? [{ grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined }] : []);
+    if (!classes.length) {
       throw new ForbiddenException('Only class teachers can review student leave requests.');
     }
-    return { grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined };
+    return classes;
   }
 
   // ── GET /me ─────────────────────────────────────────────────
@@ -155,6 +165,11 @@ export class StaffPortalService {
                   label: profile.classTeacherOfName || null,
                 }
               : null,
+            // Full list of class-teacher assignments - a teacher can
+            // legitimately be class teacher of more than one section
+            // (common in Early Years). classTeacherOf above stays as the
+            // first/primary one for any caller not yet migrated.
+            classTeacherAssignments: profile.classTeacherAssignments || [],
           }
         : null,
       department: (staff as any).department || profile?.department || null,
@@ -342,14 +357,14 @@ export class StaffPortalService {
 
   async listStudentLeaves(user: PortalUser, query: { status?: string; limit?: string }) {
     const staff = await this.requireStaff(user);
-    const cls = await this.classTeacherClassOrThrow(staff);
+    const classes = await this.classTeacherClassesOrThrow(staff);
     const schoolSlug = this.slugOf(user);
     const limit = Math.min(Math.max(parseInt(query.limit || '50', 10) || 50, 1), 200);
     // Grade/section strings are free text ('Grade 5' vs '5', ' a ' vs 'A'),
     // so match tolerantly in memory instead of an exact Mongo query.
     const schoolStudents: any[] = await this.studentModel
       .find({ schoolSlug }).select('_id currentGrade currentSection').lean();
-    const studentIds = schoolStudents.filter((s) => this.teachesStudent([cls], s)).map((s) => s._id);
+    const studentIds = schoolStudents.filter((s) => this.teachesStudent(classes, s)).map((s) => s._id);
     const filter: any = { schoolSlug, studentId: { $in: studentIds } };
     if (['pending', 'approved', 'rejected'].includes(query.status || '')) filter.status = query.status;
     const items = await this.studentLeaveModel.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
@@ -358,13 +373,13 @@ export class StaffPortalService {
 
   async reviewStudentLeave(user: PortalUser, id: string, dto: ReviewStudentLeaveDto) {
     const staff = await this.requireStaff(user);
-    const cls = await this.classTeacherClassOrThrow(staff);
+    const classes = await this.classTeacherClassesOrThrow(staff);
     const schoolSlug = this.slugOf(user);
     if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Leave request not found');
     const leave: any = await this.studentLeaveModel.findOne({ _id: id, schoolSlug });
     if (!leave) throw new NotFoundException('Leave request not found');
     const student: any = await this.studentModel.findOne({ _id: leave.studentId, schoolSlug }).select('currentGrade currentSection').lean();
-    if (!student || !this.teachesStudent([cls], student)) {
+    if (!student || !this.teachesStudent(classes, student)) {
       throw new ForbiddenException('This student is not in your class.');
     }
     if (leave.status !== 'pending') throw new ConflictException(`This request was already ${leave.status}.`);

@@ -73,13 +73,16 @@ export class IdCardsController {
   @Roles(...ID_CARD_MANAGER_ROLES)
   async generate(@Body() dto: GenerateIdCardsDto, @Request() req: any, @Res() res: Response) {
     const { schoolSlug, tenantId } = this.ctx(req);
-    const pdf = await this.service.generateIdCardsPdf(
+    const { pdf, photosOmittedForConsent } = await this.service.generateIdCardsPdf(
       schoolSlug, tenantId, dto.entityType, dto.ids, dto.templateId, dto.includeBack ?? false, dto.printMode ?? 'pvc_card',
     );
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="id-cards-${dto.entityType}.pdf"`,
       'Content-Length': pdf.length,
+      'X-Photos-Omitted-Consent': String(photosOmittedForConsent),
+      // Browsers only expose whitelisted response headers to JS by default.
+      'Access-Control-Expose-Headers': 'X-Photos-Omitted-Consent',
     });
     res.status(HttpStatus.OK).end(pdf);
   }

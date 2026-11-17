@@ -2,6 +2,36 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
 export type LibrarySettingsDocument = LibrarySettings & Document;
 
+// One named physical area of the library (e.g. "Non-fiction", "Islamic
+// Books", "Early Years") - the top level of the Zone -> Bookcase/Bay ->
+// Shelf hierarchy a book's zoneName/bay/shelfRange fields point into (see
+// book.schema.ts). Kept as a simple settings sub-document rather than its
+// own collection: a school defines these once, rarely edits them, and
+// already has a per-tenant settings document with working get/update
+// endpoints to reuse.
+@Schema({ _id: false })
+export class LibraryZoneDef {
+  @Prop({ required: true }) name: string;
+  @Prop() description: string;
+  // null = shared across all campuses; set to scope a zone to one campus's
+  // physical library on a multi-campus school.
+  @Prop({ type: String, default: null }) campusId: string | null;
+  // Optional Urdu translation of `name`, typed once by the admin - zone
+  // names are arbitrary school-chosen strings, not translatable from a
+  // fixed table, so this can't be derived automatically. Shown on the
+  // printed zone sign alongside the English name when set.
+  @Prop({ type: String, default: null }) urduLabel: string | null;
+  // Optional accent colour for the printed zone sign - one of the 6
+  // standard age-band ids from library-age-band.util.ts (early_years,
+  // lower_primary, upper_primary, middle, secondary, reference), or null
+  // for no colour. A zone itself isn't tied to one age band (e.g.
+  // "Non-fiction" spans all of them); this is purely a visual choice to
+  // keep a zone's sign consistent with the rest of the shelf-labelling
+  // palette, not a classification.
+  @Prop({ type: String, default: null }) color: string | null;
+}
+export const LibraryZoneDefSchema = SchemaFactory.createForClass(LibraryZoneDef);
+
 // Per-school configurable library/circulation policy - replaces the
 // hardcoded `overdueDays * 5` fine formula and the unlimited-checkout/
 // unlimited-renewal defaults the first cut shipped with. One document per
@@ -21,5 +51,6 @@ export class LibrarySettings {
   @Prop({ default: 1 }) maxRenewals: number;
   @Prop({ default: 14 }) renewalDays: number;
   @Prop({ default: 14 }) defaultLoanDays: number;
+  @Prop({ type: [LibraryZoneDefSchema], default: [] }) zones: LibraryZoneDef[];
 }
 export const LibrarySettingsSchema = SchemaFactory.createForClass(LibrarySettings);

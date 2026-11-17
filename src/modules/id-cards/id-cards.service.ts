@@ -17,6 +17,8 @@ import {
 import { CreateIdCardTemplateDto, UpdateIdCardTemplateDto } from './dto/id-card.dto';
 import { Campus } from '../../organization/schemas/organization.schema';
 import { GroupInstitution } from '../../organization/schemas/group-institution.schema';
+import { ConsentRecord, ConsentRecordDocument } from '../../compliance/schemas/compliance.schema';
+import { isPhotoUseWithdrawn } from '../../compliance/consent-check.util';
 
 // CR80 - the real, standard physical ID card size (credit-card sized),
 // used worldwide for student/staff/membership cards. Landscape, in mm.
@@ -36,6 +38,7 @@ export class IdCardsService {
     @InjectModel('School') private schoolModel: Model<any>,
     @InjectModel(Campus.name) private campusModel: Model<any>,
     @InjectModel(GroupInstitution.name) private institutionModel: Model<any>,
+    @InjectModel(ConsentRecord.name) private consentModel: Model<ConsentRecordDocument>,
     private readonly pdfService: PdfService,
   ) {}
 
@@ -131,7 +134,7 @@ export class IdCardsService {
   // `campusName` is resolved by the caller (generateIdCardsPdf) via its
   // per-campus branding cache, since a Student only stores a campusId,
   // not a denormalized campus name.
-  private mapEntity(entityType: string, doc: any, campusName: string) {
+  private mapEntity(entityType: string, doc: any, campusName: string, photoOmittedConsent = false) {
     if (entityType === 'staff') {
       const emergency = doc.contact?.emergency;
       return {
@@ -158,7 +161,8 @@ export class IdCardsService {
     const emergencyContact = [doc.emergencyContactName, doc.emergencyContactPhone].filter(Boolean).join(' - ');
     return {
       id: String(doc._id),
-      photo: doc.photo || '',
+      photo: photoOmittedConsent ? '' : (doc.photo || ''),
+      photoOmittedConsent,
       name: `${doc.firstName || ''} ${doc.lastName || ''}`.trim(),
       idNumber: doc.grNo || doc.admissionNumber || '',
       idLabel: doc.grNo ? 'GR #' : 'Admission #',
@@ -343,6 +347,13 @@ export class IdCardsService {
 
     const logoHtml = branding.logo ? `<img class="logo" src="${this.escapeHtml(branding.logo)}" />` : '';
     const frontFields = (template.showFields || []).filter((f) => !IdCardsService.BACK_ONLY_FIELDS.includes(f));
+    // The photo itself is already omitted upstream (mapEntity never sets
+    // person.photo when photoOmittedConsent is true) - this is purely the
+    // visible explanation, so the card doesn't just show an unexplained
+    // initials fallback as if no photo had ever been uploaded.
+    const consentNoticeHtml = person.photoOmittedConsent
+      ? `<div class="field-row" style="color:#b91c1c; font-weight:bold;">Photo withheld — consent withdrawn</div>`
+      : '';
     return `
       <div class="card">
         ${watermarkHtml}
@@ -354,6 +365,7 @@ export class IdCardsService {
             <p class="name">${this.escapeHtml(person.name)}</p>
             <p class="subtitle">${this.escapeHtml(person.subtitle)}</p>
             <div class="field-row"><span class="field-label">${person.idLabel}:</span> <span>${this.escapeHtml(person.idNumber)}</span></div>
+            ${consentNoticeHtml}
             ${frontFields.map((f) => `<div class="field-row"><span class="field-label">${fieldLabels[f] || f}:</span> <span>${this.escapeHtml((person as any)[f] || '—')}</span></div>`).join('')}
           </div>
         </div>
@@ -372,7 +384,7 @@ export class IdCardsService {
     templateId: string | undefined,
     includeBack: boolean,
     printMode: string = 'pvc_card',
-  ): Promise<Buffer> {
+  ): Promise<{ pdf: Buffer; photosOmittedForConsent: number }> {
     let template: IdCardTemplateDocument | null = templateId
       ? await this.templateModel.findOne({ _id: templateId, schoolSlug, entityType })
       : await this.templateModel.findOne({ schoolSlug, entityType, isDefault: true });
@@ -399,9 +411,17 @@ export class IdCardsService {
       }
       return brandingCache.get(key)!;
     };
+    // Photo-use consent only applies to students (the only subjectType the
+    // ID card flow produces a physical/printable output for in this check's
+    // scope) - staff cards are unaffected.
+    let photosOmittedForConsent = 0;
     const people = await Promise.all(rawEntities.map(async (d) => {
       const b = await brandingFor(d.campusId);
-      return { entity: d, person: this.mapEntity(entityType, d, b.campusName), branding: b };
+      const photoWithdrawn = entityType === 'student'
+        ? await isPhotoUseWithdrawn(this.consentModel, String(d._id), schoolSlug)
+        : false;
+      if (photoWithdrawn) photosOmittedForConsent++;
+      return { entity: d, person: this.mapEntity(entityType, d, b.campusName, photoWithdrawn), branding: b };
     }));
     const fieldLabels: Record<string, string> = {
       dob: 'DOB', bloodGroup: 'Blood Group', address: 'Address', guardianContact: 'Guardian Contact',
@@ -414,10 +434,10 @@ export class IdCardsService {
       || !!template.validityText || !!template.noteText || template.showSignatureLine;
     const makeBack = includeBack && hasBackContent;
 
-    if (printMode === 'a4_sheet') {
-      return this.generateA4SheetPdf(people, template, fieldLabels, makeBack);
-    }
-    return this.generatePvcCardPdf(people, template, fieldLabels, makeBack);
+    const pdf = printMode === 'a4_sheet'
+      ? await this.generateA4SheetPdf(people, template, fieldLabels, makeBack)
+      : await this.generatePvcCardPdf(people, template, fieldLabels, makeBack);
+    return { pdf, photosOmittedForConsent };
   }
 
   // Direct-to-card PVC printer output (Zebra/Evolis/Magicard etc.) - every

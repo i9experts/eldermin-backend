@@ -73,7 +73,7 @@ describe('malformed id -> 400 on teacher-app routes', () => {
 
   it('behaviour records (controller service)', async () => {
     const recordModel: any = { findOne: jest.fn(), findOneAndUpdate: jest.fn(), aggregate: jest.fn() };
-    const svc = new BehaviourService(recordModel, noop, noop, noop, noop, noop);
+    const svc = new BehaviourService(recordModel, noop, noop, noop, noop, noop, noop, noop, noop);
     await expect(svc.getRecordById('bad', 's')).rejects.toThrow('Invalid behaviour record id');
     await expect(svc.updateRecord('bad', 's', {})).rejects.toThrow('Invalid behaviour record id');
     await expect(svc.resolveRecord('bad', 's', 'n', 'u')).rejects.toThrow('Invalid behaviour record id');
@@ -84,8 +84,8 @@ describe('malformed id -> 400 on teacher-app routes', () => {
 
   it('students by id (360, detail, attendance summary)', async () => {
     const studentModel: any = { findOne: jest.fn() };
-    const n: any = {};
-    const svc = new StudentsService(studentModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
+    const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
+    const svc = new StudentsService(studentModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
     await expect(svc.getStudentById('bad', 's')).rejects.toThrow('Invalid student id');
     await expect(svc.getStudent360('bad', 's', teacher)).rejects.toThrow('Invalid student id');
     await expect(svc.getStudentAttendanceSummary('bad', 's')).rejects.toThrow('Invalid student id');

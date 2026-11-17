@@ -13,28 +13,46 @@ import {
   Behaviour, BehaviourSchema,
   AssessmentResult, AssessmentResultSchema,
 } from './schemas/student-supporting.schema';
+import { BehaviourRecord, BehaviourRecordSchema } from '../behaviour/schemas/behaviour.schema';
 import { MedicalRecord, MedicalRecordSchema } from './schemas/medical-record.schema';
 import { StudentNote, StudentNoteSchema } from './schemas/student-note.schema';
 import { StudentDocumentRecord, StudentDocumentRecordSchema } from './schemas/student-document-record.schema';
 import { AcademicHistoryRecord, AcademicHistoryRecordSchema } from './schemas/academic-history-record.schema';
 import { EnrollmentField, EnrollmentFieldSchema } from './schemas/enrollment-field.schema';
+import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
+import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
+import { TeacherAttendanceScopeService } from './teacher-attendance-scope.service';
 import { UploadModule } from '../upload/upload.module';
-import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
+import {
+  SchoolSchema, Campus, CampusSchema, Grade, GradeSchema,
+  AcademicYear, AcademicYearSchema,
+} from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
+import { CalendarEvent, CalendarEventSchema } from '../school-calendar/schemas/calendar-event.schema';
 import { FeeStructure, FeeStructureSchema, StudentFeeAssignment, StudentFeeAssignmentSchema } from '../finance/schemas/finance.schema';
+import { FinanceModule } from '../finance/finance.module';
 import { Family, FamilySchema } from '../families/schemas/family.schema';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentSchema } from '../syllabus/schemas/course-enrollment.schema';
 import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-attempt.schema';
 
 @Module({
   imports: [
     UploadModule,
+    // Student 360's Fee Ledger/Collect action reads and writes real
+    // invoices/payments through FinanceService (recordPayment etc.)
+    // instead of the Students module's own, never-populated StudentFee
+    // collection - see getFeeStatement/collectFee in students.controller.ts.
+    FinanceModule,
     MongooseModule.forFeature([
       { name: Student.name, schema: StudentSchema },
+      { name: Staff.name, schema: StaffSchema },
+      { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: StudentAttendance.name, schema: StudentAttendanceSchema },
       { name: StudentFee.name, schema: StudentFeeSchema },
       { name: Behaviour.name, schema: BehaviourSchema },
+      { name: BehaviourRecord.name, schema: BehaviourRecordSchema }, // Student 360 behaviour union (B1)
       { name: AssessmentResult.name, schema: AssessmentResultSchema },
       { name: MedicalRecord.name, schema: MedicalRecordSchema },
       { name: StudentNote.name, schema: StudentNoteSchema },
@@ -44,6 +62,13 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       { name: 'School', schema: SchoolSchema },
       { name: Family.name, schema: FamilySchema },
       { name: Campus.name, schema: CampusSchema },
+      { name: Grade.name, schema: GradeSchema },
+      // Master "school days" setting (AcademicYear.workingDays) and the
+      // admin-managed holiday calendar (CalendarEvent, type holiday/
+      // public_holiday) - both read-only here, for checkSchoolDay's gate
+      // on markAttendance/bulkMarkAttendance below.
+      { name: AcademicYear.name, schema: AcademicYearSchema },
+      { name: CalendarEvent.name, schema: CalendarEventSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
       { name: FeeStructure.name, schema: FeeStructureSchema },
       { name: StudentFeeAssignment.name, schema: StudentFeeAssignmentSchema },
@@ -54,11 +79,12 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       // above.
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
+      { name: CourseEnrollment.name, schema: CourseEnrollmentSchema },
       { name: QuizAttempt.name, schema: QuizAttemptSchema },
     ]),
   ],
   controllers: [StudentsController],
-  providers: [StudentsService],
+  providers: [StudentsService, TeacherAttendanceScopeService],
   exports: [StudentsService],   // ← exported so AdmissionsModule can call createFromEnrollment
 })
 export class StudentsModule {}

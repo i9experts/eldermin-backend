@@ -6,19 +6,25 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AdmissionsController } from './admissions.controller';
 import { AdmissionsService } from './admissions.service';
+import { PublicLeadFormController } from './public-lead-form.controller';
+import { LeadCaptureLinkService } from './lead-capture-link.service';
 import { StudentsModule } from '../students/students.module';
 import { Lead, LeadSchema } from './schemas/lead.schema';
 import { Applicant, ApplicantSchema } from './schemas/applicant.schema';
+import { LeadCaptureLink, LeadCaptureLinkSchema } from './schemas/lead-capture-link.schema';
 import {
   EntranceTest, EntranceTestSchema,
   Interview, InterviewSchema,
   Enrollment, EnrollmentSchema,
   Retention, RetentionSchema,
 } from './schemas/evaluation-enrollment-retention.schema';
+import { School, SchoolSchema, AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
+import { UploadModule } from '../upload/upload.module';
 
 @Module({
   imports: [
     StudentsModule,
+    UploadModule,
     MongooseModule.forFeature([
       { name: Lead.name, schema: LeadSchema },
       { name: Applicant.name, schema: ApplicantSchema },
@@ -26,10 +32,17 @@ import {
       { name: Interview.name, schema: InterviewSchema },
       { name: Enrollment.name, schema: EnrollmentSchema },
       { name: Retention.name, schema: RetentionSchema },
+      { name: LeadCaptureLink.name, schema: LeadCaptureLinkSchema },
+      // Read-only, cross-module lookups for the public lead-capture form
+      // (school name/branding, current academic year) - same pattern used
+      // by syllabus/hr/onboarding modules rather than importing the whole
+      // OrganizationModule for two read-only models.
+      { name: School.name, schema: SchoolSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
     ]),
   ],
-  controllers: [AdmissionsController],
-  providers: [AdmissionsService],
+  controllers: [AdmissionsController, PublicLeadFormController],
+  providers: [AdmissionsService, LeadCaptureLinkService],
   exports: [AdmissionsService],
 })
 export class AdmissionsModule {}

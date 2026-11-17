@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { assertNotSelfApproval, assertStillOpen } from '../common/utils/approval-guards.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -16,6 +17,7 @@ import {
 import { UploadService } from '../upload/upload.service';
 import { buildInclusiveCampusFilter, resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { computeDsarDueDate } from './data-privacy.util';
+import { isPhotoUseWithdrawn } from './consent-check.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -187,8 +189,13 @@ export class ComplianceService {
     return approval.save();
   }
 
+  /** A request is edited here; its decision is only ever recorded by decideApprovalStage (a raw $set of `status` was a one-call self-approval). */
+  static readonly APPROVAL_DECISION_FIELDS = ['status', 'decidedBy', 'decidedAt', 'decisionNote', 'approvalChain', 'schoolSlug', 'campusId', 'requestedBy', '_id'];
+
   async updateApproval(id: string, schoolSlug: string, dto: any) {
-    const approval = await this.approvalModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    const edit = { ...dto };
+    for (const f of ComplianceService.APPROVAL_DECISION_FIELDS) delete edit[f];
+    const approval = await this.approvalModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: edit }, { new: true });
     if (!approval) throw new NotFoundException('Approval request not found');
     return approval;
   }
@@ -198,12 +205,14 @@ export class ComplianceService {
   // up once every stage has a decision (rejected at any stage short-
   // circuits the whole request to rejected, matching how a real sequential
   // sign-off chain works).
-  async decideApprovalStage(id: string, schoolSlug: string, decision: 'approved' | 'rejected', comments: string, decidedByName: string) {
+  async decideApprovalStage(id: string, schoolSlug: string, decision: 'approved' | 'rejected', comments: string, decidedByName: string, requestingUser?: any) {
+    if (decision !== 'approved' && decision !== 'rejected') throw new BadRequestException("decision must be 'approved' or 'rejected'");
+    if (!Types.ObjectId.isValid(String(id ?? ''))) throw new BadRequestException('Invalid approval request id');
     const approval = await this.approvalModel.findOne({ _id: id, schoolSlug });
     if (!approval) throw new NotFoundException('Approval request not found');
-    if (approval.status !== 'pending' && approval.status !== 'on_hold') {
-      throw new Error(`This request has already been ${approval.status}`);
-    }
+    assertStillOpen(approval.status, ['pending', 'on_hold'], 'request');
+    // no self-approval: the person who raised the request cannot decide it (owner / super_admin exempt, like the leave rule)
+    if (requestingUser) assertNotSelfApproval(requestingUser, { name: approval.requestedBy }, 'approval request');
 
     const chain = approval.approvalChain || [];
     const nextStage = chain.find((s) => s.status === 'pending');
@@ -232,7 +241,7 @@ export class ComplianceService {
     return approval;
   }
 
-  async getSafeguardingCases(schoolSlug: string, query: any, requestingUser?: ScopedUser) {
+  async getSafeguardingCases(schoolSlug: string, query: any, requestingUser?: ScopedUser, viewerName?: string) {
     const { page = 1, limit = 20, status, severity, type, campusId } = query;
     const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
@@ -245,6 +254,21 @@ export class ComplianceService {
       this.safeguardingModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
       this.safeguardingModel.countDocuments(filter),
     ]);
+    // Safeguarding records are the most sensitive data in the system (see
+    // compliance.controller.ts) - the UI's "access is logged" banner must be
+    // true, so every read of the case list/detail is recorded here rather
+    // than relying on the app-wide AuditLogInterceptor, which deliberately
+    // never logs GET requests.
+    await this.logAction({
+      action: 'Viewed safeguarding case list',
+      module: 'Safeguarding',
+      resourceType: 'SafeguardingCase',
+      performedBy: viewerName || requestingUser?.userId || 'Unknown',
+      performedById: requestingUser?.userId && Types.ObjectId.isValid(requestingUser.userId)
+        ? new Types.ObjectId(requestingUser.userId) : undefined,
+      type: 'read',
+      schoolSlug,
+    });
     return { data, meta: { total, page, limit } };
   }
 
@@ -355,6 +379,10 @@ export class ComplianceService {
     const result = await this.consentModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!result) throw new NotFoundException('Consent record not found');
     return { deleted: true };
+  }
+
+  async isPhotoUseWithdrawn(studentId: string, schoolSlug: string): Promise<boolean> {
+    return isPhotoUseWithdrawn(this.consentModel, studentId, schoolSlug);
   }
 
   // ── Data Privacy: Retention Policies ─────────────────────────

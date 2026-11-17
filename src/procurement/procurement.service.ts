@@ -306,9 +306,107 @@ export class ProcurementService {
     return { po, grns };
   }
 
-  async updatePOStatus(id: string, schoolSlug: string, status: string) {
+  // Full edit of a PO's own fields (vendor, items, dates, terms, etc.) - the
+  // "Edit" modal's save. Mirrors updatePR's "only before it's locked in by a
+  // workflow step" guard: once goods have started arriving or money has
+  // moved, the order's content shouldn't shift out from under that record.
+  // approvedBy/approvedAt/paidAmount/balanceDue/isPaid/paidDate/
+  // paymentReference/status/cancelledBy/cancelledAt/cancellationReason are
+  // all server-owned (set only by approvePO/cancelPO/recordPayment) and
+  // stripped here so an edit can never accidentally touch them.
+  async updatePO(id: string, schoolSlug: string, data: any) {
+    const existing = await this.poModel.findOne({ _id: id, schoolSlug });
+    if (!existing) throw new NotFoundException('PO not found');
+    if (['partially_received', 'fully_received', 'invoiced', 'paid', 'cancelled'].includes(existing.status)) {
+      throw new BadRequestException(
+        `Cannot edit a purchase order that is already ${existing.status.replace(/_/g, ' ')} — reverse/cancel it and raise a new one instead.`,
+      );
+    }
+    const {
+      poNumber, status, approvedBy, approvedAt, paidAmount, balanceDue, isPaid,
+      paidDate, paymentReference, cancelledBy, cancelledAt, cancellationReason,
+      ...rest
+    } = data;
+
+    if (rest.items) {
+      const items = rest.items.map((i: any) => {
+        const gross = (i.quantity || 0) * (i.unitPrice || 0);
+        const disc = gross * ((i.discount || 0) / 100);
+        const net = gross - disc;
+        const tax = net * ((i.taxRate || 0) / 100);
+        return { ...i, netAmount: net + tax };
+      });
+      rest.items = items;
+      rest.subtotal = items.reduce((a: number, i: any) => a + (i.quantity * i.unitPrice), 0);
+      rest.totalDiscount = items.reduce((a: number, i: any) => {
+        const gross = i.quantity * i.unitPrice;
+        return a + (gross * ((i.discount || 0) / 100));
+      }, 0);
+      rest.totalTax = items.reduce((a: number, i: any) => {
+        const net = (i.quantity * i.unitPrice) - ((i.quantity * i.unitPrice) * ((i.discount || 0) / 100));
+        return a + (net * ((i.taxRate || 0) / 100));
+      }, 0);
+      rest.totalAmount = rest.subtotal - rest.totalDiscount + rest.totalTax;
+      rest.balanceDue = rest.totalAmount - (existing.paidAmount || 0);
+    }
+
+    const po = await this.poModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: rest }, { new: true, runValidators: true },
+    );
+    if (!po) throw new NotFoundException('PO not found');
+    return po;
+  }
+
+  async approvePO(id: string, schoolSlug: string, approvedBy: string) {
+    const existing = await this.poModel.findOne({ _id: id, schoolSlug });
+    if (!existing) throw new NotFoundException('PO not found');
+    if (existing.status !== 'draft') {
+      throw new BadRequestException(`Only a draft purchase order can be approved (current status: ${existing.status.replace(/_/g, ' ')}).`);
+    }
     return this.poModel.findOneAndUpdate(
-      { _id: id, schoolSlug }, { $set: { status } }, { new: true },
+      { _id: id, schoolSlug },
+      { $set: { status: 'approved', approvedBy, approvedAt: new Date() } },
+      { new: true, runValidators: true },
+    );
+  }
+
+  // "Reverse PO" - voids an order before any goods/money have actually
+  // moved. Rolls back the vendor totalPurchased/outstandingBalance bump
+  // createPO applied (safe to fully reverse here, since the guard below
+  // only allows this before any payment was ever recorded). Refuses once
+  // anything has been received or paid — that's a real transaction, not a
+  // mistake to quietly undo; it needs an actual return/credit note flow.
+  async cancelPO(id: string, schoolSlug: string, cancelledBy: string, reason?: string) {
+    const existing = await this.poModel.findOne({ _id: id, schoolSlug });
+    if (!existing) throw new NotFoundException('PO not found');
+    if (existing.status === 'cancelled') {
+      throw new BadRequestException('This purchase order is already cancelled.');
+    }
+    if (['partially_received', 'fully_received', 'invoiced', 'paid'].includes(existing.status)) {
+      throw new BadRequestException(
+        `Cannot reverse a purchase order that has already ${existing.status === 'paid' ? 'been paid' : 'received goods'} — this needs a return/credit note, not a cancellation.`,
+      );
+    }
+    if (existing.vendorId) {
+      await this.vendorModel.findByIdAndUpdate(existing.vendorId, {
+        $inc: { totalPurchased: -existing.totalAmount, outstandingBalance: -existing.balanceDue },
+      });
+    }
+    return this.poModel.findOneAndUpdate(
+      { _id: id, schoolSlug },
+      { $set: { status: 'cancelled', cancelledBy, cancelledAt: new Date(), cancellationReason: reason } },
+      { new: true, runValidators: true },
+    );
+  }
+
+  async updatePOStatus(id: string, schoolSlug: string, status: string) {
+    const existing = await this.poModel.findOne({ _id: id, schoolSlug });
+    if (!existing) throw new NotFoundException('PO not found');
+    if (['cancelled', 'paid'].includes(existing.status)) {
+      throw new BadRequestException(`Cannot change the status of a purchase order that is already ${existing.status}.`);
+    }
+    return this.poModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: { status } }, { new: true, runValidators: true },
     );
   }
 
@@ -337,46 +435,85 @@ export class ProcurementService {
   }
 
   // ── GRN ──────────────────────────────────────────────────
+  // Applies (sign=1) or reverses (sign=-1) a GRN's items against the PO's
+  // per-line receivedQuantity/status and against inventory currentStock -
+  // shared by createGRN and updateGRN (an edit reverses the GRN's old items
+  // then re-applies its new ones, the same "void and recreate" shape a
+  // real reversal would take, so received-quantity/stock figures never
+  // double-count or go stale after an edit).
+  private async applyGRNItemsToPO(purchaseOrderId: any, items: any[], sign: 1 | -1) {
+    if (!purchaseOrderId) return;
+    const po = await this.poModel.findById(purchaseOrderId);
+    if (!po) return;
+
+    for (const grnItem of items || []) {
+      const poItem = po.items.find((pi: any) => pi.itemName === grnItem.itemName);
+      if (poItem) {
+        (poItem as any).receivedQuantity = Math.max(
+          0, ((poItem as any).receivedQuantity || 0) + sign * (grnItem.receivedQuantity || 0),
+        );
+      }
+    }
+
+    let allReceived = po.items.length > 0;
+    let anyReceived = false;
+    for (const poItem of po.items) {
+      if (((poItem as any).receivedQuantity || 0) < poItem.quantity) allReceived = false;
+      if (((poItem as any).receivedQuantity || 0) > 0) anyReceived = true;
+    }
+    // Reversing (sign -1) a fully/partially received PO back to "nothing
+    // received yet" returns it to acknowledged, not left claiming a receipt
+    // status it no longer has evidence for.
+    const newStatus = allReceived ? 'fully_received'
+      : anyReceived ? 'partially_received'
+      : (['fully_received', 'partially_received'].includes(po.status) ? 'acknowledged' : po.status);
+
+    await this.poModel.findByIdAndUpdate(purchaseOrderId, {
+      $set: { status: newStatus, items: po.items, ...(sign > 0 ? { deliveredDate: new Date() } : {}) },
+    });
+
+    for (const grnItem of items || []) {
+      if (grnItem.inventoryItemId && grnItem.receivedQuantity > 0) {
+        await this.inventoryModel.findByIdAndUpdate(grnItem.inventoryItemId, {
+          $inc: { currentStock: sign * grnItem.receivedQuantity },
+          ...(sign > 0 ? { $set: { lastRestockedDate: new Date(), status: 'in_stock' } } : {}),
+        });
+      }
+    }
+  }
+
   async createGRN(data: any) {
     const grn = new this.grnModel({
       ...data, receivedDate: new Date(data.receivedDate || Date.now()),
     });
     const saved = await grn.save();
+    await this.applyGRNItemsToPO(data.purchaseOrderId, data.items, 1);
+    return saved;
+  }
 
-    // Update PO received quantities and status
-    const po = await this.poModel.findById(data.purchaseOrderId);
-    if (po) {
-      let allReceived = true;
-      let anyReceived = false;
+  async updateGRN(id: string, schoolSlug: string, data: any) {
+    const existing = await this.grnModel.findOne({ _id: id, schoolSlug });
+    if (!existing) throw new NotFoundException('GRN not found');
+    if (existing.verified) {
+      throw new BadRequestException('Cannot edit a GRN that has already been verified — it has already fed into verified stock/PO records.');
+    }
+    // grnNumber is server-generated and never regenerated; verified/
+    // verifiedBy/verifiedAt are only ever set by verifyGRN.
+    const { grnNumber, verified, verifiedBy, verifiedAt, ...rest } = data;
 
-      for (const grnItem of data.items) {
-        const poItem = po.items.find((pi: any) => pi.itemName === grnItem.itemName);
-        if (poItem) {
-          (poItem as any).receivedQuantity = ((poItem as any).receivedQuantity || 0) + grnItem.receivedQuantity;
-          if ((poItem as any).receivedQuantity < poItem.quantity) allReceived = false;
-          if ((poItem as any).receivedQuantity > 0) anyReceived = true;
-        }
-      }
-
-      const newStatus = allReceived ? 'fully_received'
-        : anyReceived ? 'partially_received' : po.status;
-
-      await this.poModel.findByIdAndUpdate(data.purchaseOrderId, {
-        $set: { status: newStatus, items: po.items, deliveredDate: new Date() },
-      });
-
-      // Update inventory
-      for (const grnItem of data.items) {
-        if (grnItem.inventoryItemId && grnItem.receivedQuantity > 0) {
-          await this.inventoryModel.findByIdAndUpdate(grnItem.inventoryItemId, {
-            $inc: { currentStock: grnItem.receivedQuantity },
-            $set: { lastRestockedDate: new Date(), status: 'in_stock' },
-          });
-        }
-      }
+    if (rest.items) {
+      // Reverse the old item effect, then apply the new one - keeps the
+      // PO's receivedQuantity and inventory stock accurate after an edit
+      // instead of double-counting the original receipt.
+      await this.applyGRNItemsToPO(existing.purchaseOrderId, existing.items, -1);
+      await this.applyGRNItemsToPO(rest.purchaseOrderId || existing.purchaseOrderId, rest.items, 1);
     }
 
-    return saved;
+    const grn = await this.grnModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set: rest }, { new: true, runValidators: true },
+    );
+    if (!grn) throw new NotFoundException('GRN not found');
+    return grn;
   }
 
   async getGRNs(schoolSlug: string, query: any) {

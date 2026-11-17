@@ -179,7 +179,7 @@ export class PurchaseOrder {
   @Prop({ default: 0 }) balanceDue: number;
 
   @Prop({
-    enum: ['draft', 'sent', 'acknowledged', 'partially_received',
+    enum: ['draft', 'approved', 'sent', 'acknowledged', 'partially_received',
            'fully_received', 'invoiced', 'paid', 'cancelled', 'disputed'],
     default: 'draft',
   })
@@ -200,6 +200,14 @@ export class PurchaseOrder {
   @Prop() createdBy: string;
   @Prop() approvedBy: string;
   @Prop() approvedAt: Date;
+
+  // Cancellation ("Reverse PO") — only reachable while still in draft/
+  // approved/sent/acknowledged (see ProcurementService.cancelPO); once any
+  // goods have been received or the order is paid, the status guard in
+  // cancelPO refuses rather than silently voiding a real transaction.
+  @Prop() cancelledBy: string;
+  @Prop() cancelledAt: Date;
+  @Prop() cancellationReason: string;
 
   // Vendor invoice
   @Prop() vendorInvoiceNumber: string;

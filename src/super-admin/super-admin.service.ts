@@ -24,7 +24,8 @@ import { Campus, Grade, AcademicYear } from '../organization/schemas/organizatio
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { ModulesService } from '../modules/modules.service';
-import { modulesForPlan } from '../modules/module-registry';
+import { modulesForPlan, getModuleById, MODULE_REGISTRY } from '../modules/module-registry';
+import { computeClassSectionRepair } from '../common/utils/class-section-repair.util';
 
 const paged = (p = 1, l = 20) => ({ skip: (p - 1) * l, limit: l });
 
@@ -455,7 +456,7 @@ export class SuperAdminService {
   // flow (OnboardingService.register) creates, so an activated lead
   // ends up completely indistinguishable from a self-signed-up school.
   // ============================================================
-  async activateInstitutionFromLead(leadId: string, activatedBy: string) {
+  async activateInstitutionFromLead(leadId: string, activatedBy: string, moduleIdsOverride?: string[]) {
     const lead = await this.leadModel.findById(leadId);
     if (!lead) throw new NotFoundException('Lead not found');
     if (lead.convertedInstitutionId) {
@@ -479,28 +480,56 @@ export class SuperAdminService {
     // from the same merged list so a fresh login immediately has access to
     // every module the lead actually asked for, not just 'organization'.
     //
-    // The authoritative source is now the lead's requested package
-    // (Starter/Growth/Enterprise), not the individual module checkboxes -
-    // modulesRequested is still mapped and unioned in for CRM display /
-    // in case a sales rep promised something outside the normal package,
-    // but the plan's own module set always wins the "what does this
-    // school actually get" question.
+    // The Super Admin now reviews and confirms the exact module set before
+    // every activation (CRMTab's activation modal, pre-checked from the
+    // lead's own modulesRequested) - moduleIdsOverride carries that final,
+    // human-approved list. When present, it REPLACES the plan-wins union
+    // below entirely, same "Super Admin's explicit list is authoritative,
+    // no silent widening" trust model as ModulesService.setActiveModules.
+    // Unknown ids are rejected; missing dependencies are NOT blocked here
+    // (same precedent as setActiveModules) - the frontend picker already
+    // has the full registry (including requiredModules) to warn about
+    // that before submitting, so this stays a dumb, trustworthy write.
+    //
+    // When no override is supplied (e.g. any other/legacy caller of this
+    // endpoint), fall back to the previous behaviour unchanged: the lead's
+    // requested package (Starter/Growth/Enterprise) decides the module
+    // set, with modulesRequested unioned in for CRM display / in case a
+    // sales rep promised something outside the normal package.
     const normalizedPlan = this.normalizePlanRequested((lead as any).planRequested);
     const requestedModules = this.mapRequestedModulesToIds(
       Array.isArray(lead.modulesRequested) ? lead.modulesRequested : [],
     );
-    const mergedModules = Array.from(
-      new Set(['organization', ...modulesForPlan(normalizedPlan), ...requestedModules]),
-    );
+    let mergedModules: string[];
+    if (Array.isArray(moduleIdsOverride)) {
+      const unknown = moduleIdsOverride.filter((id) => !getModuleById(id));
+      if (unknown.length > 0) {
+        throw new BadRequestException(`Unknown module id(s): ${unknown.join(', ')}`);
+      }
+      mergedModules = Array.from(new Set(['organization', ...moduleIdsOverride]));
+    } else {
+      mergedModules = Array.from(
+        new Set(['organization', ...modulesForPlan(normalizedPlan), ...requestedModules]),
+      );
+    }
 
+    // Unlike the self-service signup flow, Super Admin activation does the
+    // full setup itself right here (campus, grades, academic year, fee
+    // structure below) - there is no wizard left for anyone to complete
+    // afterwards, so this goes straight to 'active'/isSetupComplete:true
+    // rather than the self-service 'onboarding'/false. Leaving those at
+    // their self-service defaults previously left every admin-activated
+    // school (a real, live, fully-operational account) permanently stuck
+    // looking "incomplete" with no way to ever clear it, which is what
+    // kept showing the Setup Wizard link/button on already-active schools.
     const tenant = await this.tenantModel.create({
       slug,
       displayName: lead.schoolName,
-      status: 'onboarding',
+      status: 'active',
       plan: normalizedPlan,
       activeModules: mergedModules,
       billingEmail: lead.adminEmail.toLowerCase(),
-      isSetupComplete: false,
+      isSetupComplete: true,
     });
 
     const orgInstitution = await this.orgInstitutionModel.create({
@@ -722,6 +751,31 @@ export class SuperAdminService {
     if (!inst) throw new NotFoundException('Institution not found');
     const modules = await this.modulesService.listModules(slug);
     return { plan: (inst as any).plan, modules };
+  }
+
+  // Static module reference data for the lead-activation review modal -
+  // no School exists yet at that point, so this is just MODULE_REGISTRY
+  // as-is (id, name, category, requiredModules, pricingTier), plus which
+  // module ids the lead's own modulesRequested resolve to is NOT included
+  // here (that's lead-specific, read from GET institutions/leads/:id).
+  getModuleRegistry() {
+    return MODULE_REGISTRY;
+  }
+
+  // Resolves a lead's own modulesRequested (free-text labels from the
+  // marketing site's wizard, e.g. "Compliance & Governance") to registry
+  // ids - exposed separately so the activation-review modal can pre-check
+  // exactly what the lead asked for before the Super Admin adjusts
+  // anything, without duplicating MODULE_NAME_TO_ID client-side (those
+  // labels don't match MODULE_REGISTRY's own display names 1:1, e.g.
+  // "Human Resource" / "Teacher Module" / "Student Profile" vs. the
+  // registry's "Staff & HR" / "Teaching Management" / "Student 360").
+  async getRequestedModuleIds(leadId: string): Promise<string[]> {
+    const lead = await this.leadModel.findById(leadId).select('modulesRequested').lean();
+    if (!lead) throw new NotFoundException('Lead not found');
+    return this.mapRequestedModulesToIds(
+      Array.isArray((lead as any).modulesRequested) ? (lead as any).modulesRequested : [],
+    );
   }
 
   async setSchoolModules(slug: string, moduleIds: string[], updatedBy: string) {
@@ -1163,6 +1217,64 @@ export class SuperAdminService {
       byLocation,
       registrationTrend: trend,
       topUnlinkedSchools,
+    };
+  }
+
+  // ============================================================
+  // CLASS/SECTION DATA REPAIR — platform-wide variant. Runs the same
+  // repair as OrganizationService.previewClassSectionRepair/
+  // applyClassSectionRepair (see class-section-repair.util.ts), but
+  // across every school at once, for the case where this drift isn't
+  // isolated to one tenant.
+  // ============================================================
+  private async activeSchoolSlugs(): Promise<string[]> {
+    const institutions = await this.institutionModel.find({ status: { $in: ['active', 'trial'] } }).select('slug').lean();
+    return institutions.map((i: any) => i.slug).filter(Boolean);
+  }
+
+  private async repairOneSchool(schoolSlug: string, apply: boolean) {
+    const [grades, students] = await Promise.all([
+      this.gradeModel.find({ schoolSlug, isActive: true }).select('name sections').lean(),
+      this.studentModel.find({ schoolSlug }).select('firstName lastName currentGrade currentSection').lean(),
+    ]);
+    if (grades.length === 0) return { schoolSlug, fixedCount: 0, unresolvedCount: 0 };
+    const report = computeClassSectionRepair(
+      grades.map((g: any) => ({ name: g.name, sections: g.sections })),
+      students.map((s: any) => ({ id: String(s._id), name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), currentGrade: s.currentGrade, currentSection: s.currentSection })),
+    );
+    if (apply && report.fixes.length > 0) {
+      await this.studentModel.bulkWrite(report.fixes.map((f) => ({
+        updateOne: {
+          filter: { _id: f.studentId, schoolSlug },
+          update: { $set: { ...(f.newGrade ? { currentGrade: f.newGrade } : {}), ...(f.newSection ? { currentSection: f.newSection } : {}) } },
+        },
+      })));
+    }
+    return { schoolSlug, fixedCount: report.fixes.length, unresolvedCount: report.unresolved.length };
+  }
+
+  async previewClassSectionRepairAllSchools() {
+    const slugs = await this.activeSchoolSlugs();
+    const results: Array<{ schoolSlug: string; fixedCount: number; unresolvedCount: number }> = [];
+    for (const slug of slugs) results.push(await this.repairOneSchool(slug, false));
+    return {
+      schoolsChecked: results.length,
+      schoolsWithFixes: results.filter((r) => r.fixedCount > 0).length,
+      totalFixed: results.reduce((a, r) => a + r.fixedCount, 0),
+      totalUnresolved: results.reduce((a, r) => a + r.unresolvedCount, 0),
+      bySchool: results.filter((r) => r.fixedCount > 0 || r.unresolvedCount > 0),
+    };
+  }
+
+  async applyClassSectionRepairAllSchools() {
+    const slugs = await this.activeSchoolSlugs();
+    const results: Array<{ schoolSlug: string; fixedCount: number; unresolvedCount: number }> = [];
+    for (const slug of slugs) results.push(await this.repairOneSchool(slug, true));
+    return {
+      schoolsProcessed: results.length,
+      totalFixed: results.reduce((a, r) => a + r.fixedCount, 0),
+      totalUnresolved: results.reduce((a, r) => a + r.unresolvedCount, 0),
+      bySchool: results.filter((r) => r.fixedCount > 0 || r.unresolvedCount > 0),
     };
   }
 }

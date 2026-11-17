@@ -7,6 +7,7 @@ import { Student, StudentSchema } from '../../students/schemas/student.schema';
 import { Staff, StaffSchema } from '../hr/schemas/staff.schema';
 import { SchoolSchema, Campus, CampusSchema } from '../../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../../organization/schemas/group-institution.schema';
+import { ConsentRecord, ConsentRecordSchema } from '../../compliance/schemas/compliance.schema';
 import { PdfModule } from '../../pdf/pdf.module';
 
 @Module({
@@ -18,6 +19,7 @@ import { PdfModule } from '../../pdf/pdf.module';
       { name: 'School', schema: SchoolSchema },
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
+      { name: ConsentRecord.name, schema: ConsentRecordSchema },
     ]),
     PdfModule,
   ],

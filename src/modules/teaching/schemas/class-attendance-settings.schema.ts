@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
-export type AttendanceSettingsDocument = AttendanceSettings & Document;
+export type ClassAttendanceSettingsDocument = ClassAttendanceSettings & Document;
 
 // School-wide policy for how class attendance is marked - one document
 // per school. Deliberately a separate, tiny collection of its own rather
@@ -12,8 +12,13 @@ export type AttendanceSettingsDocument = AttendanceSettings & Document;
 // biometric check-in (grace periods, late thresholds, payroll
 // deductions) - a different domain entirely that happens to share a
 // generic name.
+//
+// The class (= the Mongoose model name registered by @nestjs/mongoose) is deliberately NOT called AttendanceSettings:
+// both schemas used that name, @nestjs/mongoose silently hands the SECOND registrant the FIRST model, so this module's
+// reads/writes went to HR's `hr_attendance_settings` collection (strict schema dropped `mode`, so the mode never
+// persisted). See schema-model-names.spec.ts, which fails if two schema classes ever share a name again.
 @Schema({ timestamps: true, collection: 'class_attendance_settings' })
-export class AttendanceSettings {
+export class ClassAttendanceSettings {
   @Prop({ required: true, unique: true }) schoolSlug: string;
 
   // 'daily': one present/absent/.../status per student per day (today's
@@ -30,4 +35,4 @@ export class AttendanceSettings {
   @Prop() updatedBy: string;
 }
 
-export const AttendanceSettingsSchema = SchemaFactory.createForClass(AttendanceSettings);
+export const ClassAttendanceSettingsSchema = SchemaFactory.createForClass(ClassAttendanceSettings);

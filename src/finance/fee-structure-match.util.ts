@@ -12,6 +12,7 @@ export interface FeeStructureLike {
   effectiveFrom?: Date | string | null;
   effectiveTo?: Date | string | null;
   createdAt?: Date | string | null;
+  items?: { feeHead?: string | null }[];
 }
 
 /**
@@ -63,4 +64,36 @@ export function pickApplicableFeeStructures<T extends FeeStructureLike>(
   };
   const maxRecency = Math.max(...mostSpecific.map(recency));
   return mostSpecific.filter(fs => recency(fs) === maxRecency);
+}
+
+/**
+ * Whether an equally-specific group pickApplicableFeeStructures returned
+ * (more than one candidate) is safe to bill FROM ALL OF, rather than an
+ * unresolved ambiguous match the caller should warn about and skip.
+ *
+ * The UI only ever lets a school create a single-fee-head FeeStructure per
+ * "New Fee Structure" (one feeHead per `items` array) - so a school billing
+ * both a recurring Monthly Tuition Fee and a one-time Admission Fee for the
+ * same grade/section necessarily has two separate structures for it, tied
+ * at identical specificity with nothing to otherwise distinguish them.
+ * That's not the data-hygiene duplicate pickApplicableFeeStructures exists
+ * to catch (an old structure never deactivated, or near-identical "special"
+ * variants) - it's two complementary structures that together make up this
+ * class's full billing, each still billed on its own `frequency`. They're
+ * complementary only if NO fee head repeats across the group; the moment
+ * two structures price the SAME fee head differently for the same class,
+ * that's the real ambiguity and must stay an unresolved tie.
+ */
+export function structuresAreComplementary(group: FeeStructureLike[]): boolean {
+  if (group.length <= 1) return true;
+  const seenHeads = new Set<string>();
+  for (const fs of group) {
+    for (const item of fs.items || []) {
+      const head = (item.feeHead || '').trim().toLowerCase();
+      if (!head) continue;
+      if (seenHeads.has(head)) return false;
+      seenHeads.add(head);
+    }
+  }
+  return true;
 }

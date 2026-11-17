@@ -17,6 +17,7 @@ import {
 } from './dto/organization.dto';
 import { GroupInstitution, GroupInstitutionDocument } from './schemas/group-institution.schema';
 import { buildClassTeacherOfName } from './utils/class-teacher-label.util';
+import { computeClassSectionRepair } from '../common/utils/class-section-repair.util';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument, StudentFee, StudentFeeDocument } from '../students/schemas/student-supporting.schema';
 import { resolveCampusScope, buildInclusiveCampusFilter, ScopedUser } from '../auth/scope.util';
@@ -26,6 +27,7 @@ import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/sche
 import { User, UserDocument } from '../modules/organization/schemas/user.schema';
 import { AppStoreConnectService } from '../integrations/app-store-connect/app-store-connect.service';
 import { CostCenter, CostCenterDocument } from '../finance/schemas/ledger.schema';
+import { ParentDevice, ParentDeviceDocument } from '../parent-portal/schemas/parent-device.schema';
 
 @Injectable()
 export class OrganizationService {
@@ -44,7 +46,11 @@ export class OrganizationService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+<<<<<<< HEAD
     @InjectModel(CostCenter.name) private costCenterModel: Model<CostCenterDocument>,
+=======
+    @InjectModel(ParentDevice.name) private parentDeviceModel: Model<ParentDeviceDocument>,
+>>>>>>> origin/main
     private uploadService: UploadService,
     private appStoreConnectService: AppStoreConnectService,
   ) {}
@@ -451,21 +457,131 @@ export class OrganizationService {
     return grade;
   }
 
+  /** Rebuilds a teacher's FULL class-teacher-assignments array by scanning
+   * every Grade/Section in the school for ones whose classTeacherId
+   * matches this user, then writes it to their TeacherProfile (upserting
+   * minimal identity fields if the profile doesn't exist yet).
+   *
+   * This is deliberately a full recompute rather than an incremental
+   * push/pull: it can never drift out of sync with Section.classTeacherId
+   * (the real source of truth), and - critically - it self-heals any
+   * TeacherProfile left in the old broken state (where a second
+   * assignment had silently overwritten the first, before
+   * classTeacherAssignments existed) the next time ANY class-teacher
+   * assignment changes anywhere in the school, with no manual data
+   * migration needed for that teacher specifically.
+   *
+   * The singular classTeacherOfGradeId/GradeName/SectionName/Name fields
+   * are kept mirrored from the first assignment for backward
+   * compatibility with any caller not yet reading the array.
+   */
+  private async recomputeClassTeacherAssignments(userId: string, schoolSlug: string, tenantId?: string) {
+    const staffScope: any = { userId };
+    if (tenantId) staffScope.tenantId = tenantId;
+    const staff = await this.staffModel.findOne(staffScope).lean();
+    if (!staff) return;
+
+    const grades = await this.gradeModel.find({ schoolSlug }).lean();
+    const assignments: Array<{ gradeId: string; gradeName: string; sectionId: string; sectionName: string; name: string }> = [];
+    for (const grade of grades as any[]) {
+      for (const section of grade.sections || []) {
+        if (section.classTeacherId && section.classTeacherId.toString() === userId) {
+          assignments.push({
+            gradeId: grade._id.toString(),
+            gradeName: grade.name,
+            sectionId: section._id.toString(),
+            sectionName: section.name,
+            name: buildClassTeacherOfName(grade.name, section.name),
+          });
+        }
+      }
+    }
+
+    const primary = assignments[0];
+    const fields = {
+      isClassTeacher: assignments.length > 0,
+      classTeacherAssignments: assignments,
+      classTeacherOfGradeId: primary?.gradeId ?? null,
+      classTeacherOfGradeName: primary?.gradeName ?? null,
+      classTeacherOfSectionName: primary?.sectionName ?? null,
+      classTeacherOfName: primary?.name ?? null,
+    };
+
+    const existingProfile = await this.teacherProfileModel.findOne({ staffId: staff._id });
+    if (existingProfile) {
+      await this.teacherProfileModel.updateOne({ _id: existingProfile._id }, { $set: fields });
+    } else if (assignments.length > 0) {
+      // Must create one if it doesn't exist yet (a plain updateOne with no
+      // upsert previously matched zero documents here and silently
+      // no-opped for any staff member who'd never had a TeacherProfile
+      // created before - the Section/Student writes still succeeded, so
+      // the admin saw a success toast and "Teacher: X" on the grade, while
+      // that teacher's own attendance screen kept reporting them as not a
+      // class teacher at all, since it reads this same TeacherProfile
+      // document).
+      //
+      // institutionId is REQUIRED on TeacherProfile but only OPTIONAL on
+      // Staff (Staff.institutionId isn't set for every school, e.g. one
+      // that never completed multi-institution onboarding) - assigning a
+      // class teacher who never had a TeacherProfile before, at a school
+      // with such a Staff record, threw an uncaught Mongoose
+      // ValidationError here that surfaced to the admin as a bare
+      // "Internal server error" with no indication this was the cause.
+      // Falls back to the school's own GroupInstitution the same way
+      // TeachingService.syncTeacherProfilesFromHR already falls back for
+      // this exact field (teaching.service.ts).
+      let institutionId = (staff as any).institutionId;
+      if (!institutionId) {
+        const institution = await this.groupInstitutionModel.findOne({ schoolSlug }).select('_id').lean();
+        institutionId = institution?._id;
+      }
+      if (!institutionId) {
+        console.warn(
+          `recomputeClassTeacherAssignments: no institutionId resolvable for staff ${staff._id} (school ${schoolSlug}) - skipping TeacherProfile creation, Section assignment still applies.`,
+        );
+      } else {
+        try {
+          await this.teacherProfileModel.create({
+            tenantId: (staff as any).tenantId,
+            institutionId,
+            staffId: staff._id,
+            employeeId: (staff as any).employeeId,
+            firstName: staff.firstName,
+            lastName: staff.lastName,
+            designation: (staff as any).designation,
+            department: (staff as any).department,
+            campusId: (staff as any).campusId || null,
+            ...fields,
+          });
+        } catch (err: any) {
+          if (err?.name === 'ValidationError' || err?.name === 'CastError') {
+            throw new BadRequestException(`Could not create this teacher's profile - missing or invalid: ${Object.keys(err.errors || {}).join(', ') || err.message}`);
+          }
+          throw err;
+        }
+      }
+    }
+    return assignments;
+  }
+
   /** Assigns a real teacher (by their User id) as the Class Teacher of a
    * specific grade+section. This is the actual foundational piece behind
    * "class teacher" anywhere in the app - previously the schema had the
    * right shape in three separate places (Section.classTeacherId,
    * TeacherProfile.isClassTeacher, Student.classTeacherId) but nothing
    * ever wired them together. This does:
-   *  1. Clears the PREVIOUS teacher's isClassTeacher flag, if this
-   *     section already had a different one assigned - a teacher should
-   *     only ever show as class teacher of the section they're
-   *     currently, actually assigned to.
-   *  2. Sets classTeacherId/classTeacher on the embedded Section itself
+   *  1. Sets classTeacherId/classTeacher on the embedded Section itself
    *     (the real, single source of truth for this assignment).
-   *  3. Sets isClassTeacher/classTeacherOfGradeId/classTeacherOfSectionName/
-   *     classTeacherOfName on the new teacher's own TeacherProfile -
-   *     denormalized for their own dashboard/profile to display directly.
+   *  2. Recomputes the PREVIOUS teacher's full classTeacherAssignments, if
+   *     this section already had a different one assigned - they may
+   *     still be class teacher of other sections, so their profile is
+   *     rebuilt from scratch rather than blindly cleared.
+   *  3. Recomputes the NEW teacher's full classTeacherAssignments -
+   *     covers this section AND any others they're already assigned to
+   *     elsewhere in the school, instead of overwriting their profile
+   *     with only this one (the bug that made a teacher with 2+ sections
+   *     only ever resolve as class teacher of whichever was assigned
+   *     most recently).
    *  4. Bulk-updates every Student currently in that grade+section with
    *     classTeacher/classTeacherId - denormalized for student lists/
    *     profiles to display without an extra join.
@@ -494,52 +610,27 @@ export class OrganizationService {
     if (!newTeacherStaff) throw new NotFoundException('No staff record found for this user');
     const classTeacherName = `${newTeacherStaff.firstName || ''} ${newTeacherStaff.lastName || ''}`.trim();
 
-    // Step 1: clear the previous teacher's flag, if this section already
-    // had someone else assigned and it's actually changing.
     const previousClassTeacherId = (section as any).classTeacherId?.toString();
-    if (previousClassTeacherId && previousClassTeacherId !== classTeacherId) {
-      const prevStaff = await this.staffModel.findOne(tenantId ? { userId: previousClassTeacherId, tenantId } : { userId: previousClassTeacherId }).lean();
-      if (prevStaff) {
-        await this.teacherProfileModel.updateOne(
-          { staffId: prevStaff._id },
-          { $set: { isClassTeacher: false, classTeacherOfGradeId: null, classTeacherOfGradeName: null, classTeacherOfSectionName: null, classTeacherOfName: null } },
-        );
-      }
-    }
 
-    // Step 2: set the assignment on the embedded Section itself.
+    // Step 1: set the assignment on the embedded Section itself, first -
+    // the recomputes below both read Section.classTeacherId as their
+    // source of truth, so this must land before either runs.
     await this.gradeModel.updateOne(
       { _id: gradeId, schoolSlug, 'sections._id': (section as any)._id },
       { $set: { 'sections.$.classTeacherId': classTeacherId, 'sections.$.classTeacher': classTeacherName } },
     );
 
-    // Step 3: set the new teacher's own TeacherProfile. Must create one if
-    // it doesn't exist yet (a plain updateOne with no upsert previously
-    // matched zero documents here and silently no-opped for any staff
-    // member who'd never had a TeacherProfile created before - the
-    // Section/Student writes above still succeeded, so the admin saw a
-    // success toast and "Teacher: X" on the grade, while that teacher's
-    // own attendance screen kept reporting them as not a class teacher at
-    // all, since it reads this same TeacherProfile document).
-    const classTeacherOfName = buildClassTeacherOfName(grade.name, sectionName);
-    const classTeacherFields = { isClassTeacher: true, classTeacherOfGradeId: gradeId, classTeacherOfGradeName: grade.name, classTeacherOfSectionName: sectionName, classTeacherOfName };
-    const existingProfile = await this.teacherProfileModel.findOne({ staffId: newTeacherStaff._id });
-    if (existingProfile) {
-      await this.teacherProfileModel.updateOne({ _id: existingProfile._id }, { $set: classTeacherFields });
-    } else {
-      await this.teacherProfileModel.create({
-        tenantId: (newTeacherStaff as any).tenantId,
-        institutionId: (newTeacherStaff as any).institutionId,
-        staffId: newTeacherStaff._id,
-        employeeId: (newTeacherStaff as any).employeeId,
-        firstName: newTeacherStaff.firstName,
-        lastName: newTeacherStaff.lastName,
-        designation: (newTeacherStaff as any).designation,
-        department: (newTeacherStaff as any).department,
-        campusId: (newTeacherStaff as any).campusId || null,
-        ...classTeacherFields,
-      });
+    // Step 2: rebuild the previous teacher's assignments, if this section
+    // already had someone else assigned and it's actually changing - they
+    // may still legitimately be class teacher of other sections.
+    if (previousClassTeacherId && previousClassTeacherId !== classTeacherId) {
+      await this.recomputeClassTeacherAssignments(previousClassTeacherId, schoolSlug, tenantId);
     }
+
+    // Step 3: rebuild the new teacher's full assignments (covers this
+    // section plus any others they already hold elsewhere in the school).
+    const newAssignments = await this.recomputeClassTeacherAssignments(classTeacherId, schoolSlug, tenantId);
+    const classTeacherOfName = buildClassTeacherOfName(grade.name, sectionName);
 
     // Step 4: denormalize onto every student currently in this class.
     await this.studentModel.updateMany(
@@ -547,7 +638,70 @@ export class OrganizationService {
       { $set: { classTeacher: classTeacherName, classTeacherId } },
     );
 
-    return { gradeId, sectionName, classTeacherId, classTeacherName, classTeacherOfName };
+    return {
+      gradeId,
+      sectionName,
+      classTeacherId,
+      classTeacherName,
+      classTeacherOfName,
+      classTeacherAssignments: newAssignments || [],
+    };
+  }
+
+  /** Admin-triggerable repair for TeacherProfiles left in the old,
+   * broken single-assignment state (from before classTeacherAssignments
+   * existed) - rebuilds every class-teacher's full assignment array for
+   * the given school by scanning Section.classTeacherId across all
+   * grades. Idempotent and safe to call repeatedly; a no-op for any
+   * teacher whose data is already correct.
+   */
+  async recomputeAllClassTeacherAssignments(schoolSlug: string, tenantId?: string) {
+    const grades = await this.gradeModel.find({ schoolSlug }).lean();
+    const userIds = new Set<string>();
+    for (const grade of grades as any[]) {
+      for (const section of grade.sections || []) {
+        if (section.classTeacherId) userIds.add(section.classTeacherId.toString());
+      }
+    }
+    const results: Array<{ userId: string; sections: number }> = [];
+    for (const userId of userIds) {
+      const assignments = await this.recomputeClassTeacherAssignments(userId, schoolSlug, tenantId);
+      results.push({ userId, sections: assignments?.length ?? 0 });
+    }
+    return { schoolSlug, teachersProcessed: userIds.size, results };
+  }
+
+  /** Read-only preview of what `applyClassSectionRepair` would change for
+   * this school - see class-section-repair.util.ts for why this matters
+   * (a class teacher's own Attendance register reading as empty is the
+   * most commonly reported symptom of this drift). */
+  async previewClassSectionRepair(schoolSlug: string) {
+    const [grades, students] = await Promise.all([
+      this.gradeModel.find({ schoolSlug, isActive: true }).select('name sections').lean(),
+      this.studentModel.find({ schoolSlug }).select('firstName lastName currentGrade currentSection').lean(),
+    ]);
+    if (grades.length === 0) return { totalStudents: students.length, fixes: [], unresolved: [] };
+    return computeClassSectionRepair(
+      grades.map((g: any) => ({ name: g.name, sections: g.sections })),
+      students.map((s: any) => ({ id: String(s._id), name: `${s.firstName || ''} ${s.lastName || ''}`.trim(), currentGrade: s.currentGrade, currentSection: s.currentSection })),
+    );
+  }
+
+  /** Writes the fixes `previewClassSectionRepair` reports - each student's
+   * currentGrade/currentSection rewritten to the canonical Grade/Section
+   * master spelling. A student the preview could not resolve is left
+   * untouched for manual review, exactly as the preview reports it. */
+  async applyClassSectionRepair(schoolSlug: string) {
+    const report = await this.previewClassSectionRepair(schoolSlug);
+    if (report.fixes.length === 0) return { fixedCount: 0, unresolvedCount: report.unresolved.length };
+    const ops = report.fixes.map((f) => ({
+      updateOne: {
+        filter: { _id: f.studentId, schoolSlug },
+        update: { $set: { ...(f.newGrade ? { currentGrade: f.newGrade } : {}), ...(f.newSection ? { currentSection: f.newSection } : {}) } },
+      },
+    }));
+    await this.studentModel.bulkWrite(ops);
+    return { fixedCount: report.fixes.length, unresolvedCount: report.unresolved.length };
   }
 
   async bulkCreateGrades(schoolSlug: string) {
@@ -838,7 +992,25 @@ export class OrganizationService {
       for (const sid of u.guardianOfStudentIds || []) activatedStudentIds.add(String(sid));
     }
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const recentlyActiveParents = (parentUsers as any[]).filter((u: any) => u.lastLoginAt && new Date(u.lastLoginAt) >= sevenDaysAgo).length;
+
+    // Real install proxy: devices the app itself pinged us about (on login
+    // and on every cold start) - unlike `lastLoginAt`, this isn't a single
+    // overwritten timestamp, it's one row per device the parent actually
+    // has the app on, so it survives even if this particular parent hasn't
+    // logged in again recently.
+    const parentUserIds = (parentUsers as any[]).map((u: any) => u._id);
+    const devices = parentUserIds.length > 0
+      ? await this.parentDeviceModel.find({ userId: { $in: parentUserIds } }).select('platform firstSeenAt lastSeenAt').lean()
+      : [];
+    const totalDevicesRegistered = devices.length;
+    const devicesActiveLast7Days = (devices as any[]).filter((d: any) => new Date(d.lastSeenAt) >= sevenDaysAgo).length;
+    const devicesActiveLast30Days = (devices as any[]).filter((d: any) => new Date(d.lastSeenAt) >= thirtyDaysAgo).length;
+    const devicesByPlatform = (devices as any[]).reduce((acc: Record<string, number>, d: any) => {
+      acc[d.platform] = (acc[d.platform] || 0) + 1;
+      return acc;
+    }, {});
 
     const staffByCampus = tenantId
       ? await this.staffModel.aggregate([
@@ -872,13 +1044,16 @@ export class OrganizationService {
     }
 
     return {
-      overall: { ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents },
+      overall: {
+        ...buildBucket(students as any[]), totalStaff, activatedParents: parentUsers.length, recentlyActiveParents,
+        totalDevicesRegistered, devicesActiveLast7Days, devicesActiveLast30Days, devicesByPlatform,
+      },
       campuses: campusRows,
       appleAppStoreDownloads,
       notes: {
         downloads: appleAppStoreDownloads.configured
-          ? 'Apple App Store downloads are now connected (via App Store Connect) and shown separately below - a download is not the same as activation, since a parent can install the app without ever logging in. Google Play download counts still aren’t connected yet. "Activated Parents" and "Activation Rate" above reflect actual parent app logins (a real, already-tracked signal), independent of either store’s download count.'
-          : 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads.',
+          ? 'Apple App Store downloads are now connected (via App Store Connect) and shown separately below - a download is not the same as activation, since a parent can install the app without ever logging in. Google Play download counts still aren’t connected yet. "Activated Parents" and "Activation Rate" above reflect actual parent app logins (a real, already-tracked signal), independent of either store’s download count. "Devices Registered" is the app’s own install signal: it pings us on every login and app open.'
+          : 'Real app-store download counts require integrating the Google Play/App Store Developer APIs, which isn’t connected yet. These numbers reflect actual parent app logins (a real, already-tracked signal), not raw store downloads. "Devices Registered" is the app’s own install signal: it pings us on every login and app open.',
         staffApp: 'Staff currently access Eldermin through the web dashboard - there is no separate staff mobile app login yet to measure activation for, so staff numbers above are headcount only.',
       },
     };

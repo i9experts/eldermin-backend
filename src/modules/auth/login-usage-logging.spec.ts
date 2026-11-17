@@ -19,6 +19,7 @@ describe('AuthService.login records a usage event for the school that logged in'
       findOne: () => ({ lean: () => Promise.resolve({ _id: 't1', slug: 'deenway-school', activeModules: ['organization'] }) }),
     };
     svc.usageLogModel = { findOneAndUpdate: jest.fn(() => Promise.resolve({})) };
+    svc.onboardingSessionModel = { exists: jest.fn(() => Promise.resolve(null)) };
     svc.rolesService = { getPermissionsForUser: () => Promise.resolve(null) };
     svc.resolveScopeFieldsForUser = () => Promise.resolve({});
     svc.jwtService = { sign: jest.fn(() => 'signed.jwt.token') };

@@ -5,6 +5,7 @@ import {
 import type { Response } from 'express';
 import { FinanceService } from './finance.service';
 import { RequireModuleAccess } from '../roles/decorators/require-module-access.decorator';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Real, enforced pilot of the custom-role sub-module permission system (see
 // CustomRoleGuard) — Finance is the ONLY module with live server-side
@@ -21,7 +22,7 @@ export class FinanceController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
     };
   }
@@ -262,6 +263,12 @@ export class FinanceController {
   @Delete('fee-structures/:id') async deleteFeeStructure(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.deleteFeeStructure(id, schoolSlug);
+  }
+  @RequireModuleAccess('finance', 'fee', 'manage')
+  @Post('fee-structures/bulk-delete') @HttpCode(HttpStatus.OK)
+  async bulkDeleteFeeStructures(@Body('ids') ids: string[], @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.bulkDeleteFeeStructures(ids || [], schoolSlug);
   }
 
   // Invoices
@@ -720,6 +727,18 @@ export class FinanceController {
     return this.service.deleteStudentFeeAssignment(id, schoolSlug);
   }
 
+  // Every active student (optionally narrowed to one campus/grade/section)
+  // who has never had a single invoice generated, with why - see
+  // FinanceService.getBillingGaps/diagnoseNoInvoices. The "check every
+  // student at once" counterpart to the per-student diagnosis already
+  // surfaced on Student 360's Fee Ledger when it's empty.
+  @RequireModuleAccess('finance', 'fee', 'view')
+  @Get('billing-gaps')
+  async getBillingGaps(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBillingGaps(schoolSlug, { campusId: query.campusId, grade: query.grade, section: query.section });
+  }
+
   // ── Challan / Invoice Generation ─────────────────────────────
   @RequireModuleAccess('finance', 'fee', 'manage')
   @Post('invoices/generate') @HttpCode(HttpStatus.CREATED)
@@ -745,6 +764,17 @@ export class FinanceController {
   async backfillRolledForwardInvoices(@Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.backfillRolledForwardInvoices(schoolSlug, dto.dryRun !== false);
+  }
+
+  // Mirror-image repair for invoices orphaned by the old delete-invoice bug
+  // (see FinanceService.fixOrphanedRolledForwardInvoices) - un-rolls any
+  // invoice still pointing at a now-deleted/missing invoice so it reappears
+  // in Receivables/Defaulters. Defaults to a dry run.
+  @RequireModuleAccess('finance', 'fee', 'manage')
+  @Post('invoices/fix-orphaned-rolled-forward') @HttpCode(HttpStatus.OK)
+  async fixOrphanedRolledForwardInvoices(@Body() dto: any, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.fixOrphanedRolledForwardInvoices(schoolSlug, dto.dryRun !== false);
   }
 
   // ============================================================

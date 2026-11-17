@@ -27,6 +27,7 @@ import { StudentAttendance, StudentAttendanceSchema, StudentFee, StudentFeeSchem
 import { Staff, StaffSchema } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileSchema } from '../modules/teaching/schemas/teacher-profile.schema';
 import { User, UserSchema } from '../modules/organization/schemas/user.schema';
+import { ParentDevice, ParentDeviceSchema } from '../parent-portal/schemas/parent-device.schema';
 import { UploadModule } from '../upload/upload.module';
 import { EmailModule } from '../email/email.module';
 import { AppStoreConnectModule } from '../integrations/app-store-connect/app-store-connect.module';
@@ -59,6 +60,7 @@ import { PdfModule } from '../pdf/pdf.module';
       { name: TeacherProfile.name, schema: TeacherProfileSchema },
       { name: User.name, schema: UserSchema },
       { name: CostCenter.name, schema: CostCenterSchema },
+      { name: ParentDevice.name, schema: ParentDeviceSchema },
     ]),
   ],
   controllers: [OrganizationController, InstitutionSetupController],

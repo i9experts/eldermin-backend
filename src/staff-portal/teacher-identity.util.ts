@@ -64,6 +64,21 @@ export function isOwnTeacherRef(me: TeacherIdentity, id: any): boolean {
 }
 
 /**
+ * List filter matching BOTH of my ids (BB2). Teacher-keyed documents hold a Staff._id when a teacher created them (normaliseTeacherIdForWrite)
+ * but a TeacherProfile._id when an admin/coordinator created them through the web (the web's TeacherDropdown lists TeacherProfile rows:
+ * HomeworkTab.tsx:117-123, LessonPlansTab.tsx:528,654, ClassDiaryTab.tsx:70, SyllabusTab.tsx:67). A list filtered on the Staff id alone hid those
+ * rows from the teacher they belong to. Both ids come from the DB (resolveTeacherIdentity), never from the request, and are matched in both
+ * stored forms (ObjectId and string, B0_ID_TYPING.md) so the filter is also correct inside aggregations that bypass the id-match plugin.
+ */
+export function teacherIdsMatch(me: TeacherIdentity): { $in: Array<Types.ObjectId | string> } {
+  const out: Array<Types.ObjectId | string> = [];
+  for (const id of [me.staffId, me.teacherProfileId]) {
+    if (id && Types.ObjectId.isValid(String(id))) out.push(new Types.ObjectId(String(id)), String(id));
+  }
+  return { $in: out };
+}
+
+/**
  * Create rule: absent -> my Staff._id; mine (either id) -> normalised to my
  * Staff._id; anything else -> 403.
  */
@@ -98,13 +113,27 @@ export function applyTeacherAuthorship(body: any, user: { userId?: string; name?
 export interface TeacherClassRef { grade: string; section?: string }
 
 /**
- * Classes a TEACHER may act on: their class-teacher class plus every
- * TeacherProfile.currentAssignments entry (same rule as the staff portal:
- * grade must match, section is only compared when the assignment has one).
+ * Classes a TEACHER may act on: every class-teacher section (a teacher
+ * can legitimately be class teacher of more than one section - common in
+ * Early Years, where one lead teacher often covers 2-3 small sections)
+ * plus every TeacherProfile.currentAssignments entry (same rule as the
+ * staff portal: grade must match, section is only compared when the
+ * assignment has one).
+ *
+ * Prefers the classTeacherAssignments array (the real source of truth,
+ * rebuilt from Section.classTeacherId on every assignment change) and
+ * falls back to the legacy singular classTeacherOf* fields only for a
+ * profile that predates that array and hasn't been touched since (it
+ * self-heals the next time any class-teacher assignment changes in the
+ * school - see OrganizationService.recomputeClassTeacherAssignments).
  */
 export function teacherClassesOf(profile: any): TeacherClassRef[] {
   const out: TeacherClassRef[] = [];
-  if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
+  if (profile?.classTeacherAssignments?.length) {
+    for (const a of profile.classTeacherAssignments) {
+      if (a?.gradeName) out.push({ grade: a.gradeName, section: a.sectionName || undefined });
+    }
+  } else if (profile?.isClassTeacher && profile.classTeacherOfGradeName) {
     out.push({ grade: profile.classTeacherOfGradeName, section: profile.classTeacherOfSectionName || undefined });
   }
   for (const a of profile?.currentAssignments || []) {

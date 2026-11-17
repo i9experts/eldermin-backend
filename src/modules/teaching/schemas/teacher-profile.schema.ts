@@ -33,10 +33,25 @@ export class TeacherProfile {
   // Grade's id and the section name directly instead, which is exactly
   // what's needed to look this assignment up without relying on a
   // populate that would silently return null.
+  //
+  // These singular fields only ever held ONE assignment, so a teacher who
+  // is class teacher of a second section (common in Early Years, where one
+  // lead teacher often covers 2-3 small sections) had their first
+  // assignment silently overwritten by the second - every consumer that
+  // resolved "this teacher's class" from these fields (attendance,
+  // assessments, staff/parent portals) then only ever saw one of their
+  // real sections. Kept as a mirror of classTeacherAssignments[0] for any
+  // caller not yet migrated to the array; classTeacherAssignments is now
+  // the actual source of truth.
   @Prop() classTeacherOfGradeId: string;
   @Prop() classTeacherOfGradeName: string;
   @Prop() classTeacherOfSectionName: string;
   @Prop() classTeacherOfName: string; // denormalized display label, e.g. "Grade 3 - Girls"
+  @Prop({
+    type: [{ gradeId: String, gradeName: String, sectionId: String, sectionName: String, name: String, _id: false }],
+    default: [],
+  })
+  classTeacherAssignments: Array<{ gradeId: string; gradeName: string; sectionId: string; sectionName: string; name: string }>;
 
   @Prop({ type: [String], default: [] }) certifications: string[];
   @Prop({ type: [String], default: [] }) specializations: string[];

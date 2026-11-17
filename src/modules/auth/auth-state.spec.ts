@@ -114,10 +114,10 @@ describe('AuthStateService.assertTokenValid', () => {
 describe('JwtStrategy', () => {
   const cfg: any = { get: () => 'secret' };
   it('rejects through the state check and otherwise returns the SAME req.user shape plus tv', async () => {
-    const ok = new JwtStrategy(cfg, { assertTokenValid: jest.fn().mockResolvedValue(undefined) } as any);
+    const ok = new JwtStrategy(cfg, { check: jest.fn().mockResolvedValue({}) } as any);
     const u = await ok.validate({ sub: 'u1', tv: 2, tenantId: 't', role: 'teacher', name: 'N', schoolSlug: 's' });
     expect(u).toMatchObject({ userId: 'u1', tv: 2, tenantId: 't', role: 'teacher', schoolSlug: 's', activeModules: [], isBoardLevel: false });
-    const bad = new JwtStrategy(cfg, { assertTokenValid: jest.fn().mockRejectedValue(new UnauthorizedException('x')) } as any);
+    const bad = new JwtStrategy(cfg, { check: jest.fn().mockRejectedValue(new UnauthorizedException('x')) } as any);
     await expect(bad.validate({ sub: 'u1' })).rejects.toThrow(UnauthorizedException);
   });
 });
@@ -128,6 +128,7 @@ describe('token issuance carries tv; resets and sign-out bump it', () => {
     const s: any = Object.create(AuthService.prototype);
     s.userModel = { findOne: jest.fn(() => Object.assign(Promise.resolve(user), { lean: () => Promise.resolve(user) })), findByIdAndUpdate: jest.fn(), updateOne: jest.fn() };
     s.tenantModel = { findById: () => ({ lean: () => Promise.resolve({ _id: 't1', slug: 's', status: 'active' }) }) };
+    s.onboardingSessionModel = { exists: jest.fn(async () => null) };
     s.rolesService = { getPermissionsForUser: async () => null };
     s.resolveScopeFieldsForUser = async () => ({});
     s.getPlatformPermissionsForUser = async () => undefined;

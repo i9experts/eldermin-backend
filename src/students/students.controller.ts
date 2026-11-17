@@ -5,9 +5,10 @@
 
 import {
   Controller, Get, Post, Put, Patch, Delete, Body, Param,
-  Query, Request, HttpCode, HttpStatus, BadRequestException,
+  Query, Request, HttpCode, HttpStatus, BadRequestException, UseGuards,
 } from '@nestjs/common';
 import { StudentsService } from './students.service';
+import { FinanceService } from '../finance/finance.service';
 import { UseInterceptors, UploadedFile, Res } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -17,7 +18,9 @@ import {
   CreateBehaviourDto, UpdateBehaviourDto, BehaviourQueryDto,
   CreateAssessmentResultDto,
 } from './dto/student.dto';
-import { resolveClassSectionScope } from '../auth/scope.util';
+import { resolveClassSectionScope, assertStudentAccess } from '../auth/scope.util';
+import { assertStaffAccount } from '../behaviour/behaviour-access';
+import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
@@ -25,15 +28,21 @@ import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.
 import { projectForTeacher, TEACHER_NO_FINANCE_MESSAGE } from './teacher-student-projection.util';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 import { ForbiddenException } from '@nestjs/common';
+import { TeacherAttendanceScopeService } from './teacher-attendance-scope.service';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 @Controller('students')
 export class StudentsController {
-  constructor(private readonly studentsService: StudentsService) {}
+  constructor(
+    private readonly studentsService: StudentsService,
+    private readonly financeService: FinanceService,
+    private readonly teacherScope: TeacherAttendanceScopeService,
+  ) {}
 
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
       tenantId: req?.user?.tenantId,
@@ -74,6 +83,36 @@ export class StudentsController {
   async getClassRosterDiagnostic(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return projectForTeacher(requestingUser, await this.studentsService.getClassRosterDiagnostic(schoolSlug, grade, section, requestingUser));
+  }
+
+  /** GET /api/v1/students/last-roll-number?grade=&section=&academicYear=
+   * Lets the Add Student wizard, Admissions enrollment form, and Student
+   * 360's roll-number edit all show "last used roll number in this class:
+   * N - try N+1" before the admin even submits, instead of only finding
+   * out about a collision after a rejected save. */
+  @Get('last-roll-number')
+  async getLastRollNumberInClass(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string, @Query('academicYear') academicYear?: string) {
+    const { schoolSlug } = this.ctx(req);
+    const lastRollNumber = await this.studentsService.getLastRollNumberInClass(schoolSlug, grade, section, academicYear);
+    return { lastRollNumber, nextSuggested: lastRollNumber !== null ? lastRollNumber + 1 : null };
+  }
+
+  /** GET /api/v1/students/attendance/day-summary?date=YYYY-MM-DD
+   * Class-wise attendance totals for one day - the Institution Overview
+   * dashboard's Attendance widget. Omit `date` for today. */
+  @Get('attendance/day-summary')
+  async getClassAttendanceDaySummary(@Request() req: any, @Query('date') date?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getClassAttendanceDaySummary(schoolSlug, date);
+  }
+
+  /** GET /api/v1/students/birthdays/upcoming?days=30
+   * Student birthdays within the next N days - the dashboard's Birthdays
+   * widget pairs this with HR's GET /hr/reminders/upcoming (staff). */
+  @Get('birthdays/upcoming')
+  async getUpcomingStudentBirthdays(@Request() req: any, @Query('days') days?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getUpcomingStudentBirthdays(schoolSlug, days ? Number(days) : 30);
   }
 
   // ============================================================
@@ -159,6 +198,8 @@ export class StudentsController {
   @Get(':id/360')
   async getStudent360(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
+    // The 360 carries behaviour history: a parent/student token only reaches its own linked student(s).
+    assertStudentAccess(requestingUser, id);
     return projectForTeacher(requestingUser, await this.studentsService.getStudent360(id, schoolSlug, requestingUser));
   }
 
@@ -341,6 +382,47 @@ export class StudentsController {
     return this.studentsService.bulkAssignCampus(schoolSlug, dto.campusId, dto.grade, dto.section);
   }
 
+  /** PATCH /api/v1/students/bulk-assign-class-section - fast way to assign
+   * or correct class/section for many selected students at once (Student
+   * Directory checkbox selection -> pick Grade/Section -> Apply). Validates
+   * against the real Institution Setup Grade/Section master so this can
+   * never introduce the free-text drift the filter-fix (getDistinctGrades
+   * Sections) had to clean up. */
+  @Patch('bulk-assign-class-section')
+  async bulkAssignClassSection(
+    @Body() dto: { studentIds: string[]; grade: string; section?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkAssignClassSection(schoolSlug, dto.studentIds, dto.grade, dto.section);
+  }
+
+  /** PATCH /api/v1/students/bulk-switch-program - moves a batch of
+   * students between the Early Years and K-12 programs at once (e.g. a
+   * PreK/KG cohort graduating into Grade 1 at the start of a new academic
+   * year), optionally reassigning grade/section in the same request. */
+  @Patch('bulk-switch-program')
+  async bulkSwitchProgram(
+    @Body() dto: { studentIds: string[]; programType: string; grade?: string; section?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkSwitchProgram(schoolSlug, dto.studentIds, dto.programType, dto.grade, dto.section);
+  }
+
+  /** PATCH /api/v1/students/bulk-fix-name-case - normalizes First/Last
+   * Name casing (e.g. fixing a batch of ALL-CAPS CSV-import records) for
+   * many selected students at once. Each field's case style is
+   * independent and optional. */
+  @Patch('bulk-fix-name-case')
+  async bulkFixNameCase(
+    @Body() dto: { studentIds: string[]; firstNameCase?: string; lastNameCase?: string },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.bulkFixNameCase(schoolSlug, dto.studentIds, dto.firstNameCase, dto.lastNameCase);
+  }
+
   /** PATCH /api/v1/students/bulk-status - suspend/withdraw/graduate/transfer
    * multiple students at once. The safe, reversible action for almost
    * every real case - keeps all history intact. */
@@ -485,6 +567,29 @@ export class StudentsController {
     return projectForTeacher(requestingUser, await this.studentsService.getStudentAttendanceSummary(id, schoolSlug, month));
   }
 
+  /** GET /api/v1/students/:id/attendance/insights — comprehensive,
+   * multi-category attendance insights for the Student 360 Attendance
+   * tab (overview, monthly trend, day-of-week pattern, streaks, class
+   * comparison). Its own route rather than folded into /360, same
+   * lazy-load convention as /:id/learning. */
+  @Get(':id/attendance/insights')
+  async getAttendanceInsights(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return projectForTeacher(requestingUser, await this.studentsService.getStudentAttendanceInsights(id, schoolSlug));
+  }
+
+  /** GET /api/v1/students/attendance/check-day — lets the teacher marking
+   * screen find out *before* the teacher fills in a whole class's statuses
+   * whether the selected date is even a valid school day, so the UI can
+   * show a clear reason instead of a save that silently fails (or, worse,
+   * no feedback at all). Open to any authenticated staff role - a teacher
+   * needs this just as much as an admin does. */
+  @Get('attendance/check-day')
+  async checkAttendanceDay(@Request() req: any, @Query('date') date: string, @Query('grade') grade?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.checkSchoolDay(schoolSlug, date, grade);
+  }
+
   /** POST /api/v1/students/attendance */
   @RolesOrModuleManage('students', STAFF_WRITE_ROLES, { allowModuleWide: true })
   @Post('attendance')
@@ -492,6 +597,7 @@ export class StudentsController {
   async markAttendance(@Body() dto: MarkAttendanceDto, @Request() req: any) {
     const { schoolSlug, academicYear, userName, requestingUser } = this.ctx(req);
     resolveClassSectionScope(requestingUser, dto.grade, dto.section);
+    await this.teacherScope.assertMayMark(requestingUser, [{ grade: dto.grade, section: dto.section }], 'POST /students/attendance');
     return this.studentsService.markAttendance({
       ...dto, schoolSlug, academicYear, markedBy: userName,
     });
@@ -509,7 +615,19 @@ export class StudentsController {
     for (const record of dto.records) {
       resolveClassSectionScope(requestingUser, record.grade, record.section);
     }
+    await this.teacherScope.assertMayMark(requestingUser, dto.records.map((r) => ({ grade: r.grade, section: r.section })), 'POST /students/attendance/bulk');
     return this.studentsService.bulkMarkAttendance({ ...dto, schoolSlug, academicYear });
+  }
+
+  /** DELETE /api/v1/students/attendance/:id — revert a wrongly-marked
+   * record back to "Not marked" so a teacher (or admin) can re-mark it
+   * correctly, instead of being stuck with no way to undo a mistake. */
+  @RolesOrModuleManage('students', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Delete('attendance/:id')
+  async revertAttendance(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    await this.teacherScope.assertMayMark(requestingUser, [], 'DELETE /students/attendance/:id');
+    return this.studentsService.revertAttendance(id, schoolSlug, requestingUser);
   }
 
   // ============================================================
@@ -524,12 +642,46 @@ export class StudentsController {
     return this.studentsService.getFees(schoolSlug, query);
   }
 
-  /** GET /api/v1/students/:id/fees/statement */
+  /** GET /api/v1/students/:id/fees/statement — Student 360's Fee Ledger
+   * (and the parent app's, which reads this same endpoint). Reads real
+   * Invoice records from the Finance module (the same data Finance's own
+   * Receivables view shows), not the Students module's own StudentFee
+   * collection - nothing in the normal fee-assignment flow (FeeStructure ->
+   * assignFeeStructure -> generateInvoices) ever wrote to StudentFee, so
+   * every student's Fee Ledger here was unconditionally empty regardless of
+   * how much they actually owed or had paid.
+   *
+   * An empty ledger is ambiguous on its own - identical whether the
+   * student genuinely owes nothing or was simply never billed (no active
+   * Fee Structure matches their class, or Generate Invoices was never run
+   * for them), with nothing on screen telling staff or parents which. When
+   * there are zero invoices, `diagnosis` explains why - see
+   * FinanceService.diagnoseNoInvoices. */
   @Get(':id/fees/statement')
   async getFeeStatement(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     if (isTeacherCaller(requestingUser)) throw new ForbiddenException(TEACHER_NO_FINANCE_MESSAGE);
-    return this.studentsService.getFeeStatement(id, schoolSlug);
+    const { data: invoices } = await this.financeService.getInvoices(schoolSlug, { studentId: id, limit: 1000 });
+    const summary = (invoices as any[]).reduce(
+      (acc, inv) => {
+        acc.totalBilled += inv.totalAmount || 0;
+        acc.totalPaid += inv.paidAmount || 0;
+        acc.totalBalance += inv.balanceDue || 0;
+        return acc;
+      },
+      { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
+    );
+    // diagnosis is a helpful add-on, never the main point of this endpoint -
+    // a bug or bad data hit while computing it (e.g. a malformed campusId
+    // on some legacy student record) must never take down the real
+    // invoices/summary this endpoint exists to serve.
+    let diagnosis: { reason: string; detail: string } | null = null;
+    if ((invoices as any[]).length === 0) {
+      try {
+        diagnosis = await this.financeService.diagnoseNoInvoices(schoolSlug, id);
+      } catch { /* leave diagnosis null - the ledger itself still renders */ }
+    }
+    return { invoices, summary, diagnosis };
   }
 
   /** POST /api/v1/students/fees */
@@ -540,16 +692,28 @@ export class StudentsController {
     return this.studentsService.createFee({ ...dto, schoolSlug });
   }
 
-  /** PATCH /api/v1/students/fees/:id/collect */
+  /** PATCH /api/v1/students/fees/:id/collect — Student 360's "Collect"
+   * action against a real invoice. Delegates to Finance's own
+   * recordPayment (the same path Finance's Collect Fee modal uses), which
+   * creates the Payment receipt, updates the invoice's paid/balance/
+   * status, and posts the ledger journal entry - instead of silently
+   * updating the dead StudentFee collection, which never affected any
+   * real balance anywhere. `id` here is the invoice's own id. */
   @Patch('fees/:id/collect')
   async collectFee(
     @Param('id') id: string,
     @Body() dto: CollectFeeDto,
     @Request() req: any,
   ) {
-    const { schoolSlug, userName } = this.ctx(req);
-    return this.studentsService.collectFee(id, schoolSlug, {
-      ...dto, collectedBy: dto.collectedBy || userName,
+    const { schoolSlug, userName, requestingUser } = this.ctx(req);
+    if (isTeacherCaller(requestingUser)) throw new ForbiddenException(TEACHER_NO_FINANCE_MESSAGE);
+    return this.financeService.recordPayment(id, schoolSlug, {
+      amount: dto.paidAmount,
+      paymentMethod: dto.paymentMethod,
+      transactionId: dto.receiptNumber,
+      chequeNumber: dto.paymentMethod === 'cheque' ? dto.receiptNumber : undefined,
+      notes: dto.remarks,
+      collectedBy: dto.collectedBy || userName,
     });
   }
 
@@ -558,27 +722,36 @@ export class StudentsController {
   // ============================================================
 
   /** GET /api/v1/students/behaviour */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Get('behaviour/list')
   async getBehaviour(@Request() req: any, @Query() query: BehaviourQueryDto) {
+    assertStaffAccount(req?.user); // parent/student tokens never read the legacy behaviour store
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getBehaviour(schoolSlug, query);
   }
 
   /** GET /api/v1/students/:id/behaviour */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Get(':id/behaviour')
   async getStudentBehaviour(
     @Param('id') id: string,
     @Request() req: any,
     @Query() query: BehaviourQueryDto,
   ) {
+    assertStaffAccount(req?.user);
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.getBehaviour(schoolSlug, { ...query, studentId: id });
   }
 
   /** POST /api/v1/students/behaviour */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Post('behaviour')
   @HttpCode(HttpStatus.CREATED)
   async createBehaviour(@Body() dto: CreateBehaviourDto, @Request() req: any) {
+    assertStaffAccount(req?.user);
     const { schoolSlug, academicYear, userName } = this.ctx(req);
     return this.studentsService.createBehaviour({
       ...dto, schoolSlug, academicYear, reportedBy: dto.reportedBy || userName,
@@ -586,12 +759,15 @@ export class StudentsController {
   }
 
   /** PUT /api/v1/students/behaviour/:id */
+  // Guard (not an in-handler check) so parent/student tokens are denied BEFORE body validation (400 vs 403).
+  @UseGuards(BehaviourStaffOnlyGuard)
   @Put('behaviour/:id')
   async updateBehaviour(
     @Param('id') id: string,
     @Body() dto: UpdateBehaviourDto,
     @Request() req: any,
   ) {
+    assertStaffAccount(req?.user);
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.updateBehaviour(id, schoolSlug, dto);
   }

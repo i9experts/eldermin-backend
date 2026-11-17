@@ -5,9 +5,11 @@
 
 import {
   Controller, Get, Post, Put, Patch, Delete, Body, Param,
-  Query, UseGuards, Request, HttpCode, HttpStatus,
+  Query, UseGuards, UseInterceptors, UploadedFile, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AdmissionsService } from './admissions.service';
+import { LeadCaptureLinkService } from './lead-capture-link.service';
 import {
   CreateLeadDto, UpdateLeadDto, LeadQueryDto, ConvertLeadDto,
   CreateApplicantDto, UpdateApplicantDto, ApplicantQueryDto, UpdateDocumentDto,
@@ -16,7 +18,9 @@ import {
   CreateEnrollmentDto, UpdateEnrollmentDto,
   CreateRetentionDto, UpdateRetentionDto,
 } from './dto/admissions.dto';
+import { CreateLeadCaptureLinkDto } from './dto/lead-capture-link.dto';
 import { ScopedUser } from '../auth/scope.util';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 // import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 // import { SchoolGuard } from '../auth/guards/school.guard';
 // import { Roles } from '../auth/decorators/roles.decorator';
@@ -26,14 +30,17 @@ import { ScopedUser } from '../auth/scope.util';
 @Controller('admissions')
 export class AdmissionsController {
 
-  constructor(private readonly admissionsService: AdmissionsService) {}
+  constructor(
+    private readonly admissionsService: AdmissionsService,
+    private readonly leadCaptureLinkService: LeadCaptureLinkService,
+  ) {}
 
   // ── Helper: extract school context from request ─────────────
   private getSchoolCtx(req: any) {
     // schoolSlug comes from JWT payload via SchoolGuard
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       requestingUser: req?.user as ScopedUser | undefined,
     };
   }
@@ -112,6 +119,36 @@ export class AdmissionsController {
   }
 
   // ============================================================
+  // LEAD CAPTURE LINKS (shareable public application form)
+  // ============================================================
+
+  /** GET /api/admissions/lead-capture-links */
+  @Get('lead-capture-links')
+  async getLeadCaptureLinks(@Request() req: any) {
+    const { schoolSlug } = this.getSchoolCtx(req);
+    return this.leadCaptureLinkService.listLinks(schoolSlug);
+  }
+
+  /** POST /api/admissions/lead-capture-links */
+  @Post('lead-capture-links')
+  @HttpCode(HttpStatus.CREATED)
+  async createLeadCaptureLink(@Body() dto: CreateLeadCaptureLinkDto, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.getSchoolCtx(req);
+    return this.leadCaptureLinkService.createLink(schoolSlug, dto.campusId, requestingUser?.userId);
+  }
+
+  /** PATCH /api/admissions/lead-capture-links/:id */
+  @Patch('lead-capture-links/:id')
+  async updateLeadCaptureLink(
+    @Param('id') id: string,
+    @Body() dto: { isActive?: boolean; regenerateToken?: boolean },
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.getSchoolCtx(req);
+    return this.leadCaptureLinkService.updateLink(id, schoolSlug, dto);
+  }
+
+  // ============================================================
   // APPLICANTS
   // ============================================================
 
@@ -146,6 +183,20 @@ export class AdmissionsController {
   ) {
     const { schoolSlug } = this.getSchoolCtx(req);
     return this.admissionsService.updateApplicant(id, schoolSlug, dto);
+  }
+
+  /** POST /api/admissions/applicants/:id/documents */
+  @Post('applicants/:id/documents')
+  @UseInterceptors(FileInterceptor('file'))
+  async addDocument(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('name') name: string,
+    @Body('type') type: string,
+    @Request() req: any,
+  ) {
+    const { schoolSlug } = this.getSchoolCtx(req);
+    return this.admissionsService.addDocument(id, schoolSlug, file, name, type);
   }
 
   /** PATCH /api/admissions/applicants/:id/document */

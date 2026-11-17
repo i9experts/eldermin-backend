@@ -8,6 +8,7 @@ import {
   Param, Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { SuperAdminService } from './super-admin.service';
+import { GoogleAnalyticsService } from './google-analytics.service';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 
@@ -16,7 +17,10 @@ import { UserRole } from '../auth/roles.enum';
 @Roles(UserRole.SUPER_ADMIN)
 @Controller('super-admin')
 export class SuperAdminController {
-  constructor(private readonly service: SuperAdminService) {}
+  constructor(
+    private readonly service: SuperAdminService,
+    private readonly googleAnalytics: GoogleAnalyticsService,
+  ) {}
 
   private adminUser(req: any) {
     return req?.user?.name || req?.headers['x-admin-user'] || 'Super Admin';
@@ -52,8 +56,27 @@ export class SuperAdminController {
 
   @Post('institutions/activate-from-lead/:leadId')
   @HttpCode(HttpStatus.CREATED)
-  async activateFromLead(@Param('leadId') leadId: string, @Request() req: any) {
-    return this.service.activateInstitutionFromLead(leadId, this.adminUser(req));
+  async activateFromLead(
+    @Param('leadId') leadId: string,
+    @Body() dto: { moduleIds?: string[] },
+    @Request() req: any,
+  ) {
+    return this.service.activateInstitutionFromLead(leadId, this.adminUser(req), dto?.moduleIds);
+  }
+
+  // Static registry (id, name, category, dependencies, pricing tier) for
+  // the activation-review module picker - deliberately NOT routed through
+  // ModulesService.listModules, which requires an existing School to
+  // compute active/locked status against. A lead being activated has no
+  // School yet, so this just returns the reference data as-is.
+  @Get('module-registry')
+  async getModuleRegistry() {
+    return this.service.getModuleRegistry();
+  }
+
+  @Get('leads/:leadId/requested-module-ids')
+  async getLeadRequestedModuleIds(@Param('leadId') leadId: string) {
+    return { moduleIds: await this.service.getRequestedModuleIds(leadId) };
   }
 
   @Patch('institutions/:slug/status')
@@ -103,6 +126,14 @@ export class SuperAdminController {
   @Get('analytics')
   async getAnalytics() {
     return this.service.getPlatformAnalytics();
+  }
+
+  // Website visitor traffic (GA4) - distinct from the in-platform usage
+  // data above. See GoogleAnalyticsService for the configured:false
+  // behaviour when GA4_PROPERTY_ID/GA4_SERVICE_ACCOUNT_KEY aren't set.
+  @Get('website-analytics')
+  async getWebsiteAnalytics() {
+    return this.googleAnalytics.getWebsiteAnalytics();
   }
 
   @Post('health-scores/recalculate')
@@ -172,5 +203,16 @@ export class SuperAdminController {
   @Post('tickets/:id/reply')
   async replyToTicket(@Param('id') id: string, @Body() dto: { message: string }, @Request() req: any) {
     return this.service.replyToTicket(id, dto.message, this.adminUser(req));
+  }
+
+  // ── Class/Section Data Repair (all schools) ───────────────
+  @Get('class-section-repair/preview-all')
+  async previewClassSectionRepairAllSchools() {
+    return this.service.previewClassSectionRepairAllSchools();
+  }
+
+  @Post('class-section-repair/apply-all')
+  async applyClassSectionRepairAllSchools() {
+    return this.service.applyClassSectionRepairAllSchools();
   }
 }

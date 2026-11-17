@@ -222,6 +222,33 @@ export class OrganizationController {
     return this.service.assignClassTeacher(gradeId, sectionId, classTeacherId, schoolSlug, req?.user?.tenantId);
   }
 
+  /** Admin-triggerable repair for TeacherProfiles left in the old, broken
+   * single-assignment state (see recomputeAllClassTeacherAssignments) -
+   * rebuilds every class-teacher's full assignment array for this school
+   * right now, instead of waiting for their next assignment change. Safe
+   * to call repeatedly; a no-op for any teacher already correct. */
+  @Post('teachers/recompute-class-assignments')
+  async recomputeClassTeacherAssignments(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.recomputeAllClassTeacherAssignments(schoolSlug, req?.user?.tenantId);
+  }
+
+  /** Read-only preview of students whose currentGrade/currentSection has
+   * drifted from the Institution Setup Grade/Section master (the root
+   * cause behind "my class shows 0 students" reports - see
+   * class-section-repair.util.ts). */
+  @Get('class-section-repair/preview')
+  async previewClassSectionRepair(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.previewClassSectionRepair(schoolSlug);
+  }
+
+  @Post('class-section-repair/apply')
+  async applyClassSectionRepair(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.applyClassSectionRepair(schoolSlug);
+  }
+
   // Departments
   @Get('departments') async getDepts(@Request() req: any, @Query('campusId') campusId?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);

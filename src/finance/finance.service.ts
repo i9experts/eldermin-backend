@@ -14,11 +14,12 @@ import {
   StudentFeeAssignment, StudentFeeAssignmentDocument,
 } from './schemas/finance.schema';
 import { findConflictingAssignments, feeHeadsOverlap } from './fee-assignment.util';
-import { pickApplicableFeeStructures } from './fee-structure-match.util';
+import { pickApplicableFeeStructures, structuresAreComplementary } from './fee-structure-match.util';
 import { buildAdjustmentLine, recomputeInvoiceTotals } from './invoice-adjustment.util';
 import { reverseJournalLines, isReversible } from './ledger-reversal.util';
 import { canResyncInvoiceDiscount, discountActuallyChanged } from './discount-resync.util';
 import { studentFullName } from '../common/utils/student-name.util';
+import { sameGrade, sameSection } from '../common/utils/class-match.util';
 import {
   FiscalYear, FiscalYearDocument,
   AccountingPeriod, AccountingPeriodDocument,
@@ -134,6 +135,22 @@ export class FinanceService {
     const monthStart = new Date(new Date().setDate(1));
     const monthEnd = new Date(new Date(monthStart).setMonth(monthStart.getMonth() + 1));
 
+    // Payment has no academicYear of its own (every payment is tied to an
+    // invoice via a required invoiceId, and inherits the year from there).
+    // Without this join, switching the dashboard's academic-year filter
+    // changed the invoiced/outstanding figures but left "Total Collected"
+    // as an all-time, all-years sum - for any school with more than one
+    // year of history the Fee Collection Rate (collected/invoiced) could
+    // silently exceed 100% or otherwise stop meaning anything. Skipped
+    // entirely when no year is selected, since there's nothing to join for.
+    const academicYearJoinStages: any[] = academicYear
+      ? [
+          { $lookup: { from: 'invoices', localField: 'invoiceId', foreignField: '_id', as: 'invoice' } },
+          { $unwind: '$invoice' },
+          { $match: { 'invoice.academicYear': academicYear } },
+        ]
+      : [];
+
     const [
       totalInvoiced, totalCollected, totalOutstanding,
       collectedThisMonth, expensesThisMonth, totalExpenses,
@@ -141,12 +158,20 @@ export class FinanceService {
       invoicesByStatus, recentPayments, expenseByCategory,
       bankBalances,
     ] = await Promise.all([
+      // Excludes cancelled/waived the same way the rest of this file does
+      // (e.g. resolveRollForward, generateInvoices below) - without it, a
+      // cancelled invoice or one a parent was waived out of still counted
+      // as real invoiced revenue, inflating the headline figure (and, with
+      // it, the Fee Collection Rate shown on the main Home dashboard).
+      // Drafts are excluded too - an invoice nobody has sent to a parent
+      // yet isn't revenue.
       this.invoiceModel.aggregate([
-        { $match: { ...base, isDeleted: { $ne: true } } },
+        { $match: { ...base, isDeleted: { $ne: true }, status: { $nin: ['draft', 'cancelled', 'waived'] } } },
         { $group: { _id: null, total: { $sum: '$totalAmount' } } },
       ]),
       this.paymentModel.aggregate([
-        { $match: { schoolSlug } },
+        { $match: { schoolSlug, isRefunded: { $ne: true } } },
+        ...academicYearJoinStages,
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       // rolledForwardInto excluded - that invoice's balance is already
@@ -158,7 +183,8 @@ export class FinanceService {
         { $group: { _id: null, total: { $sum: '$balanceDue' } } },
       ]),
       this.paymentModel.aggregate([
-        { $match: { schoolSlug, paymentDate: { $gte: monthStart, $lt: monthEnd } } },
+        { $match: { schoolSlug, paymentDate: { $gte: monthStart, $lt: monthEnd }, isRefunded: { $ne: true } } },
+        ...academicYearJoinStages,
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.expenseModel.aggregate([
@@ -190,6 +216,35 @@ export class FinanceService {
         .select('bankName accountTitle currentBalance isPrimary'),
     ]);
 
+    // Month-wise generated / collected / defaulters, keyed off the invoice's
+    // own billing `month` (e.g. "2025-02") rather than createdAt, so a fee
+    // generated for February still shows under February even if it was
+    // actually raised/paid late. rolledForwardInto excluded for the same
+    // double-counting reason as totalOutstanding above. Defaulters counts
+    // distinct STUDENTS (not invoices) still overdue for that billing month.
+    const [monthlyInvoices, monthlyDefaulters] = await Promise.all([
+      this.invoiceModel.aggregate([
+        { $match: { ...base, isDeleted: { $ne: true }, rolledForwardInto: null } },
+        { $group: { _id: '$month', generated: { $sum: '$totalAmount' }, collected: { $sum: '$paidAmount' } } },
+        { $sort: { _id: -1 } },
+        { $limit: 12 },
+      ]),
+      this.invoiceModel.aggregate([
+        { $match: { ...base, isDeleted: { $ne: true }, rolledForwardInto: null, status: 'overdue' } },
+        { $group: { _id: '$month', defaulterStudents: { $addToSet: '$studentId' } } },
+        { $project: { _id: 1, defaulters: { $size: '$defaulterStudents' } } },
+      ]),
+    ]);
+    const defaulterByMonth = new Map(monthlyDefaulters.map((d: any) => [d._id, d.defaulters]));
+    const monthlyTrend = monthlyInvoices
+      .map((m: any) => ({
+        month: m._id,
+        generated: m.generated || 0,
+        collected: m.collected || 0,
+        defaulters: defaulterByMonth.get(m._id) || 0,
+      }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
     return {
       summary: {
         totalInvoiced: totalInvoiced[0]?.total || 0,
@@ -206,6 +261,7 @@ export class FinanceService {
       recentPayments,
       expenseByCategory,
       bankBalances,
+      monthlyTrend,
     };
   }
 
@@ -1380,16 +1436,40 @@ export class FinanceService {
     // priority over the Department/Campus fallback — see the
     // Expense.costCenterId/costCenterName comment in finance.schema.ts.
     const costCenterName = expense.costCenterName || expense.departmentId || expense.campusId;
+    const partnerName = expense.vendorName || expense.paidTo;
+
+    // Withholding is applied at PAY time, not at creation — same convention
+    // as recordVendorPayment. `withholdingAmount` was already computed as a
+    // preview when the expense was created (see createExpense); re-resolve
+    // the category here only to get its accountCode for the journal line.
+    let withholdingAmount = Number(expense.withholdingAmount || 0);
+    let withholdingAccountCode: string | null = null;
+    let withholdingCategoryName: string | undefined;
+    if (withholdingAmount > 0 && expense.withholdingCategoryId) {
+      const category = await this.withholdingCategoryModel.findOne({ _id: expense.withholdingCategoryId, schoolSlug, isActive: true });
+      if (category) {
+        withholdingAccountCode = category.accountCode;
+        withholdingCategoryName = category.name;
+      } else {
+        withholdingAmount = 0; // category was deactivated/removed since creation — don't withhold against a dead account
+      }
+    }
+    const cashAmount = Math.round((expense.amount - withholdingAmount) * 100) / 100;
+
     try {
+      const lines: any[] = [
+        { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName, costCenterName },
+        { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: cashAmount, partnerType: 'vendor', partnerName, costCenterName, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
+      ];
+      if (withholdingAmount > 0 && withholdingAccountCode) {
+        lines.push({ accountCode: withholdingAccountCode, credit: withholdingAmount, partnerType: 'vendor', partnerName, costCenterName, taxTemplateName: withholdingCategoryName });
+      }
       await this.postJournalEntry(schoolSlug, {
         date: new Date(),
         reference: expense.expenseNo,
         narration: `Expense ${expense.expenseNo} — ${expense.title}`,
         sourceType: 'expense', sourceId: String(expense._id),
-        lines: [
-          { accountCode: this.mapExpenseCategoryToAccount(expense.category), debit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName },
-          { accountCode: this.mapPaymentMethodToAccount(expense.paymentMethod), credit: expense.amount, partnerType: 'vendor', partnerName: expense.vendorName || expense.paidTo, costCenterName, bankAccountId: expense.bankAccountId, bankAccountName: expense.bankAccountName },
-        ],
+        lines,
       });
     } catch (err: any) { /* see postFeeInvoiceJournal note */ }
   }
@@ -1676,6 +1756,27 @@ export class FinanceService {
     return { message: 'Deleted', removedAssignments: assignmentResult.deletedCount || 0 };
   }
 
+  /** Bulk convenience for removing several fee structures at once (a school
+   * cleaning up duplicate/mistaken entries) - runs each id through the same
+   * single-delete rule (never billed an invoice) so an already-billed
+   * structure in the selection is reported, not silently skipped or, worse,
+   * force-deleted and breaking its invoices' feeStructureId references. */
+  async bulkDeleteFeeStructures(ids: string[], schoolSlug: string) {
+    const deleted: string[] = [];
+    const failed: { id: string; name?: string; message: string }[] = [];
+    for (const id of ids) {
+      try {
+        const result = await this.deleteFeeStructure(id, schoolSlug);
+        deleted.push(id);
+        void result;
+      } catch (err: any) {
+        const existing = await this.feeStructModel.findOne({ _id: id, schoolSlug }).select('name').lean();
+        failed.push({ id, name: (existing as any)?.name, message: err?.message || 'Failed to delete' });
+      }
+    }
+    return { deleted: deleted.length, failed };
+  }
+
   // ── Invoices ─────────────────────────────────────────────
   async getInvoices(schoolSlug: string, query: any) {
     const { page = 1, limit = 20, status, grade, section, month, studentId, academicYear, campus, from, to } = query;
@@ -1760,6 +1861,26 @@ export class FinanceService {
     const invoice = await this.invoiceModel.findOne({ _id: invoiceId, schoolSlug, isDeleted: { $ne: true } });
     if (!invoice) throw new NotFoundException('Invoice not found');
     if (invoice.status === 'paid') throw new BadRequestException('Invoice already paid');
+
+    // Duplicate-submission guard: a double-click or a retried request (slow
+    // network, accidental double-tap on the "Record Payment" button) used to
+    // create two separate Payment documents for the same invoice/amount and
+    // double-increment paidAmount, with nothing downstream able to tell them
+    // apart. An identical, non-refunded payment on this invoice recorded in
+    // the last 10 seconds is almost certainly that, not a genuine second
+    // instalment - genuine instalments of the same amount still go through
+    // fine once that short window has passed.
+    const tenSecondsAgo = new Date(Date.now() - 10_000);
+    const recentDuplicate = await this.paymentModel.findOne({
+      invoiceId: invoice._id,
+      schoolSlug,
+      amount: paymentData.amount,
+      isRefunded: { $ne: true },
+      createdAt: { $gte: tenSecondsAgo },
+    });
+    if (recentDuplicate) {
+      throw new BadRequestException('An identical payment was just recorded for this invoice - please check Collected Fee before submitting again.');
+    }
 
     const payment = new this.paymentModel({
       ...paymentData,
@@ -1895,16 +2016,86 @@ export class FinanceService {
   }
 
   async createExpense(data: any) {
+    const schoolSlug = data.schoolSlug;
+
+    // Three-way-match upgrade: resolve the Vendor master record when one was
+    // selected, so vendorName/taxId-bearing fields are always sourced from
+    // the vendor, not re-typed — same convention as createVendorBill.
+    let vendor: any = null;
+    if (data.vendorId) {
+      vendor = await this.vendorModel.findOne({ _id: data.vendorId, schoolSlug });
+      if (!vendor) throw new NotFoundException('Vendor not found');
+    }
+
+    // Duplicate-payment guard — the same vendor can't submit the same
+    // invoice number twice. Checked explicitly (rather than only relying on
+    // the schema's unique index) so the error is a clear BadRequestException
+    // instead of a raw duplicate-key error. Only applies when both a vendor
+    // and an invoice number were actually given.
+    if (data.vendorId && data.invoiceNumber) {
+      const dup = await this.expenseModel.findOne({ schoolSlug, vendorId: data.vendorId, invoiceNumber: data.invoiceNumber });
+      if (dup) {
+        throw new BadRequestException(
+          `Invoice ${data.invoiceNumber} has already been recorded for this vendor (expense ${dup.expenseNo}) — check you're not entering it twice.`,
+        );
+      }
+    }
+
+    const date = new Date(data.date || data.expenseDate || Date.now());
+
+    // Due Date auto-calculation from Payment Terms — same convention as
+    // createVendorBill: an explicit dueDate always wins; otherwise resolve
+    // dueDays from the chosen term (falling back to the vendor's own default
+    // term when the invoice didn't pick one) and add it to the invoice date.
+    let dueDate = data.dueDate ? new Date(data.dueDate) : null;
+    let paymentTermName = data.paymentTermName;
+    const termId = data.paymentTermId || vendor?.paymentTermId;
+    if (termId) {
+      const term = await this.paymentTermModel.findOne({ _id: termId, schoolSlug });
+      if (term) {
+        paymentTermName = term.name;
+        if (!dueDate) {
+          dueDate = new Date(date);
+          dueDate.setDate(dueDate.getDate() + (term.dueDays || 0));
+        }
+      }
+    }
+
+    // Withholding tax preview — computed up front (from the vendor's
+    // WithholdingTaxCategory, same rate convention as recordVendorPayment)
+    // purely for display on the invoice/approval screen. The actual journal
+    // split only happens at pay time in postExpensePaidJournal, matching how
+    // the formal Vendor Bill flow withholds at payment, not at bill time.
+    let withholdingAmount = 0;
+    const withholdingCategoryId = data.withholdingCategoryId || vendor?.withholdingCategoryId;
+    if (withholdingCategoryId && data.amount) {
+      const category = await this.withholdingCategoryModel.findOne({ _id: withholdingCategoryId, schoolSlug, isActive: true });
+      if (category) {
+        withholdingAmount = Math.round(Number(data.amount) * (category.rate || 0)) / 100;
+        withholdingAmount = Math.min(withholdingAmount, Number(data.amount));
+      }
+    }
+
     const exp = new this.expenseModel({
       ...data,
       title: data.title || data.description || 'Expense',
-      date: new Date(data.date || data.expenseDate || Date.now()),
-      paidTo: data.paidTo || data.vendorName,
-      vendorName: data.vendorName || data.paidTo,
+      date,
+      paidTo: data.paidTo || vendor?.name || data.vendorName,
+      vendorName: vendor?.name || data.vendorName || data.paidTo,
+      vendorId: vendor?._id || null,
+      paymentTermId: termId || null,
+      paymentTermName,
+      dueDate,
+      withholdingCategoryId: withholdingCategoryId || null,
+      withholdingAmount,
+      // Status is driven by the Submit → Approve → Pay workflow, not freely
+      // settable from the create form — always starts at 'submitted'
+      // regardless of what the caller sends.
+      status: 'submitted',
     });
     // Phase 6 — see recordPayment's identical note on bankAccountName denorm.
     if (exp.bankAccountId) {
-      const acc = await this.bankModel.findOne({ _id: exp.bankAccountId, schoolSlug: data.schoolSlug });
+      const acc = await this.bankModel.findOne({ _id: exp.bankAccountId, schoolSlug });
       if (acc) exp.bankAccountName = `${acc.bankName} — ${acc.accountTitle}`;
     }
     // Denormalize costCenterName from the selected Cost Center up front, so
@@ -1913,7 +2104,7 @@ export class FinanceService {
     // convention of denormalizing a CostCenter's name onto the record that
     // references it.
     if (exp.costCenterId) {
-      const cc = await this.costCenterModel.findOne({ _id: exp.costCenterId, schoolSlug: data.schoolSlug });
+      const cc = await this.costCenterModel.findOne({ _id: exp.costCenterId, schoolSlug });
       if (cc) exp.costCenterName = cc.name;
     }
     return exp.save();
@@ -1927,7 +2118,11 @@ export class FinanceService {
   // reflects the correction instead of staying stuck on the old value.
   async updateExpense(id: string, schoolSlug: string, data: any) {
     const update: any = {};
-    for (const key of ['costCenterId', 'costCenterName', 'departmentId', 'campusId', 'category', 'description', 'vendorName', 'paidTo']) {
+    for (const key of [
+      'costCenterId', 'costCenterName', 'departmentId', 'campusId', 'category', 'description', 'vendorName', 'paidTo',
+      'invoiceNumber', 'paymentTermId', 'paymentTermName', 'dueDate', 'attachmentUrl',
+      'purchaseOrderId', 'poNumber', 'grnId', 'grnNumber',
+    ]) {
       if (data[key] !== undefined) update[key] = data[key];
     }
     if (update.costCenterId) {
@@ -2455,7 +2650,7 @@ export class FinanceService {
 
     const [revenue, expenses] = await Promise.all([
       this.paymentModel.aggregate([
-        { $match: { schoolSlug, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
+        { $match: { schoolSlug, isRefunded: { $ne: true }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]),
       this.expenseModel.aggregate([
@@ -2604,7 +2799,10 @@ export class FinanceService {
   }) {
     const { groupBy, from, to, month, grade, academicYear } = params;
 
-    const paymentMatch: any = { schoolSlug };
+    // A payment voided via reversePayment() (isRefunded: true) must not keep
+    // showing up as "collected" in any of this report's groupings forever —
+    // it was previously included unconditionally here.
+    const paymentMatch: any = { schoolSlug, isRefunded: { $ne: true } };
     if (from || to) {
       paymentMatch.paymentDate = {};
       if (from) paymentMatch.paymentDate.$gte = new Date(from);
@@ -2888,6 +3086,19 @@ export class FinanceService {
       deletedBy,
     );
 
+    // An earlier invoice may have rolled its unpaid balance forward into
+    // THIS one (rolledForwardInto points here — see generateInvoices). That
+    // earlier invoice is excluded from Receivables/Defaulters on the
+    // assumption its balance now lives on this invoice's arrears line. If
+    // this invoice is deleted without undoing that, the earlier invoice is
+    // orphaned — permanently invisible to every admin report — while the
+    // Parent Portal (which doesn't filter on rolledForwardInto) still shows
+    // it as payable. Un-roll it back onto its own books so it reappears.
+    await this.invoiceModel.updateMany(
+      { schoolSlug, rolledForwardInto: invoice._id },
+      { $set: { rolledForwardInto: null } },
+    );
+
     invoice.isDeleted = true;
     invoice.deletedAt = new Date();
     invoice.deletedBy = deletedBy;
@@ -3012,9 +3223,22 @@ export class FinanceService {
       match.campus = params.scopeValue;
     }
 
+    const toDeleteIds = (await this.invoiceModel.find(match).select('_id').lean()).map((d: any) => d._id);
+
     const result = await this.invoiceModel.updateMany(match, {
       $set: { isDeleted: true, deletedAt: new Date(), deletedBy, deleteReason: reason || 'Bulk reverted from Fee Assignment' },
     });
+
+    // Same un-roll as softDeleteInvoice: an earlier invoice may have rolled
+    // its balance forward into one of the invoices this bulk-deletes. Left
+    // alone, that earlier invoice would be permanently orphaned - invisible
+    // to Receivables/Defaulters, but still shown payable in Parent Portal.
+    if (toDeleteIds.length) {
+      await this.invoiceModel.updateMany(
+        { schoolSlug, rolledForwardInto: { $in: toDeleteIds } },
+        { $set: { rolledForwardInto: null } },
+      );
+    }
 
     if (result.matchedCount === 0) {
       const { academicYear, ...matchWithoutYear } = match;
@@ -3171,7 +3395,7 @@ export class FinanceService {
   }) {
     const { from, to, month, grade, academicYear } = params;
 
-    const paymentMatch: any = { schoolSlug };
+    const paymentMatch: any = { schoolSlug, isRefunded: { $ne: true } };
     if (from || to) {
       paymentMatch.paymentDate = {};
       if (from) paymentMatch.paymentDate.$gte = new Date(from);
@@ -3802,20 +4026,35 @@ export class FinanceService {
    * once (a whole class, a filtered selection, etc - see FEE-02). Runs each
    * student through the same single-assignment conflict logic rather than
    * a raw insertMany, so a student who already has a conflicting
-   * assignment is reported, not silently overwritten or silently skipped. */
+   * assignment is reported, not silently overwritten or silently skipped.
+   *
+   * Each student is independent, so this runs them concurrently rather than
+   * one at a time in a for-loop: a "Multiple Students"/"Whole Class" pick of
+   * 20-30+ students run sequentially could push the request past the
+   * frontend's timeout, which then reported a flat "Failed to assign fee
+   * structure" to the admin even though the backend kept going and was
+   * still creating assignments behind the scenes - a confusing partial
+   * state. Each student's outcome is also caught individually now, so one
+   * bad id (e.g. a student since transferred/deleted) no longer aborts the
+   * whole batch - it's reported per-student instead, the same way
+   * bulkImportFeeAssignments already reports per-row. */
   async bulkAssignFeeStructure(schoolSlug: string, data: {
     studentIds: string[]; feeStructureId: string; academicYear: string;
     effectiveFrom: string | Date; effectiveTo?: string | Date | null;
     assignedBy?: string; notes?: string; replace?: boolean;
   }) {
-    const results: { studentId: string; conflict: boolean; message?: string }[] = [];
-    for (const studentId of data.studentIds) {
-      const result = await this.assignFeeStructure(schoolSlug, { ...data, studentId });
-      results.push({ studentId, conflict: !!result.conflict, message: result.conflict ? result.message : undefined });
-    }
+    const results = await Promise.all(data.studentIds.map(async (studentId) => {
+      try {
+        const result = await this.assignFeeStructure(schoolSlug, { ...data, studentId });
+        return { studentId, conflict: !!result.conflict, error: false, message: result.conflict ? result.message : undefined };
+      } catch (err: any) {
+        return { studentId, conflict: false, error: true, message: err?.message || 'Failed to assign.' };
+      }
+    }));
     return {
-      assigned: results.filter(r => !r.conflict).length,
+      assigned: results.filter(r => !r.conflict && !r.error).length,
       conflicts: results.filter(r => r.conflict),
+      errors: results.filter(r => r.error),
     };
   }
 
@@ -4173,8 +4412,12 @@ export class FinanceService {
 
     let created = 0, skippedAlreadyBilled = 0, skippedNoMatch = 0, skippedAmbiguousMatch = 0, discountsSynced = 0;
     const errors: string[] = [];
-    const gradesWithNoMatch = new Map<string, number>(); // grade/section -> count of students affected
-    const gradesWithAmbiguousMatch = new Map<string, number>(); // grade/section -> count of students affected
+    // Keyed by the same display string as `key` below, but carrying the raw
+    // grade/section too - so the frontend can offer a one-click "reassign a
+    // Fee Structure to this class" action instead of just a count with
+    // nothing actionable about it.
+    const gradesWithNoMatch = new Map<string, { grade: string; section: string; count: number }>();
+    const gradesWithAmbiguousMatch = new Map<string, { grade: string; section: string; count: number }>();
 
     for (const student of students) {
       try {
@@ -4225,15 +4468,30 @@ export class FinanceService {
           // ties, by specificity/recency. A genuine unresolved tie is never
           // silently summed into one invoice - it's reported below so the
           // school can deactivate the stale structure(s).
+          // sameGrade/sameSection (not strict ===) - a Grade/Section
+          // rename in Organization Setup never cascades to the FeeStructure's
+          // own grade/section snapshot (confirmed: no rename-cascade exists
+          // anywhere), so an exact-string match broke the moment a class was
+          // renamed, even though the "same" class/fee structure still exist.
+          // This tolerates the case/format drift (not a true rename to a
+          // different name) that's the overwhelming majority of that drift.
           const gradeSectionCampusMatch = feeStructures.filter((fs: any) =>
-            fs.grade === (student as any).currentGrade &&
-            (!fs.section || fs.section === (student as any).currentSection) &&
+            sameGrade(fs.grade, (student as any).currentGrade) &&
+            (!fs.section || sameSection(fs.section, (student as any).currentSection)) &&
             (!fs.campus || fs.campus === studentCampusName)
           );
           applicableStructures = pickApplicableFeeStructures(gradeSectionCampusMatch, billingMonthAnchor);
-          if (applicableStructures.length > 1) {
+          // More than one equally-specific match is only a genuine,
+          // unresolved ambiguity when the tied structures actually overlap
+          // on a fee head (see structuresAreComplementary) - a school
+          // billing e.g. Monthly Tuition Fee from one structure and
+          // Admission Fee from another, both for the same grade, is
+          // complementary, not a conflict, and bills from both (the loop
+          // below already iterates every structure in applicableStructures).
+          if (applicableStructures.length > 1 && !structuresAreComplementary(applicableStructures)) {
             skippedAmbiguousMatch++;
-            gradesWithAmbiguousMatch.set(key, (gradesWithAmbiguousMatch.get(key) || 0) + 1);
+            const prevAmb = gradesWithAmbiguousMatch.get(key);
+            gradesWithAmbiguousMatch.set(key, { grade: (student as any).currentGrade || 'Unknown', section: (student as any).currentSection || '', count: (prevAmb?.count || 0) + 1 });
             const structureNames = applicableStructures.map((fs: any) => `"${fs.name}"`).join(', ');
             errors.push(`${studentDisplayName}: ${applicableStructures.length} equally-specific active fee structures match ${key} for this billing month (${structureNames}) - deactivate the stale one(s) in Fee Structures, or assign this student a fee structure explicitly.`);
             skippedStudents.push({
@@ -4245,7 +4503,8 @@ export class FinanceService {
         }
         if (applicableStructures.length === 0) {
           skippedNoMatch++;
-          gradesWithNoMatch.set(key, (gradesWithNoMatch.get(key) || 0) + 1);
+          const prevNoMatch = gradesWithNoMatch.get(key);
+          gradesWithNoMatch.set(key, { grade: (student as any).currentGrade || 'Unknown', section: (student as any).currentSection || '', count: (prevNoMatch?.count || 0) + 1 });
           skippedStudents.push({
             name: studentDisplayName, grade: studentDisplayGrade, reason: 'no_match',
             detail: `No active Fee Structure defined for ${key}.`,
@@ -4484,12 +4743,138 @@ export class FinanceService {
       skippedStudents,
       skippedAlreadyBilled,
       skippedNoMatch,
-      noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, count]) => ({ grade, count })),
+      // `grade` stays the existing display string (e.g. "GRADE-1 - Grade 1B")
+      // for backward compatibility; `rawGrade`/`rawSection` are the actual
+      // field values, added so the frontend can offer a one-click
+      // "reassign a Fee Structure to this class" action instead of just a
+      // count with nothing actionable about it.
+      noMatchBreakdown: Array.from(gradesWithNoMatch.entries()).map(([grade, v]) => ({ grade, count: v.count, rawGrade: v.grade, rawSection: v.section })),
       skippedAmbiguousMatch,
-      ambiguousMatchBreakdown: Array.from(gradesWithAmbiguousMatch.entries()).map(([grade, count]) => ({ grade, count })),
+      ambiguousMatchBreakdown: Array.from(gradesWithAmbiguousMatch.entries()).map(([grade, v]) => ({ grade, count: v.count, rawGrade: v.grade, rawSection: v.section })),
       errors,
       totalStudents: students.length,
     };
+  }
+
+  /**
+   * Why does this student's Fee Ledger (Student 360, parent app) show zero
+   * invoices? An empty ledger is ambiguous on its own - it looks identical
+   * whether the student genuinely has nothing to owe or was simply never
+   * billed, and nothing anywhere told an admin which. Runs the exact same
+   * eligibility check generateInvoices uses (explicit StudentFeeAssignment,
+   * else grade/section/campus auto-match against active FeeStructures) so
+   * the diagnosis is never out of sync with what actually determines
+   * billing. Read-only - never creates or changes anything.
+   */
+  async diagnoseNoInvoices(schoolSlug: string, studentId: string) {
+    const student: any = await this.studentModel.findOne({ _id: studentId, schoolSlug }).lean();
+    if (!student) return { reason: 'student_not_found', detail: 'Student record not found in this school.' };
+
+    if (student.status !== 'active') {
+      return {
+        reason: 'inactive_status',
+        detail: `Student status is "${student.status}", not "active" - invoices are only ever generated for active students. Correct the status in Student 360 first if this is wrong.`,
+      };
+    }
+
+    // Student.campusId is a free-form string (not an ObjectId-typed field -
+    // see student.schema.ts), so it can legitimately hold a value that
+    // isn't a valid Mongo ObjectId (blank, a stale/legacy value, or data
+    // imported before campuses existed here). findById() on an invalid id
+    // rejects rather than resolving to null, which - unguarded - took down
+    // this ENTIRE diagnosis (and therefore the whole Fee Ledger response,
+    // since nothing here was wrapped in try/catch) for every such student
+    // instead of just leaving the campus name blank for them.
+    const campusId = student.campusId && Types.ObjectId.isValid(student.campusId) ? student.campusId : null;
+    const [feeStructures, campus, explicitAssignments] = await Promise.all([
+      this.feeStructModel.find({ schoolSlug, isActive: true }).lean(),
+      campusId ? this.campusModel.findById(campusId).lean() : null,
+      this.studentFeeAssignmentModel.find({ schoolSlug, studentId, isActive: true }).sort({ effectiveFrom: -1 }).lean(),
+    ]);
+    const studentCampusName = (campus as any)?.name || '';
+    const now = new Date();
+    const activeAssignment = (explicitAssignments as any[]).find((a: any) =>
+      new Date(a.effectiveFrom) <= now && (!a.effectiveTo || new Date(a.effectiveTo) >= now));
+
+    let applicableStructures: any[];
+    if (activeAssignment) {
+      applicableStructures = [activeAssignment].map((a: any) => feeStructures.find((fs: any) => String(fs._id) === String(a.feeStructureId))).filter(Boolean);
+      // The assignment's own referenced structure may since have been
+      // deactivated (assignFeeStructure never required isActive at
+      // assignment time) - fall back to a direct lookup so this doesn't
+      // read as "no fee structure" when one genuinely is assigned.
+      if (applicableStructures.length === 0) {
+        const assignedStructure = await this.feeStructModel.findOne({ _id: activeAssignment.feeStructureId, schoolSlug }).lean();
+        if (assignedStructure) applicableStructures = [assignedStructure];
+      }
+    } else {
+      const gradeSectionCampusMatch = feeStructures.filter((fs: any) =>
+        sameGrade(fs.grade, student.currentGrade) &&
+        (!fs.section || sameSection(fs.section, student.currentSection)) &&
+        (!fs.campus || fs.campus === studentCampusName));
+      applicableStructures = pickApplicableFeeStructures(gradeSectionCampusMatch, now);
+    }
+
+    const classLabel = `${student.currentGrade || 'Unknown'}${student.currentSection ? ' - ' + student.currentSection : ''}`;
+    if (applicableStructures.length === 0) {
+      return {
+        reason: 'no_fee_structure_assigned',
+        detail: `No active Fee Structure matches ${classLabel}${studentCampusName ? ` at ${studentCampusName}` : ''}, and no Fee Structure is explicitly assigned to this student. Assign one in Finance → Fee Structures (or Assign Fee) before invoices can be generated.`,
+      };
+    }
+
+    return {
+      reason: 'not_yet_generated',
+      detail: `${activeAssignment ? 'An explicit fee assignment' : `A matching Fee Structure for ${classLabel}`} is in place, but no invoice has been generated for this student yet - run Generate Invoices from Finance → Fees for the relevant month(s).`,
+    };
+  }
+
+  /**
+   * The "check every student, not just the one I noticed" version of
+   * diagnoseNoInvoices above - every active student in scope who has never
+   * had a single invoice (any month, any academic year), each with the
+   * same reason a staff member would otherwise only discover one Student
+   * 360 profile at a time. Optionally narrowed to one campus/grade/section,
+   * since running this across an entire multi-campus school at once is
+   * exactly the kind of admin task that needs to start scoped.
+   */
+  async getBillingGaps(schoolSlug: string, query: { campusId?: string; grade?: string; section?: string } = {}) {
+    const studentFilter: any = { schoolSlug, status: 'active' };
+    if (query.campusId) studentFilter.campusId = query.campusId;
+    if (query.grade) studentFilter.currentGrade = query.grade;
+    if (query.section) studentFilter.currentSection = query.section;
+
+    const students = await this.studentModel.find(studentFilter)
+      .select('firstName lastName rollNumber currentGrade currentSection campusId').lean();
+    if (students.length === 0) return { totalChecked: 0, gaps: [] };
+
+    const billedStudentIds = new Set(
+      (await this.invoiceModel.find(
+        { schoolSlug, studentId: { $in: students.map((s: any) => s._id) }, isDeleted: { $ne: true } },
+        { studentId: 1 },
+      ).lean()).map((inv: any) => String(inv.studentId)),
+    );
+    const neverBilled = students.filter((s: any) => !billedStudentIds.has(String(s._id)));
+    if (neverBilled.length === 0) return { totalChecked: students.length, gaps: [] };
+
+    const gaps = await Promise.all(neverBilled.map(async (s: any) => {
+      // One student's bad data must never take down the whole report - see
+      // the matching guard in students.controller.ts's getFeeStatement.
+      let diagnosis: any;
+      try {
+        diagnosis = await this.diagnoseNoInvoices(schoolSlug, String(s._id));
+      } catch (e: any) {
+        diagnosis = { reason: 'error', detail: `Could not determine why: ${e?.message || 'unknown error'}` };
+      }
+      return {
+        studentId: String(s._id),
+        name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Unnamed student',
+        rollNumber: s.rollNumber,
+        grade: s.currentGrade, section: s.currentSection,
+        ...diagnosis,
+      };
+    }));
+    return { totalChecked: students.length, gaps };
   }
 
   /**
@@ -4556,6 +4941,50 @@ export class FinanceService {
       willFix: fixes.reduce((a, f) => a + f.sourceInvoiceIds.length, 0),
       mismatchCount: fixes.filter((f) => f.amountMismatch).length,
       fixes,
+    };
+  }
+
+  /**
+   * One-time repair for the mirror-image bug: softDeleteInvoice/
+   * bulkDeleteInvoices previously never cleared rolledForwardInto on the
+   * earlier invoice(s) a deleted invoice had absorbed, orphaning them -
+   * invisible to Receivables/Defaulters (both exclude rolledForwardInto !=
+   * null) forever, even though Parent Portal still shows them as payable
+   * since it doesn't filter on that field. Finds every invoice whose
+   * rolledForwardInto points at an invoice that is now deleted or gone
+   * entirely, and un-rolls it. Safe to re-run; dryRun defaults to true.
+   */
+  async fixOrphanedRolledForwardInvoices(schoolSlug: string, dryRun = true) {
+    const candidates = await this.invoiceModel
+      .find({ schoolSlug, isDeleted: { $ne: true }, rolledForwardInto: { $ne: null } })
+      .select('invoiceNumber studentName studentId month balanceDue rolledForwardInto')
+      .lean();
+
+    if (candidates.length === 0) return { dryRun, orphansFound: 0, orphansFixed: 0, orphans: [] };
+
+    const targetIds = Array.from(new Set(candidates.map((c: any) => String(c.rolledForwardInto))));
+    const liveTargets = await this.invoiceModel
+      .find({ _id: { $in: targetIds }, isDeleted: { $ne: true } })
+      .select('_id').lean();
+    const liveTargetIds = new Set(liveTargets.map((t: any) => String(t._id)));
+
+    const orphans = candidates.filter((c: any) => !liveTargetIds.has(String(c.rolledForwardInto)));
+
+    if (!dryRun && orphans.length) {
+      await this.invoiceModel.updateMany(
+        { _id: { $in: orphans.map((o: any) => o._id) } },
+        { $set: { rolledForwardInto: null } },
+      );
+    }
+
+    return {
+      dryRun,
+      orphansFound: orphans.length,
+      orphansFixed: dryRun ? 0 : orphans.length,
+      orphans: orphans.map((o: any) => ({
+        invoiceId: String(o._id), invoiceNumber: o.invoiceNumber, studentName: o.studentName,
+        month: o.month, balanceDue: o.balanceDue,
+      })),
     };
   }
 
@@ -4969,7 +5398,7 @@ export class FinanceService {
   // invoice's creation and the payment that settled it, plus a simple
   // month-by-month invoiced/collected/avg-days-to-pay breakdown.
   async getPaymentPeriodReport(schoolSlug: string, from?: string, to?: string) {
-    const paymentMatch: any = { schoolSlug };
+    const paymentMatch: any = { schoolSlug, isRefunded: { $ne: true } };
     if (from || to) {
       paymentMatch.paymentDate = {};
       if (from) paymentMatch.paymentDate.$gte = new Date(from);
@@ -5244,7 +5673,7 @@ export class FinanceService {
       const rule: any = ruleBySource.get(sourceName);
       const studentIds = Array.from(studentIdSet).filter(Types.ObjectId.isValid);
       const collectedAgg = studentIds.length ? await this.paymentModel.aggregate([
-        { $match: { schoolSlug, studentId: { $in: studentIds.map(id => new Types.ObjectId(id)) }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
+        { $match: { schoolSlug, studentId: { $in: studentIds.map(id => new Types.ObjectId(id)) }, isRefunded: { $ne: true }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
       ]) : [];
       const totalCollected = collectedAgg[0]?.total || 0;
@@ -5270,7 +5699,7 @@ export class FinanceService {
     const dateFilter: any = {};
     if (from) dateFilter.$gte = new Date(from);
     if (to) dateFilter.$lte = new Date(to);
-    const match: any = { schoolSlug, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) };
+    const match: any = { schoolSlug, isRefunded: { $ne: true }, ...(Object.keys(dateFilter).length ? { paymentDate: dateFilter } : {}) };
     const dateFormat = groupBy === 'day' ? '%Y-%m-%d' : groupBy === 'week' ? '%G-W%V' : '%Y-%m';
 
     const [byPeriod, byMethod, byCollector, totalsAgg] = await Promise.all([

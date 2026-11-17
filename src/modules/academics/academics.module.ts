@@ -8,6 +8,7 @@ import { SubjectGroup, SubjectGroupSchema } from './schemas/subject-group.schema
 import { Curriculum, CurriculumSchema } from './schemas/curriculum.schema';
 import { Syllabus, SyllabusSchema } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookSchema } from './schemas/book.schema';
+import { BookCategory, BookCategorySchema } from './schemas/book-category.schema';
 import { BookIssue, BookIssueSchema } from './schemas/book-issue.schema';
 import { LibrarySettings, LibrarySettingsSchema } from './schemas/library-settings.schema';
 import { Reservation, ReservationSchema } from './schemas/reservation.schema';
@@ -26,6 +27,7 @@ import { TeacherProfile, TeacherProfileSchema } from '../teaching/schemas/teache
       { name: Curriculum.name, schema: CurriculumSchema },
       { name: Syllabus.name,  schema: SyllabusSchema  },
       { name: Book.name,      schema: BookSchema      },
+      { name: BookCategory.name, schema: BookCategorySchema },
       { name: BookIssue.name, schema: BookIssueSchema },
       { name: LibrarySettings.name, schema: LibrarySettingsSchema },
       { name: Reservation.name, schema: ReservationSchema },
