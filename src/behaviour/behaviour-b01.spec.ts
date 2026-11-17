@@ -124,6 +124,21 @@ describe('section fallback: a record with no section matches the teacher by clas
     await svc.getTarbiyahAssessments('demo', {}, TEACHER as any, access());
     expect(tarbiyahModel.find.mock.calls[0][0].$and[0].$or[0].$or).toHaveLength(2);
   });
+
+  // Term Report Card (assessments module) needs "this student's Tarbiyah
+  // for this academic year" - academicYear was already on the schema but
+  // never exposed as a query filter here until now.
+  it('Tarbiyah list filters by academicYear when given', async () => {
+    const { svc, tarbiyahModel } = build();
+    await svc.getTarbiyahAssessments('demo', { studentId: OID().toString(), academicYear: '2025-26' });
+    expect(tarbiyahModel.find.mock.calls[0][0].academicYear).toBe('2025-26');
+  });
+
+  it('Tarbiyah list omits the academicYear filter when not given (unchanged existing behaviour)', async () => {
+    const { svc, tarbiyahModel } = build();
+    await svc.getTarbiyahAssessments('demo', { studentId: OID().toString() });
+    expect(tarbiyahModel.find.mock.calls[0][0].academicYear).toBeUndefined();
+  });
 });
 
 describe('raw PUT with the full object: protected fields are stripped (ignored), never rejected', () => {

@@ -56,7 +56,7 @@ import {
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import { dedupeGuardians, guardianDedupeKey } from './guardian-dedupe.util';
 import { normalizePhone } from '../common/utils/phone.util';
-import { gradeMatcher, sectionMatcher } from '../common/utils/class-match.util';
+import { gradeMatcher, sectionMatcher, normalizeGradeName, normalizeSectionName } from '../common/utils/class-match.util';
 import { resolveClassSectionScope } from '../auth/scope.util';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { TEACHER_STUDENT_SELECT, stripTeacherSensitive } from './teacher-student-projection.util';
@@ -466,7 +466,74 @@ export class StudentsService {
     };
   }
 
+  // ============================================================
+  // ROLL NUMBER DUPLICATE GUARD
+  // ============================================================
+  // Nothing anywhere previously stopped two students in the same class
+  // from being saved with the identical roll number - no unique index, no
+  // validation in any of the write paths (Add Student, Student 360 edit,
+  // Admissions enrollment, CSV import). Grade/section are free-text
+  // strings with no FK (see class-match.util.ts), so the check has to
+  // tolerate every stored spelling ('Grade 3' vs '3' vs 'G3', 'Section A'
+  // vs 'A') the same way getStudents/gradeMatcher/sectionMatcher already
+  // do, or it would miss real collisions / false-flag non-collisions.
+
+  /** The highest numeric roll number currently assigned to an active
+   * student in this class - used both to reject a duplicate with a useful
+   * "try the next one" message, and to let the UI suggest the next free
+   * number before the admin even picks one. Non-numeric roll numbers
+   * (rare, but free-text) are ignored for the "last used" calculation. */
+  async getLastRollNumberInClass(schoolSlug: string | undefined, grade?: string, section?: string, academicYear?: string): Promise<number | null> {
+    if (!grade || !schoolSlug) return null;
+    const filter: any = { schoolSlug, status: 'active', currentGrade: gradeMatcher(grade) };
+    if (section) filter.currentSection = sectionMatcher(section);
+    if (academicYear) filter.currentAcademicYear = academicYear;
+    const rows = await this.studentModel.find(filter).select('currentRollNumber').lean();
+    const numeric = rows
+      .map((r: any) => parseInt(String(r.currentRollNumber ?? '').trim(), 10))
+      .filter((n) => Number.isFinite(n));
+    return numeric.length ? Math.max(...numeric) : null;
+  }
+
+  private async findRollNumberCollision(
+    schoolSlug: string | undefined, grade: string | undefined, section: string | undefined,
+    academicYear: string | undefined, rollNumber: string | undefined, excludeStudentId?: string,
+  ): Promise<{ firstName?: string; lastName?: string } | null> {
+    const trimmed = String(rollNumber ?? '').trim();
+    if (!trimmed || !grade || !schoolSlug) return null;
+    const filter: any = { schoolSlug, status: 'active', currentGrade: gradeMatcher(grade), currentRollNumber: trimmed };
+    if (section) filter.currentSection = sectionMatcher(section);
+    if (academicYear) filter.currentAcademicYear = academicYear;
+    if (excludeStudentId) filter._id = { $ne: excludeStudentId };
+    return this.studentModel.findOne(filter).select('firstName lastName').lean() as any;
+  }
+
+  /** Throws ConflictException if `rollNumber` is already held by another
+   * active student in the same class - called from every entry point that
+   * can set/change a student's roll number (createStudent, updateStudent,
+   * createFromEnrollment, commitBulkImport). Reminds the admin of the
+   * class's current last-used sequence number so they can just pick the
+   * next one, rather than guessing a second time. */
+  private async assertRollNumberAvailable(
+    schoolSlug: string | undefined, grade: string | undefined, section: string | undefined,
+    academicYear: string | undefined, rollNumber: string | undefined, excludeStudentId?: string,
+  ): Promise<void> {
+    const trimmed = String(rollNumber ?? '').trim();
+    if (!trimmed) return;
+    const collision = await this.findRollNumberCollision(schoolSlug, grade, section, academicYear, trimmed, excludeStudentId);
+    if (!collision) return;
+    const last = await this.getLastRollNumberInClass(schoolSlug, grade, section, academicYear);
+    const holderName = [collision.firstName, collision.lastName].filter(Boolean).join(' ') || 'another student';
+    const classLabel = [grade, section].filter(Boolean).join(' - ');
+    throw new ConflictException(
+      `Roll number ${trimmed} is already assigned to ${holderName} in ${classLabel || 'this class'}.` +
+      (last !== null ? ` The last roll number currently used in this class is ${last} - try ${last + 1} or another free number.` : ' Please choose a different roll number.'),
+    );
+  }
+
   async createStudent(dto: CreateStudentDto): Promise<Student> {
+    await this.assertRollNumberAvailable(dto.schoolSlug, dto.currentGrade, dto.currentSection, dto.currentAcademicYear, dto.currentRollNumber);
+
     // studentId is required + unique on the schema but was never being
     // generated here (only the bulk-import path did this) - every single
     // create via this method was guaranteed to fail Mongoose's required-
@@ -558,6 +625,8 @@ export class StudentsService {
       schoolSlug: enrollmentData.schoolSlug,
     });
     if (existing) return existing;
+
+    await this.assertRollNumberAvailable(enrollmentData.schoolSlug, enrollmentData.grade, enrollmentData.section, enrollmentData.academicYear, enrollmentData.rollNumber);
 
     const student = new this.studentModel({
       firstName: enrollmentData.firstName,
@@ -822,6 +891,23 @@ export class StudentsService {
       for (const [key, value] of Object.entries(medical)) {
         if (value !== undefined) setDoc[`medical.${key}`] = value;
       }
+    }
+
+    // A roll-number edit (e.g. from Student 360) only sends currentRollNumber,
+    // not grade/section - fall back to the student's own current class so the
+    // duplicate check still runs against the right roster even when grade/
+    // section aren't part of this particular update.
+    if (setDoc.currentRollNumber !== undefined) {
+      const existing = await this.studentModel.findOne({ _id: id, schoolSlug }).select('currentGrade currentSection currentAcademicYear').lean();
+      if (!existing) throw new NotFoundException('Student not found');
+      await this.assertRollNumberAvailable(
+        schoolSlug,
+        setDoc.currentGrade ?? (existing as any).currentGrade,
+        setDoc.currentSection ?? (existing as any).currentSection,
+        setDoc.currentAcademicYear ?? (existing as any).currentAcademicYear,
+        setDoc.currentRollNumber,
+        id,
+      );
     }
     // Student Profile's own "Add/Edit Guardian" flow saves via this
     // generic PUT rather than the guardian-specific POST /guardians
@@ -2029,10 +2115,19 @@ export class StudentsService {
       }),
       this.studentModel.countDocuments({ ...filter, scholarshipHolder: true }),
       this.studentModel.countDocuments({ ...filter, specialNeeds: true }),
-      // Grade+Section breakdown — same as gradeDistribution but split further
+      // Grade+Section breakdown — same as gradeDistribution but split further.
+      // male/female counts added for the dashboard's "Students by class"
+      // gender-split bars (Academics breakdown widget) - additive fields,
+      // every existing caller that only reads grade/section/count is
+      // unaffected.
       this.studentModel.aggregate([
         { $match: { ...filter, status: 'active' } },
-        { $group: { _id: { grade: '$currentGrade', section: '$currentSection' }, count: { $sum: 1 } } },
+        { $group: {
+          _id: { grade: '$currentGrade', section: '$currentSection' },
+          count: { $sum: 1 },
+          male: { $sum: { $cond: [{ $eq: ['$gender', 'male'] }, 1, 0] } },
+          female: { $sum: { $cond: [{ $eq: ['$gender', 'female'] }, 1, 0] } },
+        } },
         { $sort: { '_id.grade': 1, '_id.section': 1 } },
       ]),
       // Min/max/avg age per grade+section, computed from dateOfBirth as of today.
@@ -2122,7 +2217,7 @@ export class StudentsService {
       },
       gradeDistribution,
       gradeSectionDistribution: gradeSectionDistribution.map((r: any) => ({
-        grade: r._id.grade, section: r._id.section, count: r.count,
+        grade: r._id.grade, section: r._id.section, count: r.count, male: r.male, female: r.female,
       })),
       sectionAgeStats: sectionAgeStats.map((r: any) => ({
         grade: r._id.grade, section: r._id.section,
@@ -2148,6 +2243,120 @@ export class StudentsService {
         outstanding: outstanding[0]?.total || 0,
       },
     };
+  }
+
+  // Class-wise attendance for a single day, for the Institution Overview
+  // dashboard's attendance widget - getDashboardStats' todayAttendance is
+  // school-wide only (no class breakdown, no Leave/Holiday/Unmarked
+  // buckets), and nothing else in the codebase aggregates attendance by
+  // class for one specific day. Every StudentAttendance.status value maps
+  // into exactly one of present/absent/leave/late, so totals always add up
+  // without an "other" bucket.
+  async getClassAttendanceDaySummary(schoolSlug: string, dateStr?: string) {
+    const date = dateStr ? new Date(dateStr) : new Date();
+    const dayStart = new Date(date);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const [classCounts, attendanceCounts, holiday] = await Promise.all([
+      this.studentModel.aggregate([
+        { $match: { schoolSlug, status: 'active' } },
+        { $group: { _id: { grade: '$currentGrade', section: '$currentSection' }, total: { $sum: 1 } } },
+      ]),
+      this.attendanceModel.aggregate([
+        { $match: { schoolSlug, date: { $gte: dayStart, $lt: dayEnd } } },
+        { $group: { _id: { grade: '$grade', section: '$section', status: '$status' }, count: { $sum: 1 } } },
+      ]),
+      // Same school-wide ('gradeLevels: []') holiday check assertValidSchoolDay
+      // uses above - this widget doesn't need the per-grade-scoped variant.
+      this.calendarEventModel.findOne({
+        schoolSlug, type: { $in: ['holiday', 'public_holiday'] }, gradeLevels: { $size: 0 },
+        startDate: { $lte: dayEnd }, endDate: { $gte: dayStart },
+      }).select('title').lean(),
+    ]);
+
+    const PRESENT_STATUSES = new Set(['present', 'half_day', 'half_day_am', 'half_day_pm']);
+    const LEAVE_STATUSES = new Set(['on_leave', 'excused', 'medical']);
+
+    type ClassRow = { grade: string; section: string; total: number; present: number; absent: number; leave: number; late: number };
+    const classMap = new Map<string, ClassRow>();
+    for (const c of classCounts as any[]) {
+      const grade = c._id.grade, section = c._id.section || '';
+      classMap.set(`${grade}|${section}`, { grade, section, total: c.total, present: 0, absent: 0, leave: 0, late: 0 });
+    }
+    for (const a of attendanceCounts as any[]) {
+      const row = classMap.get(`${a._id.grade}|${a._id.section || ''}`);
+      if (!row) continue; // attendance marked for a class with no currently-active students - ignore
+      if (PRESENT_STATUSES.has(a._id.status)) row.present += a.count;
+      else if (a._id.status === 'absent') row.absent += a.count;
+      else if (LEAVE_STATUSES.has(a._id.status)) row.leave += a.count;
+      else if (a._id.status === 'late') row.late += a.count;
+    }
+
+    const classes = Array.from(classMap.values())
+      .map((c) => ({ ...c, unmarked: Math.max(0, c.total - c.present - c.absent - c.leave - c.late) }))
+      .sort((a, b) => a.grade.localeCompare(b.grade) || a.section.localeCompare(b.section));
+
+    const totals = classes.reduce((acc, c) => {
+      acc.total += c.total; acc.present += c.present; acc.absent += c.absent;
+      acc.leave += c.leave; acc.late += c.late; acc.unmarked += c.unmarked;
+      return acc;
+    }, { total: 0, present: 0, absent: 0, leave: 0, late: 0, unmarked: 0 });
+
+    return {
+      date: dayStart.toISOString().slice(0, 10),
+      isHoliday: !!holiday,
+      holidayTitle: holiday?.title,
+      totals: {
+        ...totals,
+        classesCount: classes.length,
+        markedPct: totals.total ? Math.round(((totals.total - totals.unmarked) / totals.total) * 100) : 0,
+      },
+      classes,
+    };
+  }
+
+  // Student-side twin of HR's Staff getUpcomingReminders - same
+  // nextOccurrence/daysUntil math, over Student.dateOfBirth instead of
+  // Staff.dateOfBirth, for the dashboard's Birthdays widget. No existing
+  // query anywhere computes student birthday proximity.
+  async getUpcomingStudentBirthdays(schoolSlug: string, withinDays = 30) {
+    const students = await this.studentModel
+      .find({ schoolSlug, status: 'active', dateOfBirth: { $exists: true, $ne: null } },
+        { firstName: 1, lastName: 1, dateOfBirth: 1, currentGrade: 1, currentSection: 1 })
+      .lean();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const nextOccurrence = (date: Date) => {
+      const d = new Date(date);
+      const next = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+      if (next < today) next.setFullYear(today.getFullYear() + 1);
+      return next;
+    };
+    const daysUntil = (d: Date) => Math.round((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    const birthdays = students
+      .map((s: any) => {
+        const next = nextOccurrence(s.dateOfBirth);
+        const inDays = daysUntil(next);
+        return {
+          studentId: s._id,
+          name: `${s.firstName} ${s.lastName}`,
+          grade: s.currentGrade,
+          section: s.currentSection,
+          dateOfBirth: s.dateOfBirth,
+          date: next,
+          inDays,
+          type: 'birthday' as const,
+        };
+      })
+      .filter((b) => b.inDays <= withinDays)
+      .sort((a, b) => a.inDays - b.inDays);
+
+    return { birthdays };
   }
 
   // ============================================================
@@ -3179,9 +3388,26 @@ export class StudentsService {
     const admissionMap = new Map(existingByAdmission.map((s: any) => [s.admissionNumber, s]));
 
     const existingAll = await this.studentModel.find({ schoolSlug })
-      .select('admissionNumber firstName lastName dateOfBirth').lean();
+      .select('admissionNumber firstName lastName dateOfBirth currentGrade currentSection currentAcademicYear currentRollNumber status').lean();
     const nameDobMap = new Map(existingAll.map((s: any) =>
       [`${(s.firstName || '').toLowerCase()}|${(s.lastName || '').toLowerCase()}|${s.dateOfBirth ? new Date(s.dateOfBirth).toISOString().slice(0, 10) : ''}`, s]));
+
+    // Same duplicate-roll-number guard as every other write path
+    // (createStudent/updateStudent/createFromEnrollment) - seeded from
+    // every already-active student, then updated as each row is processed
+    // so two rows in the SAME csv claiming the same roll number in the
+    // same class are caught too, not just collisions against pre-existing
+    // students.
+    const rollKey = (grade: any, section: any, year: any, roll: any) =>
+      `${normalizeGradeName(grade)}|${normalizeSectionName(section)}|${year || ''}|${String(roll ?? '').trim()}`;
+    const takenRollNumbers = new Map<string, string>();
+    for (const s of existingAll as any[]) {
+      if (s.status !== 'active' || !s.currentRollNumber) continue;
+      takenRollNumbers.set(
+        rollKey(s.currentGrade, s.currentSection, s.currentAcademicYear, s.currentRollNumber),
+        `${s.firstName || ''} ${s.lastName || ''}`.trim() || 'another student',
+      );
+    }
 
     const toInsert: any[] = [];
     const updateOps: any[] = [];
@@ -3231,6 +3457,18 @@ export class StudentsService {
       if (existing) {
         if (duplicateAction === 'skip') { skipped++; continue; }
         if (duplicateAction === 'update') {
+          const newRoll = String(row.data.currentRollNumber ?? '').trim();
+          if (newRoll) {
+            const newKey = rollKey(row.data.currentGrade, row.data.currentSection, (existing as any).currentAcademicYear, newRoll);
+            const oldKey = rollKey((existing as any).currentGrade, (existing as any).currentSection, (existing as any).currentAcademicYear, (existing as any).currentRollNumber);
+            const holder = takenRollNumbers.get(newKey);
+            if (holder && newKey !== oldKey) {
+              failed.push({ row: row.row, error: `Roll number ${newRoll} is already used by ${holder} in this class - row skipped. Assign a different roll number and re-import this row.` });
+              continue;
+            }
+            if (oldKey !== newKey) takenRollNumbers.delete(oldKey);
+            takenRollNumbers.set(newKey, `${row.data.firstName || (existing as any).firstName || ''} ${row.data.lastName || (existing as any).lastName || ''}`.trim() || 'another student');
+          }
           const setFields: any = {
             currentGrade: row.data.currentGrade,
             currentSection: row.data.currentSection,
@@ -3263,6 +3501,17 @@ export class StudentsService {
           continue;
         }
         // duplicateAction === 'createAnyway' falls through to insert below
+      }
+
+      const newStudentRoll = String(row.data.currentRollNumber ?? '').trim();
+      if (newStudentRoll) {
+        const key = rollKey(row.data.currentGrade, row.data.currentSection, academicYear, newStudentRoll);
+        const holder = takenRollNumbers.get(key);
+        if (holder) {
+          failed.push({ row: row.row, error: `Roll number ${newStudentRoll} is already used by ${holder} in this class - row skipped. Assign a different roll number and re-import this row.` });
+          continue;
+        }
+        takenRollNumbers.set(key, `${row.data.firstName || ''} ${row.data.lastName || ''}`.trim() || 'another student');
       }
 
       const studentId = generateUniqueStudentId();

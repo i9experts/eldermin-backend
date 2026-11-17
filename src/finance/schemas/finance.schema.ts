@@ -360,6 +360,44 @@ export class Expense {
   @Prop() accountCode: string;
   @Prop() departmentId: string;
   @Prop() campusId: string;
+  // Three-way-match / Odoo-standard AP upgrade (additive — every field below
+  // is optional at the schema level so existing documents, which predate
+  // all of this, keep loading and displaying exactly as before; the
+  // required-on-create checks live in FinanceService.createExpense, not here).
+  //
+  // Real vendor master link, mirroring VendorBill.vendorId — `vendorName`
+  // above stays the denormalized display value (now set FROM the vendor
+  // record when vendorId is given, same convention as VendorBill), and is
+  // still settable directly for a one-off vendor not yet in the master.
+  @Prop({ type: Types.ObjectId, ref: 'Vendor', default: null }) vendorId: Types.ObjectId | null;
+  // The vendor's own invoice number (what they printed on the paper/PDF
+  // invoice) — distinct from `expenseNo`, which is Eldermin's own internal
+  // sequence. Checked for schoolSlug+vendorId+invoiceNumber uniqueness in
+  // FinanceService.createExpense as a duplicate-payment control.
+  @Prop() invoiceNumber: string;
+  @Prop({ type: Types.ObjectId, ref: 'PaymentTerm', default: null }) paymentTermId: Types.ObjectId | null;
+  @Prop() paymentTermName: string;
+  // Auto-calculated from `date` + the payment term's dueDays when not given
+  // explicitly, same convention as VendorBill's dueDate (see createExpense).
+  @Prop() dueDate: Date;
+  // Withholding tax preview, computed from the vendor's WithholdingTaxCategory
+  // at creation time for display (so the approver can see net payable up
+  // front) — mirrors VendorPayment.withholdingAmount's rate/accountCode
+  // convention, but the authoritative application (the actual journal split)
+  // still happens at pay time in postExpensePaidJournal, same as the Vendor
+  // Bill flow withholds at payment, not at bill time.
+  @Prop({ type: Types.ObjectId, ref: 'WithholdingTaxCategory', default: null }) withholdingCategoryId: Types.ObjectId | null;
+  @Prop({ default: 0 }) withholdingAmount: number;
+  // Optional three-way match: link this invoice to the Procurement PO it
+  // bills against, and the GRN confirming goods were actually received,
+  // so a mismatch (invoice amount vs PO total, or GRN not fully received)
+  // can be flagged before approval. Validation/matching logic lives in the
+  // frontend (it already has both PO and GRN data loaded); these are plain
+  // id references with no cross-module Mongoose population.
+  @Prop() purchaseOrderId: string;
+  @Prop() poNumber: string;
+  @Prop() grnId: string;
+  @Prop() grnNumber: string;
   // Explicit Cost Center this expense is charged against, so it can be
   // tagged on the journal lines when posted (see postExpensePaidJournal)
   // and matched against a Budget line's own cost center resolution
@@ -392,6 +430,16 @@ export const ExpenseSchema = SchemaFactory.createForClass(Expense);
 ExpenseSchema.index({ schoolSlug: 1, date: -1 });
 ExpenseSchema.index({ schoolSlug: 1, category: 1, date: -1 });
 ExpenseSchema.index({ schoolSlug: 1, status: 1 });
+// Duplicate-payment guard: the same vendor can't have the same invoice
+// number recorded twice. Sparse so pre-upgrade documents (and any one-off
+// expense with no vendorId/invoiceNumber at all) are never indexed here and
+// never collide — FinanceService.createExpense also checks this explicitly
+// up front for a friendly error message rather than relying on the raw
+// duplicate-key error.
+ExpenseSchema.index(
+  { schoolSlug: 1, vendorId: 1, invoiceNumber: 1 },
+  { unique: true, sparse: true },
+);
 ExpenseSchema.pre('validate', function () {
   if (this.isNew && !this.expenseNo) {
     const d = new Date();

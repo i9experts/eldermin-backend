@@ -7,7 +7,10 @@ function makeService(opts: {
 } = {}) {
   const insertedDocs: any[] = [];
   const settingsModel: any = {
-    findOne: jest.fn().mockReturnValue({ lean: () => Promise.resolve(opts.settings ?? null) }),
+    findOne: jest.fn().mockReturnValue({
+      lean: () => Promise.resolve(opts.settings ?? null),
+      select: () => ({ lean: () => Promise.resolve(opts.settings ?? null) }),
+    }),
     findOneAndUpdate: jest.fn().mockResolvedValue({ schoolSlug: 'demo-school' }),
   };
   const invigilatorModel: any = {
@@ -22,8 +25,11 @@ function makeService(opts: {
   const studentModel: any = {
     find: jest.fn().mockReturnValue({ select: () => ({ lean: () => Promise.resolve(opts.students ?? []) }) }),
   };
-  const service = new QaidaNazraExtrasService(settingsModel, invigilatorModel, homeLogModel, studentModel);
-  return { service, insertedDocs, settingsModel, invigilatorModel, homeLogModel };
+  const nazraProgressModel: any = {
+    updateMany: jest.fn().mockResolvedValue({ modifiedCount: 0 }),
+  };
+  const service = new QaidaNazraExtrasService(settingsModel, invigilatorModel, homeLogModel, studentModel, nazraProgressModel);
+  return { service, insertedDocs, settingsModel, invigilatorModel, homeLogModel, nazraProgressModel };
 }
 
 describe('QaidaNazraExtrasService.getSettings', () => {
@@ -32,6 +38,37 @@ describe('QaidaNazraExtrasService.getSettings', () => {
     const settings = await service.getSettings('demo-school');
     expect(settings.nazraReverseOrder).toBe(false);
     expect(settings.invigilatorKpis).toEqual(DEFAULT_INVIGILATOR_KPIS);
+  });
+});
+
+// Pins the fix for already-enrolled students getting permanently stuck
+// after a school turns nazraReverseOrder on/off: their NazraProgress doc
+// was seeded at creation time under the OLD setting (e.g. Para 1
+// in_progress), so under the new setting the actual starting Para (Para 30
+// in reverse) was still 'not_started' forever, blocking every Sabaq entry
+// next to it with "hasn't been started yet".
+describe('QaidaNazraExtrasService.updateSettings (NazraProgress reseed)', () => {
+  it('reseeds untouched students (no diary entries yet) to the new order', async () => {
+    const { service, nazraProgressModel } = makeService({ settings: { nazraReverseOrder: false } });
+    await service.updateSettings('demo-school', { nazraReverseOrder: true });
+    expect(nazraProgressModel.updateMany).toHaveBeenCalledTimes(1);
+    const [filter, update] = nazraProgressModel.updateMany.mock.calls[0];
+    expect(filter).toMatchObject({ schoolSlug: 'demo-school', recordType: { $ne: 'joined_later' }, diaryEntries: { $size: 0 } });
+    expect(update.$set.currentPara).toBe(30);
+    expect(update.$set.paras.find((p: any) => p.paraNumber === 30).status).toBe('in_progress');
+    expect(update.$set.paras.find((p: any) => p.paraNumber === 1).status).toBe('not_started');
+  });
+
+  it('does nothing when the reverse-order setting is unchanged', async () => {
+    const { service, nazraProgressModel } = makeService({ settings: { nazraReverseOrder: true } });
+    await service.updateSettings('demo-school', { nazraReverseOrder: true });
+    expect(nazraProgressModel.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when the dto does not touch nazraReverseOrder', async () => {
+    const { service, nazraProgressModel } = makeService({ settings: { nazraReverseOrder: false } });
+    await service.updateSettings('demo-school', { invigilatorKpis: [] } as any);
+    expect(nazraProgressModel.updateMany).not.toHaveBeenCalled();
   });
 });
 

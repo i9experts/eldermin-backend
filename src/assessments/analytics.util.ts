@@ -88,6 +88,22 @@ export function computeStudentOverallStats(marks: AnalyticsMarkRow[]): StudentOv
   return results;
 }
 
+export interface RankedStudentStat extends StudentOverallStat {
+  classPosition: number;
+  totalStudents: number;
+}
+
+/** Ranks a set of students' overall % within the same scope (e.g. every
+ * TermReportCard for one grade/section/academicYear/term), highest
+ * first - the term-wide equivalent of generateReportCards' existing
+ * single-assessment classPosition assignment. Ties aren't shared; 1/2/3…
+ * follows sort order, same convention as the single-exam ranking. */
+export function rankStudentStats(stats: StudentOverallStat[]): RankedStudentStat[] {
+  const sorted = [...stats].sort((a, b) => b.overallPct - a.overallPct);
+  const totalStudents = sorted.length;
+  return sorted.map((s, i) => ({ ...s, classPosition: i + 1, totalStudents }));
+}
+
 const GRADE_BANDS = [
   { grade: 'A+', min: 90 }, { grade: 'A', min: 80 }, { grade: 'B+', min: 70 },
   { grade: 'B', min: 60 }, { grade: 'C', min: 50 }, { grade: 'D', min: 40 }, { grade: 'F', min: 0 },

@@ -38,6 +38,16 @@ import {
 import { ExamPaper, ExamPaperDocument } from './schemas/exam-paper.schema';
 import { OMRAnswerSheet, OMRAnswerSheetDocument } from './schemas/omr-answer-sheet.schema';
 import { QuizAttempt, QuizAttemptDocument } from './schemas/quiz-attempt.schema';
+import { TermReportCard, TermReportCardDocument } from './schemas/term-report-card.schema';
+import { AssessmentGradingScale, AssessmentGradingScaleDocument } from './schemas/grading-scale.schema';
+import { AssessmentVisibilitySettings, AssessmentVisibilitySettingsDocument } from './schemas/assessment-visibility-settings.schema';
+import { GRADING_SCALE_PRESETS, findGradingPreset } from './grading-scale-presets';
+import { BehaviourService } from '../behaviour/behaviour.service';
+import { QaidaService } from '../behaviour/qaida.service';
+import { NazraService } from '../behaviour/nazra.service';
+import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
+import { StudentsService } from '../students/students.service';
+import { ParentEngagementService } from '../parent-engagement/parent-engagement.service';
 import { detectOMRAnswers } from './omr-detection.util';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
@@ -51,7 +61,7 @@ import { Subject, SubjectDocument } from '../modules/academics/schemas/subject.s
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import {
   AnalyticsMarkRow, computeStudentOverallStats, gradeDistribution, classComparison,
-  QuizAnswerRow, computeQuizInsights,
+  QuizAnswerRow, computeQuizInsights, rankStudentStats,
 } from './analytics.util';
 
 import {
@@ -59,13 +69,19 @@ import {
   CreateQuestionDto, QuestionQueryDto,
   BulkMarkEntryDto, VerifyMarksDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
-  PublishResultDto, ReportCardQueryDto,
+  PublishResultDto, UnpublishResultDto, ReportCardQueryDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto, UnpublishTermReportCardsDto,
+  CreateGradingScaleDto, UpdateGradingScaleDto, UpdateAssessmentVisibilitySettingsDto,
 } from './dto/assessment.dto';
 
 const paged = (page = 1, limit = 20) => ({ skip: (page - 1) * limit, limit });
 
-// Grade from percentage using default scale
-const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gpa: number } => {
+// Grade from percentage. `scale` is an Assessment.gradingScale-shaped
+// snapshot ({ label: { min, gpa } }); when absent (every assessment that
+// predates Assessment Master Settings, or one whose framework still has no
+// AssessmentGradingScale) this falls back to the same fixed scale Eldermin
+// has always used - legacy behaviour never changes or gets blocked.
+const getGrade = (pct: number, scale?: Record<string, { min: number; gpa: number }>): { grade: string; gpa: number } => {
   const defaultScale = [
     { grade: 'A+', min: 90, gpa: 4.0 },
     { grade: 'A',  min: 80, gpa: 3.7 },
@@ -75,10 +91,14 @@ const getGrade = (pct: number, scale?: Record<string, any>): { grade: string; gp
     { grade: 'D',  min: 40, gpa: 1.0 },
     { grade: 'F',  min: 0,  gpa: 0.0 },
   ];
-  for (const entry of defaultScale) {
+  const entries = scale && Object.keys(scale).length
+    ? Object.entries(scale).map(([grade, v]) => ({ grade, min: v.min, gpa: v.gpa }))
+    : defaultScale;
+  const sorted = [...entries].sort((a, b) => b.min - a.min);
+  for (const entry of sorted) {
     if (pct >= entry.min) return { grade: entry.grade, gpa: entry.gpa };
   }
-  return { grade: 'F', gpa: 0.0 };
+  return { grade: sorted[sorted.length - 1]?.grade ?? 'F', gpa: sorted[sorted.length - 1]?.gpa ?? 0.0 };
 };
 
 export const TEACHER_MARKS_LOCKED_MESSAGE =
@@ -126,7 +146,131 @@ export class AssessmentService {
     // strictly-typed `new AssessmentService(...)` test construction
     // (exam-paper-error-handling.spec.ts) keeps compiling unchanged.
     @Optional() private gamificationService?: GamificationService,
+    // Comprehensive Term Report Card - same trailing-optional convention
+    // as gamificationService above, for the same reason (keeps every
+    // existing direct `new AssessmentService(...)` test construction,
+    // e.g. assessment-test-fakes.ts, compiling with no changes). Always
+    // present in the real app via AssessmentModule's imports/forFeature.
+    @Optional() @InjectModel(TermReportCard.name) private termReportCardModel?: Model<TermReportCardDocument>,
+    @Optional() private behaviourService?: BehaviourService,
+    @Optional() private qaidaService?: QaidaService,
+    @Optional() private nazraService?: NazraService,
+    @Optional() private qaidaNazraExtrasService?: QaidaNazraExtrasService,
+    @Optional() private studentsService?: StudentsService,
+    @Optional() private parentEngagementService?: ParentEngagementService,
+    // Assessment Master Settings - same trailing-optional convention as
+    // termReportCardModel above, for the same reason (every existing
+    // `new AssessmentService(...)` test construction keeps compiling).
+    // Always present in the real app via AssessmentModule's forFeature.
+    @Optional() @InjectModel(AssessmentGradingScale.name) private gradingScaleModel?: Model<AssessmentGradingScaleDocument>,
+    @Optional() @InjectModel(AssessmentVisibilitySettings.name) private visibilitySettingsModel?: Model<AssessmentVisibilitySettingsDocument>,
   ) {}
+
+  // ── Assessment Master Settings: Grading Scales ──────────────────
+
+  private bandsToGradingScale(bands: { label: string; minPercent: number; gpaPoint?: number }[]): Record<string, { min: number; gpa: number }> {
+    const rec: Record<string, { min: number; gpa: number }> = {};
+    for (const b of bands) rec[b.label] = { min: b.minPercent, gpa: b.gpaPoint ?? 0 };
+    return rec;
+  }
+
+  /** Plain lookup, no snapshot/mutation - used by both generateReportCards (via resolveAndSnapshotGradingScale) and generateTermReportCards (which has no single assessment doc to snapshot onto). */
+  private async lookupGradingScale(schoolSlug: string, framework?: string): Promise<Record<string, { min: number; gpa: number }> | null> {
+    if (!framework || !this.gradingScaleModel) return null;
+    const scale: any = await this.gradingScaleModel.findOne({ schoolSlug, framework }).lean();
+    return scale ? this.bandsToGradingScale(scale.bands) : null;
+  }
+
+  /**
+   * Resolves the grading scale to use for one assessment's report cards and,
+   * the first time this runs for it, snapshots the result onto
+   * `assessment.gradingScale` so a later edit to the master
+   * AssessmentGradingScale never changes a grade already generated
+   * (Assessment Master Settings' "never retroactive" rule - see
+   * Assessment.gradingScaleSnapshotted).
+   *
+   * - No `framework` set (every assessment created before Assessment Master
+   *   Settings existed) -> legacy behaviour: reuse whatever is already in
+   *   `gradingScale` (the long-standing hardcoded default). Never blocks.
+   * - `framework` set and already snapshotted -> reuse the stored
+   *   `gradingScale` as-is, never re-resolves even if the master scale
+   *   changed since.
+   * - `framework` set, not yet snapshotted -> look up the school's
+   *   AssessmentGradingScale for that framework. Found -> snapshot + persist
+   *   `gradingScaleSnapshotted: true`. Not found -> throws, which is what
+   *   blocks Generate Report Cards (and therefore Publish Results, which
+   *   requires report cards to already exist) until an admin configures one.
+   */
+  private async resolveAndSnapshotGradingScale(assessment: any): Promise<Record<string, { min: number; gpa: number }>> {
+    if (!assessment.framework || assessment.gradingScaleSnapshotted) return assessment.gradingScale;
+    const record = await this.lookupGradingScale(assessment.schoolSlug, assessment.framework);
+    if (!record) {
+      throw new BadRequestException(
+        `No grading scale is configured for the "${assessment.framework}" framework yet. Add one under Assessments → Settings → Grading Scales before generating report cards.`,
+      );
+    }
+    await this.assessmentModel.updateOne({ _id: assessment._id }, { $set: { gradingScale: record, gradingScaleSnapshotted: true } });
+    return record;
+  }
+
+  /** The framework most of a term's included assessments agree on, or undefined if none have one set yet (legacy term, falls back to the default scale, never blocks). */
+  private majorityFramework(assessments: { framework?: string }[]): string | undefined {
+    const counts = new Map<string, number>();
+    for (const a of assessments) if (a.framework) counts.set(a.framework, (counts.get(a.framework) ?? 0) + 1);
+    if (!counts.size) return undefined;
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+
+  getGradingScalePresets() {
+    return GRADING_SCALE_PRESETS;
+  }
+
+  async listGradingScales(schoolSlug: string) {
+    if (!this.gradingScaleModel) return [];
+    return this.gradingScaleModel.find({ schoolSlug }).sort({ framework: 1 });
+  }
+
+  async createGradingScale(dto: CreateGradingScaleDto) {
+    if (!this.gradingScaleModel) throw new InternalServerErrorException('Grading scales are not available');
+    const existing = await this.gradingScaleModel.findOne({ schoolSlug: dto.schoolSlug, framework: dto.framework });
+    if (existing) throw new ConflictException(`A grading scale for the "${dto.framework}" framework already exists - edit it instead of creating another.`);
+    return this.gradingScaleModel.create(dto);
+  }
+
+  async updateGradingScale(id: string, schoolSlug: string, dto: UpdateGradingScaleDto) {
+    if (!this.gradingScaleModel) throw new InternalServerErrorException('Grading scales are not available');
+    assertValidObjectId(id, 'grading scale');
+    const updated = await this.gradingScaleModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+    if (!updated) throw new NotFoundException('Grading scale not found');
+    return updated;
+  }
+
+  async deleteGradingScale(id: string, schoolSlug: string) {
+    if (!this.gradingScaleModel) throw new InternalServerErrorException('Grading scales are not available');
+    assertValidObjectId(id, 'grading scale');
+    const deleted = await this.gradingScaleModel.findOneAndDelete({ _id: id, schoolSlug });
+    if (!deleted) throw new NotFoundException('Grading scale not found');
+    return { message: 'Grading scale deleted' };
+  }
+
+  // ── Assessment Master Settings: Parent Visibility ────────────────
+
+  async getVisibilitySettings(schoolSlug: string) {
+    const defaults = { schoolSlug, shareGPA: true, shareSubjectBreakdown: true, shareClassPosition: false, shareClassAverage: false, passLabel: 'Pass', failLabel: 'Fail' };
+    if (!this.visibilitySettingsModel) return defaults;
+    const existing = await this.visibilitySettingsModel.findOne({ schoolSlug }).lean();
+    return existing ?? defaults;
+  }
+
+  async updateVisibilitySettings(schoolSlug: string, dto: UpdateAssessmentVisibilitySettingsDto) {
+    if (!this.visibilitySettingsModel) throw new InternalServerErrorException('Visibility settings are not available');
+    const { schoolSlug: _ignored, ...patch } = dto;
+    return this.visibilitySettingsModel.findOneAndUpdate(
+      { schoolSlug },
+      { $set: patch, $setOnInsert: { schoolSlug } },
+      { new: true, upsert: true },
+    );
+  }
 
   /** TEACHER callers only: my Staff identity + the classes I teach, resolved from the DB (never the JWT claims). 403 when no Staff record. */
   private async teacherContext(user: any): Promise<{ staffId: string; classes: TeacherClassRef[]; subjectClasses: TeacherSubjectClassRef[]; isClassTeacher: boolean; classTeacherClasses: TeacherClassRef[] }> {
@@ -316,21 +460,32 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async getExamPapers(schoolSlug: string, query: any) {
+    const { page = 1, limit = 20, search } = query;
+    const { skip } = paged(page, limit);
     const filter: any = { schoolSlug };
     if (query.subject) filter.subject = query.subject;
     if (query.grade) filter.grade = query.grade;
-    const papers = await this.examPaperModel.find(filter).sort({ createdAt: -1 }).lean();
+    if (search) filter.title = { $regex: this.escapeRegex(search), $options: 'i' };
+    // Previously an unbounded .find() with no page/limit/countDocuments at
+    // all - every exam paper and worksheet a school ever created loaded in
+    // one request, with no pager anywhere in the UI to even reach a second
+    // page once this got large. Mirrors getQuestions' paging above.
+    const [papers, total] = await Promise.all([
+      this.examPaperModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      this.examPaperModel.countDocuments(filter),
+    ]);
     // Real total marks per paper (sum of actual question marks), not a
     // separately-stored number that could silently drift out of sync
     // with the questions actually in the paper.
     const allQuestionIds = [...new Set(papers.flatMap((p: any) => p.sections.flatMap((s: any) => s.questionIds.map(String))))];
     const questions = await this.questionModel.find({ _id: { $in: allQuestionIds }, schoolSlug }).select('marks').lean();
     const marksById = new Map(questions.map((q: any) => [String(q._id), q.marks]));
-    return papers.map((p: any) => ({
+    const data = papers.map((p: any) => ({
       ...p,
       totalMarks: p.sections.reduce((sum: number, s: any) => sum + s.questionIds.reduce((s2: number, qid: any) => s2 + (marksById.get(String(qid)) || 0), 0), 0),
       questionCount: p.sections.reduce((sum: number, s: any) => sum + s.questionIds.length, 0),
     }));
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit) } };
   }
 
   async getExamPaperById(id: string, schoolSlug: string) {
@@ -1386,9 +1541,25 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       this.markModel.countDocuments(base),
     ]);
 
-    // Performance stats across all completed assessments
+    // Performance stats across finalized assessments only. MarkEntry has no
+    // status of its own - a teacher can enter marks as soon as an assessment
+    // is "ongoing", well before it's marked completed/result_published, and
+    // those entries used to count toward this summary immediately. That made
+    // the Dashboard's Grade-wise Performance look fully populated with real
+    // pass/fail numbers while the same assessments still sat as drafts/not
+    // yet generated in the Planner - confusing, and not a trustworthy "this
+    // is the finalized result" number. Join back to the assessment and only
+    // count marks whose assessment has actually been completed or published.
     const avgPerformance = await this.markModel.aggregate([
       { $match: { ...base, obtainedMarks: { $ne: null }, isAbsent: false } },
+      { $lookup: {
+        from: 'assessments',
+        localField: 'assessmentId',
+        foreignField: '_id',
+        as: 'assessment',
+      }},
+      { $unwind: '$assessment' },
+      { $match: { 'assessment.status': { $in: ['completed', 'result_published'] } } },
       { $group: {
         _id: '$grade',
         avgPct: { $avg: '$percentage' },
@@ -1877,16 +2048,27 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const mark: any = await this.markModel.findOne({ _id: id, schoolSlug });
     if (!mark) throw new NotFoundException('Mark entry not found');
 
+    const assessment = await this.assessmentModel.findById(mark.assessmentId);
+
     // Same teacher-only lock bulkEnterMarks enforces - other roles
     // (admin, principal, etc.) keep today's overwrite behaviour.
     if (isTeacherCaller(requestingUser)) {
-      const assessment = await this.assessmentModel.findById(mark.assessmentId);
       await this.assertTeacherMarksScope(requestingUser, assessment, mark.subject, 'PATCH /assessments/marks/:id');
       this.assertTeacherMarksNotLocked(assessment);
       if (mark.verified) {
         throw new ConflictException(`Marks for ${mark.studentName || mark.studentId}${mark.rollNumber ? ` (roll ${mark.rollNumber})` : ''} are verified and locked.`);
       }
     }
+
+    // Rows written by the raw bulkWrite/updateOne paths (bulkEnterMarks,
+    // upsertMarkEntryFromAttempt) skip schema validation on write, so an
+    // older row can be missing a field the schema has since made required
+    // (e.g. academicYear, assessmentTitle). This is the only write path
+    // that calls the full-validation mark.save() - backfill from the
+    // parent assessment first so an old row doesn't 500 on an edit that
+    // has nothing to do with the missing field.
+    if (!mark.academicYear && assessment?.academicYear) mark.academicYear = assessment.academicYear;
+    if (!mark.assessmentTitle && assessment?.title) mark.assessmentTitle = assessment.title;
 
     const isAbsent = dto.isAbsent ?? mark.isAbsent ?? false;
     const isExempt = dto.isExempt ?? mark.isExempt ?? false;
@@ -1906,7 +2088,15 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     mark.gpa = gpa ?? null;
     mark.result = result;
     if (dto.remarks !== undefined) mark.remarks = dto.remarks;
-    await mark.save();
+    try {
+      await mark.save();
+    } catch (err: any) {
+      if (err?.name === 'ValidationError') {
+        const fields = Object.keys(err.errors || {}).join(', ') || 'a required field';
+        throw new BadRequestException(`Could not save this mark - it's missing ${fields}. Please re-enter it from the class roster (Enter Marks) instead of editing it directly.`);
+      }
+      throw err;
+    }
     return mark;
   }
 
@@ -2270,6 +2460,11 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     const assessment = await this.assessmentModel.findById(dto.assessmentId);
     if (!assessment) throw new NotFoundException('Assessment not found');
 
+    // Resolves (and, the first time, snapshots) this assessment's grading
+    // scale - throws, blocking generation, if a framework is set but no
+    // AssessmentGradingScale exists for it yet (Assessment Master Settings).
+    const scale = await this.resolveAndSnapshotGradingScale(assessment);
+
     // Get all marks for this assessment
     const allMarks = await this.markModel.find({
       assessmentId: new Types.ObjectId(dto.assessmentId),
@@ -2293,15 +2488,23 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       const totalMax = marks.reduce((a, m) => a + m.totalMarks, 0);
       const totalObtained = validMarks.reduce((a, m) => a + (m.obtainedMarks || 0), 0);
       const pct = totalMax > 0 ? parseFloat(((totalObtained / totalMax) * 100).toFixed(1)) : 0;
-      const gradeInfo = getGrade(pct);
+      const gradeInfo = getGrade(pct, scale);
       const anyFail = marks.some(m => m.result === 'fail');
 
+      // Each subject's grade is recomputed from its own percentage against
+      // this assessment's resolved scale, rather than trusting
+      // m.grade_result verbatim - that field was written at mark-entry time
+      // using whatever scale was in effect then (always the plain default,
+      // since Enter Marks never resolves a framework scale), so without
+      // this a report card could show an overall grade under e.g. the
+      // Cambridge scale while a subject row still showed a default-scale
+      // letter for the same percentage.
       const subjects = marks.map(m => ({
         subject: m.subject,
         totalMarks: m.totalMarks,
         obtainedMarks: m.obtainedMarks || 0,
         percentage: m.percentage || 0,
-        grade: m.grade_result || 'F',
+        grade: (m.isAbsent || m.isExempt) ? (m.grade_result || 'F') : getGrade(m.percentage || 0, scale).grade,
         gpa: m.gpa || 0,
         result: m.result || 'fail',
         remarks: m.remarks || '',
@@ -2348,9 +2551,13 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     }).sort({ overallPercentage: -1 });
 
     const totalStudents = saved.length;
+    const classAverage = totalStudents
+      ? parseFloat((saved.reduce((sum, r) => sum + (r.overallPercentage || 0), 0) / totalStudents).toFixed(1))
+      : 0;
     for (let i = 0; i < saved.length; i++) {
       saved[i].classPosition = i + 1;
       saved[i].totalStudents = totalStudents;
+      saved[i].classAveragePercentage = classAverage;
       await saved[i].save();
     }
 
@@ -2363,7 +2570,7 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async getReportCards(schoolSlug: string, query: ReportCardQueryDto) {
-    const { page, limit, assessmentId, studentId, grade, academicYear, published } = query;
+    const { page, limit, assessmentId, studentId, grade, academicYear, published, search } = query;
     const { skip } = paged(page, limit);
 
     const filter: any = { schoolSlug };
@@ -2372,11 +2579,36 @@ You are assisting a teacher's professional judgement, not replacing it - classif
     if (grade) filter.grade = grade;
     if (academicYear) filter.academicYear = academicYear;
     if (published !== undefined) filter.published = published;
+    // The "master search" on the Results list needs to reach every student
+    // across every page/assessment, not just whatever happens to already be
+    // loaded client-side - matched the same way Question Bank search does
+    // (escaped, case-insensitive, name or roll number).
+    if (search) {
+      const safeSearch = this.escapeRegex(search.trim());
+      filter.$or = [
+        { studentName: { $regex: safeSearch, $options: 'i' } },
+        { rollNumber: { $regex: safeSearch, $options: 'i' } },
+      ];
+    }
 
     const [data, total] = await Promise.all([
-      this.reportCardModel.find(filter).sort({ classPosition: 1 }).skip(skip).limit(limit!),
+      this.reportCardModel.find(filter).sort({ classPosition: 1 }).skip(skip).limit(limit!).lean(),
       this.reportCardModel.countDocuments(filter),
     ]);
+
+    // Report cards are a marks snapshot - they never stored a student photo.
+    // Join it in here (same denormalization pattern the PDF generator uses)
+    // so the Results list can show a real profile picture instead of only
+    // initials, without having to backfill/duplicate it onto every card.
+    if (data.length) {
+      const students = await this.studentModel
+        .find({ _id: { $in: data.map((rc: any) => rc.studentId) }, schoolSlug })
+        .select('photo')
+        .lean();
+      const photoByStudentId = new Map(students.map((s: any) => [String(s._id), s.photo]));
+      for (const rc of data as any[]) rc.studentPhoto = photoByStudentId.get(String(rc.studentId)) || null;
+    }
+
     return { data, meta: { total, page, limit, pages: Math.ceil(total / limit!) } };
   }
 
@@ -2412,6 +2644,15 @@ You are assisting a teacher's professional judgement, not replacing it - classif
   }
 
   async publishResults(dto: PublishResultDto) {
+    const reportCardCount = await this.reportCardModel.countDocuments({
+      assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug,
+    });
+    if (!reportCardCount) {
+      // Previously this silently flipped the assessment's status to
+      // result_published and notified zero guardians - admins had no way
+      // to tell "nothing to publish yet" from "published successfully".
+      throw new BadRequestException('No report cards exist for this assessment yet - generate report cards before publishing.');
+    }
     await this.reportCardModel.updateMany(
       { assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug },
       { $set: { published: true, publishedAt: new Date() } },
@@ -2425,6 +2666,356 @@ You are assisting a teacher's professional judgement, not replacing it - classif
       body: `${assessment?.title || 'Assessment'} results are now available.`, relatedEntityId: String(dto.assessmentId),
     });
     return { message: 'Results published successfully' };
+  }
+
+  /** Reverses publishResults: parents immediately lose access (the Parent
+   * Portal's results/term-report-cards queries already filter on
+   * published:true, so clearing the flag is all that's needed there) and
+   * teachers regain the ability to edit marks for this assessment, since
+   * assertTeacherMarksNotLocked only locks on status 'result_published' /
+   * resultPublished:true. Status reverts to 'completed' - the state every
+   * assessment is already guaranteed to have passed through before
+   * publishing was ever possible. */
+  async unpublishResults(dto: UnpublishResultDto) {
+    await this.reportCardModel.updateMany(
+      { assessmentId: new Types.ObjectId(dto.assessmentId), schoolSlug: dto.schoolSlug },
+      { $set: { published: false }, $unset: { publishedAt: '' } },
+    );
+    await this.assessmentModel.findByIdAndUpdate(dto.assessmentId, {
+      $set: { status: 'completed', resultPublished: false },
+      $unset: { resultPublishedAt: '', resultPublishedBy: '' },
+    });
+    return { message: 'Results unpublished - no longer visible in the parent app' };
+  }
+
+  // ============================================================
+  // TERM REPORT CARDS (comprehensive, whole-term report)
+  // ============================================================
+  /** Generates one TermReportCard per student in scope, combining every
+   * assessment this academicYear+term into a term-wide academic summary
+   * and class position (NOT the same as ReportCard.classPosition, which
+   * only ranks within one exam), plus whichever optional sections the
+   * admin asked for - Tarbiyah, Qaida, Nazra, attendance, compiled
+   * teacher feedback, Parent Engagement Score. A student with no marks
+   * at all for this academicYear+term is skipped (nothing academic to
+   * report), same convention as generateReportCards. */
+  async generateTermReportCards(dto: GenerateTermReportCardsDto) {
+    if (!this.termReportCardModel) throw new InternalServerErrorException('Term report cards are not available');
+    const { academicYear, term, scopeType = 'all', scopeValue, schoolSlug, generatedBy } = dto;
+    const sections = dto.sections || {};
+
+    const studentMatch: any = { schoolSlug, status: 'active' };
+    if (scopeType === 'class' && scopeValue) {
+      studentMatch.currentGrade = scopeValue;
+    } else if (scopeType === 'section' && scopeValue) {
+      const [g, s] = scopeValue.split('::');
+      studentMatch.currentGrade = g;
+      if (s) studentMatch.currentSection = s;
+    } else if (scopeType === 'student' && scopeValue) {
+      studentMatch._id = new Types.ObjectId(scopeValue);
+    }
+    const students = await this.studentModel.find(studentMatch).lean();
+    if (students.length === 0) return { message: 'No matching active students found for this scope', count: 0, skipped: 0 };
+    const studentIds = students.map((s: any) => s._id);
+
+    // Every assessment in this term feeds the academic summary - a term
+    // report isn't tied to one exam, unlike ReportCard.
+    const assessments = await this.assessmentModel.find({ schoolSlug, academicYear, term }).lean();
+    const assessmentIds = assessments.map((a: any) => a._id);
+    const assessmentById = new Map(assessments.map((a: any) => [String(a._id), a]));
+
+    // Term Report Cards aggregate several assessments at once, so there's no
+    // single assessment doc to snapshot a scale onto (unlike
+    // resolveAndSnapshotGradingScale) - resolved fresh from whichever
+    // framework most of this term's assessments agree on, each time this
+    // runs. No framework set on any of them -> legacy behaviour (plain
+    // default scale, never blocks); a framework set but with no matching
+    // AssessmentGradingScale -> blocks, same as per-exam report cards.
+    const termFramework = this.majorityFramework(assessments as any[]);
+    let termScale: Record<string, { min: number; gpa: number }> | undefined;
+    if (termFramework) {
+      const resolved = await this.lookupGradingScale(schoolSlug as string, termFramework);
+      if (!resolved) {
+        throw new BadRequestException(
+          `No grading scale is configured for the "${termFramework}" framework yet. Add one under Assessments → Settings → Grading Scales before generating term report cards.`,
+        );
+      }
+      termScale = resolved;
+    }
+
+    const marks = assessmentIds.length
+      ? await this.markModel.find({ schoolSlug, assessmentId: { $in: assessmentIds }, studentId: { $in: studentIds } }).lean()
+      : [];
+    // Deliberately NOT bailing out here when no marks exist. A Term Report
+    // Card also carries Tarbiyah/Qaida/Nazra/Attendance/Parent Engagement -
+    // a student on a non-academic track (e.g. a Hifz/Qaida-only student
+    // with no written exams this term) can have real data in every one of
+    // those sections and nothing at all in Marks. Requiring marks here used
+    // to silently refuse to generate a report for exactly that student
+    // ("No marks found..."), even though every section they actually care
+    // about was ready. Each student below gets a report with whatever
+    // academic data exists (possibly none) plus their qualitative sections.
+
+    // Default term date range (for attendance/Qaida-Nazra-extras scoping
+    // below) from the earliest/latest assessment in this term, unless the
+    // admin gave explicit dates. Falls back to the academic year's own
+    // start through today when the term has no assessments at all yet (so
+    // a purely non-academic term report - e.g. a brand-new Qaida-only term
+    // with no exams scheduled - still gets a sensible range instead of
+    // computing Math.min/max of an empty array).
+    const termFrom = dto.termStartDate || (assessments.length
+      ? new Date(Math.min(...assessments.map((a: any) => new Date(a.startDate).getTime()))).toISOString().slice(0, 10)
+      : `${(academicYear || '').slice(0, 4) || new Date().getFullYear()}-01-01`);
+    const termTo = dto.termEndDate || (assessments.length
+      ? new Date(Math.max(...assessments.map((a: any) => new Date(a.endDate || a.startDate).getTime()))).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10));
+
+    const marksByStudent = new Map<string, any[]>();
+    for (const m of marks as any[]) {
+      const key = String(m.studentId);
+      (marksByStudent.get(key) ?? marksByStudent.set(key, []).get(key)!).push(m);
+    }
+
+    const analyticsRows: AnalyticsMarkRow[] = (marks as any[]).map((m) => ({
+      studentId: String(m.studentId), studentName: m.studentName, grade: m.grade, section: m.section,
+      subject: m.subject, totalMarks: m.totalMarks, obtainedMarks: m.obtainedMarks, isAbsent: m.isAbsent, isExempt: m.isExempt,
+    }));
+    const stats = computeStudentOverallStats(analyticsRows);
+
+    // Rank within each grade/section separately - mixing classes into one
+    // ranking (e.g. scopeType 'all' spanning several grades) would make
+    // "class position" meaningless.
+    const statsByClass = new Map<string, typeof stats>();
+    for (const s of stats) {
+      const key = `${s.grade}||${s.section || ''}`;
+      (statsByClass.get(key) ?? statsByClass.set(key, []).get(key)!).push(s);
+    }
+    const statByStudent = new Map<string, ReturnType<typeof rankStudentStats>[number]>();
+    // Same convention as ReportCard.classAveragePercentage - one plain
+    // average per grade/section group, computed once here alongside ranking.
+    const classAverageByGroupKey = new Map<string, number>();
+    for (const [key, group] of statsByClass) {
+      classAverageByGroupKey.set(key, group.length
+        ? parseFloat((group.reduce((sum, s) => sum + s.overallPct, 0) / group.length).toFixed(1))
+        : 0);
+      for (const ranked of rankStudentStats(group)) statByStudent.set(ranked.studentId, ranked);
+    }
+
+    let created = 0;
+    let withoutMarks = 0;
+
+    // Every active student in scope gets a term report card - not just the
+    // ones who turn up in statByStudent (built purely from marks). A
+    // student with zero marks this term still gets one, with the academic
+    // section left blank/zero and whichever qualitative sections below
+    // (Tarbiyah/Qaida/Nazra/Attendance/Parent Engagement) actually have data.
+    for (const student of students as any[]) {
+      const studentId = String(student._id);
+      const stat = statByStudent.get(studentId);
+      const hasMarks = !!stat;
+      if (!hasMarks) withoutMarks++;
+      const studentMarks = marksByStudent.get(studentId) || [];
+      const firstMark = studentMarks[0];
+      const gradeInfo = hasMarks ? getGrade(stat!.overallPct, termScale) : null;
+
+      const subjects = hasMarks
+        ? stat!.subjects.map((sub) => ({
+            subject: sub.subject, obtainedMarks: sub.obtainedMarks, totalMarks: sub.totalMarks,
+            percentage: sub.pct, grade: getGrade(sub.pct, termScale).grade, isAbsent: sub.isAbsent,
+          }))
+        : [];
+
+      const assessmentsIncluded = Array.from(new Set(studentMarks.map((m: any) => String(m.assessmentId))))
+        .map((id) => assessmentById.get(id))
+        .filter(Boolean)
+        .map((a: any) => ({ assessmentId: a._id, title: a.title, type: a.type, date: a.startDate }));
+
+      const teacherFeedback: any[] = [];
+      if (sections.teacherFeedback) {
+        for (const m of studentMarks) {
+          if (m.remarks) teacherFeedback.push({ source: 'subject_remark', date: m.updatedAt || m.createdAt, author: m.enteredBy, subject: m.subject, text: m.remarks });
+        }
+      }
+
+      let tarbiyah: Record<string, any> | null = null;
+      if (sections.tarbiyah && this.behaviourService) {
+        try {
+          const result = await this.behaviourService.getTarbiyahAssessments(schoolSlug as string, { studentId, academicYear, limit: 1 });
+          const doc: any = result?.data?.[0];
+          if (doc) {
+            tarbiyah = {
+              period: doc.period, overallScore: doc.overallScore, overallPercentage: doc.overallPercentage,
+              overallRating: doc.overallRating, traits: doc.traits, teacherObservations: doc.teacherObservations,
+              areasOfStrength: doc.areasOfStrength, areasForImprovement: doc.areasForImprovement, recommendedActions: doc.recommendedActions,
+            };
+            if (sections.teacherFeedback && doc.teacherObservations) {
+              teacherFeedback.push({ source: 'tarbiyah', date: doc.assessmentDate, author: doc.assessedBy, text: doc.teacherObservations });
+            }
+          }
+        } catch { /* a student with no Tarbiyah assessment yet is not an error - section stays null */ }
+      }
+
+      let qaida: Record<string, any> | null = null;
+      if (sections.qaida && this.qaidaService) {
+        try { qaida = await this.qaidaService.getReportData(studentId, schoolSlug as string); } catch { /* not enrolled in Qaida - not an error */ }
+      }
+
+      let nazra: Record<string, any> | null = null;
+      if (sections.nazra && this.nazraService) {
+        try { nazra = await this.nazraService.getReportData(studentId, schoolSlug as string); } catch { /* not enrolled in Nazra - not an error */ }
+      }
+
+      let qaidaNazraExtras: Record<string, any> | null = null;
+      if ((sections.qaida || sections.nazra) && this.qaidaNazraExtrasService) {
+        const [invigilator, homeLog] = await Promise.all([
+          this.qaidaNazraExtrasService.getAssessmentsForStudent(studentId, schoolSlug as string),
+          this.qaidaNazraExtrasService.getHomeLog(studentId, schoolSlug as string),
+        ]);
+        const inRange = (d: any) => d && new Date(d) >= new Date(termFrom) && new Date(d) <= new Date(termTo);
+        qaidaNazraExtras = {
+          invigilatorAssessments: (invigilator as any[]).filter((a: any) => inRange(a.visitDate)),
+          homeLog: (homeLog as any[]).filter((h: any) => inRange(h.date)),
+        };
+        if (sections.teacherFeedback) {
+          for (const a of qaidaNazraExtras.invigilatorAssessments) {
+            if (a.overallRemarks) teacherFeedback.push({ source: 'ptm', date: a.visitDate, author: a.invigilatorName, text: a.overallRemarks });
+          }
+        }
+      }
+
+      let attendance: Record<string, any> | null = null;
+      if (sections.attendance && this.studentsService) {
+        const report: any = await this.studentsService.getStudentAttendanceSummaryReport(schoolSlug as string, { studentId, from: termFrom, to: termTo });
+        attendance = { ...(report.rows?.[0] || {}), trend: report.trend || [] };
+      }
+
+      let parentEngagement: Record<string, any> | null = null;
+      if (sections.parentEngagement && this.parentEngagementService) {
+        parentEngagement = await this.parentEngagementService.computeScore(schoolSlug as string, studentId) as any;
+      }
+
+      if (sections.teacherFeedback && this.behaviourService) {
+        try {
+          const profile: any = await this.behaviourService.getStudentBehaviourProfile(studentId, schoolSlug as string, academicYear);
+          for (const r of profile.recent || []) {
+            teacherFeedback.push({ source: 'behaviour', date: r.date, author: r.reportedBy, text: `${r.title}: ${r.description}` });
+          }
+        } catch { /* behaviour profile lookup failing (e.g. no access context) must never block the whole report */ }
+      }
+      teacherFeedback.sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+
+      const grade = hasMarks ? stat!.grade : (student.currentGrade || '');
+      const section = hasMarks ? stat!.section : (student.currentSection || '');
+
+      const doc = {
+        studentId: student._id, studentName: `${student.firstName || ''} ${student.lastName || ''}`.trim() || firstMark?.studentName,
+        rollNumber: student.currentRollNumber || student.admissionNumber || firstMark?.rollNumber || '-',
+        grade, section,
+        academicYear, term,
+        assessmentsIncluded, subjects,
+        totalObtainedMarks: hasMarks ? stat!.totalObtained : 0,
+        totalMaxMarks: hasMarks ? stat!.totalMax : 0,
+        overallPercentage: hasMarks ? stat!.overallPct : 0,
+        overallGrade: gradeInfo?.grade, overallGPA: gradeInfo?.gpa,
+        overallResult: hasMarks ? (stat!.overallPct >= 40 ? 'pass' : 'fail') : undefined,
+        classPosition: hasMarks ? stat!.classPosition : undefined,
+        totalStudents: hasMarks ? stat!.totalStudents : undefined,
+        classAveragePercentage: hasMarks ? (classAverageByGroupKey.get(`${grade}||${section || ''}`) ?? 0) : 0,
+        strongestSubject: hasMarks ? stat!.strongestSubject?.subject : undefined,
+        weakestSubject: hasMarks ? stat!.weakestSubject?.subject : undefined,
+        // Lets the UI/PDF show "No academic marks on record this term" instead
+        // of a misleading 0% when this student simply wasn't marked (e.g. a
+        // Qaida/Hifz-only student with no written exams this term), as
+        // distinct from a 0% a student who sat exams and failed every one.
+        hasAcademicData: hasMarks,
+        sectionsIncluded: {
+          tarbiyah: !!sections.tarbiyah, qaida: !!sections.qaida, nazra: !!sections.nazra,
+          attendance: !!sections.attendance, teacherFeedback: !!sections.teacherFeedback, parentEngagement: !!sections.parentEngagement,
+        },
+        tarbiyah, qaida, nazra, qaidaNazraExtras, attendance, parentEngagement, teacherFeedback,
+        generatedBy, schoolSlug,
+      };
+
+      await this.termReportCardModel.findOneAndUpdate(
+        { studentId: student._id, academicYear, term, schoolSlug },
+        { $set: doc, $setOnInsert: { published: false } },
+        { upsert: true },
+      );
+      created++;
+    }
+
+    const message = `${created} term report card(s) generated`
+      + (withoutMarks ? ` (${withoutMarks} with no marks on record this term - academic section left blank)` : '');
+    return { message, count: created, skipped: 0 };
+  }
+
+  async getTermReportCards(schoolSlug: string, query: TermReportCardQueryDto) {
+    const { page, limit, studentId, grade, section, academicYear, term, published } = query;
+    const { skip } = paged(page, limit);
+
+    const filter: any = { schoolSlug };
+    if (studentId) filter.studentId = new Types.ObjectId(studentId);
+    if (grade) filter.grade = grade;
+    if (section) filter.section = section;
+    if (academicYear) filter.academicYear = academicYear;
+    if (term) filter.term = term;
+    if (published !== undefined) filter.published = published;
+
+    const [data, total] = await Promise.all([
+      this.termReportCardModel!.find(filter).sort({ classPosition: 1 }).skip(skip).limit(limit!),
+      this.termReportCardModel!.countDocuments(filter),
+    ]);
+    return { data, meta: { total, page, limit, pages: Math.ceil(total / limit!) } };
+  }
+
+  async getTermReportCard(id: string, schoolSlug: string) {
+    assertValidObjectId(id, 'term report card');
+    const rc = await this.termReportCardModel!.findOne({ _id: id, schoolSlug });
+    if (!rc) throw new NotFoundException('Term report card not found');
+    return rc;
+  }
+
+  async updateTermReportCardRemarks(id: string, schoolSlug: string, dto: UpdateReportCardRemarksDto, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const t = await this.teacherContext(requestingUser);
+      const card: any = Types.ObjectId.isValid(id) ? await this.termReportCardModel!.findOne({ _id: id, schoolSlug }).select('grade section').lean() : null;
+      if (!card) throw new NotFoundException('Term report card not found');
+      if (!this.classIncludes(t.classTeacherClasses, card.grade, card.section)) {
+        throw new ForbiddenException('Only the class teacher of this class can edit report card remarks.');
+      }
+      const $set: any = {};
+      if (dto.classTeacherRemarks !== undefined) $set.classTeacherRemarks = dto.classTeacherRemarks;
+      if (!Object.keys($set).length) return this.termReportCardModel!.findOne({ _id: id, schoolSlug });
+      return this.termReportCardModel!.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
+    }
+    assertValidObjectId(id, 'term report card');
+    return this.termReportCardModel!.findOneAndUpdate({ _id: id, schoolSlug }, { $set: dto }, { new: true });
+  }
+
+  async publishTermReportCards(dto: PublishTermReportCardsDto) {
+    const filter: any = { schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, term: dto.term };
+    if (dto.grade) filter.grade = dto.grade;
+    if (dto.section) filter.section = dto.section;
+
+    await this.termReportCardModel!.updateMany(filter, { $set: { published: true, publishedAt: new Date() } });
+    const cards: any[] = await this.termReportCardModel!.find(filter).select('studentId').lean();
+    await notifyGuardiansOfStudents(this.termReportCardModel!.db, cards.map((c) => c.studentId), {
+      schoolSlug: dto.schoolSlug as string, type: 'result', title: 'Term report card published',
+      body: `Your child's ${dto.term} ${dto.academicYear} report card is now available.`, relatedEntityId: `${dto.academicYear}-${dto.term}`,
+    });
+    return { message: `${cards.length} term report card(s) published` };
+  }
+
+  /** Reverses publishTermReportCards - see unpublishResults for why this is
+   * safe and sufficient on its own (Parent Portal already gates on
+   * published:true). */
+  async unpublishTermReportCards(dto: UnpublishTermReportCardsDto) {
+    const filter: any = { schoolSlug: dto.schoolSlug, academicYear: dto.academicYear, term: dto.term };
+    if (dto.grade) filter.grade = dto.grade;
+    if (dto.section) filter.section = dto.section;
+
+    const result = await this.termReportCardModel!.updateMany(filter, { $set: { published: false }, $unset: { publishedAt: '' } });
+    return { message: `${result.modifiedCount} term report card(s) unpublished - no longer visible in the parent app` };
   }
 
   // ============================================================
@@ -2445,10 +3036,20 @@ You are assisting a teacher's professional judgement, not replacing it - classif
    * directly (an assessment spanning "all sections" still needs
    * per-mark section filtering when the caller filters by one). */
   async getPerformanceAnalytics(schoolSlug: string, filters: {
-    academicYear: string; grade?: string; section?: string; subject?: string;
+    academicYear?: string; grade?: string; section?: string; subject?: string;
     term?: string; type?: string; dateFrom?: string; dateTo?: string;
   }) {
-    const assessmentFilter: any = { schoolSlug, academicYear: filters.academicYear };
+    // academicYear is optional ("All Years") rather than always required:
+    // the Institution Setup "current" year and the free-text academicYear
+    // stored on an Assessment at creation time are two independent values
+    // that can drift apart (the same class of bug previously fixed for a
+    // hardcoded '2025-26' default) - requiring an exact match meant a
+    // school could publish real results and still see a permanently blank
+    // Analytics tab with no indication why. Letting the filter be omitted
+    // guarantees published data is always reachable; a specific year can
+    // still be picked to narrow it down.
+    const assessmentFilter: any = { schoolSlug };
+    if (filters.academicYear) assessmentFilter.academicYear = filters.academicYear;
     if (filters.grade) assessmentFilter.grade = filters.grade;
     if (filters.section) assessmentFilter.$or = [{ section: filters.section }, { section: { $in: [null, ''] } }];
     if (filters.term) assessmentFilter.term = filters.term;

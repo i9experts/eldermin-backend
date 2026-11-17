@@ -12,8 +12,12 @@ import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Invoice, InvoiceDocument } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntryDocument, ReportCard, ReportCardDocument } from '../assessments/schemas/assessment.schema';
+import { TermReportCard, TermReportCardDocument } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahAssessmentDocument } from '../behaviour/schemas/behaviour.schema';
-import { PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf } from './parent-behaviour.projection';
+import {
+  PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf,
+} from './parent-behaviour.projection';
+import { projectParentReportCard, projectParentTermReportCard } from './parent-results.projection';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { AssignmentSubmission, AssignmentSubmissionDocument } from '../modules/teaching/schemas/assignment-submission.schema';
@@ -49,6 +53,11 @@ import { ParentAccessControlService } from '../parent-access-control/parent-acce
 import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
 import { GamificationService } from '../gamification/gamification.service';
 import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
+import { QaidaService } from '../behaviour/qaida.service';
+import { NazraService } from '../behaviour/nazra.service';
+import { projectParentQaidaReport } from './parent-qaida.projection';
+import { projectParentNazraReport } from './parent-nazra.projection';
+import { GuidedReadingService, READER_COMPLETION_POINTS } from '../guided-reading/guided-reading.service';
 
 /** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
 export const MAX_DEVICES_PER_PARENT = 10;
@@ -92,6 +101,18 @@ export class ParentPortalService {
     private forumService: ForumService,
     private gamificationService: GamificationService,
     private qaidaNazraExtras: QaidaNazraExtrasService,
+    // Assessment Master Settings' parent-facing Term Report Card view -
+    // appended at the END, not inserted alongside reportCardModel above, so
+    // every existing positional `new ParentPortalService(...)` test
+    // construction (several spec files hardcode exact argument indices/
+    // counts - see consent-request-results.spec.ts's own comment on this
+    // fragility) keeps compiling and passing unchanged.
+    @InjectModel(TermReportCard.name) private termReportCardModel: Model<TermReportCardDocument>,
+    // Qaida & Nazra progress report - appended last for the same positional-construction reason as above.
+    private qaidaService: QaidaService,
+    private nazraService: NazraService,
+    // Guided Reading student player (Phase 3) - appended last for the same positional-construction reason as above.
+    private guidedReadingService: GuidedReadingService,
   ) {}
 
   // ── Device ping: a real "this parent has the app open" signal ──────
@@ -438,13 +459,14 @@ export class ParentPortalService {
   // business logic, just one call site for all four.
   async getMyLearning(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
-    const [courses, assignments, quizzes, certificates] = await Promise.all([
+    const [courses, assignments, quizzes, certificates, reading] = await Promise.all([
       this.getMyCourses(studentId, requestingUser, tenantId, schoolSlug),
       this.getHomework(studentId, requestingUser, tenantId, schoolSlug),
       this.listMyQuizzes(studentId, requestingUser, schoolSlug),
       this.certificatesService.getIssuedForStudent(schoolSlug, studentId),
+      this.guidedReadingService.getReadingHome(studentId, schoolSlug),
     ]);
-    return { courses, assignments, quizzes, certificates };
+    return { courses, assignments, quizzes, certificates, reading };
   }
 
   // ── LMS Phase 4: course discussion forum (student/parent side) ──────
@@ -647,6 +669,45 @@ export class ParentPortalService {
     return updated;
   }
 
+  // ── Guided Reading: student player (Phase 3) ────────────────────
+  async getMyReadingHome(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.guidedReadingService.getReadingHome(studentId, schoolSlug);
+  }
+
+  async getMyReader(studentId: string, readerId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.guidedReadingService.getReaderForStudent(readerId, studentId, schoolSlug);
+  }
+
+  async completeMyReading(
+    studentId: string, readerId: string, requestingUser: ScopedUser, schoolSlug: string,
+    tenantId: string, keywordsLookedUp: string[] = [],
+  ) {
+    assertStudentAccess(requestingUser, studentId);
+    const result = await this.guidedReadingService.completeReaderForStudent(readerId, studentId, schoolSlug, keywordsLookedUp);
+
+    // Same non-blocking convention as markLessonProgress's gamification
+    // hook above - a points/badge hiccup never blocks the student's own
+    // completion from saving.
+    if (result.justCompleted) {
+      try {
+        await this.gamificationService.awardPoints(
+          schoolSlug, studentId, READER_COMPLETION_POINTS, `Finished reading: ${result.reader.title}`,
+          'reader_completion', String(result.reader._id), { tenantId },
+        );
+        if (result.completedCount === 1) {
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'first_reader', {
+            tenantId, sourceType: 'reader_completion', sourceId: String(result.reader._id),
+          });
+        }
+      } catch {
+        // never let a gamification hiccup block the student's own progress from saving
+      }
+    }
+    return result;
+  }
+
   // ── LMS Phase 2: self-paced online quizzes ─────────────────────
   // Thin wrappers around AssessmentService - the grading/auto-mark logic
   // lives there once, shared with the teacher-facing review queue,
@@ -681,7 +742,76 @@ export class ParentPortalService {
     assertStudentAccess(requestingUser, studentId);
     const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
     if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
-    return this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean();
+    const [cards, settings] = await Promise.all([
+      this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean(),
+      this.assessmentService.getVisibilitySettings(schoolSlug),
+    ]);
+    // Assessment Master Settings' parent-visibility allowlist (see
+    // parent-results.projection.ts) - previously the full ReportCard
+    // document went straight to the parent app with zero filtering,
+    // including classPosition/totalStudents regardless of any setting.
+    return cards.map((c) => projectParentReportCard(c, settings as any));
+  }
+
+  // ── Term Report Cards (whole-term, comprehensive) ───────────────
+  // Previously no parent-facing path existed for TermReportCard at all -
+  // generateTermReportCards/publishTermReportCards only ever fed the
+  // staff-facing Results tab.
+  async getTermReportCards(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
+    const [cards, settings] = await Promise.all([
+      this.termReportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean(),
+      this.assessmentService.getVisibilitySettings(schoolSlug),
+    ]);
+    return cards.map((c) => projectParentTermReportCard(c, settings as any));
+  }
+
+  /** Same PDF the web's Assessments > Results screen downloads (PdfService.generateExamReportCardPdf), gated to this parent's own child and published results. */
+  async downloadResultPdf(studentId: string, reportCardId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!Types.ObjectId.isValid(reportCardId)) throw new NotFoundException('Result not found');
+    const card: any = await this.reportCardModel.findOne({
+      _id: new Types.ObjectId(reportCardId), studentId: new Types.ObjectId(studentId), schoolSlug, published: true,
+    }).select('assessmentId').lean();
+    if (!card) throw new NotFoundException('Result not found');
+    return this.pdfService.generateExamReportCardPdf(
+      schoolSlug, { assessmentId: String(card.assessmentId), studentId }, requestingUser.userId || 'parent');
+  }
+
+  // ── Qaida & Tajweed progress report ───────────────────────────
+  // Same data as the web's Qaida tracker report (QaidaService.getReportData), projected to a parent-safe shape. A child with no Qaida
+  // record yet, or one the teacher hasn't shared via the Share-with-Parent toggle, is a normal state, not an error: `{ recorded: false }`.
+  async getQaidaReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null };
+    // Tenant check: the guardian link is by id only; the child must also belong to this school.
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    const shared = await this.qaidaService.getParentVisibleProgress(studentId, schoolSlug);
+    if (!shared) return { recorded: false };
+    return { recorded: true, ...projectParentQaidaReport(await this.qaidaService.getReportData(studentId, schoolSlug)) };
+  }
+
+  /** The same PDF the web's Qaida tracker downloads (PdfService.generateQaidaReport). */
+  async downloadQaidaPdf(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    if (!(await this.qaidaService.getParentVisibleProgress(studentId, schoolSlug))) throw new NotFoundException('Report not shared yet');
+    return this.pdfService.generateQaidaReport(schoolSlug, { studentId } as any, requestingUser.userId || 'parent');
+  }
+
+  // ── Nazra Qur'an progress report ─────────────────────────────
+  // Mirrors getQaidaReport above: same feature key, same parentShared gate, same "unshared looks identical to absent" convention.
+  async getNazraReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null };
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    const shared = await this.nazraService.getParentVisibleProgress(studentId, schoolSlug);
+    if (!shared) return { recorded: false };
+    return { recorded: true, ...projectParentNazraReport(await this.nazraService.getReportData(studentId, schoolSlug)) };
   }
 
   // ── Dues ─────────────────────────────────────────────────────
@@ -1205,6 +1335,14 @@ export class ParentPortalService {
   async getStudentLeaves(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
     return this.studentLeaveModel.find({ studentId, schoolSlug }).sort({ createdAt: -1 }).lean();
+  }
+
+  // School-wide pending count for the Institution Overview dashboard's
+  // Academics widget - everything else touching StudentLeave is scoped to
+  // one student's own leave history.
+  async getPendingStudentLeaveCount(schoolSlug: string) {
+    const pending = await this.studentLeaveModel.countDocuments({ schoolSlug, status: 'pending' });
+    return { pending };
   }
 
   // ── Notifications / Inbox (same data, two views) ──────────────

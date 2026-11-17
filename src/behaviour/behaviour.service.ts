@@ -28,6 +28,9 @@ import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
 import { TeacherProfile, TeacherProfileDocument } from '../modules/teaching/schemas/teacher-profile.schema';
 import { resolveTeacherIdentity, teacherClassesOf, TeacherClassRef } from '../staff-portal/teacher-identity.util';
 import { BehaviourAccessContext, denyOrLog, logBehaviourGuard } from './behaviour-access';
+import { gradeMatcher, normalizeSectionName } from '../common/utils/class-match.util';
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 import { classIncludes, classScopeFilter, isOwnByAuthor, stripProtectedFields } from './behaviour-teacher-scope';
 import { sectionMatcher } from '../common/utils/class-match.util';
 
@@ -381,6 +384,27 @@ export class BehaviourService {
     return this.recordModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: { ...stripProtectedFields(body), ...stampUpdate(requestingUser) } }, { new: true });
   }
 
+  /**
+   * DELETE /behaviour/records/:id. Same two-layer author-or-admin rule as updateRecord above (B0 denyOrLog policy, then the always-enforced
+   * D7 hard rule) - a teacher may only delete a record they themselves logged; admin roles and an elevated custom-role grant may delete any.
+   */
+  async deleteRecord(id: string, schoolSlug: string, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'behaviour record');
+    const existing: any = await this.recordModel.findOne({ _id: id, schoolSlug }).lean();
+    if (!existing) throw new NotFoundException('Record not found');
+    if (access?.isTeacher && !access.elevated && !isOwnByAuthor(requestingUser || {}, existing, 'reportedById', 'reportedBy')) {
+      denyOrLog(access, requestingUser, 'teacher_deletes_other_record', 'You can only delete behaviour records you logged yourself.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated && !isOwnByAuthor(requestingUser as any, existing, 'reportedById', 'reportedBy')) {
+        throw new ForbiddenException('You can only delete behaviour records you logged yourself');
+      }
+    }
+    await this.recordModel.deleteOne({ _id: id, schoolSlug });
+    return { deleted: true };
+  }
+
   async resolveRecord(id: string, schoolSlug: string, note: string, resolvedBy: string, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     assertValidObjectId(id, 'behaviour record');
     if (access?.isTeacher) {
@@ -500,7 +524,7 @@ export class BehaviourService {
 
   async getTarbiyahAssessments(schoolSlug: string, query: any, requestingUser?: ScopedUser, access?: BehaviourAccessContext) {
     const classes = await this.teacherClassScope(requestingUser, access);
-    const { grade, section, studentId, period, periodType, campusId } = query;
+    const { grade, section, studentId, period, periodType, campusId, academicYear } = query;
     const { page, limit, skip } = pageParams(query.page, query.limit);
 
     const filter: any = { schoolSlug };
@@ -509,6 +533,11 @@ export class BehaviourService {
     if (studentId) filter.studentId = new Types.ObjectId(studentId);
     if (period) filter.period = period;
     if (periodType) filter.periodType = periodType;
+    // Term Report Card (assessments module) needs "this student's Tarbiyah
+    // for this academic year" without knowing the school's own free-text
+    // period naming convention - academicYear was on the schema already
+    // but never exposed as a filter here until now.
+    if (academicYear) filter.academicYear = academicYear;
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
     if (effectiveCampusId) filter.campusId = effectiveCampusId;
 
@@ -573,8 +602,26 @@ export class BehaviourService {
     const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, campusId) : campusId;
 
     const filter: any = { schoolSlug };
-    if (grade) filter.grade = grade;
-    if (section) filter.section = section;
+    // TarbiyahAssessment.grade/section are copied verbatim from
+    // Student.currentGrade/currentSection at assessment creation time
+    // (AddTarbiyahModal), which is free-text with no FK to the real
+    // Grade/Section master - the same drift documented in
+    // students.service.ts's getStudents filter. The Reports tab's Grade/
+    // Section filters now come from that real master (GradeLevelDropdown/
+    // SectionDropdown), e.g. "Grade 2"/"A", so an exact-match filter here
+    // would silently return zero rows against assessments stored as
+    // "GRADE-2"/"Grade 2A". gradeMatcher handles the grade side the same
+    // way getStudents already does; section additionally needs a
+    // trailing-match fallback because some schools' legacy section values
+    // bake the grade into the section string ("Grade 2A") rather than
+    // storing the bare section ("A") - sectionMatcher's prefix-only
+    // tolerance doesn't cover that, so match section values that simply
+    // end with the selected (normalized) section too.
+    if (grade) filter.grade = gradeMatcher(grade);
+    if (section) {
+      const bareSection = normalizeSectionName(section);
+      filter.section = bareSection ? new RegExp(`${escapeRegExp(bareSection)}\\s*$`, 'i') : section;
+    }
     if (period) filter.period = period;
     if (effectiveCampusId) filter.campusId = new Types.ObjectId(effectiveCampusId);
 
@@ -584,7 +631,7 @@ export class BehaviourService {
     const traitKeys = traitDefs.map((t: any) => t.key);
     const scaleMax = settings?.ratingScale?.max ?? 5;
 
-    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, periodTrendAgg] = await Promise.all([
+    const [summaryAgg, studentRankingAgg, traitStudentRows, traitClassRows, classComparison, sectionBreakdown, periodTrendAgg] = await Promise.all([
       this.tarbiyahModel.aggregate([
         { $match: filter },
         { $group: { _id: null, totalAssessments: { $sum: 1 }, totalStudents: { $addToSet: '$studentId' }, avgOverallScore: { $avg: '$overallScore' } } },
@@ -627,6 +674,26 @@ export class BehaviourService {
         } },
         { $project: { grade: '$_id.grade', section: '$_id.section', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, _id: 0 } },
         { $sort: { avgOverallScore: -1 } },
+      ]) : Promise.resolve(null),
+      // Grade picked, no specific section yet (the "All sections" consolidated
+      // view) - breaks the total down by each raw `section` value actually on
+      // file. TarbiyahAssessment.section is a free-text snapshot of the
+      // student's section at assessment time, not an FK to the Grade/Section
+      // master, so a student recorded under a section that's since been
+      // renamed/merged/removed from that master becomes invisible the moment
+      // staff filter down to a specific (current) section - counted in this
+      // grade's "All sections" total but absent from every section-specific
+      // one, with nothing on screen explaining the gap. The frontend already
+      // knows the grade's current real sections and flags whichever of these
+      // raw values doesn't match one of them.
+      (grade && !section) ? this.tarbiyahModel.aggregate([
+        { $match: filter },
+        { $group: {
+            _id: '$section',
+            avgOverallScore: { $avg: '$overallScore' }, studentIds: { $addToSet: '$studentId' }, assessmentCount: { $sum: 1 },
+        } },
+        { $project: { section: '$_id', avgOverallScore: 1, studentCount: { $size: '$studentIds' }, assessmentCount: 1, _id: 0 } },
+        { $sort: { studentCount: -1 } },
       ]) : Promise.resolve(null),
       !period ? this.tarbiyahModel.aggregate([
         { $match: filter },
@@ -677,6 +744,7 @@ export class BehaviourService {
       traitLeaderboard,
       classComparison,
       periodTrend: periodTrendAgg ? periodTrendAgg.map((p: any) => ({ period: p._id, avgOverallScore: p.avgOverallScore || 0, assessmentCount: p.assessmentCount })) : null,
+      sectionBreakdown,
     };
   }
 
@@ -744,6 +812,40 @@ export class BehaviourService {
       });
     }
     return updated;
+  }
+
+  /**
+   * DELETE /behaviour/tarbiyah/:id. Same author-or-admin-or-coordinator rule as updateTarbiyahAssessment above. A parent-shared assessment
+   * must be unshared first (same PUT this tab's own Share toggle already uses) - deleting it silently out from under a parent who has
+   * already seen it would leave them with a notification/report that now 404s with no explanation.
+   */
+  async deleteTarbiyahAssessment(id: string, schoolSlug: string, requestingUser?: ScopedUser & { userId?: string }, access?: BehaviourAccessContext) {
+    assertValidObjectId(id, 'tarbiyah assessment');
+    const existing: any = await this.tarbiyahModel.findOne({ _id: id, schoolSlug }).select('assessedById assessedBy parentShared campusId').lean();
+    if (!existing) throw new NotFoundException('Assessment not found');
+    if (existing.parentShared) {
+      throw new BadRequestException('This assessment is shared with the parent - unshare it first, then delete.');
+    }
+    const callerRole = (requestingUser as any)?.role || (requestingUser as any)?.primaryRole;
+    let coordinatorMayDelete = false;
+    if (callerRole === UserRole.ACADEMIC_COORDINATOR) {
+      const mine = (requestingUser as any)?.campusId ? String((requestingUser as any).campusId) : '';
+      if (mine && existing.campusId && String(existing.campusId) !== mine) {
+        throw new ForbiddenException('This assessment belongs to another campus.');
+      }
+      coordinatorMayDelete = true;
+    }
+    if (access && !access.elevated && !coordinatorMayDelete && !isOwnByAuthor(requestingUser || {}, existing, 'assessedById', 'assessedBy')) {
+      denyOrLog(access, requestingUser, 'tarbiyah_delete_not_author_or_admin', 'Only the author of this assessment or an administrator can delete it.');
+    }
+    if (requestingUser) {
+      const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+      if (!TEACHING_ADMIN_ROLES.includes(role) && !access?.elevated && !coordinatorMayDelete && !isOwnByAuthor(requestingUser as any, existing, 'assessedById', 'assessedBy')) {
+        throw new ForbiddenException('You can only delete Tarbiyah assessments you recorded yourself');
+      }
+    }
+    await this.tarbiyahModel.deleteOne({ _id: id, schoolSlug });
+    return { deleted: true };
   }
 
   // ============================================================

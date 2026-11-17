@@ -12,6 +12,7 @@ import {
   InvigilatorAssessment, InvigilatorAssessmentDocument,
   HomeRecitationLog, HomeRecitationLogDocument,
 } from './schemas/qaida-nazra-extras.schema';
+import { NazraProgress, NazraProgressDocument, NAZRA_PARAS, NAZRA_PARA_COUNT } from './schemas/nazra-progress.schema';
 import { RecordInvigilatorAssessmentsDto, RecordHomeRecitationLogDto, UpdateQaidaNazraSettingsDto } from './dto/qaida-nazra-extras.dto';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
@@ -23,6 +24,7 @@ export class QaidaNazraExtrasService {
     @InjectModel(InvigilatorAssessment.name) private invigilatorModel: Model<InvigilatorAssessmentDocument>,
     @InjectModel(HomeRecitationLog.name) private homeLogModel: Model<HomeRecitationLogDocument>,
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
+    @InjectModel(NazraProgress.name) private nazraProgressModel: Model<NazraProgressDocument>,
   ) {}
 
   // ── Settings ─────────────────────────────────────────────────
@@ -41,10 +43,41 @@ export class QaidaNazraExtrasService {
   }
 
   async updateSettings(schoolSlug: string, dto: UpdateQaidaNazraSettingsDto) {
-    return this.settingsModel.findOneAndUpdate(
+    const before = await this.settingsModel.findOne({ schoolSlug }).select('nazraReverseOrder').lean();
+    const wasReverse = !!before?.nazraReverseOrder;
+    const updated = await this.settingsModel.findOneAndUpdate(
       { schoolSlug },
       { $set: dto },
       { upsert: true, new: true },
+    );
+    if (dto.nazraReverseOrder !== undefined && dto.nazraReverseOrder !== wasReverse) {
+      await this.reseedUntouchedNazraProgress(schoolSlug, dto.nazraReverseOrder);
+    }
+    return updated;
+  }
+
+  // A NazraProgress document's para seed (which Para starts 'in_progress')
+  // is fixed at creation time, from whatever nazraReverseOrder was at that
+  // moment - see NazraService.getOrInitProgress. Flipping the setting
+  // afterwards left every student already enrolled permanently stuck: a
+  // forward-seeded student (Para 1 in_progress) under a now-reverse school
+  // would find Para 30 still 'not_started' and get blocked from recording
+  // the Para before it with "hasn't been started yet", with no way to
+  // self-correct short of a teacher manually editing every Para's status.
+  // Only re-seeds students who haven't recorded a single diary entry yet -
+  // anyone with real progress keeps it untouched, exactly as before.
+  private async reseedUntouchedNazraProgress(schoolSlug: string, reverse: boolean) {
+    const startPara = reverse ? NAZRA_PARA_COUNT : 1;
+    const paras = NAZRA_PARAS.map((p) => ({
+      paraNumber: p.number,
+      status: p.number === startPara ? 'in_progress' : 'not_started',
+      startedDate: p.number === startPara ? new Date() : undefined,
+      revisionCount: 0,
+      attempts: [],
+    }));
+    await this.nazraProgressModel.updateMany(
+      { schoolSlug, recordType: { $ne: 'joined_later' }, diaryEntries: { $size: 0 } },
+      { $set: { paras, currentPara: startPara, overallStatus: 'not_started' } },
     );
   }
 

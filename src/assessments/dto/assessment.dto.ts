@@ -8,6 +8,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PartialType } from '@nestjs/mapped-types';
+import { CURRICULUM_FRAMEWORKS } from '../../common/constants/curriculum-framework';
 
 export class PaginationDto {
   @IsOptional() @Type(() => Number) page?: number = 1;
@@ -58,11 +59,55 @@ export class CreateAssessmentDto {
 
   @IsOptional() @IsEnum(['teacher_marked', 'self_paced_online']) deliveryMode?: string;
 
+  // Assessment Master Settings - which grading scale (by curriculum
+  // framework) this assessment's results are graded under. Optional so
+  // existing clients/tests that don't send it keep working; the frontend
+  // always sends a real value going forward (auto-suggested from the
+  // assessment's subjects' Curriculum framework, editable).
+  @IsOptional() @IsEnum(CURRICULUM_FRAMEWORKS) framework?: string;
+
   schoolSlug?: string;
   createdBy?: string;
 }
 
 export class UpdateAssessmentDto extends PartialType(CreateAssessmentDto) {}
+
+// ── Assessment Master Settings: Grading Scales ──────────────────
+export class GradingBandDto {
+  @IsNumber() @Min(0) @Max(100) minPercent: number;
+  @IsNumber() @Min(0) @Max(100) maxPercent: number;
+  @IsString() label: string;
+  @IsOptional() @IsNumber() gpaPoint?: number;
+  @IsOptional() @IsBoolean() isPassing?: boolean;
+}
+
+export class CreateGradingScaleDto {
+  @IsEnum(CURRICULUM_FRAMEWORKS) framework: string;
+  @IsString() name: string;
+  @IsOptional() @IsString() presetKey?: string;
+
+  @IsArray() @ValidateNested({ each: true })
+  @Type(() => GradingBandDto)
+  bands: GradingBandDto[];
+
+  schoolSlug?: string;
+  updatedBy?: string;
+}
+
+export class UpdateGradingScaleDto extends PartialType(CreateGradingScaleDto) {}
+
+// ── Assessment Master Settings: Parent Visibility ────────────────
+export class UpdateAssessmentVisibilitySettingsDto {
+  @IsOptional() @IsBoolean() shareGPA?: boolean;
+  @IsOptional() @IsBoolean() shareSubjectBreakdown?: boolean;
+  @IsOptional() @IsBoolean() shareClassPosition?: boolean;
+  @IsOptional() @IsBoolean() shareClassAverage?: boolean;
+  @IsOptional() @IsString() passLabel?: string;
+  @IsOptional() @IsString() failLabel?: string;
+
+  schoolSlug?: string;
+  updatedBy?: string;
+}
 
 // ── LMS Phase 2: online quizzes ─────────────────────────────────
 export class StartQuizDto {
@@ -213,6 +258,18 @@ export class UpdateMarkEntryDto {
 }
 
 export class MarkQueryDto extends PaginationDto {
+  // Overrides PaginationDto's default limit:20 - unlike a genuinely
+  // paginated list (assessments, questions, report cards), a Mark Sheet
+  // request IS the full roster for one class/subject: the Total/Entered/
+  // Pass/Fail/Absent/Avg% summary cards and "Verify All" all silently
+  // operate over whatever this one page returns. A 20-row cap meant a
+  // class of 30+ (or "All sections" of a grade) showed only its first 20
+  // students, with wrong totals and no way to reach - or verify - the
+  // rest, and no pagination control existed on this screen to surface the
+  // truncation. 2000 comfortably covers even a large grade's combined
+  // sections in one request; the cap stays only as a hard safety ceiling.
+  @IsOptional() @Type(() => Number) @Min(1) @Max(2000) limit?: number = 2000;
+
   @IsOptional() @IsMongoId() assessmentId?: string;
   @IsOptional() @IsMongoId() studentId?: string;
   @IsOptional() @IsString() grade?: string;
@@ -239,12 +296,67 @@ export class PublishResultDto {
   publishedBy?: string;
 }
 
+export class UnpublishResultDto {
+  @IsMongoId() assessmentId: string;
+  schoolSlug?: string;
+}
+
 export class ReportCardQueryDto extends PaginationDto {
   @IsOptional() @IsMongoId() assessmentId?: string;
   @IsOptional() @IsMongoId() studentId?: string;
   @IsOptional() @IsString() grade?: string;
   @IsOptional() @IsString() academicYear?: string;
   @IsOptional() @IsBoolean() @Type(() => Boolean) published?: boolean;
+}
+
+// ── Term Report Card (comprehensive, whole-term report) ─────────
+export class TermReportCardSectionsDto {
+  @IsOptional() @IsBoolean() tarbiyah?: boolean;
+  @IsOptional() @IsBoolean() qaida?: boolean;
+  @IsOptional() @IsBoolean() nazra?: boolean;
+  @IsOptional() @IsBoolean() attendance?: boolean;
+  @IsOptional() @IsBoolean() teacherFeedback?: boolean;
+  @IsOptional() @IsBoolean() parentEngagement?: boolean;
+}
+
+export class GenerateTermReportCardsDto {
+  @IsString() academicYear: string;
+  @IsString() term: string;
+  @IsOptional() @IsEnum(['all', 'class', 'section', 'student']) scopeType?: 'all' | 'class' | 'section' | 'student';
+  @IsOptional() @IsString() scopeValue?: string;
+  // Term date range - needed to scope attendance/Qaida-Nazra/behaviour
+  // entries to just this term rather than a student's whole history.
+  @IsOptional() @IsDateString() termStartDate?: string;
+  @IsOptional() @IsDateString() termEndDate?: string;
+  @IsOptional() @ValidateNested() @Type(() => TermReportCardSectionsDto) sections?: TermReportCardSectionsDto;
+  schoolSlug?: string;
+  generatedBy?: string;
+}
+
+export class TermReportCardQueryDto extends PaginationDto {
+  @IsOptional() @IsMongoId() studentId?: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @IsString() academicYear?: string;
+  @IsOptional() @IsString() term?: string;
+  @IsOptional() @IsBoolean() @Type(() => Boolean) published?: boolean;
+}
+
+export class PublishTermReportCardsDto {
+  @IsString() academicYear: string;
+  @IsString() term: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  schoolSlug?: string;
+  publishedBy?: string;
+}
+
+export class UnpublishTermReportCardsDto {
+  @IsString() academicYear: string;
+  @IsString() term: string;
+  @IsOptional() @IsString() grade?: string;
+  @IsOptional() @IsString() section?: string;
+  schoolSlug?: string;
 }
 
 export class ClassifyBloomsLevelDto {

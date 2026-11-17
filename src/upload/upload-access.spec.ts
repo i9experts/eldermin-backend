@@ -98,9 +98,11 @@ describe('/ece is staff-only on every route (D9)', () => {
       if (own) { expect(() => check(EceController, proto[h], 'teacher')).toThrow(ForbiddenException); expect(() => check(EceController, proto[h], 'librarian')).toThrow(ForbiddenException); }
     }
   });
-  it('the five existing write guards are untouched', () => {
+  // round 3: Learning Experience Library, Environment/Provision Areas and Montessori writes previously had no module-grant
+  // guard at all (only the class-level SCHOOL_STAFF_ROLES applied) - they now carry the same guard as the five originals.
+  it('the five original write guards plus the ten newly-guarded writes are all present', () => {
     const guarded = handlers.filter((h) => Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]));
-    expect(guarded).toHaveLength(5);
+    expect(guarded).toHaveLength(15);
     for (const h of guarded) expect(Reflect.getMetadata(ROLES_OR_MODULE_KEY, proto[h]).roles).toEqual(STAFF_WRITE_ROLES);
   });
 });

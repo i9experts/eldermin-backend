@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { ProcurementService } from './procurement.service';
 import { ProcurementSettingsService } from './procurement-settings.service';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // ============================================================
 // PROCUREMENT CONTROLLER
@@ -18,7 +19,7 @@ export class ProcurementController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
     };
   }

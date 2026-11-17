@@ -6,6 +6,7 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceSchema } from '../students/schemas/student-supporting.schema';
 import { Invoice, InvoiceSchema } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntrySchema, ReportCard, ReportCardSchema } from '../assessments/schemas/assessment.schema';
+import { TermReportCard, TermReportCardSchema } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { Timetable, TimetableSchema } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
@@ -58,6 +59,7 @@ import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
 import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
 import { GamificationModule } from '../gamification/gamification.module';
 import { BehaviourModule } from '../behaviour/behaviour.module';
+import { GuidedReadingModule } from '../guided-reading/guided-reading.module';
 
 @Module({
   imports: [
@@ -67,6 +69,7 @@ import { BehaviourModule } from '../behaviour/behaviour.module';
       { name: Invoice.name, schema: InvoiceSchema },
       { name: MarkEntry.name, schema: MarkEntrySchema },
       { name: ReportCard.name, schema: ReportCardSchema },
+      { name: TermReportCard.name, schema: TermReportCardSchema },
       { name: BehaviourRecord.name, schema: BehaviourRecordSchema },
       { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
       { name: Timetable.name, schema: TimetableSchema },
@@ -116,6 +119,7 @@ import { BehaviourModule } from '../behaviour/behaviour.module';
     BehaviourModule,
     HomeTasksModule,
     ParentAccessControlModule,
+    GuidedReadingModule,
   ],
   controllers: [ParentPortalController, ParentAuthController, ParentEarlyYearsController],
   providers: [ParentPortalService, ParentAuthService, ParentEarlyYearsService, GuardianRefreshInterceptor, GeocodingService],

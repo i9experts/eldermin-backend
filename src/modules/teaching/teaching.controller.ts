@@ -21,6 +21,13 @@ export class TeachingController {
   @Get('dashboard')
   getDashboard(@Request() req) { return this.teachingService.getDashboardStats(req.user.tenantId, req.user); }
 
+  // Institution Overview dashboard's "Homework Summary" widget.
+  @RequireModuleAccess('teaching', 'dashboard', 'view')
+  @Get('homework-summary')
+  getHomeworkSummary(@Request() req, @Query('date') date?: string, @Query('campusId') campusId?: string) {
+    return this.teachingService.getHomeworkSummary(req.user.tenantId, date, campusId);
+  }
+
   // ── TEACHER PROFILES ──────────────────────────────────────────────────────────
 
   @RequireModuleAccess('teaching', 'teachers', 'manage')

@@ -172,6 +172,38 @@ export class AcademicsController {
     return this.academicsService.updateLibrarySettings(req.user.tenantId, body);
   }
 
+  // ─── LIBRARY — CATEGORIES (Dewey Decimal) ──────────────────────────────────────
+
+  @Roles(...SCHOOL_STAFF_ROLES)
+  @Get('library/categories')
+  getBookCategories(@Request() req, @Query() q: any) {
+    return this.academicsService.getBookCategories(req.user.tenantId, q);
+  }
+
+  @Roles(...SCHOOL_STAFF_ROLES)
+  @Post('library/categories/seed-defaults')
+  seedBookCategories(@Request() req) {
+    return this.academicsService.seedDefaultBookCategories(req.user.tenantId, req.user.institutionId);
+  }
+
+  @Roles(...SCHOOL_STAFF_ROLES)
+  @Post('library/categories')
+  createBookCategory(@Request() req, @Body() body: any) {
+    return this.academicsService.createBookCategory(req.user.tenantId, req.user.institutionId, body);
+  }
+
+  @Roles(...SCHOOL_STAFF_ROLES)
+  @Patch('library/categories/:id')
+  updateBookCategory(@Request() req, @Param('id') id: string, @Body() body: any) {
+    return this.academicsService.updateBookCategory(req.user.tenantId, id, body);
+  }
+
+  @Roles(...SCHOOL_STAFF_ROLES)
+  @Delete('library/categories/:id')
+  deleteBookCategory(@Request() req, @Param('id') id: string) {
+    return this.academicsService.deleteBookCategory(req.user.tenantId, id);
+  }
+
   // ─── LIBRARY — BOOKS ──────────────────────────────────────────────────────────
 
   @Roles(...SCHOOL_STAFF_ROLES)

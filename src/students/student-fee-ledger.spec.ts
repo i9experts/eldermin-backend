@@ -17,6 +17,7 @@ function makeController(financeOverrides: any = {}, serviceOverrides: any = {}) 
   const finance: any = {
     getInvoices: jest.fn(async () => ({ data: [] })),
     recordPayment: jest.fn(async () => ({ _id: 'payment-1' })),
+    diagnoseNoInvoices: jest.fn(async () => ({ reason: 'no_fee_structure_assigned', detail: 'No active Fee Structure matches this student.' })),
     ...financeOverrides,
   };
   return { ctrl: new StudentsController(svc, finance, { assertMayMark: async () => undefined } as any), svc, finance };
@@ -39,12 +40,42 @@ describe('getFeeStatement', () => {
     // Summed across BOTH invoices, not just the first — this is exactly
     // the kind of aggregation that used to silently show 0 for everyone.
     expect(result.summary).toEqual({ totalBilled: 30000, totalPaid: 20000, totalBalance: 10000 });
+    expect(result.diagnosis).toBeNull();
   });
 
-  it('returns a zeroed summary (not a crash) when the student genuinely has no invoices yet', async () => {
-    const { ctrl } = makeController();
+  // An empty ledger is ambiguous on its own - identical whether the student
+  // genuinely owes nothing or was simply never billed. diagnosis explains
+  // which, instead of a bare empty array leaving staff/parents guessing.
+  it('includes a diagnosis explaining why, when the student genuinely has no invoices yet', async () => {
+    const { ctrl, finance } = makeController();
     const result = await ctrl.getFeeStatement('student-1', reqOf({ role: 'admin' }));
-    expect(result).toEqual({ invoices: [], summary: { totalBilled: 0, totalPaid: 0, totalBalance: 0 } });
+    expect(result).toEqual({
+      invoices: [], summary: { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
+      diagnosis: { reason: 'no_fee_structure_assigned', detail: 'No active Fee Structure matches this student.' },
+    });
+    expect(finance.diagnoseNoInvoices).toHaveBeenCalledWith('s', 'student-1');
+  });
+
+  it('does not bother computing a diagnosis when invoices were actually found', async () => {
+    const invoices = [{ _id: 'inv-1', totalAmount: 1000, paidAmount: 0, balanceDue: 1000, status: 'sent' }];
+    const { ctrl, finance } = makeController({ getInvoices: jest.fn(async () => ({ data: invoices })) });
+    await ctrl.getFeeStatement('student-1', reqOf({ role: 'admin' }));
+    expect(finance.diagnoseNoInvoices).not.toHaveBeenCalled();
+  });
+
+  // Regression: diagnosis is a helpful add-on, never the main point of this
+  // endpoint. A bug while computing it (e.g. a malformed campusId on some
+  // legacy student record - see diagnoseNoInvoices's own regression test)
+  // must never take down the real invoices/summary this endpoint exists to
+  // serve - which is exactly what an unguarded await here did, turning
+  // "No invoices found" (an honest empty ledger) into a 500 for every
+  // student who genuinely had zero invoices.
+  it('still returns the real (empty) ledger even if computing the diagnosis itself throws', async () => {
+    const { ctrl } = makeController({ diagnoseNoInvoices: jest.fn(async () => { throw new Error('Cast to ObjectId failed'); }) });
+    const result = await ctrl.getFeeStatement('student-1', reqOf({ role: 'admin' }));
+    expect(result).toEqual({
+      invoices: [], summary: { totalBilled: 0, totalPaid: 0, totalBalance: 0 }, diagnosis: null,
+    });
   });
 
   it('still blocks a teacher caller from seeing financial data', async () => {

@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Request, HttpCode, HttpStatus, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Post, Patch, Get, Body, Request, HttpCode, HttpStatus, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthService } from './auth.service';
 import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
@@ -19,6 +19,12 @@ class ForgotPasswordDto {
 class ResetPasswordDto {
   @IsString() token: string;
   @IsString() @MinLength(6) newPassword: string;
+}
+
+class UpdateTourStateDto {
+  // 'global' = the one-time sidebar/topbar orientation tour; anything else
+  // is a module key (e.g. 'finance') for that module's own mini-tour.
+  @IsString() scope: string;
 }
 
 @Controller('auth')
@@ -56,6 +62,13 @@ export class AuthController {
   @UseInterceptors(FileInterceptor('avatar'))
   uploadAvatar(@Request() req, @UploadedFile() avatar: Express.Multer.File) {
     return this.authService.uploadAvatar(req.user.userId, req.user.tenantId, avatar);
+  }
+
+  /** "Show Me Around" tour: mark the global tour, or a given module's mini-tour, as seen. */
+  @AllowNonStaff()
+  @Patch('me/tour')
+  updateTourState(@Request() req, @Body() dto: UpdateTourStateDto) {
+    return this.authService.updateTourState(req.user.userId, req.user.tenantId, dto.scope);
   }
 
   /** Authenticated: ends ALL sessions of the caller (tokenVersion bump). The old @Public logout stays a no-op. */

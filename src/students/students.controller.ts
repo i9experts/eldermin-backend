@@ -29,6 +29,7 @@ import { projectForTeacher, TEACHER_NO_FINANCE_MESSAGE } from './teacher-student
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
 import { ForbiddenException } from '@nestjs/common';
 import { TeacherAttendanceScopeService } from './teacher-attendance-scope.service';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 @Controller('students')
 export class StudentsController {
@@ -41,7 +42,7 @@ export class StudentsController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
       tenantId: req?.user?.tenantId,
@@ -82,6 +83,36 @@ export class StudentsController {
   async getClassRosterDiagnostic(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return projectForTeacher(requestingUser, await this.studentsService.getClassRosterDiagnostic(schoolSlug, grade, section, requestingUser));
+  }
+
+  /** GET /api/v1/students/last-roll-number?grade=&section=&academicYear=
+   * Lets the Add Student wizard, Admissions enrollment form, and Student
+   * 360's roll-number edit all show "last used roll number in this class:
+   * N - try N+1" before the admin even submits, instead of only finding
+   * out about a collision after a rejected save. */
+  @Get('last-roll-number')
+  async getLastRollNumberInClass(@Request() req: any, @Query('grade') grade: string, @Query('section') section?: string, @Query('academicYear') academicYear?: string) {
+    const { schoolSlug } = this.ctx(req);
+    const lastRollNumber = await this.studentsService.getLastRollNumberInClass(schoolSlug, grade, section, academicYear);
+    return { lastRollNumber, nextSuggested: lastRollNumber !== null ? lastRollNumber + 1 : null };
+  }
+
+  /** GET /api/v1/students/attendance/day-summary?date=YYYY-MM-DD
+   * Class-wise attendance totals for one day - the Institution Overview
+   * dashboard's Attendance widget. Omit `date` for today. */
+  @Get('attendance/day-summary')
+  async getClassAttendanceDaySummary(@Request() req: any, @Query('date') date?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getClassAttendanceDaySummary(schoolSlug, date);
+  }
+
+  /** GET /api/v1/students/birthdays/upcoming?days=30
+   * Student birthdays within the next N days - the dashboard's Birthdays
+   * widget pairs this with HR's GET /hr/reminders/upcoming (staff). */
+  @Get('birthdays/upcoming')
+  async getUpcomingStudentBirthdays(@Request() req: any, @Query('days') days?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.getUpcomingStudentBirthdays(schoolSlug, days ? Number(days) : 30);
   }
 
   // ============================================================
@@ -611,13 +642,21 @@ export class StudentsController {
     return this.studentsService.getFees(schoolSlug, query);
   }
 
-  /** GET /api/v1/students/:id/fees/statement — Student 360's Fee Ledger.
-   * Reads real Invoice records from the Finance module (the same data
-   * Finance's own Receivables view shows), not the Students module's own
-   * StudentFee collection - nothing in the normal fee-assignment flow
-   * (FeeStructure -> assignFeeStructure -> generateInvoices) ever wrote to
-   * StudentFee, so every student's Fee Ledger here was unconditionally
-   * empty regardless of how much they actually owed or had paid. */
+  /** GET /api/v1/students/:id/fees/statement — Student 360's Fee Ledger
+   * (and the parent app's, which reads this same endpoint). Reads real
+   * Invoice records from the Finance module (the same data Finance's own
+   * Receivables view shows), not the Students module's own StudentFee
+   * collection - nothing in the normal fee-assignment flow (FeeStructure ->
+   * assignFeeStructure -> generateInvoices) ever wrote to StudentFee, so
+   * every student's Fee Ledger here was unconditionally empty regardless of
+   * how much they actually owed or had paid.
+   *
+   * An empty ledger is ambiguous on its own - identical whether the
+   * student genuinely owes nothing or was simply never billed (no active
+   * Fee Structure matches their class, or Generate Invoices was never run
+   * for them), with nothing on screen telling staff or parents which. When
+   * there are zero invoices, `diagnosis` explains why - see
+   * FinanceService.diagnoseNoInvoices. */
   @Get(':id/fees/statement')
   async getFeeStatement(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
@@ -632,7 +671,17 @@ export class StudentsController {
       },
       { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
     );
-    return { invoices, summary };
+    // diagnosis is a helpful add-on, never the main point of this endpoint -
+    // a bug or bad data hit while computing it (e.g. a malformed campusId
+    // on some legacy student record) must never take down the real
+    // invoices/summary this endpoint exists to serve.
+    let diagnosis: { reason: string; detail: string } | null = null;
+    if ((invoices as any[]).length === 0) {
+      try {
+        diagnosis = await this.financeService.diagnoseNoInvoices(schoolSlug, id);
+      } catch { /* leave diagnosis null - the ledger itself still renders */ }
+    }
+    return { invoices, summary, diagnosis };
   }
 
   /** POST /api/v1/students/fees */

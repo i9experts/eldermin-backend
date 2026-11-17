@@ -305,6 +305,31 @@ export class ParentPortalController {
     return this.service.markLessonProgress(studentId, requestingUser, tenantId, schoolSlug, dto);
   }
 
+  // ── Guided Reading: student player (Phase 3) ────────────────────
+  @Get('students/:studentId/reading')
+  async getMyReadingHome(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyReadingHome(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/reading/:readerId')
+  async getMyReader(@Param('studentId') studentId: string, @Param('readerId') readerId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyReader(studentId, readerId, requestingUser, schoolSlug);
+  }
+
+  @Post('students/:studentId/reading/:readerId/complete')
+  @HttpCode(HttpStatus.OK)
+  async completeMyReading(
+    @Param('studentId') studentId: string,
+    @Param('readerId') readerId: string,
+    @Body() dto: { keywordsLookedUp?: string[] },
+    @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.completeMyReading(studentId, readerId, requestingUser, schoolSlug, tenantId, dto?.keywordsLookedUp || []);
+  }
+
   // ── LMS Phase 2: self-paced online quizzes ─────────────────────
   @Get('students/:studentId/quizzes')
   async listMyQuizzes(@Param('studentId') studentId: string, @Request() req: any) {
@@ -334,6 +359,59 @@ export class ParentPortalController {
   async getResults(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
     return this.service.getResults(studentId, requestingUser, schoolSlug);
+  }
+
+  // Whole-term, comprehensive report (academics + Tarbiyah/Qaida/Nazra/
+  // attendance where the school included them) - distinct from the
+  // per-exam list above.
+  @Get('students/:studentId/term-report-cards')
+  async getTermReportCards(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCards(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/results/:reportCardId/pdf')
+  async downloadResultPdf(
+    @Param('studentId') studentId: string, @Param('reportCardId') reportCardId: string,
+    @Request() req: any, @Res() res: Response,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    // Ownership first, so the suspended answer is never readable for someone else's child.
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'academic_progress_report', reason: access.reason || null });
+      return;
+    }
+    const pdf = await this.service.downloadResultPdf(studentId, reportCardId, requestingUser, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="result-${reportCardId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
+  @Get('students/:studentId/qaida')
+  async getQaidaReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getQaidaReport(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/qaida/pdf')
+  async downloadQaidaPdf(@Param('studentId') studentId: string, @Request() req: any, @Res() res: Response) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null });
+      return;
+    }
+    const pdf = await this.service.downloadQaidaPdf(studentId, requestingUser, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="qaida-report-${studentId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
+  @Get('students/:studentId/nazra')
+  async getNazraReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getNazraReport(studentId, requestingUser, schoolSlug);
   }
 
   @Get('students/:studentId/dues')
@@ -415,6 +493,17 @@ export class ParentPortalController {
   async getLeaves(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
     return this.service.getStudentLeaves(studentId, requestingUser, schoolSlug);
+  }
+
+  // Staff-facing override of this controller's parent-only default, same
+  // pattern as the consent-admin routes above - the Institution Overview
+  // dashboard's Academics widget needs a school-wide pending count, not
+  // one child's own leave history.
+  @Roles(...CONSENT_ADMIN_ROLES)
+  @Get('student-leave-requests/pending-count')
+  async getPendingStudentLeaveCount(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPendingStudentLeaveCount(schoolSlug);
   }
 
   @Post('students/:studentId/leaves')

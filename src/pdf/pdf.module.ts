@@ -7,11 +7,17 @@ import { StudentSchema } from '../students/schemas/student.schema';
 import { InvoiceSchema, PaymentSchema, ExpenseSchema, BankAccountSchema } from '../finance/schemas/finance.schema';
 import { SchoolSchema, Campus, CampusSchema } from '../organization/schemas/organization.schema';
 import { GroupInstitution, GroupInstitutionSchema } from '../organization/schemas/group-institution.schema';
-import { AssessmentSchema } from '../assessments/schemas/assessment.schema';
+import { AssessmentSchema, ReportCard, ReportCardSchema } from '../assessments/schemas/assessment.schema';
+import { TermReportCard, TermReportCardSchema } from '../assessments/schemas/term-report-card.schema';
+import { AssessmentVisibilitySettings, AssessmentVisibilitySettingsSchema } from '../assessments/schemas/assessment-visibility-settings.schema';
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { QaidaProgressSchema } from '../behaviour/schemas/qaida-progress.schema';
+import { NazraProgressSchema } from '../behaviour/schemas/nazra-progress.schema';
 import { CharacterProgramSettings, CharacterProgramSettingsSchema } from '../behaviour/schemas/character-program-settings.schema';
 import { ReportTemplateSchema } from '../modules/report-templates/schemas/report-template.schema';
+import { ReadingLevel, ReadingLevelSchema } from '../guided-reading/schemas/reading-level.schema';
+import { Reader, ReaderSchema } from '../guided-reading/schemas/reader.schema';
+import { StudentReadingProgress, StudentReadingProgressSchema } from '../guided-reading/schemas/student-reading-progress.schema';
 import { FinanceModule } from '../finance/finance.module';
 
 @Module({
@@ -39,15 +45,35 @@ import { FinanceModule } from '../finance/finance.module';
       { name: 'BankAccount', schema: BankAccountSchema },
       { name: 'School', schema: SchoolSchema },
       { name: 'Assessment', schema: AssessmentSchema },
+      // Comprehensive report-card PDF (generateReportCard) now reads the
+      // already-computed TermReportCard directly - see Phase 1
+      // (AssessmentService.generateTermReportCards) - instead of
+      // re-querying Assessment/behaviour collections with the wrong
+      // field shapes, which always produced zero marks.
+      { name: TermReportCard.name, schema: TermReportCardSchema },
+      // Per-exam Report Card PDF (generateExamReportCardPdf) - the "print
+      // preview before publish" path, separate from the whole-term one above.
+      { name: ReportCard.name, schema: ReportCardSchema },
+      // Assessment Master Settings' Pass/Fail result relabeling - read
+      // alongside the above so a school's custom wording shows on the PDF,
+      // not just the web Results tab.
+      { name: AssessmentVisibilitySettings.name, schema: AssessmentVisibilitySettingsSchema },
       // behaviour_records under its OWN model name. This used to be registered as 'Behaviour', the name students.module uses for the legacy
       // student_behaviour store, so whichever module loaded first decided which collection BOTH services read and wrote (BB12).
       { name: BehaviourRecord.name, schema: BehaviourRecordSchema },
       { name: 'QaidaProgress', schema: QaidaProgressSchema },
+      { name: 'NazraProgress', schema: NazraProgressSchema },
       { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
       { name: CharacterProgramSettings.name, schema: CharacterProgramSettingsSchema },
       { name: 'ReportTemplate', schema: ReportTemplateSchema },
       { name: Campus.name, schema: CampusSchema },
       { name: GroupInstitution.name, schema: GroupInstitutionSchema },
+      // Guided Reading Phase 5 report - the staff CRUD module's own
+      // schemas, registered directly rather than importing
+      // GuidedReadingModule, same convention as QaidaProgress/NazraProgress above.
+      { name: 'ReadingLevel', schema: ReadingLevelSchema },
+      { name: 'Reader', schema: ReaderSchema },
+      { name: 'StudentReadingProgress', schema: StudentReadingProgressSchema },
     ]),
   ],
   controllers: [PdfController],

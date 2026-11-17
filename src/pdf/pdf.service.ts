@@ -1,19 +1,24 @@
-import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException, OnModuleDestroy, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as puppeteer from 'puppeteer';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import { IsString, IsOptional, IsMongoId, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsMongoId, IsInt, IsIn, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PdfLog, PdfLogDocument } from './schemas/pdf-log.schema';
 import { PROCUREMENT_REPORT_TITLES, procurementReportSections } from '../modules/report-templates/procurement-report-sections';
 import { FinanceService } from '../finance/finance.service';
 import { formatDateShort } from '../common/utils/date-format.util';
 import { studentFullName } from '../common/utils/student-name.util';
-import { escapeHtml, renderRichTextField, urduFontFaceCss } from '../common/utils/rich-text.util';
+import { escapeHtml, renderRichTextField, urduFontFaceCss, latinFontFaceCss, containsArabicScript } from '../common/utils/rich-text.util';
 import { QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT } from '../behaviour/schemas/qaida-progress.schema';
+import { NAZRA_PARAS, NAZRA_PARA_COUNT } from '../behaviour/schemas/nazra-progress.schema';
+import { BADGE_BY_KEY } from '../gamification/badge-catalog';
 import { BehaviourRecord, TarbiyahAssessment, TARBIYAH_TRAITS } from '../behaviour/schemas/behaviour.schema';
 import { CharacterProgramSettings } from '../behaviour/schemas/character-program-settings.schema';
+import { TermReportCard } from '../assessments/schemas/term-report-card.schema';
+import { ReportCard } from '../assessments/schemas/assessment.schema';
+import { AssessmentVisibilitySettings } from '../assessments/schemas/assessment-visibility-settings.schema';
 
 // ── Report Templates: sample data for preview / ad-hoc generation ──────────
 export function sampleDataForType(type: string): Record<string, any> {
@@ -284,6 +289,22 @@ export class GenerateReportCardDto {
   @IsOptional() @IsString() term?: string;
 }
 
+export class GenerateExamReportCardDto {
+  @IsMongoId() assessmentId: string;
+  @IsMongoId() studentId: string;
+}
+
+/** Download every matching student's per-exam report card as one combined
+ * PDF, instead of the Results tab's staff having to click "Download" once
+ * per row - the complaint this was built to fix. section/result mirror the
+ * same client-side filters the Results tab's own list already applies, so
+ * "download all" always means exactly the rows currently shown there. */
+export class BulkExamReportCardsDto {
+  @IsMongoId() assessmentId: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @IsIn(['pass', 'fail']) result?: string;
+}
+
 export class GenerateInvoiceDto {
   @IsMongoId() invoiceId: string;
 }
@@ -300,6 +321,15 @@ export class BulkReportCardDto {
   @IsOptional() @IsString() term?: string;
 }
 
+/** Download every term report card matching the Results tab's own Term/
+ * Section filters as one combined PDF, same reasoning and convention as
+ * BulkExamReportCardsDto above - "download all" always means exactly the
+ * rows currently shown in TermReportCardsView, not a separate scope. */
+export class BulkTermReportCardsPdfDto {
+  @IsOptional() @IsString() term?: string;
+  @IsOptional() @IsString() section?: string;
+}
+
 export class GenerateQaidaReportDto {
   @IsMongoId() studentId: string;
   // Lets the admin print only up to a specific Takhti instead of always
@@ -309,8 +339,29 @@ export class GenerateQaidaReportDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(QAIDA_TAKHTI_COUNT) upToTakhti?: number;
 }
 
+export class GenerateNazraReportDto {
+  @IsMongoId() studentId: string;
+  // Same reasoning as GenerateQaidaReportDto.upToTakhti, for Nazra's 30 Paras.
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) upToPara?: number;
+}
+
+/** Download every tracked student's Nazra progress report in a class as
+ * one combined PDF - grade/section mirror the exact filters the Nazra
+ * tab's own class roster already applies (NazraController.getClassProgress),
+ * same "download all means exactly these rows" convention as
+ * BulkExamReportCardsDto/BulkTermReportCardsPdfDto above. */
+export class BulkNazraReportsPdfDto {
+  @IsString() grade: string;
+  @IsOptional() @IsString() section?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) upToPara?: number;
+}
+
 export class GenerateTarbiyahReportDto {
   @IsMongoId() assessmentId: string;
+}
+
+export class GenerateGuidedReadingReportDto {
+  @IsMongoId() studentId: string;
 }
 
 // Shared filter shape for both the class-wise and school-wide aggregate
@@ -333,132 +384,710 @@ export class GenerateTarbiyahSchoolReportDto {
   @IsOptional() @IsString() category?: string;
 }
 
-const REPORT_CARD_TEMPLATE = (data: any) => `
+// Human label for a TraitScore.traitKey - falls back to the raw key
+// (title-cased) for a school-customized characteristic not in the
+// default TARBIYAH_TRAITS list (see CharacterProgramSettings).
+const tarbiyahTraitLabel = (key: string): string =>
+  TARBIYAH_TRAITS.find((t) => t.key === key)?.nameEn
+  || key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' ');
+
+// Comprehensive, whole-term report card - academics (with a term-wide
+// class position and a subject-performance bar chart) plus whichever
+// optional Tarbiyah/Qaida/Nazra/attendance/teacher-feedback/Parent
+// Engagement sections the admin included at generation time (see
+// TermReportCard.sectionsIncluded). Every chart here is hand-built CSS
+// (bar widths as percentages), matching this file's existing tarb-bar/
+// starGlyphs convention - no JS charting library is wired into the
+// Puppeteer pipeline, and inline SVG/CSS avoids waiting on an async
+// render loop that htmlToPdf's `waitUntil:'load'` wouldn't catch anyway.
+const REPORT_CARD_TEMPLATE = (data: any) => {
+  const included = data.sectionsIncluded || {};
+  const esc = escapeHtml;
+  // Internally the result is always the literal 'pass' | 'fail' (sorting,
+  // filtering, pass-rate stats all key off that) - but some schools don't
+  // want that word shown verbatim on a report card a parent sees, so
+  // Assessment Master Settings lets them relabel it (e.g. "Promoted" /
+  // "Needs Improvement"). Always resolve the display text through that
+  // label rather than the raw value.
+  const resultLabel = !data.overallResult ? 'N/A' : data.overallResult === 'pass' ? (data.passLabel || 'Pass') : (data.failLabel || 'Fail');
+  // Free-text fields here (teacher observations, invigilator remarks/names,
+  // home-tutoring notes, feedback) are staff-entered and can be Urdu rather
+  // than English. Without an explicit rtl wrap + a font that actually
+  // shapes Arabic script, Puppeteer/Chromium falls back to whatever font
+  // the container has for those codepoints, which renders each letter in
+  // its isolated form, unjoined and in raw (unreordered) storage order -
+  // exactly the "invigilator name not showing properly" symptom reported.
+  // Same fix already used for the Class Diary PDF (rich-text.util.ts).
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+
+  const gradeTone = (grade: string) => {
+    const g = (grade || '').charAt(0).toUpperCase();
+    return g === 'A' ? { fg: '#15803D', bg: '#DCFCE7', bar: '#16A34A' }
+      : g === 'B' ? { fg: '#1D4ED8', bg: '#DBEAFE', bar: '#2563EB' }
+      : g === 'C' ? { fg: '#B45309', bg: '#FEF3C7', bar: '#D97706' }
+      : { fg: '#B91C1C', bg: '#FEE2E2', bar: '#DC2626' };
+  };
+  // Kept for the gradeClass-based Qaida/Tarbiyah callers elsewhere in this
+  // file that still expect the old .grade-a/.grade-b/.grade-c/.grade-d
+  // classes (those CSS rules remain defined below for compatibility).
+  const gradeClass = (grade: string) => {
+    const g = (grade || '').charAt(0).toUpperCase();
+    return g === 'A' ? 'grade-a' : g === 'B' ? 'grade-b' : g === 'C' ? 'grade-c' : 'grade-d';
+  };
+  void gradeClass;
+
+  const initials = (data.studentName || '?')
+    .split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase() || '').join('') || '?';
+  const positionMedal = data.classPosition === 1 ? '🥇' : data.classPosition === 2 ? '🥈' : data.classPosition === 3 ? '🥉' : null;
+
+  const subjectRows = (data.subjects || []).map((s: any) => {
+    const tone = gradeTone(s.grade);
+    const pct = Math.max(0, Math.min(100, s.percentage ?? 0));
+    return `
+    <tr>
+      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span class="absent-tag">Absent</span>' : ''}</td>
+      <td class="num">${s.obtainedMarks ?? 0}<span class="of-max"> / ${s.totalMarks ?? 0}</span></td>
+      <td><div class="mastery-track"><div class="mastery-fill" style="width:${pct}%;background:${tone.bar}"></div></div></td>
+      <td class="num">${s.percentage ?? 0}%</td>
+      <td class="num"><span class="grade-pill" style="color:${tone.fg};background:${tone.bg}">${esc(s.grade) || 'N/A'}</span></td>
+    </tr>`;
+  }).join('');
+
+  const tagList = (items: string[], cls: string) =>
+    `<div class="tags-row">${items.map((s) => `<span class="tag ${cls}">${rtl(s)}</span>`).join('')}</div>`;
+
+  const tarbiyahSection = included.tarbiyah ? (() => {
+    const t = data.tarbiyah;
+    if (!t) return `<div class="section-title">Tarbiyah (Character Development)</div><p class="muted">No Tarbiyah assessment on file for this academic year.</p>`;
+    const traitRows = (t.traits || []).map((tr: any) => `
+      <div class="list-item"><span>${esc(tarbiyahTraitLabel(tr.traitKey))}</span><span style="font-weight:700;color:#1B4F8A">${tr.score}</span></div>`).join('');
+    return `
+    <div class="section-title">Tarbiyah (Character Development)</div>
+    <div class="summary-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="summary-card"><div class="summary-num">${t.overallScore ?? '—'}</div><div class="summary-label">Overall Score</div></div>
+      <div class="summary-card"><div class="summary-num" style="font-size:16px;text-transform:capitalize">${esc((t.overallRating || '').replace(/_/g, ' ')) || 'N/A'}</div><div class="summary-label">Rating</div></div>
+      <div class="summary-card"><div class="summary-num">${t.overallPercentage ?? '—'}%</div><div class="summary-label">Percentage</div></div>
+    </div>
+    ${traitRows ? `<p class="note" style="margin-top:10px"><strong>Trait Scores</strong></p><div class="tarb-grid">${traitRows}</div>` : ''}
+    ${t.teacherObservations ? `<p class="note"><strong>Teacher's Observations:</strong> ${rtl(t.teacherObservations)}</p>` : ''}
+    ${(t.areasOfStrength || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Areas of Strength</strong></p>${tagList(t.areasOfStrength, 'tag-strong')}` : ''}
+    ${(t.areasForImprovement || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Areas for Improvement</strong></p>${tagList(t.areasForImprovement, 'tag-weak')}` : ''}
+    ${(t.recommendedActions || []).length ? `<p class="note" style="margin-bottom:4px"><strong>Recommended Actions</strong></p><ul style="margin:0 0 12px 18px;padding:0">${t.recommendedActions.map((a: string) => `<li class="note" style="margin-bottom:2px">${rtl(a)}</li>`).join('')}</ul>` : ''}
+    `;
+  })() : '';
+
+  // Flattens every takhti's/para's day-by-day log into one chronological
+  // list (most recent first) - the actual "lesson diary" a comprehensive
+  // report needs, not just a single current-position snapshot.
+  const qaidaRecentLessons = (data.qaida?.takhtis || [])
+    .flatMap((tk: any) => (tk.sabaqLog || []).map((l: any) => ({ ...l, takhtiNumber: tk.number })))
+    .sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, 8);
+  const nazraRecentLessons = (data.nazra?.diaryLog || [])
+    .slice()
+    .sort((a: any, b: any) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+    .slice(0, 8);
+  const qnExtras = data.qaidaNazraExtras || {};
+  const invigilatorEntries = (qnExtras.invigilatorAssessments || []).slice(0, 6);
+  const homeLogEntries = (qnExtras.homeLog || []).slice(0, 6);
+  const fmtDate = (d: any) => (d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—');
+
+  const qaidaNazraSection = (included.qaida || included.nazra) ? `
+    <div class="section-title">Qaida / Nazra Progress</div>
+    <div class="summary-grid" style="grid-template-columns:repeat(2,1fr)">
+      ${included.qaida ? (data.qaida ? `
+        <div class="summary-card" style="text-align:left;padding:14px">
+          <div class="info-label">Qaida</div>
+          <div class="info-value" style="text-transform:capitalize">${esc((data.qaida.overallStatus || '').replace(/_/g, ' ')) || 'N/A'}</div>
+          <p class="note" style="margin-top:6px">Takhti ${data.qaida.currentTakhti ?? '—'} of ${data.qaida.totalTakhtis ?? 16} · ${data.qaida.masteryPct ?? 0}% mastered</p>
+        </div>` : `<div class="summary-card" style="text-align:left;padding:14px"><div class="info-label">Qaida</div><p class="muted">Not enrolled.</p></div>`) : ''}
+      ${included.nazra ? (data.nazra ? `
+        <div class="summary-card" style="text-align:left;padding:14px">
+          <div class="info-label">Nazra</div>
+          <div class="info-value" style="text-transform:capitalize">${esc((data.nazra.overallStatus || '').replace(/_/g, ' ')) || 'N/A'}</div>
+          <p class="note" style="margin-top:6px">Para ${data.nazra.currentPara ?? '—'} of ${data.nazra.totalParas ?? 30} · ${data.nazra.completionPct ?? 0}% complete</p>
+        </div>` : `<div class="summary-card" style="text-align:left;padding:14px"><div class="info-label">Nazra</div><p class="muted">Not enrolled.</p></div>`) : ''}
+    </div>
+    ${qaidaRecentLessons.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Qaida — Recent Lessons</strong></p>
+    ${qaidaRecentLessons.map((l: any) => `
+      <div class="list-item"><span>Takhti ${l.takhtiNumber}${l.sabaqFrom ? ` · ${esc(l.sabaqFrom)}${l.sabaqTo ? `–${esc(l.sabaqTo)}` : ''}` : ''}</span><span style="text-transform:capitalize">${esc((l.rating || '').replace(/_/g, ' '))} · ${fmtDate(l.date)}</span></div>`).join('')}
+    ` : ''}
+    ${(data.qaida?.commonErrors || []).length ? `<p class="note" style="margin-top:8px;margin-bottom:4px"><strong>Qaida — Common Errors</strong></p>${tagList(data.qaida.commonErrors.slice(0, 6).map((e: any) => `${e.error} (${e.count})`), 'tag-weak')}` : ''}
+    ${nazraRecentLessons.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Nazra — Recent Diary</strong></p>
+    ${nazraRecentLessons.map((l: any) => `
+      <div class="list-item"><span>Para ${l.sabaq?.paraNumber ?? '—'}${l.sabaq?.pageFrom ? ` · ${esc(l.sabaq.pageFrom)}${l.sabaq.pageTo ? `–${esc(l.sabaq.pageTo)}` : ''}` : ''}</span><span style="text-transform:capitalize">${esc((l.sabaq?.rating || '').replace(/_/g, ' '))} · ${fmtDate(l.date)}</span></div>`).join('')}
+    ` : ''}
+    ${(data.nazra?.commonErrors || []).length ? `<p class="note" style="margin-top:8px;margin-bottom:4px"><strong>Nazra — Common Errors</strong></p>${tagList(data.nazra.commonErrors.slice(0, 6).map((e: any) => `${e.error} (${e.count})`), 'tag-weak')}` : ''}
+    ${invigilatorEntries.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Invigilator Assessments</strong></p>
+    ${invigilatorEntries.map((a: any) => `
+      <div class="feedback-item">
+        <p class="feedback-text">${a.overallScore != null ? `<strong>${a.overallScore}</strong> · ` : ''}${rtl(a.overallRemarks) || 'No remarks recorded'}</p>
+        <p class="feedback-meta">${rtl(a.invigilatorName) || 'Invigilator'}${a.invigilatorType ? ` (${esc(a.invigilatorType)})` : ''} · ${fmtDate(a.visitDate)}</p>
+      </div>`).join('')}
+    ` : ''}
+    ${homeLogEntries.length ? `
+    <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Parent Home-Tutoring Log</strong></p>
+    ${homeLogEntries.map((h: any) => `
+      <div class="feedback-item">
+        <p class="feedback-text">${h.takhtiNumber ? `Takhti ${h.takhtiNumber}` : h.paraNumber ? `Para ${h.paraNumber}` : ''}${h.pageFrom ? ` · ${esc(h.pageFrom)}${h.pageTo ? `–${esc(h.pageTo)}` : ''}` : ''}${h.notes ? ` — ${rtl(h.notes)}` : ''}</p>
+        <p class="feedback-meta">${rtl(h.tutorName) || 'Home tutor'} · ${fmtDate(h.date)}</p>
+      </div>`).join('')}
+    ` : ''}` : '';
+
+  const attendanceSection = included.attendance ? (() => {
+    const a = data.attendance;
+    if (!a || a.markedDays == null) return `<div class="section-title">Attendance</div><p class="muted">No attendance records for this term.</p>`;
+    const rate = a.attendanceRate ?? 0;
+    // Monthly roll-up of the daily trend the service already computes -
+    // compact enough for a report (a term is a few months), still a real
+    // breakdown instead of only the term-wide totals.
+    const monthly = new Map<string, { present: number; absent: number; total: number }>();
+    for (const d of (a.trend || [])) {
+      const key = String(d.date || '').slice(0, 7);
+      if (!key) continue;
+      const m = monthly.get(key) || { present: 0, absent: 0, total: 0 };
+      m.present += d.presentCount || 0;
+      m.absent += d.absentCount || 0;
+      m.total += d.total || 0;
+      monthly.set(key, m);
+    }
+    const monthRows = Array.from(monthly.entries()).sort(([a1], [b1]) => a1.localeCompare(b1)).map(([key, m]) => {
+      const pct = m.total ? Math.round((m.present / m.total) * 100) : 0;
+      const label = new Date(`${key}-01`).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+      return `<div class="bar-item">
+        <div class="bar-name">${esc(label)}</div>
+        <div class="bar-wrap"><div class="bar-fill" style="width:${pct}%;background:${pct >= 90 ? '#16A34A' : pct >= 75 ? '#F5A623' : '#DC2626'}"></div></div>
+        <div class="bar-score">${pct}%</div>
+      </div>`;
+    }).join('');
+    return `
+    <div class="section-title">Attendance</div>
+    <div class="bar-item" style="margin-bottom:12px">
+      <div class="bar-name" style="width:110px">Term Overall</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, rate))}%;background:${rate >= 90 ? '#16A34A' : rate >= 75 ? '#F5A623' : '#DC2626'}"></div></div>
+      <div class="bar-score">${rate}%</div>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-card"><div class="summary-num">${a.presentCount ?? 0}</div><div class="summary-label">Present</div></div>
+      <div class="summary-card"><div class="summary-num">${a.lateCount ?? 0}</div><div class="summary-label">Late</div></div>
+      <div class="summary-card"><div class="summary-num">${a.absentCount ?? 0}</div><div class="summary-label">Absent</div></div>
+      <div class="summary-card"><div class="summary-num">${a.halfDayCount ?? 0}</div><div class="summary-label">Half Day</div></div>
+    </div>
+    ${monthRows ? `<p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Month-by-Month</strong></p>${monthRows}` : ''}`;
+  })() : '';
+
+  const parentEngagementSection = included.parentEngagement ? (() => {
+    const p = data.parentEngagement;
+    if (!p || p.overallScore == null) return `<div class="section-title">Parent Engagement</div><p class="muted">Not enough data yet to compute a Parent Engagement Score.</p>`;
+    return `
+    <div class="section-title">Parent Engagement</div>
+    <div class="bar-item">
+      <div class="bar-name" style="width:110px;text-transform:capitalize">${esc((p.rating || '').replace(/_/g, ' '))}</div>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, p.overallScore))}%;background:#7C3AED"></div></div>
+      <div class="bar-score">${p.overallScore}/100</div>
+    </div>
+    ${p.recommendation ? `<p class="note">${esc(p.recommendation)}</p>` : ''}`;
+  })() : '';
+
+  const feedbackSection = included.teacherFeedback ? (() => {
+    // Full history, not truncated - a comprehensive report shows every
+    // recorded entry across the term, chronological (most recent first,
+    // already sorted that way by the service), with its date and author.
+    const entries = data.teacherFeedback || [];
+    if (entries.length === 0) return `<div class="section-title">Teacher Feedback This Term</div><p class="muted">No feedback recorded for this term yet.</p>`;
+    return `
+    <div class="section-title">Teacher Feedback This Term</div>
+    ${entries.map((f: any) => `
+      <div class="feedback-item">
+        <p class="feedback-text">${f.subject ? `<strong>${esc(f.subject)}:</strong> ` : ''}${rtl(f.text)}</p>
+        <p class="feedback-meta">${rtl(f.author) || 'Staff'}${f.date ? ' · ' + new Date(f.date).toLocaleDateString('en-GB') : ''}</p>
+      </div>`).join('')}`;
+  })() : '';
+
+  const overallPct = Math.max(0, Math.min(100, data.overallPct ?? 0));
+  const ringColor = overallPct >= 80 ? '#16A34A' : overallPct >= 50 ? '#D97706' : '#DC2626';
+  const ringCircumference = 2 * Math.PI * 52;
+  const ringOffset = ringCircumference * (1 - overallPct / 100);
+  // A student with no marks this term (e.g. a Qaida/Hifz-only student with
+  // no written exams) still gets a report - just with this section swapped
+  // for a plain notice instead of a misleading 0%/F grade/position.
+  const hasAcademicData = data.hasAcademicData !== false;
+
+  // This report's length isn't driven by subject count alone the way a
+  // single-exam result is - it's a whole-term summary that can carry up to
+  // six optional sections (Tarbiyah, Qaida, Nazra, Attendance, Parent
+  // Engagement, Teacher Feedback) plus class teacher/principal remarks, each
+  // with its own free-text and list content. A fixed-size layout tuned to
+  // one combination of these (e.g. 5 subjects + 3 sections) reliably bleeds
+  // onto a near-blank 2nd page the moment a student has more sections
+  // enabled, more feedback entries, or a longer remark - exactly what kept
+  // being reported even after the printable-area min-height fix. Rather than
+  // hand-tuning dozens of CSS values against every possible combination,
+  // scale the whole content box down with CSS `zoom` (which, unlike
+  // `transform: scale`, actually reduces Chromium's print-layout flow, not
+  // just the visual appearance) in proportion to how much is actually on
+  // the page.
+  const sectionCount = ['tarbiyah', 'qaida', 'nazra', 'attendance', 'parentEngagement', 'teacherFeedback']
+    .filter((k) => included[k]).length;
+  const subjectCount = (data.subjects || []).length;
+  const feedbackCount = (data.teacherFeedback || []).length;
+  const remarksBlocks = (data.remarks ? 1 : 0) + (data.principalRemarks ? 1 : 0);
+  const BASELINE_DENSITY = 5 /* subjects */ + 3 /* sections */ + 1 /* feedback entry */ + 1 /* one remarks block */;
+  const density = subjectCount + sectionCount + feedbackCount + remarksBlocks;
+  const overflow = Math.max(0, density - BASELINE_DENSITY);
+  const zoom = Math.max(0.75, 1 - overflow * 0.028);
+
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <style>
+  ${urduFontFaceCss()}
+  ${latinFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #0D1F35; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1B4F8A; margin-bottom: 18px; }
-  .school-name { font-size: 22px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.5px; }
-  .school-sub { font-size: 12px; color: #3D5A7A; margin-top: 2px; }
-  .doc-title { font-size: 14px; font-weight: 700; color: #F5A623; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
-  .doc-year { font-size: 12px; color: #3D5A7A; text-align: right; }
-  .student-box { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-  .info-label { font-size: 10px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-  .info-value { font-size: 14px; font-weight: 600; color: #0D1F35; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-  th { background: #1B4F8A; color: #fff; padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  th:last-child { text-align: center; }
-  td { padding: 10px 12px; border-bottom: 1px solid #EEF4FB; }
-  tr:nth-child(even) td { background: #F7FAFD; }
-  td:last-child { text-align: center; }
+  body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; position: relative; }
+  .accent-bar { height: 6px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
+  .content { padding: 2mm 13mm 3mm; zoom: ${zoom}; }
+  .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
+    background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+    padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 6px; border-bottom: 2px solid #EEF4FB; margin-bottom: 6px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { height: 36px; width: 36px; object-fit: contain; border-radius: 8px; }
+  .school-name { font-size: 16px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
+  .school-sub { font-size: 9.5px; color: #7A9AB8; margin-top: 1px; }
+  .doc-meta { text-align: right; }
+  .doc-eyebrow { font-size: 8.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
+  .doc-title { font-size: 12px; font-weight: 700; color: #1B4F8A; margin-top: 1px; }
+  .doc-year { font-size: 9.5px; color: #7A9AB8; margin-top: 1px; }
+  .status-pill { display: inline-block; margin-top: 3px; font-size: 8.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 2px 9px; }
+  .status-published { color: #15803D; background: #DCFCE7; }
+  .status-draft { color: #B45309; background: #FEF3C7; }
+  .student-card { display: flex; align-items: center; gap: 12px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; padding: 6px 12px; margin-bottom: 6px; }
+  .avatar { flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  .student-box { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px 14px; }
+  .info-label { font-size: 8.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1px; }
+  .info-value { font-size: 11.5px; font-weight: 700; color: #0D1F35; }
+  .section-title { font-size: 10.5px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: 6px 0 4px; padding-bottom: 2px; border-bottom: 2px solid #EEF4FB; }
+  .section-title:first-of-type { margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11px; }
+  th { background: #1B4F8A; color: #fff; padding: 4px 8px; text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 3px 8px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  tr:nth-child(even) td { background: #F9FBFD; }
+  .num { text-align: right; white-space: nowrap; }
+  .of-max { color: #94A3B8; font-weight: 400; }
+  .absent-tag { color: #DC2626; font-size: 9px; font-weight: 700; margin-left: 4px; }
+  .mastery-track { width: 90px; height: 5px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
+  .mastery-fill { height: 100%; border-radius: 4px; }
+  .grade-pill { display: inline-block; min-width: 28px; text-align: center; font-weight: 800; font-size: 10px; border-radius: 999px; padding: 1px 8px; }
   .grade-a { color: #16A34A; font-weight: 700; }
   .grade-b { color: #2563EB; font-weight: 700; }
   .grade-c { color: #D97706; font-weight: 700; }
   .grade-d { color: #DC2626; font-weight: 700; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
-  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 8px; padding: 12px; text-align: center; }
-  .summary-num { font-size: 24px; font-weight: 800; color: #1B4F8A; }
-  .summary-label { font-size: 10px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
-  .tarb-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
-  .tarb-item { display: flex; align-items: center; gap: 8px; }
-  .tarb-bar-wrap { flex: 1; background: #EEF4FB; border-radius: 4px; height: 6px; overflow: hidden; }
-  .tarb-bar { height: 100%; border-radius: 4px; background: #1B4F8A; }
-  .tarb-name { font-size: 11px; color: #3D5A7A; width: 80px; }
-  .tarb-score { font-size: 11px; font-weight: 700; color: #1B4F8A; width: 28px; text-align: right; }
-  .remarks-box { background: #FEF3DC; border: 1px solid #F5A623; border-radius: 8px; padding: 14px; margin-bottom: 20px; }
-  .remarks-text { font-size: 13px; color: #0D1F35; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 32px; padding-top: 16px; border-top: 1px solid #DDE8F4; }
+  .results-row { display: flex; gap: 10px; align-items: stretch; margin: 5px 0 3px; }
+  .ring-card { flex: 0 0 90px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px; }
+  .ring-card svg { width: 68px; height: 68px; }
+  .ring-label { font-size: 8.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 1px; }
+  .result-tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+  .result-tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 8px; padding: 5px 8px; }
+  .result-tile-num { font-size: 14px; font-weight: 800; color: #1B4F8A; }
+  .result-tile-label { font-size: 8.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 4px; }
+  .summary-card { background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 8px; padding: 4px; text-align: center; }
+  .summary-num { font-size: 16px; font-weight: 800; color: #1B4F8A; }
+  .summary-label { font-size: 8.5px; color: #7A9AB8; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  .tags-row { display: flex; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+  .tag { font-size: 9.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+  .tag-strong { background: #ECFDF5; color: #16A34A; }
+  .tag-weak { background: #FEF3DC; color: #B45309; }
+  .bar-item { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+  .bar-name { font-size: 9.5px; color: #3D5A7A; width: 110px; flex-shrink: 0; }
+  .bar-wrap { flex: 1; background: #EEF4FB; border-radius: 4px; height: 6px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; background: #1B4F8A; }
+  .bar-score { font-size: 9.5px; font-weight: 700; color: #1B4F8A; width: 32px; text-align: right; flex-shrink: 0; }
+  .tarb-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px 18px; margin-bottom: 3px; }
+  .list-item { display: flex; justify-content: space-between; font-size: 10.5px; padding: 1px 0; border-bottom: 1px solid #F7FAFD; }
+  .note { font-size: 10.5px; color: #3D5A7A; line-height: 1.35; margin-bottom: 3px; }
+  .muted { font-size: 10.5px; color: #9CA7B8; font-style: italic; margin-bottom: 4px; }
+  .feedback-item { background: #F7FAFD; border-radius: 6px; padding: 4px 8px; margin-bottom: 2px; }
+  .feedback-text { font-size: 10.5px; color: #0D1F35; }
+  .feedback-meta { font-size: 9px; color: #9CA7B8; margin-top: 1px; }
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: 6px 10px; margin-bottom: 4px; }
+  .remarks-text { font-size: 10.5px; color: #0D1F35; line-height: 1.4; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 2px; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px solid #0D1F35; margin-bottom: 6px; height: 32px; }
-  .sig-label { font-size: 11px; color: #3D5A7A; font-weight: 600; }
-  .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #7A9AB8; border-top: 1px solid #EEF4FB; padding-top: 10px; }
+  .sig-line { width: 120px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 3px; height: 18px; }
+  .sig-label { font-size: 9.5px; color: #3D5A7A; font-weight: 700; }
+  .footer { text-align: center; margin-top: 6px; font-size: 8.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: 4px; }
   .footer strong { color: #1B4F8A; }
 </style>
 </head>
 <body>
 <div class="page">
+  <div class="accent-bar"></div>
+  ${!data.published ? '<div class="draft-ribbon">Draft</div>' : ''}
+  <div class="content">
   <div class="header">
-    <div>
-      <div class="school-name">${data.schoolName}</div>
-      <div class="school-sub">${data.schoolAddress || ''}</div>
+    <div class="brand">
+      ${data.schoolLogo ? `<img class="logo" src="${data.schoolLogo}" alt="logo" />` : ''}
+      <div>
+        <div class="school-name">${esc(data.schoolName)}</div>
+        ${data.schoolAddress ? `<div class="school-sub">${esc(data.schoolAddress)}</div>` : ''}
+      </div>
     </div>
-    <div>
-      <div class="doc-title">Student Report Card</div>
-      <div class="doc-year">${data.academicYear} ${data.term ? '· ' + data.term : ''}</div>
+    <div class="doc-meta">
+      <div class="doc-eyebrow">Term Report Card</div>
+      <div class="doc-title">${esc(data.academicYear)}${data.term ? ' · ' + esc(data.term) : ''}</div>
+      ${data.published != null ? `<div class="status-pill ${data.published ? 'status-published' : 'status-draft'}">${data.published ? 'Published' : 'Not Yet Published'}</div>` : ''}
     </div>
   </div>
-  <div class="student-box">
-    <div><div class="info-label">Student Name</div><div class="info-value">${data.studentName}</div></div>
-    <div><div class="info-label">GR No</div><div class="info-value">${data.rollNumber || 'N/A'}</div></div>
-    <div><div class="info-label">Grade / Class</div><div class="info-value">${data.grade} ${data.section || ''}</div></div>
-    <div><div class="info-label">Date of Birth</div><div class="info-value">${data.dob || 'N/A'}</div></div>
-    <div><div class="info-label">Attendance</div><div class="info-value">${data.attendance || 'N/A'}</div></div>
+  <div class="student-card">
+    <div class="avatar">${data.studentPhoto ? `<img src="${data.studentPhoto}" alt="" />` : esc(initials)}</div>
+    <div class="student-box">
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">GR No</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
+    <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `${positionMedal ? positionMedal + ' ' : ''}#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
+    <div><div class="info-label">Result</div><div class="info-value" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'};text-transform:uppercase">${esc(resultLabel)}</div></div>
     <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
+    </div>
   </div>
+
   <div class="section-title">Academic Performance</div>
+  ${!hasAcademicData ? `
+  <p class="muted">No academic marks were recorded against this student for any assessment this term.</p>
+  ` : `
   <table>
     <thead>
       <tr>
-        <th style="width:35%">Subject</th>
-        <th>Total Marks</th>
-        <th>Obtained</th>
-        <th>Percentage</th>
-        <th>Grade</th>
-        <th>Remarks</th>
+        <th style="width:32%">Subject</th>
+        <th style="text-align:right">Marks</th>
+        <th style="text-align:center">Mastery</th>
+        <th style="text-align:right">%</th>
+        <th style="text-align:right">Grade</th>
       </tr>
     </thead>
-    <tbody>
-      ${(data.subjects || []).map((s: any) => {
-        const pct = s.totalMarks ? Math.round((s.obtainedMarks / s.totalMarks) * 100) : 0;
-        const grade = pct >= 80 ? 'A' : pct >= 65 ? 'B' : pct >= 50 ? 'C' : 'D';
-        const cls = `grade-${grade.toLowerCase()}`;
-        const remark = pct >= 80 ? 'Excellent' : pct >= 65 ? 'Good' : pct >= 50 ? 'Satisfactory' : 'Needs Improvement';
-        return `<tr>
-          <td><strong>${s.subjectName}</strong></td>
-          <td>${s.totalMarks}</td>
-          <td>${s.obtainedMarks}</td>
-          <td>${pct}%</td>
-          <td class="${cls}">${grade}</td>
-          <td>${remark}</td>
-        </tr>`;
-      }).join('')}
-    </tbody>
+    <tbody>${subjectRows}</tbody>
   </table>
-  <div class="summary-grid">
-    <div class="summary-card"><div class="summary-num">${data.totalObtained || 0}</div><div class="summary-label">Total Obtained</div></div>
-    <div class="summary-card"><div class="summary-num">${data.totalMarks || 0}</div><div class="summary-label">Total Marks</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:${data.overallPct >= 65 ? '#16A34A' : '#DC2626'}">${data.overallPct || 0}%</div><div class="summary-label">Overall %</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:#F5A623">${data.overallGrade || 'N/A'}</div><div class="summary-label">Final Grade</div></div>
+  <div class="results-row">
+    <div class="ring-card">
+      <svg width="120" height="120" viewBox="0 0 120 120">
+        <circle cx="60" cy="60" r="52" fill="none" stroke="#EEF4FB" stroke-width="12" />
+        <circle cx="60" cy="60" r="52" fill="none" stroke="${ringColor}" stroke-width="12" stroke-linecap="round"
+          stroke-dasharray="${ringCircumference.toFixed(1)}" stroke-dashoffset="${ringOffset.toFixed(1)}"
+          transform="rotate(-90 60 60)" />
+        <text x="60" y="66" text-anchor="middle" font-size="24" font-weight="800" fill="${ringColor}" font-family="Segoe UI, Arial, sans-serif">${overallPct}%</text>
+      </svg>
+      <div class="ring-label">Overall Score</div>
+    </div>
+    <div class="result-tiles">
+      <div class="result-tile"><div class="result-tile-num">${data.totalObtained || 0} / ${data.totalMarks || 0}</div><div class="result-tile-label">Marks Obtained</div></div>
+      <div class="result-tile" style="border-left-color:#F5A623"><div class="result-tile-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (GPA ${data.overallGPA})` : ''}</div><div class="result-tile-label">Final Grade</div></div>
+      <div class="result-tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="result-tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(resultLabel)}</div><div class="result-tile-label">Result</div></div>
+      <div class="result-tile" style="border-left-color:#7C3AED"><div class="result-tile-num" style="color:#7C3AED">${(data.subjects || []).length}</div><div class="result-tile-label">Subjects</div></div>
+    </div>
   </div>
-  ${data.tarbiyah && data.tarbiyah.length > 0 ? `
-  <div class="section-title">Behaviour & Tarbiyah</div>
-  <div class="tarb-grid">
-    ${data.tarbiyah.map((t: any) => `
-    <div class="tarb-item">
-      <div class="tarb-name">${t.trait}</div>
-      <div class="tarb-bar-wrap"><div class="tarb-bar" style="width:${t.score}%"></div></div>
-      <div class="tarb-score">${t.score}</div>
-    </div>`).join('')}
+  ${(data.strongestSubject || data.weakestSubject) ? `
+  <div class="tags-row">
+    ${data.strongestSubject ? `<span class="tag tag-strong">Strongest: ${esc(data.strongestSubject)}</span>` : ''}
+    ${data.weakestSubject ? `<span class="tag tag-weak">Needs Focus: ${esc(data.weakestSubject)}</span>` : ''}
   </div>` : ''}
+  `}
+
+  ${tarbiyahSection}
+  ${qaidaNazraSection}
+  ${attendanceSection}
+  ${parentEngagementSection}
+  ${feedbackSection}
+
   ${data.remarks ? `
   <div class="section-title">Class Teacher Remarks</div>
-  <div class="remarks-box"><div class="remarks-text">${data.remarks}</div></div>` : ''}
+  <div class="remarks-box"><div class="remarks-text">${rtl(data.remarks)}</div></div>` : ''}
+  ${data.principalRemarks ? `
+  <div class="section-title">Principal's Remarks</div>
+  <div class="remarks-box"><div class="remarks-text">${rtl(data.principalRemarks)}</div></div>` : ''}
+
   <div class="sig-row">
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Principal</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
   </div>
-  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${data.schoolName} · ${new Date().toLocaleDateString('en-GB')}</div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+  </div>
 </div>
 </body>
 </html>
 `;
+};
+
+/** Per-exam Report Card PDF - deliberately a much smaller template than
+ * REPORT_CARD_TEMPLATE above (which is actually the whole-TERM report),
+ * since a single-assessment result has none of the Tarbiyah/Qaida/
+ * attendance/engagement sections a term summary does. Works regardless of
+ * published state by design - this is the "print preview before
+ * publishing" path, called from the same staff-only PDF route whether or
+ * not the result has been published yet - so a ribbon marks it Draft
+ * until then, rather than leaving the viewer to guess.
+ *
+ * Redesigned per school feedback on the original (plain table + flat
+ * tiles) layout: an accent gradient band, a logo slot, a student avatar
+ * with initials, medal styling for the top 3 class positions, colored
+ * grade pills with an inline mastery bar per subject, and a radial
+ * progress ring for the headline percentage instead of a plain number. */
+const EXAM_REPORT_CARD_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+  // See REPORT_CARD_TEMPLATE's own resultLabel comment - same per-school relabeling.
+  const resultLabel = !data.overallResult ? 'N/A' : data.overallResult === 'pass' ? (data.passLabel || 'Pass') : (data.failLabel || 'Fail');
+  const gradeTone = (grade: string) => {
+    const g = (grade || '').charAt(0).toUpperCase();
+    return g === 'A' ? { fg: '#15803D', bg: '#DCFCE7', bar: '#16A34A' }
+      : g === 'B' ? { fg: '#1D4ED8', bg: '#DBEAFE', bar: '#2563EB' }
+      : g === 'C' ? { fg: '#B45309', bg: '#FEF3C7', bar: '#D97706' }
+      : { fg: '#B91C1C', bg: '#FEE2E2', bar: '#DC2626' };
+  };
+  const initials = (data.studentName || '?')
+    .split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase() || '').join('') || '?';
+
+  const subjectRows = (data.subjects || []).map((s: any) => {
+    const tone = gradeTone(s.grade);
+    const pct = Math.max(0, Math.min(100, s.percentage ?? 0));
+    return `
+    <tr>
+      <td><strong>${esc(s.subject)}</strong>${s.isAbsent ? ' <span class="absent-tag">Absent</span>' : ''}</td>
+      <td class="num">${s.obtainedMarks ?? 0}<span class="of-max"> / ${s.totalMarks ?? 0}</span></td>
+      <td>
+        <div class="mastery-track"><div class="mastery-fill" style="width:${pct}%;background:${tone.bar}"></div></div>
+      </td>
+      <td class="num">${s.percentage ?? 0}%</td>
+      <td class="num"><span class="grade-pill" style="color:${tone.fg};background:${tone.bg}">${esc(s.grade) || 'N/A'}</span></td>
+    </tr>`;
+  }).join('');
+
+  const overallPct = Math.max(0, Math.min(100, data.overallPercentage ?? 0));
+  const ringColor = overallPct >= 80 ? '#16A34A' : overallPct >= 50 ? '#D97706' : '#DC2626';
+  // r=52, circumference ~326.7 - a plain SVG stroke-dasharray ring renders
+  // reliably in headless Chromium without any charting library.
+  const ringCircumference = 2 * Math.PI * 52;
+  const ringOffset = ringCircumference * (1 - overallPct / 100);
+
+  const positionMedal = data.classPosition === 1 ? '🥇' : data.classPosition === 2 ? '🥈' : data.classPosition === 3 ? '🥉' : null;
+
+  // The sections below the subjects table (score ring, tiles, class-average
+  // bars, remarks, signatures) are fixed-size, but the table itself grows
+  // with the student's real subject count - a student with more subjects
+  // than the ~6 this single-page layout was tuned against pushes everything
+  // below the table onto an otherwise near-blank second page. Rather than a
+  // one-size padding trim (fine for a fixed-length document, not for a
+  // genuinely variable one), shrink the table's own row spacing/font-size
+  // and trim the fixed sections' margins in proportion to how far the real
+  // subject count exceeds that baseline, so the report keeps fitting one
+  // page as the subject count keeps growing.
+  //
+  // A report at exactly the old 6-subject baseline (unshrunk spacing)
+  // measured out to within a fraction of a millimeter of the 277mm
+  // printable-area limit - no real margin at all, so any small real-world
+  // variance (a longer assessment title wrapping onto a 2nd line, slightly
+  // different font metrics) was enough to tip it onto a near-blank 2nd
+  // page, which is exactly what kept being reported even after the
+  // min-height and subject-count fixes above. Starting the shrink 2
+  // subjects earlier gives every report, baseline included, real breathing
+  // room instead of being tuned to the exact edge.
+  const subjectCount = (data.subjects || []).length;
+  const BASELINE_SUBJECTS = 4;
+  const overflow = Math.max(0, subjectCount - BASELINE_SUBJECTS);
+  const clamp = (min: number, max: number, v: number) => Math.max(min, Math.min(max, v));
+  const tdPadV = clamp(3, 7, 7 - overflow * 0.8);
+  const thPadV = clamp(4, 7, 7 - overflow * 0.6);
+  const rowFontSize = clamp(10.5, 12.5, 12.5 - overflow * 0.3);
+  const masteryWidth = clamp(70, 100, 100 - overflow * 4);
+  const trim = clamp(0, 8, overflow * 1.2);
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  ${urduFontFaceCss()}
+  ${latinFontFaceCss()}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; position: relative; }
+  .accent-bar { height: 8px; background: linear-gradient(90deg, #1B4F8A 0%, #2563EB 55%, #F5A623 100%); }
+  .content { padding: 0 16mm; }
+
+  .draft-ribbon { position: absolute; top: 34px; right: -42px; width: 190px; transform: rotate(40deg); text-align: center;
+    background: #F5A623; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+    padding: 5px 0; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 5; }
+
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: ${clamp(6, 10, 10 - overflow * 0.6)}px; border-bottom: 2px solid #EEF4FB; margin-bottom: ${clamp(6, 12, 12 - trim)}px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo { height: 46px; width: 46px; object-fit: contain; border-radius: 8px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #1B4F8A; letter-spacing: -0.4px; }
+  .school-sub { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .doc-meta { text-align: right; }
+  .doc-eyebrow { font-size: 9.5px; font-weight: 800; color: #F5A623; text-transform: uppercase; letter-spacing: 1.2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #1B4F8A; margin-top: 2px; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .doc-year { font-size: 11px; color: #7A9AB8; margin-top: 2px; }
+  .status-pill { display: inline-block; margin-top: 6px; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; border-radius: 999px; padding: 3px 11px; }
+  .status-published { color: #15803D; background: #DCFCE7; }
+  .status-draft { color: #B45309; background: #FEF3C7; }
+
+  .student-card { display: flex; align-items: center; gap: 16px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; padding: ${clamp(8, 12, 12 - overflow * 0.6)}px 18px; margin-bottom: ${clamp(6, 14, 14 - trim)}px; }
+  .avatar { flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, #1B4F8A, #2563EB); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 19px; font-weight: 800; }
+  .student-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  .info-label { font-size: 9.5px; font-weight: 700; color: #7A9AB8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 14px; font-weight: 700; color: #0D1F35; }
+  .result-pass { color: #15803D; }
+  .result-fail { color: #B91C1C; }
+
+  .section-title { font-size: 12px; font-weight: 800; color: #1B4F8A; text-transform: uppercase; letter-spacing: 0.8px; margin: ${clamp(6, 12, 12 - trim * 0.7)}px 0 ${clamp(4, 8, 8 - overflow * 0.4)}px; padding-bottom: ${clamp(3, 6, 6 - overflow * 0.3)}px; border-bottom: 2px solid #EEF4FB; }
+
+  table { width: 100%; border-collapse: collapse; font-size: ${rowFontSize}px; }
+  th { background: #1B4F8A; color: #fff; padding: ${thPadV}px 12px; text-align: left; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: ${tdPadV}px 12px; border-bottom: 1px solid #EEF4FB; vertical-align: middle; }
+  tr:nth-child(even) td { background: #F9FBFD; }
+  .num { text-align: right; white-space: nowrap; }
+  .of-max { color: #94A3B8; font-weight: 400; }
+  .absent-tag { color: #DC2626; font-size: 9.5px; font-weight: 700; margin-left: 4px; }
+  .mastery-track { width: ${masteryWidth}px; height: 6px; border-radius: 4px; background: #EEF4FB; overflow: hidden; margin: 0 auto; }
+  .mastery-fill { height: 100%; border-radius: 4px; }
+  .grade-pill { display: inline-block; min-width: 30px; text-align: center; font-weight: 800; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; }
+
+  .results-row { display: flex; gap: 16px; align-items: stretch; margin: ${clamp(6, 12, 12 - trim * 0.7)}px 0 4px; }
+  .ring-card { flex: 0 0 150px; background: #F7FAFD; border: 1px solid #DDE8F4; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: ${clamp(8, 14, 14 - overflow * 0.6)}px; }
+  .ring-pct { font-size: 20px; font-weight: 800; }
+  .ring-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
+  .tiles { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .tile { background: #F7FAFD; border: 1px solid #DDE8F4; border-left: 4px solid #1B4F8A; border-radius: 10px; padding: ${clamp(8, 12, 12 - overflow * 0.4)}px 14px; }
+  .tile-num { font-size: 18px; font-weight: 800; color: #1B4F8A; }
+  .tile-label { font-size: 9.5px; color: #7A9AB8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+
+  .compare { margin-top: 4px; margin-bottom: ${clamp(4, 10, 10 - trim * 0.6)}px; }
+  .compare-row { display: flex; align-items: center; gap: 10px; margin-top: ${clamp(4, 6, 6 - overflow * 0.2)}px; }
+  .compare-name { width: 110px; font-size: 10.5px; color: #3D5A7A; flex-shrink: 0; }
+  .compare-track { flex: 1; height: 9px; border-radius: 5px; background: #EEF4FB; overflow: hidden; }
+  .compare-fill { height: 100%; border-radius: 5px; }
+  .compare-val { width: 44px; text-align: right; font-size: 10.5px; font-weight: 700; color: #1B4F8A; flex-shrink: 0; }
+
+  .remarks-box { background: #FEF3DC; border-left: 4px solid #F5A623; border-radius: 0 8px 8px 0; padding: ${clamp(6, 10, 10 - overflow * 0.4)}px 14px; margin-bottom: ${clamp(4, 10, 10 - trim * 0.6)}px; }
+  .remarks-label { font-size: 9.5px; font-weight: 800; color: #B45309; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 4px; }
+  .remarks-text { font-size: 12.5px; color: #0D1F35; line-height: 1.55; }
+
+  .sig-row { display: flex; justify-content: space-between; margin-top: ${clamp(8, 18, 18 - trim * 1.2)}px; padding-top: 4px; }
+  .sig-item { text-align: center; }
+  .sig-line { width: 140px; border-bottom: 1.5px dashed #94A3B8; margin-bottom: 6px; height: ${clamp(20, 30, 30 - overflow)}px; }
+  .sig-label { font-size: 10.5px; color: #3D5A7A; font-weight: 700; }
+
+  .footer { text-align: center; margin-top: ${clamp(6, 12, 12 - trim * 0.5)}px; font-size: 9.5px; color: #94A3B8; border-top: 1px solid #EEF4FB; padding-top: ${clamp(4, 8, 8 - overflow * 0.4)}px; }
+  .footer strong { color: #1B4F8A; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="accent-bar"></div>
+  ${!data.published ? '<div class="draft-ribbon">Draft</div>' : ''}
+  <div class="content">
+    <div class="header">
+      <div class="brand">
+        ${data.schoolLogo ? `<img class="logo" src="${data.schoolLogo}" alt="logo" />` : ''}
+        <div>
+          <div class="school-name">${esc(data.schoolName)}</div>
+          ${data.schoolAddress ? `<div class="school-sub">${esc(data.schoolAddress)}</div>` : ''}
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="doc-eyebrow">Report Card</div>
+        <div class="doc-title">${esc(data.assessmentTitle) || ''}</div>
+        <div class="doc-year">${esc(data.academicYear) || ''}${data.term ? ' · ' + esc(data.term) : ''}</div>
+        <div class="status-pill ${data.published ? 'status-published' : 'status-draft'}">${data.published ? 'Published' : 'Not Yet Published'}</div>
+      </div>
+    </div>
+
+    <div class="student-card">
+      <div class="avatar">${data.studentPhoto ? `<img src="${data.studentPhoto}" alt="" />` : esc(initials)}</div>
+      <div class="student-grid">
+        <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+        <div><div class="info-label">Roll Number</div><div class="info-value">${esc(data.rollNumber) || 'N/A'}</div></div>
+        <div><div class="info-label">Grade / Class</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+        <div><div class="info-label">Class Position</div><div class="info-value">${data.classPosition ? `${positionMedal ? positionMedal + ' ' : ''}#${data.classPosition} of ${data.totalStudents}` : 'N/A'}</div></div>
+        <div><div class="info-label">Result</div><div class="info-value ${data.overallResult === 'pass' ? 'result-pass' : 'result-fail'}">${esc(resultLabel)}</div></div>
+        <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div></div>
+      </div>
+    </div>
+
+    <div class="section-title">Academic Performance</div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:32%">Subject</th>
+          <th style="text-align:right">Marks</th>
+          <th style="text-align:center">Mastery</th>
+          <th style="text-align:right">%</th>
+          <th style="text-align:right">Grade</th>
+        </tr>
+      </thead>
+      <tbody>${subjectRows}</tbody>
+    </table>
+
+    <div class="results-row">
+      <div class="ring-card">
+        <svg width="120" height="120" viewBox="0 0 120 120">
+          <circle cx="60" cy="60" r="52" fill="none" stroke="#EEF4FB" stroke-width="12" />
+          <circle cx="60" cy="60" r="52" fill="none" stroke="${ringColor}" stroke-width="12" stroke-linecap="round"
+            stroke-dasharray="${ringCircumference.toFixed(1)}" stroke-dashoffset="${ringOffset.toFixed(1)}"
+            transform="rotate(-90 60 60)" />
+          <text x="60" y="66" text-anchor="middle" font-size="24" font-weight="800" fill="${ringColor}" font-family="Segoe UI, Arial, sans-serif">${overallPct}%</text>
+        </svg>
+        <div class="ring-label">Overall Score</div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="tile-num">${data.totalObtainedMarks || 0} / ${data.totalMaxMarks || 0}</div><div class="tile-label">Marks Obtained</div></div>
+        <div class="tile" style="border-left-color:#F5A623"><div class="tile-num" style="color:#F5A623">${esc(data.overallGrade) || 'N/A'}${data.overallGPA != null ? ` (GPA ${data.overallGPA})` : ''}</div><div class="tile-label">Final Grade</div></div>
+        <div class="tile" style="border-left-color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}"><div class="tile-num" style="color:${data.overallResult === 'pass' ? '#16A34A' : '#DC2626'}">${esc(resultLabel)}</div><div class="tile-label">Result</div></div>
+        <div class="tile" style="border-left-color:#7C3AED"><div class="tile-num" style="color:#7C3AED">${(data.subjects || []).length}</div><div class="tile-label">Subjects</div></div>
+      </div>
+    </div>
+
+    ${data.classAveragePercentage != null ? `
+    <div class="compare">
+      <div class="compare-row">
+        <div class="compare-name">This student</div>
+        <div class="compare-track"><div class="compare-fill" style="width:${overallPct}%;background:${ringColor}"></div></div>
+        <div class="compare-val">${overallPct}%</div>
+      </div>
+      <div class="compare-row">
+        <div class="compare-name">Class average</div>
+        <div class="compare-track"><div class="compare-fill" style="width:${Math.max(0, Math.min(100, data.classAveragePercentage))}%;background:#94A3B8"></div></div>
+        <div class="compare-val">${data.classAveragePercentage}%</div>
+      </div>
+    </div>` : ''}
+
+    ${data.classTeacherRemarks ? `
+    <div class="remarks-box"><div class="remarks-label">Class Teacher Remarks</div><div class="remarks-text">${rtl(data.classTeacherRemarks)}</div></div>` : ''}
+    ${data.principalRemarks ? `
+    <div class="remarks-box"><div class="remarks-label">Principal's Remarks</div><div class="remarks-text">${rtl(data.principalRemarks)}</div></div>` : ''}
+
+    <div class="sig-row">
+      <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
+      <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Principal</div></div>
+      <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+    </div>
+    <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+  </div>
+</div>
+</body>
+</html>
+`;
+};
 
 // Human-readable labels for QAIDA_COMMON_ERRORS keys (qaida-progress.schema.ts)
 // - kept here rather than on the schema itself, since the schema's job is
@@ -481,47 +1110,92 @@ const QAIDA_STATUS_STYLE: Record<string, { bg: string; text: string; label: stri
   not_started: { bg: '#F1F5F9', text: '#64748B', label: 'Not Started' },
 };
 
-const QAIDA_REPORT_TEMPLATE = (data: any) => `
+// Human-readable labels for NAZRA_COMMON_ERRORS keys (nazra-progress.schema.ts) -
+// same convention as QAIDA_ERROR_LABELS above.
+const NAZRA_ERROR_LABELS: Record<string, string> = {
+  makhraj_confusion: 'Makhraj confusion (similar-sounding letters)',
+  missed_ghunna: 'Ghunna (nasalization) missed',
+  madd_too_short: 'Madd (elongation) held too short',
+  madd_too_long: 'Madd (elongation) held too long',
+  qalqalah_missed: 'Qalqalah (echoing bounce) missed',
+  idgham_missed: 'Idgham (merging) missed',
+  ikhfa_missed: 'Ikhfa (concealment) missed',
+  izhar_missed: 'Izhar (clear pronunciation) missed',
+  iqlab_missed: 'Iqlab (conversion to meem sound) missed',
+  waqf_ignored: 'Waqf (stop sign) ignored',
+  tashdeed_not_doubled: 'Tashdeed not doubled',
+  fluency_too_slow: 'Fluency too slow',
+  word_misread: 'Word misread',
+};
+
+// Nazra's status set is a superset of Qaida's (adds 'completed' instead of
+// 'mastered', plus 'not_tracked' for a Para never taught at this school -
+// see NazraProgress.recordType/NazraParaStatus) so it needs its own style map.
+const NAZRA_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+  completed: { bg: '#DCFCE7', text: '#16A34A', label: 'Completed' },
+  in_progress: { bg: '#DBEAFE', text: '#2563EB', label: 'In Progress' },
+  needs_revision: { bg: '#FEF3DC', text: '#C8811A', label: 'Needs Revision' },
+  not_started: { bg: '#F1F5F9', text: '#64748B', label: 'Not Started' },
+  not_tracked: { bg: '#F1F5F9', text: '#94A3B8', label: 'Not Tracked' },
+};
+
+/**
+ * Nazra (Qur'an reading) progress report - the 30-Para journey map plus
+ * per-Para status/attempt history, a recent Sabaq/Sabqi/Manzil diary log,
+ * and aggregated common errors. Modeled directly on QAIDA_REPORT_TEMPLATE
+ * (same layout conventions, embedded fonts, and compact-density spacing
+ * already hardened against page-bleed this session), since Nazra is the
+ * same program's next stage after Qaida - see generateNazraReport.
+ */
+const NAZRA_REPORT_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <style>
+  ${urduFontFaceCss()}
+  ${latinFontFaceCss()}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #2B2016; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #0E7C5A; margin-bottom: 18px; }
-  .school-name { font-size: 22px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
-  .school-sub { font-size: 12px; color: #6B5B3E; margin-top: 2px; }
-  .doc-title { font-size: 15px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
-  .doc-sub { font-size: 11px; color: #6B5B3E; text-align: right; margin-top: 2px; }
-  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-  .info-label { font-size: 10px; font-weight: 700; color: #9C8A66; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-  .info-value { font-size: 14px; font-weight: 600; color: #2B2016; }
-  .section-title { font-size: 13px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EAF5F0; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 4px; }
-  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 12px; text-align: center; }
-  .summary-num { font-size: 24px; font-weight: 800; color: #0E7C5A; }
-  .summary-label { font-size: 10px; color: #9C8A66; font-weight: 600; text-transform: uppercase; margin-top: 3px; }
-  .journey-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
-  .journey-tile { border-radius: 8px; padding: 8px 4px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
-  .journey-num { font-size: 15px; font-weight: 800; }
-  .journey-title { font-size: 8px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11.5px; }
-  th { background: #0E7C5A; color: #fff; padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 7px 10px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
+  body { font-family: 'Inter', 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 5px; border-bottom: 3px solid #0E7C5A; margin-bottom: 6px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
+  .school-sub { font-size: 11px; color: #6B5B3E; margin-top: 2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-sub { font-size: 10px; color: #6B5B3E; text-align: right; margin-top: 2px; }
+  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 6px 8px; margin-bottom: 6px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .info-label { font-size: 9px; font-weight: 700; color: #9C8A66; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 13px; font-weight: 600; color: #2B2016; }
+  .section-title { font-size: 12px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; margin-top: 7px; padding-bottom: 3px; border-bottom: 2px solid #EAF5F0; }
+  .section-title:first-of-type { margin-top: 0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 3px; }
+  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 5px; text-align: center; }
+  .summary-num { font-size: 18px; font-weight: 800; color: #0E7C5A; }
+  .summary-label { font-size: 9px; color: #9C8A66; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  .journey-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; }
+  .journey-tile { border-radius: 6px; padding: 2px 1px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
+  .journey-num { font-size: 11px; font-weight: 800; }
+  .journey-title { font-size: 6px; font-weight: 600; margin-top: 1px; line-height: 1.05; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3px; font-size: 10px; }
+  th { background: #0E7C5A; color: #fff; padding: 3px 7px; text-align: left; font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 2px 7px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
   tr:nth-child(even) td { background: #FBF8F0; }
-  .status-pill { display: inline-block; padding: 2px 9px; border-radius: 100px; font-size: 9.5px; font-weight: 700; }
-  .urdu { font-size: 12px; direction: rtl; color: #6B5B3E; font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif; }
-  .error-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
-  .error-chip { background: #FEF3DC; border: 1px solid #F0D5A0; color: #8A5A0A; border-radius: 100px; padding: 5px 12px; font-size: 11px; font-weight: 600; }
-  .error-chip b { color: #C8811A; }
-  .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 34px; padding-top: 16px; border-top: 1px solid #EADFC4; }
+  .status-pill { display: inline-block; padding: 1.5px 7px; border-radius: 100px; font-size: 8.5px; font-weight: 700; }
+  .urdu { font-size: 10px; direction: rtl; color: #6B5B3E; font-family: 'Noto Nastaliq Urdu', 'Inter', Arial, sans-serif; }
+  .error-note { font-size: 9.5px; color: #6B5B3E; line-height: 1.45; margin-bottom: 3px; }
+  .error-note b { color: #C8811A; font-weight: 700; }
+  .diary-item { display: flex; justify-content: space-between; font-size: 9.5px; padding: 1.5px 0; border-bottom: 1px solid #FBF8F0; }
+  .diary-tag { font-size: 8px; font-weight: 700; text-transform: uppercase; padding: 0 5px; border-radius: 100px; margin-right: 3px; }
+  .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 6px; font-size: 11px; line-height: 1.4; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 4px; border-top: 1px solid #EADFC4; }
   .sig-item { text-align: center; }
-  .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 6px; height: 32px; }
-  .sig-label { font-size: 11px; color: #6B5B3E; font-weight: 600; }
-  .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #9C8A66; border-top: 1px solid #EAF5F0; padding-top: 10px; }
+  .sig-line { width: 130px; border-bottom: 1.5px solid #2B2016; margin-bottom: 3px; height: 18px; }
+  .sig-label { font-size: 9.5px; color: #6B5B3E; font-weight: 600; }
+  .footer { text-align: center; margin-top: 6px; font-size: 8.5px; color: #9C8A66; border-top: 1px solid #EAF5F0; padding-top: 4px; }
   .footer strong { color: #0E7C5A; }
 </style>
 </head>
@@ -529,8 +1203,290 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
 <div class="page">
   <div class="header">
     <div>
-      <div class="school-name">${data.schoolName}</div>
-      <div class="school-sub">${data.schoolAddress || ''}</div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
+    </div>
+    <div>
+      <div class="doc-title">Nazra (Qur'an Reading) Progress Report</div>
+      <div class="doc-sub">30-Para Programme</div>
+    </div>
+  </div>
+
+  <div class="student-box">
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Nazra Teacher</div><div class="info-value">${esc(data.currentTeacher) || 'N/A'}</div></div>
+    <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
+  </div>
+
+  <div class="section-title">Progress Overview</div>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-num">${data.completedCount}/${data.totalParas}</div><div class="summary-label">Paras Completed</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:${data.completionPct >= 80 ? '#16A34A' : data.completionPct >= 40 ? '#C8811A' : '#DC2626'}">${data.completionPct}%</div><div class="summary-label">Overall Completion</div></div>
+    <div class="summary-card"><div class="summary-num" style="font-size:16px">Para ${data.currentPara}</div><div class="summary-label">Currently On</div></div>
+    <div class="summary-card"><div class="summary-num" style="font-size:16px;text-transform:capitalize">${(data.overallStatus || '').replace(/_/g, ' ')}</div><div class="summary-label">Status</div></div>
+  </div>
+
+  <div class="section-title">${data.journeyHeading}</div>
+  <div class="journey-grid">
+    ${data.paras.map((p: any) => {
+      const style = NAZRA_STATUS_STYLE[p.status] || NAZRA_STATUS_STYLE.not_started;
+      return `<div class="journey-tile" style="background:${style.bg}">
+        <div class="journey-num" style="color:${style.text}">${p.number}</div>
+        <div class="journey-title" style="color:${style.text}">${esc(p.titleEn)}</div>
+      </div>`;
+    }).join('')}
+  </div>
+
+  <div class="section-title">Detailed Breakdown</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:4%">#</th>
+        <th style="width:24%">Para</th>
+        <th style="width:13%">Status</th>
+        <th style="width:11%">Started</th>
+        <th style="width:11%">Completed</th>
+        <th style="width:9%">Attempts</th>
+        <th style="width:28%">Latest Sabaq / Remarks</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${data.paras.map((p: any) => {
+        const style = NAZRA_STATUS_STYLE[p.status] || NAZRA_STATUS_STYLE.not_started;
+        const sabaq = p.latestAttempt?.pageFrom
+          ? `<strong>p.${esc(p.latestAttempt.pageFrom)}${p.latestAttempt.pageTo && p.latestAttempt.pageTo !== p.latestAttempt.pageFrom ? ` → p.${esc(p.latestAttempt.pageTo)}` : ''}</strong>`
+          : '';
+        const remarks = p.latestAttempt?.remarks ? rtl(p.latestAttempt.remarks) : '';
+        return `<tr>
+          <td><strong>${p.number}</strong></td>
+          <td><strong>${esc(p.titleEn)}</strong><div class="urdu">${rtl(p.titleAr)}</div></td>
+          <td><span class="status-pill" style="background:${style.bg};color:${style.text}">${style.label}${p.revisionCount > 0 ? ` ×${p.revisionCount + 1}` : ''}</span></td>
+          <td>${p.startedDate ? new Date(p.startedDate).toLocaleDateString('en-GB') : '—'}</td>
+          <td>${p.completedDate ? new Date(p.completedDate).toLocaleDateString('en-GB') : '—'}</td>
+          <td>${p.attemptCount}</td>
+          <td>${[sabaq, remarks].filter(Boolean).join(' — ') || '—'}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>
+
+  ${data.diaryLog && data.diaryLog.length > 0 ? `
+  <div class="section-title">Recent Diary — Sabaq / Sabqi / Manzil</div>
+  ${data.diaryLog.map((e: any) => {
+    const sabaqText = `Para ${e.sabaq.paraNumber}${e.sabaq.pageFrom ? ` · p.${esc(e.sabaq.pageFrom)}${e.sabaq.pageTo ? `–${esc(e.sabaq.pageTo)}` : ''}` : ''}`;
+    const tags = [
+      `<span class="diary-tag" style="background:#DBEAFE;color:#2563EB">Sabaq</span>${sabaqText} (${esc((e.sabaq.rating || '').replace(/_/g, ' '))})`,
+      e.sabqi ? `<span class="diary-tag" style="background:#FEF3DC;color:#C8811A">Sabqi</span>Para ${e.sabqi.paraNumber} (${esc((e.sabqi.rating || '').replace(/_/g, ' '))})` : '',
+      e.manzil ? `<span class="diary-tag" style="background:#DCFCE7;color:#16A34A">Manzil</span>Para ${e.manzil.paraNumber} (${esc((e.manzil.rating || '').replace(/_/g, ' '))})` : '',
+    ].filter(Boolean).join(' &nbsp; ');
+    return `<div class="diary-item"><span>${tags}</span><span>${new Date(e.date).toLocaleDateString('en-GB')}</span></div>`;
+  }).join('')}` : ''}
+
+  ${data.commonErrors && data.commonErrors.length > 0 ? `
+  <div class="section-title">Areas Needing Attention</div>
+  <p class="error-note">${data.commonErrors.map((e: any) => `${esc(NAZRA_ERROR_LABELS[e.error] || e.error)} <b>×${e.count}</b>`).join(', ')}</p>` : ''}
+
+  ${data.overallRemarks ? `
+  <div class="section-title">Teacher's Overall Remarks</div>
+  <div class="remarks-box">${rtl(data.overallRemarks)}</div>` : ''}
+
+  <div class="sig-row">
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Nazra Teacher</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Academic Coordinator</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+  </div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+</div>
+</body>
+</html>
+`;
+};
+
+const GUIDED_READING_REPORT_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  ${latinFontFaceCss()}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; color: #2B2016; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 5px; border-bottom: 3px solid #0C447C; margin-bottom: 6px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #0C447C; letter-spacing: -0.5px; }
+  .school-sub { font-size: 11px; color: #6B5B3E; margin-top: 2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-sub { font-size: 10px; color: #6B5B3E; text-align: right; margin-top: 2px; }
+  .student-box { background: #F3F7FB; border: 1px solid #D7E4F0; border-radius: 10px; padding: 6px 8px; margin-bottom: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .info-label { font-size: 9px; font-weight: 700; color: #7A93AC; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 13px; font-weight: 600; color: #2B2016; }
+  .section-title { font-size: 12px; font-weight: 700; color: #0C447C; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; margin-top: 10px; padding-bottom: 3px; border-bottom: 2px solid #EAF1F8; }
+  .section-title:first-of-type { margin-top: 0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 3px; }
+  .summary-card { background: #F3F7FB; border: 1px solid #D7E4F0; border-radius: 8px; padding: 8px; text-align: center; }
+  .summary-num { font-size: 20px; font-weight: 800; color: #0C447C; }
+  .summary-label { font-size: 9px; color: #7A93AC; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3px; font-size: 10.5px; }
+  th { background: #0C447C; color: #fff; padding: 4px 8px; text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 3px 8px; border-bottom: 1px solid #EAF1F8; vertical-align: top; }
+  tr:nth-child(even) td { background: #F8FAFC; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .badge-chip { display: flex; align-items: center; gap: 5px; background: #F3F7FB; border: 1px solid #D7E4F0; border-radius: 100px; padding: 3px 10px; font-size: 10px; font-weight: 600; color: #2B2016; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 14px; padding-top: 6px; border-top: 1px solid #D7E4F0; }
+  .sig-item { text-align: center; }
+  .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 4px; height: 24px; }
+  .sig-label { font-size: 10px; color: #6B5B3E; font-weight: 600; }
+  .footer { text-align: center; margin-top: 10px; font-size: 9px; color: #9C8A66; border-top: 1px solid #EAF1F8; padding-top: 6px; }
+  .footer strong { color: #0C447C; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
+    </div>
+    <div>
+      <div class="doc-title">Guided Reading Progress Report</div>
+      <div class="doc-sub">Listen · Read · Learn Keywords</div>
+    </div>
+  </div>
+
+  <div class="student-box">
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Current Reading Level</div><div class="info-value">${esc(data.currentLevelName) || 'Not assigned'}</div></div>
+    <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div></div>
+  </div>
+
+  <div class="section-title">Progress Overview</div>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-num">${data.completedCount}</div><div class="summary-label">Readers Completed</div></div>
+    <div class="summary-card"><div class="summary-num">${data.totalPoints}</div><div class="summary-label">Points Earned</div></div>
+    <div class="summary-card"><div class="summary-num">${data.keywordsLearnedCount}</div><div class="summary-label">Keywords Learned</div></div>
+  </div>
+
+  ${data.badges && data.badges.length > 0 ? `
+  <div class="section-title">Badges Earned</div>
+  <div class="badge-row">
+    ${data.badges.map((b: any) => `<div class="badge-chip"><span>${esc(b.icon)}</span>${esc(b.label)}</div>`).join('')}
+  </div>` : ''}
+
+  <div class="section-title">Readers Completed</div>
+  ${data.completedReaders.length === 0 ? '<p style="font-size:11px;color:#6B5B3E;">No readers completed yet.</p>' : `
+  <table>
+    <thead>
+      <tr>
+        <th style="width:5%">#</th>
+        <th style="width:32%">Title</th>
+        <th style="width:20%">Author</th>
+        <th style="width:15%">Keywords Learned</th>
+        <th style="width:14%">Points</th>
+        <th style="width:14%">Completed</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${data.completedReaders.map((r: any, i: number) => `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${esc(r.title)}</strong></td>
+        <td>${esc(r.author) || '—'}</td>
+        <td>${r.keywordsLookedUp.length}</td>
+        <td>+${r.pointsAwarded}</td>
+        <td>${new Date(r.completedAt).toLocaleDateString('en-GB')}</td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`}
+
+  <div class="sig-row">
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Class Teacher</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Academic Coordinator</div></div>
+    <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
+  </div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
+</div>
+</body>
+</html>
+`;
+};
+
+const QAIDA_REPORT_TEMPLATE = (data: any) => {
+  const esc = escapeHtml;
+  // Takhti titles, teacher remarks and sabaq notes are often Urdu rather
+  // than English - without an explicit rtl wrap + an embedded font that
+  // actually shapes Arabic script, Puppeteer/Chromium falls back to
+  // whatever font the container has for those codepoints, rendering each
+  // letter in its isolated form, unjoined and in raw (unreordered) storage
+  // order instead of a properly joined/reordered Urdu word. Same fix as
+  // the comprehensive report card template (REPORT_CARD_TEMPLATE).
+  const rtl = (v: any) => (v != null && containsArabicScript(String(v)) ? `<span dir="rtl">${esc(String(v))}</span>` : esc(v));
+
+  // A real 16-Takhti report (unlike the short test fixtures this layout was
+  // first tuned against) still bled onto a near-empty 3rd page even after
+  // proportionally shrinking for longer remarks/errors (see prior commits'
+  // history on this template) - the per-section padding was simply too
+  // generous for a document with this much fixed content (16 journey tiles,
+  // 16 table rows, 4 overview cards) to begin with, and "Areas Needing
+  // Attention" rendered each error as its own big rounded chip that wrapped
+  // onto extra lines. Rather than fragile proportional math tuned to a
+  // specific overflow amount, every section below is simply laid out more
+  // densely, and the errors are a single compact line instead of chips -
+  // reliably fitting 2 pages regardless of how much real content is there.
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  ${urduFontFaceCss()}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #2B2016; background: #fff; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 5px; border-bottom: 3px solid #0E7C5A; margin-bottom: 6px; }
+  .school-name { font-size: 20px; font-weight: 800; color: #0E7C5A; letter-spacing: -0.5px; }
+  .school-sub { font-size: 11px; color: #6B5B3E; margin-top: 2px; }
+  .doc-title { font-size: 14px; font-weight: 700; color: #C8811A; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
+  .doc-sub { font-size: 10px; color: #6B5B3E; text-align: right; margin-top: 2px; }
+  .student-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 10px; padding: 6px 8px; margin-bottom: 6px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .info-label { font-size: 9px; font-weight: 700; color: #9C8A66; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .info-value { font-size: 13px; font-weight: 600; color: #2B2016; }
+  .section-title { font-size: 12px; font-weight: 700; color: #0E7C5A; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 4px; margin-top: 7px; padding-bottom: 3px; border-bottom: 2px solid #EAF5F0; }
+  .section-title:first-of-type { margin-top: 0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 3px; }
+  .summary-card { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 5px; text-align: center; }
+  .summary-num { font-size: 18px; font-weight: 800; color: #0E7C5A; }
+  .summary-label { font-size: 9px; color: #9C8A66; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+  .journey-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+  .journey-tile { border-radius: 6px; padding: 3px 2px; text-align: center; border: 1px solid rgba(0,0,0,0.06); }
+  .journey-num { font-size: 12px; font-weight: 800; }
+  .journey-title { font-size: 6.5px; font-weight: 600; margin-top: 1px; line-height: 1.1; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3px; font-size: 10.5px; }
+  th { background: #0E7C5A; color: #fff; padding: 4px 8px; text-align: left; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 2.5px 8px; border-bottom: 1px solid #EAF5F0; vertical-align: top; }
+  tr:nth-child(even) td { background: #FBF8F0; }
+  .status-pill { display: inline-block; padding: 1.5px 8px; border-radius: 100px; font-size: 9px; font-weight: 700; }
+  .urdu { font-size: 11px; direction: rtl; color: #6B5B3E; font-family: 'Noto Nastaliq Urdu', 'Segoe UI', Arial, sans-serif; }
+  .error-note { font-size: 10px; color: #6B5B3E; line-height: 1.5; margin-bottom: 3px; }
+  .error-note b { color: #C8811A; font-weight: 700; }
+  .remarks-box { background: #FBF8F0; border: 1px solid #EADFC4; border-radius: 8px; padding: 8px; font-size: 12px; line-height: 1.5; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 10px; padding-top: 5px; border-top: 1px solid #EADFC4; }
+  .sig-item { text-align: center; }
+  .sig-line { width: 140px; border-bottom: 1.5px solid #2B2016; margin-bottom: 4px; height: 24px; }
+  .sig-label { font-size: 10px; color: #6B5B3E; font-weight: 600; }
+  .footer { text-align: center; margin-top: 10px; font-size: 9px; color: #9C8A66; border-top: 1px solid #EAF5F0; padding-top: 6px; }
+  .footer strong { color: #0E7C5A; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <div>
+      <div class="school-name">${esc(data.schoolName)}</div>
+      <div class="school-sub">${esc(data.schoolAddress) || ''}</div>
     </div>
     <div>
       <div class="doc-title">Qaida &amp; Tajweed Progress Report</div>
@@ -539,9 +1495,9 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
   </div>
 
   <div class="student-box">
-    <div><div class="info-label">Student Name</div><div class="info-value">${data.studentName}</div></div>
-    <div><div class="info-label">Grade / Section</div><div class="info-value">${data.grade} ${data.section || ''}</div></div>
-    <div><div class="info-label">Qaida Teacher</div><div class="info-value">${data.currentTeacher || 'N/A'}</div></div>
+    <div><div class="info-label">Student Name</div><div class="info-value">${esc(data.studentName)}</div></div>
+    <div><div class="info-label">Grade / Section</div><div class="info-value">${esc(data.grade)} ${esc(data.section) || ''}</div></div>
+    <div><div class="info-label">Qaida Teacher</div><div class="info-value">${esc(data.currentTeacher) || 'N/A'}</div></div>
     <div><div class="info-label">Report Date</div><div class="info-value">${new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div></div>
   </div>
 
@@ -559,7 +1515,7 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
       const style = QAIDA_STATUS_STYLE[t.status] || QAIDA_STATUS_STYLE.not_started;
       return `<div class="journey-tile" style="background:${style.bg}">
         <div class="journey-num" style="color:${style.text}">${t.number}</div>
-        <div class="journey-title" style="color:${style.text}">${t.titleEn}</div>
+        <div class="journey-title" style="color:${style.text}">${esc(t.titleEn)}</div>
       </div>`;
     }).join('')}
   </div>
@@ -581,12 +1537,12 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
       ${data.takhtis.map((t: any) => {
         const style = QAIDA_STATUS_STYLE[t.status] || QAIDA_STATUS_STYLE.not_started;
         const sabaq = t.latestAttempt?.sabaqFrom
-          ? `<strong>${t.latestAttempt.sabaqFrom}${t.latestAttempt.sabaqTo && t.latestAttempt.sabaqTo !== t.latestAttempt.sabaqFrom ? ` → ${t.latestAttempt.sabaqTo}` : ''}</strong>`
+          ? `<strong>${esc(t.latestAttempt.sabaqFrom)}${t.latestAttempt.sabaqTo && t.latestAttempt.sabaqTo !== t.latestAttempt.sabaqFrom ? ` → ${esc(t.latestAttempt.sabaqTo)}` : ''}</strong>`
           : '';
-        const remarks = t.latestAttempt?.remarks || '';
+        const remarks = t.latestAttempt?.remarks ? rtl(t.latestAttempt.remarks) : '';
         return `<tr>
           <td><strong>${t.number}</strong></td>
-          <td><strong>${t.titleEn}</strong><div class="urdu">${t.titleUr}</div></td>
+          <td><strong>${esc(t.titleEn)}</strong><div class="urdu">${rtl(t.titleUr)}</div></td>
           <td><span class="status-pill" style="background:${style.bg};color:${style.text}">${style.label}${t.revisionCount > 0 ? ` ×${t.revisionCount + 1}` : ''}</span></td>
           <td>${t.startedDate ? new Date(t.startedDate).toLocaleDateString('en-GB') : '—'}</td>
           <td>${t.masteredDate ? new Date(t.masteredDate).toLocaleDateString('en-GB') : '—'}</td>
@@ -599,24 +1555,23 @@ const QAIDA_REPORT_TEMPLATE = (data: any) => `
 
   ${data.commonErrors && data.commonErrors.length > 0 ? `
   <div class="section-title">Areas Needing Attention</div>
-  <div class="error-list">
-    ${data.commonErrors.map((e: any) => `<div class="error-chip">${QAIDA_ERROR_LABELS[e.error] || e.error} <b>×${e.count}</b></div>`).join('')}
-  </div>` : ''}
+  <p class="error-note">${data.commonErrors.map((e: any) => `${esc(QAIDA_ERROR_LABELS[e.error] || e.error)} <b>×${e.count}</b>`).join(', ')}</p>` : ''}
 
   ${data.overallRemarks ? `
   <div class="section-title">Teacher's Overall Remarks</div>
-  <div class="remarks-box">${data.overallRemarks}</div>` : ''}
+  <div class="remarks-box">${rtl(data.overallRemarks)}</div>` : ''}
 
   <div class="sig-row">
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Qaida Teacher</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Academic Coordinator</div></div>
     <div class="sig-item"><div class="sig-line"></div><div class="sig-label">Parent / Guardian</div></div>
   </div>
-  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${data.schoolName} · ${new Date().toLocaleDateString('en-GB')}</div>
+  <div class="footer">Generated by <strong>Eldermin ERP</strong> · ${esc(data.schoolName)} · ${new Date().toLocaleDateString('en-GB')}</div>
 </div>
 </body>
 </html>
 `;
+};
 
 // Mirrors the frontend's TARBIYAH_RATING_CONFIG (src/pages/behaviour/types.ts)
 // so the PDF shows the exact same rating label/colour a teacher already
@@ -649,18 +1604,18 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #1e3a5f; margin-bottom: 10px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
   .school-name { font-size: 22px; font-weight: 800; color: #1e3a5f; letter-spacing: -0.5px; }
   .school-sub { font-size: 12px; color: #5B7290; margin-top: 2px; }
   .doc-title { font-size: 15px; font-weight: 700; color: #B45309; text-align: right; text-transform: uppercase; letter-spacing: 1px; }
   .doc-sub { font-size: 11px; color: #5B7290; text-align: right; margin-top: 2px; }
-  .student-box { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .student-box { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 10px; margin-bottom: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .info-label { font-size: 10px; font-weight: 700; color: #8295AE; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
   .info-value { font-size: 14px; font-weight: 600; color: #1E2A3A; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
+  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; margin-top: 12px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
   .hero { display: flex; align-items: center; gap: 24px; background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 12px; padding: 20px; }
   .hero-score { font-size: 42px; font-weight: 900; color: #1e3a5f; line-height: 1; }
   .hero-max { font-size: 14px; color: #8295AE; font-weight: 600; }
@@ -670,8 +1625,8 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
   .rating-pill { display: inline-block; padding: 4px 14px; border-radius: 100px; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
   .share-pill { display: inline-block; padding: 3px 10px; border-radius: 100px; font-size: 10.5px; font-weight: 700; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11.5px; }
-  th { background: #1e3a5f; color: #fff; padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-  td { padding: 7px 10px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
+  th { background: #1e3a5f; color: #fff; padding: 6px 10px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 4px 10px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
   tr:nth-child(even) td { background: #F9FAFC; }
   .cat-chip { display: inline-block; padding: 1px 8px; border-radius: 100px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
   .local-script { direction: rtl; font-size: 13px; color: #5B7290; font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif; }
@@ -680,7 +1635,7 @@ const TARBIYAH_REPORT_TEMPLATE = (data: any) => `
   .list-card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
   .list-item { font-size: 12px; margin-bottom: 5px; display: flex; justify-content: space-between; }
   .remarks-box { background: #F9FAFC; border: 1px solid #EEF2F8; border-radius: 8px; padding: 14px; font-size: 13px; line-height: 1.6; }
-  .sig-row { display: flex; justify-content: space-between; margin-top: 34px; padding-top: 16px; border-top: 1px solid #EEF2F8; }
+  .sig-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 8px; border-top: 1px solid #EEF2F8; }
   .sig-item { text-align: center; }
   .sig-line { width: 140px; border-bottom: 1.5px solid #1E2A3A; margin-bottom: 6px; height: 32px; }
   .sig-label { font-size: 11px; color: #5B7290; font-weight: 600; }
@@ -795,8 +1750,8 @@ const TARBIYAH_AGGREGATE_REPORT_TEMPLATE = (data: any) => `
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; color: #1E2A3A; background: #fff; }
-  .page { width: 210mm; min-height: 297mm; padding: 16mm; }
-  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 14px; border-bottom: 3px solid #1e3a5f; margin-bottom: 18px; }
+  .page { width: 210mm; min-height: 277mm; padding: 6mm 16mm; }
+  .header { display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px; border-bottom: 3px solid #1e3a5f; margin-bottom: 10px; }
   .header-left { display: flex; align-items: center; gap: 12px; }
   .logo { height: 48px; max-width: 110px; object-fit: contain; }
   .school-name { font-size: 22px; font-weight: 800; color: #1e3a5f; letter-spacing: -0.5px; }
@@ -807,10 +1762,10 @@ const TARBIYAH_AGGREGATE_REPORT_TEMPLATE = (data: any) => `
   .summary-tile { background: #F6F8FB; border: 1px solid #DCE4F0; border-radius: 10px; padding: 14px; text-align: center; }
   .summary-tile .num { font-size: 24px; font-weight: 800; color: #1e3a5f; }
   .summary-tile .label { font-size: 10px; font-weight: 700; color: #8295AE; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
-  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px; margin-top: 22px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
+  .section-title { font-size: 13px; font-weight: 700; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; margin-top: 12px; padding-bottom: 6px; border-bottom: 2px solid #EEF2F8; }
   table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 11px; }
-  th { background: #1e3a5f; color: #fff; padding: 7px 9px; text-align: left; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
-  td { padding: 6px 9px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
+  th { background: #1e3a5f; color: #fff; padding: 5px 9px; text-align: left; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
+  td { padding: 4px 9px; border-bottom: 1px solid #EEF2F8; vertical-align: top; }
   tr:nth-child(even) td { background: #F9FAFC; }
   .local-script { direction: rtl; font-size: 12px; color: #5B7290; font-family: 'Noto Naskh Arabic', 'Noto Sans Arabic', 'Segoe UI', Arial, sans-serif; }
   .cat-chip { display: inline-block; padding: 1px 8px; border-radius: 100px; font-size: 9px; font-weight: 700; text-transform: uppercase; }
@@ -1133,7 +2088,28 @@ export class PdfService implements OnModuleDestroy {
     @InjectModel(TarbiyahAssessment.name) private tarbiyahModel: Model<any>,
     @InjectModel(CharacterProgramSettings.name) private characterSettingsModel: Model<any>,
     private financeService: FinanceService,
+    @InjectModel(TermReportCard.name) private termReportCardModel: Model<any>,
+    @InjectModel(ReportCard.name) private reportCardModel: Model<any>,
+    // Same trailing-optional convention as AssessmentService's own
+    // visibilitySettingsModel - keeps every existing `new PdfService(...)`
+    // test construction (positional args) compiling unchanged.
+    @Optional() @InjectModel(AssessmentVisibilitySettings.name) private visibilitySettingsModel?: Model<any>,
+    // Trailing-optional, same convention as visibilitySettingsModel above -
+    // keeps every existing `new PdfService(...)` test construction
+    // (positional args) compiling unchanged.
+    @Optional() @InjectModel('NazraProgress') private nazraModel?: Model<any>,
+    // Guided Reading Phase 5 report - trailing-optional, same convention as nazraModel above.
+    @Optional() @InjectModel('ReadingLevel') private readingLevelModel?: Model<any>,
+    @Optional() @InjectModel('Reader') private guidedReaderModel?: Model<any>,
+    @Optional() @InjectModel('StudentReadingProgress') private readingProgressModel?: Model<any>,
   ) {}
+
+  /** Per-school display text for 'pass'/'fail' (Assessment Master Settings) - falls back to the plain words when unset or the settings collection isn't wired up (e.g. in a lean test construction). */
+  private async getResultLabels(schoolSlug: string): Promise<{ passLabel: string; failLabel: string }> {
+    if (!this.visibilitySettingsModel) return { passLabel: 'Pass', failLabel: 'Fail' };
+    const settings = await this.visibilitySettingsModel.findOne({ schoolSlug }).lean();
+    return { passLabel: (settings as any)?.passLabel || 'Pass', failLabel: (settings as any)?.failLabel || 'Fail' };
+  }
 
   /**
    * Puppeteer's own bundled Chromium download is skipped in this project's
@@ -1153,10 +2129,45 @@ export class PdfService implements OnModuleDestroy {
       const page = await browser.newPage();
       try {
         await page.setContent(html, { waitUntil: 'load' });
+        // Every embedded @font-face here is a data: URI (no network round
+        // trip), but the browser's font-loading pipeline is still
+        // asynchronous - without this wait, a template whose layout
+        // depends on a specific embedded font's exact metrics (rather than
+        // whatever fallback font the host happens to have installed) could
+        // occasionally get measured/printed before that font finished
+        // swapping in, silently reintroducing host-font-dependent height
+        // differences this embedding was meant to eliminate.
+        await page.evaluate(() => (document as any).fonts.ready);
+        // A nonzero top/bottom margin here (rather than baking all spacing
+        // into each template's own .page/.content CSS padding) is what
+        // makes a SECOND printed page start with a real inset instead of
+        // flush against the paper edge: a template's own top padding only
+        // ever applies once, at the very start of the HTML's continuous
+        // flow - Chromium's print pagination just cuts that flow every
+        // PRINTABLE-area height, so any page after the first inherits none
+        // of a template's own top padding. A Puppeteer-level page margin,
+        // by contrast, is re-applied to every physical page the content
+        // spans. Each of the 6 templates that share this method (report
+        // card, exam report card, Qaida report, Tarbiyah report, Tarbiyah
+        // class/school report) has had its own top/bottom padding reduced
+        // by this same 10mm so a single-page document still looks exactly
+        // as before.
+        //
+        // IMPORTANT for any template using this method: with a 10mm top +
+        // 10mm bottom margin, the printable area per A4 page is only
+        // 297mm - 20mm = 277mm tall, NOT the full 297mm page size. Every
+        // one of these templates' top-level `.page` div had `min-height:
+        // 297mm` (the full page), which forced `.page` to be at least
+        // 20mm TALLER than what actually fits in the printable area on
+        // every single print, regardless of how little real content it
+        // held - guaranteeing a near-blank continuation page every time.
+        // `.page`'s min-height must always equal the printable area
+        // (pageHeight - top margin - bottom margin), not the raw page
+        // size, or this same bug reappears.
         const pdfBuffer = await page.pdf({
           format: 'A4',
           printBackground: true,
-          margin: { top: '0', right: '0', bottom: '0', left: '0' },
+          margin: { top: '10mm', right: '0', bottom: '10mm', left: '0' },
         });
         return pdfBuffer as Buffer;
       } finally {
@@ -1322,6 +2333,21 @@ export class PdfService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Comprehensive, whole-term report card PDF. Previously this queried
+   * `this.assessmentModel` (one whole-exam definition per grade/section,
+   * with no `studentId` field at all) and a `behaviourModel.traits` field
+   * that doesn't exist on that schema either - so this always produced an
+   * empty subjects list and zero marks, regardless of real data, silently.
+   * Now reads the already-computed TermReportCard directly (see
+   * AssessmentService.generateTermReportCards) - the single source of
+   * truth for a student's whole-term academic summary plus whichever
+   * optional Tarbiyah/Qaida/Nazra/attendance/teacher-feedback/Parent
+   * Engagement sections were included at generation time - instead of
+   * re-deriving the same aggregation a second time against the wrong
+   * collections. If `dto.term` is omitted, the most recently generated
+   * term report for that academic year is used.
+   */
   async generateReportCard(
     schoolSlug: string,
     dto: GenerateReportCardDto,
@@ -1334,78 +2360,69 @@ export class PdfService implements OnModuleDestroy {
       .lean();
     if (!student) throw new NotFoundException('Student not found');
 
-    const assessments = await this.assessmentModel
-      .find({
-        schoolSlug,
-        studentId: dto.studentId,
-        academicYear: dto.academicYear,
-        ...(dto.term ? { term: dto.term } : {}),
-      })
+    const filter: any = { schoolSlug, studentId: dto.studentId, academicYear: dto.academicYear };
+    if (dto.term) filter.term = dto.term;
+    const trc: any = await this.termReportCardModel
+      .findOne(filter)
+      .sort({ createdAt: -1 })
       .lean();
+    if (!trc) {
+      throw new NotFoundException(
+        `No report card has been generated yet for ${studentFullName(student as any)} in ${dto.academicYear}` +
+        `${dto.term ? ` (${dto.term})` : ''} - generate one first from Assessments → Results → Whole Term.`,
+      );
+    }
 
-    const behaviour = await this.behaviourModel
-      .findOne({
-        schoolSlug,
-        studentId: dto.studentId,
-        academicYear: dto.academicYear,
-      })
-      .lean();
-
-    const subjects = assessments.map((a: any) => ({
-      subjectName: a.subjectName || a.subject,
-      totalMarks: a.totalMarks || 100,
-      obtainedMarks: a.obtainedMarks || a.marksObtained || 0,
-    }));
-
-    const totalMarks = subjects.reduce((s: number, x: any) => s + x.totalMarks, 0);
-    const totalObtained = subjects.reduce((s: number, x: any) => s + x.obtainedMarks, 0);
-    const overallPct = totalMarks > 0 ? Math.round((totalObtained / totalMarks) * 100) : 0;
-    const overallGrade = overallPct >= 80 ? 'A' : overallPct >= 65 ? 'B' : overallPct >= 50 ? 'C' : 'D';
-
-    const tarbiyah = (behaviour as any)?.traits
-      ? Object.entries((behaviour as any).traits).map(([trait, score]) => ({
-          trait: trait.charAt(0).toUpperCase() + trait.slice(1),
-          score: Number(score),
-        }))
-      : [];
+    const { passLabel, failLabel } = await this.getResultLabels(schoolSlug);
 
     const data = {
       schoolName: (school as any).name,
       schoolAddress: this.formatSchoolAddress(school),
-      academicYear: dto.academicYear,
-      term: dto.term || '',
-      studentName: studentFullName(student as any),
-      rollNumber: (student as any).rollNumber || (student as any).admissionNumber || 'N/A',
-      grade: (student as any).grade || (student as any).gradeLevel || '',
-      section: (student as any).section || '',
-      dob: (student as any).dateOfBirth
-        ? new Date((student as any).dateOfBirth).toLocaleDateString('en-GB')
-        : 'N/A',
-      attendance: (student as any).attendancePct ? `${(student as any).attendancePct}%` : 'N/A',
-      subjects,
-      totalMarks,
-      totalObtained,
-      overallPct,
-      overallGrade,
-      tarbiyah,
-      remarks: (behaviour as any)?.teacherRemarks || '',
+      schoolLogo: (school as any).logo || null,
+      studentPhoto: (student as any).photo || null,
+      academicYear: trc.academicYear,
+      term: trc.term,
+      studentName: trc.studentName,
+      rollNumber: trc.rollNumber || 'N/A',
+      grade: trc.grade,
+      section: trc.section || '',
+      subjects: trc.subjects || [],
+      totalMarks: trc.totalMaxMarks || 0,
+      totalObtained: trc.totalObtainedMarks || 0,
+      overallPct: trc.overallPercentage || 0,
+      overallGrade: trc.overallGrade || 'N/A',
+      overallGPA: trc.overallGPA,
+      overallResult: trc.overallResult,
+      passLabel, failLabel,
+      classPosition: trc.classPosition,
+      totalStudents: trc.totalStudents,
+      strongestSubject: trc.strongestSubject,
+      weakestSubject: trc.weakestSubject,
+      hasAcademicData: trc.hasAcademicData !== false,
+      sectionsIncluded: trc.sectionsIncluded || {},
+      tarbiyah: trc.tarbiyah || null,
+      qaida: trc.qaida || null,
+      nazra: trc.nazra || null,
+      qaidaNazraExtras: trc.qaidaNazraExtras || null,
+      attendance: trc.attendance || null,
+      parentEngagement: trc.parentEngagement || null,
+      teacherFeedback: trc.teacherFeedback || [],
+      remarks: trc.classTeacherRemarks || '',
+      principalRemarks: trc.principalRemarks || '',
+      published: !!trc.published,
     };
 
-    // Same reasoning as generateFeeReceipt above: route through the
-    // school's actual custom "Result Card" template so branding/layout
-    // choices made in the Report Templates designer show up on real report
-    // cards, instead of always using this fixed HTML template regardless
-    // of what a school designed. Falls back to the original fixed layout
-    // if the template-driven render fails for any reason - a report card
-    // going home to a parent must never simply error out.
-    let pdf: Buffer;
-    try {
-      pdf = await this.renderTemplateDrivenPdf(schoolSlug, 'result_card', data);
-    } catch (err: any) {
-      this.logger.warn(`Template-based report card render failed for student ${dto.studentId}, falling back to standard layout: ${err?.message}`);
-      const html = REPORT_CARD_TEMPLATE(data);
-      pdf = await this.htmlToPdf(html);
-    }
+    // Deliberately NOT routing this through the school's custom "Result
+    // Card" template the way generateFeeReceipt does for receipts. The
+    // generic template-driven engine only supports simple field/table/text
+    // sections - it has no way to represent Tarbiyah/Qaida/Nazra/
+    // attendance/Parent Engagement at all, so a school with a custom
+    // "Result Card" template configured (even one meant for something
+    // else entirely, e.g. a generic fee-style layout) would silently
+    // "succeed" with a near-blank page missing every comprehensive section
+    // below, with no error to signal it. A whole-term report card always
+    // needs the real thing, so it always goes through the fixed template.
+    const pdf = await this.htmlToPdf(REPORT_CARD_TEMPLATE(data));
 
     await this.logPdf({
       schoolSlug,
@@ -1418,6 +2435,172 @@ export class PdfService implements OnModuleDestroy {
     });
 
     return pdf;
+  }
+
+  /**
+   * Per-exam Report Card PDF - lets a school admin print/preview a single
+   * assessment's result before deciding to publish it to the parent app
+   * (Assessments → Results → Publish Results), or print it afterward.
+   * Deliberately has NO published check: a draft preview is the whole
+   * point, and the template itself prints a "Draft" badge whenever the
+   * underlying ReportCard isn't published yet.
+   */
+  async generateExamReportCardPdf(
+    schoolSlug: string,
+    dto: GenerateExamReportCardDto,
+    userId: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const [card, student]: [any, any] = await Promise.all([
+      this.reportCardModel.findOne({
+        assessmentId: dto.assessmentId,
+        studentId: dto.studentId,
+        schoolSlug,
+      }).lean(),
+      this.studentModel.findOne({ _id: dto.studentId, schoolSlug }).select('photo').lean(),
+    ]);
+    if (!card) throw new NotFoundException('Report card not found - generate report cards for this assessment first.');
+
+    const { passLabel, failLabel } = await this.getResultLabels(schoolSlug);
+
+    const data = {
+      schoolName: (school as any).name,
+      schoolAddress: this.formatSchoolAddress(school),
+      schoolLogo: (school as any).logo || null,
+      studentPhoto: student?.photo || null,
+      assessmentTitle: card.assessmentTitle,
+      academicYear: card.academicYear,
+      term: card.term,
+      studentName: card.studentName,
+      rollNumber: card.rollNumber,
+      grade: card.grade,
+      section: card.section || '',
+      subjects: card.subjects || [],
+      totalMaxMarks: card.totalMaxMarks || 0,
+      totalObtainedMarks: card.totalObtainedMarks || 0,
+      overallPercentage: card.overallPercentage || 0,
+      overallGrade: card.overallGrade || 'N/A',
+      overallGPA: card.overallGPA,
+      overallResult: card.overallResult,
+      passLabel, failLabel,
+      classPosition: card.classPosition,
+      totalStudents: card.totalStudents,
+      classAveragePercentage: card.classAveragePercentage,
+      classTeacherRemarks: card.classTeacherRemarks || '',
+      principalRemarks: card.principalRemarks || '',
+      published: !!card.published,
+    };
+
+    const pdf = await this.htmlToPdf(EXAM_REPORT_CARD_TEMPLATE(data));
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'exam-report-card',
+      referenceId: dto.studentId,
+      referenceName: data.studentName,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /** Caps how many students a single "Download All" request will render,
+   * so a school accidentally requesting an entire campus at once gets a
+   * clear error (narrow the filters) instead of a request that ties up a
+   * Puppeteer page for minutes or runs the container out of memory. */
+  private static readonly MAX_BULK_REPORT_CARDS = 100;
+
+  /**
+   * Download every report card matching an assessment (optionally narrowed
+   * by section/result, the same two filters the Results tab's own list
+   * already applies) as a single combined PDF - school admins were
+   * downloading these one student at a time otherwise. Reuses
+   * generateExamReportCardPdf as-is for each student (so a bulk download is
+   * byte-for-byte the same per-student pages as the single-download button,
+   * including every page-fit fix already made to that template) and merges
+   * the resulting PDFs together with pdf-lib rather than re-deriving the
+   * template's data/HTML here.
+   */
+  async generateBulkExamReportCardsPdf(
+    schoolSlug: string,
+    dto: BulkExamReportCardsDto,
+    userId: string,
+  ): Promise<Buffer> {
+    const filter: any = { schoolSlug, assessmentId: dto.assessmentId };
+    if (dto.section) filter.section = dto.section;
+    if (dto.result) filter.overallResult = dto.result;
+
+    const cards: any[] = await this.reportCardModel
+      .find(filter)
+      .sort({ classPosition: 1 })
+      .select('assessmentId studentId')
+      .lean();
+    if (!cards.length) throw new NotFoundException('No report cards match these filters.');
+    if (cards.length > PdfService.MAX_BULK_REPORT_CARDS) {
+      throw new BadRequestException(
+        `${cards.length} report cards match these filters - narrow them (e.g. by section) to ${PdfService.MAX_BULK_REPORT_CARDS} or fewer at a time.`,
+      );
+    }
+
+    const merged = await PDFDocument.create();
+    for (const card of cards) {
+      const pdf = await this.generateExamReportCardPdf(
+        schoolSlug,
+        { assessmentId: String(card.assessmentId), studentId: String(card.studentId) },
+        userId,
+      );
+      const doc = await PDFDocument.load(pdf);
+      const copiedPages = await merged.copyPages(doc, doc.getPageIndices());
+      for (const page of copiedPages) merged.addPage(page);
+    }
+    return Buffer.from(await merged.save());
+  }
+
+  /**
+   * Download every whole-term report card matching the Results tab's
+   * Term/Section filters as one combined PDF - same reasoning and
+   * pdf-lib merge convention as generateBulkExamReportCardsPdf above,
+   * just reading TermReportCard instead of the per-exam ReportCard
+   * collection. Reuses generateReportCard as-is per student (same
+   * academicYear/term the single "View" download already uses, read off
+   * each matching TermReportCard rather than passed in), so a bulk
+   * download is byte-for-byte the same per-student pages.
+   */
+  async generateBulkTermReportCardsPdf(
+    schoolSlug: string,
+    dto: BulkTermReportCardsPdfDto,
+    userId: string,
+  ): Promise<Buffer> {
+    const filter: any = { schoolSlug };
+    if (dto.term) filter.term = dto.term;
+    if (dto.section) filter.section = dto.section;
+
+    const cards: any[] = await this.termReportCardModel
+      .find(filter)
+      .sort({ grade: 1, section: 1, classPosition: 1 })
+      .select('studentId academicYear term')
+      .lean();
+    if (!cards.length) throw new NotFoundException('No term report cards match these filters.');
+    if (cards.length > PdfService.MAX_BULK_REPORT_CARDS) {
+      throw new BadRequestException(
+        `${cards.length} term report cards match these filters - narrow them (e.g. by section) to ${PdfService.MAX_BULK_REPORT_CARDS} or fewer at a time.`,
+      );
+    }
+
+    const merged = await PDFDocument.create();
+    for (const card of cards) {
+      const pdf = await this.generateReportCard(
+        schoolSlug,
+        { studentId: String(card.studentId), academicYear: card.academicYear, term: card.term },
+        userId,
+      );
+      const doc = await PDFDocument.load(pdf);
+      const copiedPages = await merged.copyPages(doc, doc.getPageIndices());
+      for (const page of copiedPages) merged.addPage(page);
+    }
+    return Buffer.from(await merged.save());
   }
 
   /**
@@ -1505,6 +2688,251 @@ export class PdfService implements OnModuleDestroy {
     await this.logPdf({
       schoolSlug,
       type: 'qaida-report',
+      referenceId: dto.studentId,
+      referenceName: data.studentName,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Nazra (Qur'an reading) progress report - the 30-Para journey map plus
+   * per-Para status/attempt history, a recent Sabaq/Sabqi/Manzil diary log,
+   * and aggregated common errors. Reads NazraProgress directly rather than
+   * depending on BehaviourModule's NazraService, same one-directional,
+   * model-only convention as generateQaidaReport above - the aggregation
+   * logic here deliberately mirrors NazraService.getReportData (see
+   * nazra.service.ts, which is commented as the "single source of truth
+   * for both the JSON report view and the (future) PDF generator"), just
+   * re-derived here rather than imported.
+   */
+  async generateNazraReport(
+    schoolSlug: string,
+    dto: GenerateNazraReportDto,
+    userId: string,
+  ): Promise<Buffer> {
+    if (!this.nazraModel) throw new NotFoundException('Nazra progress tracking is not available.');
+    const school = await this.getSchool(schoolSlug);
+    const progress: any = await this.nazraModel.findOne({
+      studentId: dto.studentId, schoolSlug,
+    }).lean();
+    if (!progress) throw new NotFoundException('No Nazra progress recorded for this student yet');
+
+    const paras = NAZRA_PARAS.map((def) => {
+      const record = (progress.paras || []).find((p: any) => p.paraNumber === def.number);
+      const latestAttempt = record?.attempts?.[record.attempts.length - 1];
+      return {
+        ...def,
+        status: record?.status || 'not_started',
+        startedDate: record?.startedDate,
+        completedDate: record?.completedDate,
+        revisionCount: record?.revisionCount || 0,
+        attemptCount: record?.attempts?.length || 0,
+        latestAttempt: latestAttempt ? {
+          pageFrom: latestAttempt.pageFrom,
+          pageTo: latestAttempt.pageTo,
+          remarks: latestAttempt.remarks,
+        } : null,
+      };
+    });
+    const completedCount = paras.filter((p) => p.status === 'completed').length;
+
+    // Aggregate every error tag ever noted, across Sabaq attempts and
+    // diary Sabqi/Manzil revisions - same aggregation NazraService.
+    // getReportData does for the JSON report view.
+    const errorCounts = new Map<string, number>();
+    for (const record of progress.paras || []) {
+      for (const attempt of record.attempts || []) {
+        for (const err of attempt.errorsNoted || []) {
+          errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+        }
+      }
+    }
+    for (const entry of progress.diaryEntries || []) {
+      for (const err of entry.sabqi?.errorsNoted || []) {
+        errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+      }
+      for (const err of entry.manzil?.errorsNoted || []) {
+        errorCounts.set(err, (errorCounts.get(err) || 0) + 1);
+      }
+    }
+    const commonErrors = Array.from(errorCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([error, count]) => ({ error, count }));
+
+    // Most recent 8 diary entries first - the full history can run to
+    // hundreds of entries over a school year, which would bleed the
+    // report onto many pages; a printed report needs a recent snapshot,
+    // not the entire diary (the full diary stays available in the app).
+    const diaryLog = (progress.diaryEntries || [])
+      .slice()
+      .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 8)
+      .map((e: any) => ({ date: e.date, sabaq: e.sabaq, sabqi: e.sabqi || null, manzil: e.manzil || null }));
+
+    // Printing all 30 Paras for a student who has only just started
+    // produces a report that's mostly "Not Started" rows - same reasoning
+    // as Qaida's upToTakhti. The overview stats above always stay against
+    // the true 30-Para total; only the journey grid/table listing is narrowed.
+    const upToPara = dto.upToPara;
+    const shownParas = upToPara ? paras.filter((p) => p.number <= upToPara) : paras;
+    const journeyHeading = upToPara
+      ? `The Learning Journey — Paras 1–${upToPara} of ${NAZRA_PARA_COUNT}`
+      : `The Learning Journey — All ${NAZRA_PARA_COUNT} Paras`;
+
+    const data = {
+      schoolName: (school as any).name,
+      schoolAddress: this.formatSchoolAddress(school),
+      studentName: progress.studentName,
+      grade: progress.grade,
+      section: progress.section,
+      currentTeacher: progress.currentTeacher,
+      currentPara: progress.currentPara,
+      overallStatus: progress.overallStatus,
+      overallRemarks: progress.overallRemarks,
+      completedCount,
+      totalParas: NAZRA_PARA_COUNT,
+      completionPct: Math.round((completedCount / NAZRA_PARA_COUNT) * 100),
+      journeyHeading,
+      paras: shownParas,
+      diaryLog,
+      commonErrors,
+    };
+
+    const html = NAZRA_REPORT_TEMPLATE(data);
+    const pdf = await this.htmlToPdf(html);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'nazra-report',
+      referenceId: dto.studentId,
+      referenceName: data.studentName,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
+   * Download every tracked student's Nazra progress report in a class as
+   * one combined PDF - grade/section match exactly how the Nazra tab's
+   * own class roster is filtered (NazraController.getClassProgress),
+   * same pdf-lib merge convention as generateBulkExamReportCardsPdf/
+   * generateBulkTermReportCardsPdf above. Reuses generateNazraReport
+   * as-is per student.
+   */
+  async generateBulkNazraReportsPdf(
+    schoolSlug: string,
+    dto: BulkNazraReportsPdfDto,
+    userId: string,
+  ): Promise<Buffer> {
+    if (!this.nazraModel) throw new NotFoundException('Nazra progress tracking is not available.');
+    const filter: any = { schoolSlug, grade: dto.grade };
+    if (dto.section) filter.section = dto.section;
+
+    const progresses: any[] = await this.nazraModel
+      .find(filter)
+      .sort({ studentName: 1 })
+      .select('studentId')
+      .lean();
+    if (!progresses.length) throw new NotFoundException('No Nazra progress recorded for this class yet.');
+    if (progresses.length > PdfService.MAX_BULK_REPORT_CARDS) {
+      throw new BadRequestException(
+        `${progresses.length} students match this class - narrow it (e.g. by section) to ${PdfService.MAX_BULK_REPORT_CARDS} or fewer at a time.`,
+      );
+    }
+
+    const merged = await PDFDocument.create();
+    for (const progress of progresses) {
+      const pdf = await this.generateNazraReport(
+        schoolSlug,
+        { studentId: String(progress.studentId), upToPara: dto.upToPara } as any,
+        userId,
+      );
+      const doc = await PDFDocument.load(pdf);
+      const copiedPages = await merged.copyPages(doc, doc.getPageIndices());
+      for (const page of copiedPages) merged.addPage(page);
+    }
+    return Buffer.from(await merged.save());
+  }
+
+  // Guided Reading Phase 5: per-student progress report, modeled on the
+  // Qaida/Nazra reports above since this is the same "reading program
+  // progress" report shape, just for the Guided Reading module instead of
+  // the Qur'an-reading tracker.
+  async generateGuidedReadingReport(
+    schoolSlug: string,
+    dto: GenerateGuidedReadingReportDto,
+    userId: string,
+  ): Promise<Buffer> {
+    if (!this.readingProgressModel || !this.guidedReaderModel || !this.readingLevelModel) {
+      throw new NotFoundException('Guided Reading is not available.');
+    }
+    const school = await this.getSchool(schoolSlug);
+    const student = await this.studentModel.findOne({ _id: dto.studentId, schoolSlug }).lean();
+    if (!student) throw new NotFoundException('Student not found');
+
+    const progress: any = await this.readingProgressModel.findOne({ studentId: dto.studentId, schoolSlug }).lean();
+    const completedEntries: any[] = progress?.completedReaders || [];
+
+    const [level, readers] = await Promise.all([
+      progress?.currentLevelId
+        ? this.readingLevelModel.findOne({ _id: progress.currentLevelId, schoolSlug }).lean()
+        : Promise.resolve(null),
+      this.guidedReaderModel.find({
+        schoolSlug, _id: { $in: completedEntries.map((c: any) => c.readerId) },
+      }).lean(),
+    ]);
+    const readerById = new Map(readers.map((r: any) => [String(r._id), r]));
+
+    const completedReaders = completedEntries
+      .slice()
+      .sort((a: any, b: any) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
+      .map((c: any) => {
+        const reader = readerById.get(String(c.readerId));
+        return {
+          title: reader?.title || 'Untitled reader',
+          author: reader?.author || '',
+          keywordsLookedUp: c.keywordsLookedUp || [],
+          pointsAwarded: c.pointsAwarded || 0,
+          completedAt: c.completedAt,
+        };
+      });
+
+    const totalPoints = completedEntries.reduce((sum: number, c: any) => sum + (c.pointsAwarded || 0), 0);
+    const keywordsLearnedCount = new Set(completedEntries.flatMap((c: any) => c.keywordsLookedUp || [])).size;
+    // Mirrors ParentPortalService.completeMyReading's own award logic: the
+    // "Bookworm" badge is given exactly once, the moment a student's
+    // completedReaders count first reaches 1 - so "has completed at least
+    // one reader" is the same condition as "has this badge", with no
+    // separate AwardedBadge lookup needed.
+    const badges = completedEntries.length > 0 ? [BADGE_BY_KEY.first_reader] : [];
+
+    const data = {
+      schoolName: (school as any).name,
+      schoolAddress: this.formatSchoolAddress(school),
+      studentName: studentFullName(student as any),
+      grade: (student as any).currentGrade,
+      section: (student as any).currentSection,
+      currentLevelName: (level as any)?.name || null,
+      completedCount: completedEntries.length,
+      totalPoints,
+      keywordsLearnedCount,
+      badges,
+      completedReaders,
+    };
+
+    const html = GUIDED_READING_REPORT_TEMPLATE(data);
+    const pdf = await this.htmlToPdf(html);
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'guided-reading-report',
       referenceId: dto.studentId,
       referenceName: data.studentName,
       generatedBy: userId,

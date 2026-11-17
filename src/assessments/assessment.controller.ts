@@ -17,14 +17,17 @@ import {
   CreateQuestionDto, QuestionQueryDto,
   BulkMarkEntryDto, VerifyMarksDto, UpdateMarkEntryDto, MarkQueryDto,
   GenerateReportCardsDto, UpdateReportCardRemarksDto,
-  PublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  PublishResultDto, UnpublishResultDto, ReportCardQueryDto, ClassifyBloomsLevelDto,
+  GenerateTermReportCardsDto, TermReportCardQueryDto, PublishTermReportCardsDto, UnpublishTermReportCardsDto,
   CreateExamPaperDto, UpdateExamPaperDto,
   GenerateOMRSheetsDto, ConfirmOMRSheetDto,
   GradeQuizAttemptDto,
+  CreateGradingScaleDto, UpdateGradingScaleDto, UpdateAssessmentVisibilitySettingsDto,
 } from './dto/assessment.dto';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { NON_STAFF_ROLES } from '../auth/admin-role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 
 // Roles allowed to create/modify/delete question-bank & exam-paper content.
 // Read-only routes stay open to any authenticated role (matches the rest of
@@ -41,7 +44,7 @@ export class AssessmentController {
   private ctx(req: any) {
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       userName: req?.user?.name || 'Admin',
       requestingUser: req?.user,
     };
@@ -138,11 +141,63 @@ export class AssessmentController {
     return this.service.publishResults({ ...dto, schoolSlug, publishedBy: userName });
   }
 
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('report-cards/unpublish')
+  async unpublishResults(@Body() dto: UnpublishResultDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unpublishResults({ ...dto, schoolSlug });
+  }
+
+  // ── Term Report Cards (comprehensive, whole-term report; static before :id) ──
+  @Get('term-report-cards')
+  async getTermReportCards(@Request() req: any, @Query() query: TermReportCardQueryDto) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCards(schoolSlug, query);
+  }
+
+  @Get('term-report-cards/:id')
+  async getTermReportCard(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCard(id, schoolSlug);
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/generate')
+  async generateTermReportCards(@Body() dto: GenerateTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.generateTermReportCards({ ...dto, schoolSlug, generatedBy: userName });
+  }
+
+  @RolesOrModuleManage('assessments', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Patch('term-report-cards/:id/remarks')
+  async updateTermReportCardRemarks(
+    @Param('id') id: string,
+    @Body() dto: UpdateReportCardRemarksDto,
+    @Request() req: any,
+  ) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.service.updateTermReportCardRemarks(id, schoolSlug, dto, requestingUser);
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/publish')
+  async publishTermReportCards(@Body() dto: PublishTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.publishTermReportCards({ ...dto, schoolSlug, publishedBy: userName });
+  }
+
+  @RolesOrModuleManage('assessments', TEACHING_ADMIN_ROLES)
+  @Post('term-report-cards/unpublish')
+  async unpublishTermReportCards(@Body() dto: UnpublishTermReportCardsDto, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.unpublishTermReportCards({ ...dto, schoolSlug });
+  }
+
   // ── Analytics ─────────────────────────────────────────────────
   @Get('analytics/performance')
   async getAnalytics(
     @Request() req: any,
-    @Query('academicYear') academicYear: string,
+    @Query('academicYear') academicYear?: string,
     @Query('grade') grade?: string,
     @Query('section') section?: string,
     @Query('subject') subject?: string,
@@ -201,6 +256,54 @@ export class AssessmentController {
   @Get('papers') async getExamPapers(@Request() req: any, @Query() query: any) {
     const { schoolSlug } = this.ctx(req);
     return this.service.getExamPapers(schoolSlug, query);
+  }
+
+  // ── Assessment Master Settings (must stay registered before the
+  // 'settings/...' and ':id' routes below for the same reason as 'papers'
+  // above - every one of these is a static first path segment). ──────────
+  @Get('settings/grading-scales/presets')
+  getGradingScalePresets() {
+    return this.service.getGradingScalePresets();
+  }
+
+  @Get('settings/grading-scales')
+  async listGradingScales(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.listGradingScales(schoolSlug);
+  }
+
+  @Post('settings/grading-scales')
+  @Roles(...STAFF_WRITE_ROLES)
+  async createGradingScale(@Body() dto: CreateGradingScaleDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.createGradingScale({ ...dto, schoolSlug, updatedBy: userName });
+  }
+
+  @Patch('settings/grading-scales/:id')
+  @Roles(...STAFF_WRITE_ROLES)
+  async updateGradingScale(@Param('id') id: string, @Body() dto: UpdateGradingScaleDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateGradingScale(id, schoolSlug, { ...dto, updatedBy: userName });
+  }
+
+  @Delete('settings/grading-scales/:id')
+  @Roles(...STAFF_WRITE_ROLES)
+  async deleteGradingScale(@Param('id') id: string, @Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.deleteGradingScale(id, schoolSlug);
+  }
+
+  @Get('settings/visibility')
+  async getVisibilitySettings(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getVisibilitySettings(schoolSlug);
+  }
+
+  @Patch('settings/visibility')
+  @Roles(...STAFF_WRITE_ROLES)
+  async updateVisibilitySettings(@Body() dto: UpdateAssessmentVisibilitySettingsDto, @Request() req: any) {
+    const { schoolSlug, userName } = this.ctx(req);
+    return this.service.updateVisibilitySettings(schoolSlug, { ...dto, updatedBy: userName });
   }
 
   // ── Dynamic :id (must come AFTER all static GET routes) ───────

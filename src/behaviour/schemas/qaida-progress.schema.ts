@@ -238,6 +238,13 @@ export class QaidaProgress {
 
   @Prop() overallRemarks?: string;
 
+  // Whether this student's Qaida progress is visible in the Parent Portal. Shared by default: parents see their child's progress as soon
+  // as it is recorded and it grows with the child. A teacher can still hide it (PATCH .../share { parentShared: false }); the parent
+  // gate is `parentShared: { $ne: false }`, so records that predate this field stay visible too. Lives on the whole progress record,
+  // not per-takhti: one ongoing tracker per student.
+  @Prop({ default: true }) parentShared: boolean;
+  @Prop() parentSharedDate?: Date;
+
   // 'joined_later': this student came in without a full Qaida history at
   // this school (transferred, or placed directly on a later board after an
   // entry assessment) - the boards before wherever they were placed are

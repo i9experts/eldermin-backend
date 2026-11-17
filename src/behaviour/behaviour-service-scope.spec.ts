@@ -31,6 +31,7 @@ function build(f: Fixture = {}) {
     findOne: jest.fn(() => q((f.records ?? [])[0] ?? null)),
     countDocuments: jest.fn(() => Promise.resolve((f.records ?? []).length)),
     findOneAndUpdate: jest.fn(() => Promise.resolve({ ok: 1 })),
+    deleteOne: jest.fn(() => Promise.resolve({ deletedCount: 1 })),
     db: {},
   };
   const tarbiyahModel: any = {
@@ -38,6 +39,7 @@ function build(f: Fixture = {}) {
     findOne: jest.fn(() => q((f.tarbiyah ?? [])[0] ?? null)),
     countDocuments: jest.fn(() => Promise.resolve(0)),
     findOneAndUpdate: jest.fn(() => Promise.resolve({ _id: 'a1', studentId: new Types.ObjectId(), period: 'T1', studentName: 'X' })),
+    deleteOne: jest.fn(() => Promise.resolve({ deletedCount: 1 })),
     db: { collection: () => ({ find: () => ({ project: () => ({ toArray: () => Promise.resolve([]) }) }), insertMany: jest.fn() }) },
   };
   const settingsModel: any = {
@@ -203,6 +205,28 @@ describe('writes: create / edit / resolve', () => {
     await expect(build({ records: [rec({ grade: 'Grade 9', section: 'C' })] }).svc.resolveRecord(OID(), 'demo', 'n', 'Ms Noor', TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
     await expect(build({ records: [rec()] }).svc.resolveRecord(OID(), 'demo', 'n', 'Ms Noor', TEACHER_USER as any, access())).resolves.toBeDefined();
   });
+
+  it('deleteRecord: teacher may delete only their own record (by id, or legacy name when no id); others 403 in enforce', async () => {
+    const own = rec();
+    const other = rec({ reportedById: new Types.ObjectId(), reportedBy: 'Mr Khan' });
+    const legacyMine = rec({ reportedById: undefined, reportedBy: ' ms noor ' });
+    const legacyOther = rec({ reportedById: undefined, reportedBy: 'Someone Else' });
+    await expect(build({ records: [own] }).svc.deleteRecord(OID(), 'demo', TEACHER_USER as any, access())).resolves.toEqual({ deleted: true });
+    await expect(build({ records: [legacyMine] }).svc.deleteRecord(OID(), 'demo', TEACHER_USER as any, access())).resolves.toEqual({ deleted: true });
+    await expect(build({ records: [other] }).svc.deleteRecord(OID(), 'demo', TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
+    await expect(build({ records: [legacyOther] }).svc.deleteRecord(OID(), 'demo', TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
+  });
+
+  it('deleteRecord: log mode still refuses a teacher deleting another teacher\'s record (D7) and logs it; admin can delete any record', async () => {
+    const other = rec({ reportedById: new Types.ObjectId(), reportedBy: 'Mr Khan' });
+    await expect(build({ records: [other] }).svc.deleteRecord(OID(), 'demo', TEACHER_USER as any, logMode())).rejects.toThrow(ForbiddenException);
+    expect(logEvents()[0]).toMatchObject({ decision: 'would_deny', reason: 'teacher_deletes_other_record' });
+    await expect(build({ records: [other] }).svc.deleteRecord(OID(), 'demo', ADMIN_USER as any, adminAccess())).resolves.toEqual({ deleted: true });
+  });
+
+  it('deleteRecord: unknown id is 404', async () => {
+    await expect(build({ records: [] }).svc.deleteRecord(OID(), 'demo', ADMIN_USER as any, adminAccess())).rejects.toThrow('Record not found');
+  });
 });
 
 describe('Tarbiyah: author or admin', () => {
@@ -241,6 +265,26 @@ describe('Tarbiyah: author or admin', () => {
     expect(t.tarbiyahModel.findOne).toHaveBeenCalledTimes(1);
     expect(t.tarbiyahModel.findOneAndUpdate.mock.calls[0][1].$set.parentShared).toBe(true);
     expect(t.tarbiyahModel.findOneAndUpdate.mock.calls[0][1].$set.parentSharedDate).toBeInstanceOf(Date);
+  });
+
+  it('deleteTarbiyahAssessment: author may delete; a non-author teacher is 403 in enforce and only logged in log mode', async () => {
+    await expect(build({ tarbiyah: [mineT()] }).svc.deleteTarbiyahAssessment(OID(), 'demo', TEACHER_USER as any, access())).resolves.toEqual({ deleted: true });
+    await expect(build({ tarbiyah: [otherT()] }).svc.deleteTarbiyahAssessment(OID(), 'demo', TEACHER_USER as any, access())).rejects.toThrow(ForbiddenException);
+    await expect(build({ tarbiyah: [otherT()] }).svc.deleteTarbiyahAssessment(OID(), 'demo', TEACHER_USER as any, logMode())).rejects.toThrow(ForbiddenException);
+    expect(logEvents()[0]).toMatchObject({ decision: 'would_deny', reason: 'tarbiyah_delete_not_author_or_admin' });
+  });
+
+  it('deleteTarbiyahAssessment: admin (elevated) may delete anyone\'s assessment', async () => {
+    await expect(build({ tarbiyah: [otherT()] }).svc.deleteTarbiyahAssessment(OID(), 'demo', ADMIN_USER as any, adminAccess())).resolves.toEqual({ deleted: true });
+  });
+
+  it('deleteTarbiyahAssessment: a parent-shared assessment must be unshared first, even for an admin', async () => {
+    const shared = { ...mineT(), parentShared: true };
+    await expect(build({ tarbiyah: [shared] }).svc.deleteTarbiyahAssessment(OID(), 'demo', ADMIN_USER as any, adminAccess())).rejects.toThrow(BadRequestException);
+  });
+
+  it('deleteTarbiyahAssessment: unknown id is 404', async () => {
+    await expect(build({ tarbiyah: [] }).svc.deleteTarbiyahAssessment(OID(), 'demo', ADMIN_USER as any, adminAccess())).rejects.toThrow('Assessment not found');
   });
 
   it('createTarbiyahAssessment stamps assessedById from the token (body value ignored) and class-checks teachers', async () => {

@@ -513,14 +513,23 @@ export class SuperAdminService {
       );
     }
 
+    // Unlike the self-service signup flow, Super Admin activation does the
+    // full setup itself right here (campus, grades, academic year, fee
+    // structure below) - there is no wizard left for anyone to complete
+    // afterwards, so this goes straight to 'active'/isSetupComplete:true
+    // rather than the self-service 'onboarding'/false. Leaving those at
+    // their self-service defaults previously left every admin-activated
+    // school (a real, live, fully-operational account) permanently stuck
+    // looking "incomplete" with no way to ever clear it, which is what
+    // kept showing the Setup Wizard link/button on already-active schools.
     const tenant = await this.tenantModel.create({
       slug,
       displayName: lead.schoolName,
-      status: 'onboarding',
+      status: 'active',
       plan: normalizedPlan,
       activeModules: mergedModules,
       billingEmail: lead.adminEmail.toLowerCase(),
-      isSetupComplete: false,
+      isSetupComplete: true,
     });
 
     const orgInstitution = await this.orgInstitutionModel.create({

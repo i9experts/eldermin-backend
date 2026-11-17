@@ -1,4 +1,5 @@
 import { schoolSlugOf } from '../common/utils/school-slug.util';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 import { assertStaffAccount } from '../behaviour/behaviour-access';
 import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import {
@@ -8,7 +9,7 @@ import {
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { SchoolGuard } from '../auth/school.guard';
-import { PdfService, GenerateReportCardDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto } from './pdf.service';
+import { PdfService, GenerateReportCardDto, GenerateExamReportCardDto, BulkExamReportCardsDto, BulkTermReportCardsPdfDto, GenerateInvoiceDto, BulkReportCardDto, GenerateQaidaReportDto, GenerateNazraReportDto, BulkNazraReportsPdfDto, GenerateTarbiyahReportDto, GenerateTarbiyahClassReportDto, GenerateTarbiyahSchoolReportDto, GenerateGuidedReadingReportDto } from './pdf.service';
 import { IsArray, IsIn, IsMongoId, IsObject, IsOptional, IsString } from 'class-validator';
 import { REPORT_TEMPLATE_TYPES } from '../modules/report-templates/schemas/report-template.schema';
 
@@ -59,6 +60,54 @@ export class PdfController {
     res.status(HttpStatus.OK).end(pdf);
   }
 
+  @Post('exam-report-card')
+  async generateExamReportCard(
+    @Body() dto: GenerateExamReportCardDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateExamReportCardPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="report-card-${dto.studentId}-${dto.assessmentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('exam-report-card/bulk')
+  async generateBulkExamReportCards(
+    @Body() dto: BulkExamReportCardsDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateBulkExamReportCardsPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="report-cards-${dto.assessmentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('report-card/bulk')
+  async generateBulkTermReportCards(
+    @Body() dto: BulkTermReportCardsPdfDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateBulkTermReportCardsPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="report-cards${dto.term ? '-' + dto.term : ''}${dto.section ? '-' + dto.section : ''}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
   @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
   @Post('qaida-report')
   async generateQaidaReport(
@@ -72,6 +121,58 @@ export class PdfController {
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="qaida-report-${dto.studentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
+  @Post('nazra-report')
+  async generateNazraReport(
+    @Body() dto: GenerateNazraReportDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate the Nazra report
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateNazraReport(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="nazra-report-${dto.studentId}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @UseGuards(BehaviourStaffOnlyGuard) // before body validation; the in-handler assertStaffAccount below stays as a second layer
+  @Post('nazra-report/bulk')
+  async generateBulkNazraReports(
+    @Body() dto: BulkNazraReportsPdfDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    assertStaffAccount(req.user); // parent/student tokens never generate the Nazra report
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateBulkNazraReportsPdf(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="nazra-reports-${dto.grade}${dto.section ? '-' + dto.section : ''}.pdf"`,
+      'Content-Length': pdf.length,
+    });
+    res.status(HttpStatus.OK).end(pdf);
+  }
+
+  @Post('guided-reading-report')
+  async generateGuidedReadingReport(
+    @Body() dto: GenerateGuidedReadingReportDto,
+    @Request() req: any,
+    @Res() res: Response,
+  ) {
+    const schoolSlug = schoolSlugOf(req);
+    const pdf = await this.pdfService.generateGuidedReadingReport(schoolSlug, dto, req.user.userId);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="guided-reading-report-${dto.studentId}.pdf"`,
       'Content-Length': pdf.length,
     });
     res.status(HttpStatus.OK).end(pdf);
@@ -154,7 +255,7 @@ export class PdfController {
     @Res() res: Response,
   ) {
     const schoolSlug = schoolSlugOf(req);
-    const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
+    const academicYear = dto.academicYear || req.headers['x-academic-year'] || resolveAcademicYearFallback();
     const pdf = await this.pdfService.generateBulkChallans(
       schoolSlug,
       { month: dto.month, academicYear, scopeType: dto.scopeType as any, scopeValue: dto.scopeValue },
@@ -231,7 +332,7 @@ export class PdfController {
     @Res() res: Response,
   ) {
     const schoolSlug = schoolSlugOf(req);
-    const academicYear = dto.academicYear || req.headers['x-academic-year'] || '2025-26';
+    const academicYear = dto.academicYear || req.headers['x-academic-year'] || resolveAcademicYearFallback();
     const pdf = await this.pdfService.generateFeeRevenueReportPdf(
       schoolSlug, { month: dto.month, academicYear, campus: dto.campus }, req.user.userId,
     );

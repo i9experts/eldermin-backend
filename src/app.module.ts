@@ -27,6 +27,7 @@ import { EmailModule } from './email/email.module';
 import { ComplianceModule } from './compliance/compliance.module';
 import { PdfModule } from './pdf/pdf.module';
 import { ReportTemplatesModule } from './modules/report-templates/report-templates.module';
+import { GuidedReadingModule } from './guided-reading/guided-reading.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { ModulesModule } from './modules/modules.module';
 import { FamiliesModule } from './families/families.module';
@@ -54,6 +55,7 @@ import { SchoolCalendarModule } from './school-calendar/school-calendar.module';
 import { EventsModule } from './events/events.module';
 import { LmsModule } from './lms/lms.module';
 import { GamificationModule } from './gamification/gamification.module';
+import { AppVersionModule } from './app-version/app-version.module';
 
 import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-match.selftest';
 @Module({
@@ -89,6 +91,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     AccountingIntegrationsModule,
     SchoolCalendarModule,
     EventsModule,
+    AppVersionModule,
     ProcurementModule,
     StudentsModule,
     TeachingModule,
@@ -108,6 +111,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     ComplianceModule,
     PdfModule,
     ReportTemplatesModule,
+    GuidedReadingModule,
     OnboardingModule,
     ModulesModule,
     FamiliesModule,
