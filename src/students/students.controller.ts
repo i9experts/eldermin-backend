@@ -642,13 +642,21 @@ export class StudentsController {
     return this.studentsService.getFees(schoolSlug, query);
   }
 
-  /** GET /api/v1/students/:id/fees/statement — Student 360's Fee Ledger.
-   * Reads real Invoice records from the Finance module (the same data
-   * Finance's own Receivables view shows), not the Students module's own
-   * StudentFee collection - nothing in the normal fee-assignment flow
-   * (FeeStructure -> assignFeeStructure -> generateInvoices) ever wrote to
-   * StudentFee, so every student's Fee Ledger here was unconditionally
-   * empty regardless of how much they actually owed or had paid. */
+  /** GET /api/v1/students/:id/fees/statement — Student 360's Fee Ledger
+   * (and the parent app's, which reads this same endpoint). Reads real
+   * Invoice records from the Finance module (the same data Finance's own
+   * Receivables view shows), not the Students module's own StudentFee
+   * collection - nothing in the normal fee-assignment flow (FeeStructure ->
+   * assignFeeStructure -> generateInvoices) ever wrote to StudentFee, so
+   * every student's Fee Ledger here was unconditionally empty regardless of
+   * how much they actually owed or had paid.
+   *
+   * An empty ledger is ambiguous on its own - identical whether the
+   * student genuinely owes nothing or was simply never billed (no active
+   * Fee Structure matches their class, or Generate Invoices was never run
+   * for them), with nothing on screen telling staff or parents which. When
+   * there are zero invoices, `diagnosis` explains why - see
+   * FinanceService.diagnoseNoInvoices. */
   @Get(':id/fees/statement')
   async getFeeStatement(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug, requestingUser } = this.ctx(req);
@@ -663,7 +671,10 @@ export class StudentsController {
       },
       { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
     );
-    return { invoices, summary };
+    const diagnosis = (invoices as any[]).length === 0
+      ? await this.financeService.diagnoseNoInvoices(schoolSlug, id)
+      : null;
+    return { invoices, summary, diagnosis };
   }
 
   /** POST /api/v1/students/fees */

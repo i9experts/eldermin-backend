@@ -4712,6 +4712,111 @@ export class FinanceService {
   }
 
   /**
+   * Why does this student's Fee Ledger (Student 360, parent app) show zero
+   * invoices? An empty ledger is ambiguous on its own - it looks identical
+   * whether the student genuinely has nothing to owe or was simply never
+   * billed, and nothing anywhere told an admin which. Runs the exact same
+   * eligibility check generateInvoices uses (explicit StudentFeeAssignment,
+   * else grade/section/campus auto-match against active FeeStructures) so
+   * the diagnosis is never out of sync with what actually determines
+   * billing. Read-only - never creates or changes anything.
+   */
+  async diagnoseNoInvoices(schoolSlug: string, studentId: string) {
+    const student: any = await this.studentModel.findOne({ _id: studentId, schoolSlug }).lean();
+    if (!student) return { reason: 'student_not_found', detail: 'Student record not found in this school.' };
+
+    if (student.status !== 'active') {
+      return {
+        reason: 'inactive_status',
+        detail: `Student status is "${student.status}", not "active" - invoices are only ever generated for active students. Correct the status in Student 360 first if this is wrong.`,
+      };
+    }
+
+    const [feeStructures, campus, explicitAssignments] = await Promise.all([
+      this.feeStructModel.find({ schoolSlug, isActive: true }).lean(),
+      student.campusId ? this.campusModel.findById(student.campusId).lean() : null,
+      this.studentFeeAssignmentModel.find({ schoolSlug, studentId, isActive: true }).sort({ effectiveFrom: -1 }).lean(),
+    ]);
+    const studentCampusName = (campus as any)?.name || '';
+    const now = new Date();
+    const activeAssignment = (explicitAssignments as any[]).find((a: any) =>
+      new Date(a.effectiveFrom) <= now && (!a.effectiveTo || new Date(a.effectiveTo) >= now));
+
+    let applicableStructures: any[];
+    if (activeAssignment) {
+      applicableStructures = [activeAssignment].map((a: any) => feeStructures.find((fs: any) => String(fs._id) === String(a.feeStructureId))).filter(Boolean);
+      // The assignment's own referenced structure may since have been
+      // deactivated (assignFeeStructure never required isActive at
+      // assignment time) - fall back to a direct lookup so this doesn't
+      // read as "no fee structure" when one genuinely is assigned.
+      if (applicableStructures.length === 0) {
+        const assignedStructure = await this.feeStructModel.findOne({ _id: activeAssignment.feeStructureId, schoolSlug }).lean();
+        if (assignedStructure) applicableStructures = [assignedStructure];
+      }
+    } else {
+      const gradeSectionCampusMatch = feeStructures.filter((fs: any) =>
+        sameGrade(fs.grade, student.currentGrade) &&
+        (!fs.section || sameSection(fs.section, student.currentSection)) &&
+        (!fs.campus || fs.campus === studentCampusName));
+      applicableStructures = pickApplicableFeeStructures(gradeSectionCampusMatch, now);
+    }
+
+    const classLabel = `${student.currentGrade || 'Unknown'}${student.currentSection ? ' - ' + student.currentSection : ''}`;
+    if (applicableStructures.length === 0) {
+      return {
+        reason: 'no_fee_structure_assigned',
+        detail: `No active Fee Structure matches ${classLabel}${studentCampusName ? ` at ${studentCampusName}` : ''}, and no Fee Structure is explicitly assigned to this student. Assign one in Finance → Fee Structures (or Assign Fee) before invoices can be generated.`,
+      };
+    }
+
+    return {
+      reason: 'not_yet_generated',
+      detail: `${activeAssignment ? 'An explicit fee assignment' : `A matching Fee Structure for ${classLabel}`} is in place, but no invoice has been generated for this student yet - run Generate Invoices from Finance → Fees for the relevant month(s).`,
+    };
+  }
+
+  /**
+   * The "check every student, not just the one I noticed" version of
+   * diagnoseNoInvoices above - every active student in scope who has never
+   * had a single invoice (any month, any academic year), each with the
+   * same reason a staff member would otherwise only discover one Student
+   * 360 profile at a time. Optionally narrowed to one campus/grade/section,
+   * since running this across an entire multi-campus school at once is
+   * exactly the kind of admin task that needs to start scoped.
+   */
+  async getBillingGaps(schoolSlug: string, query: { campusId?: string; grade?: string; section?: string } = {}) {
+    const studentFilter: any = { schoolSlug, status: 'active' };
+    if (query.campusId) studentFilter.campusId = query.campusId;
+    if (query.grade) studentFilter.currentGrade = query.grade;
+    if (query.section) studentFilter.currentSection = query.section;
+
+    const students = await this.studentModel.find(studentFilter)
+      .select('firstName lastName rollNumber currentGrade currentSection campusId').lean();
+    if (students.length === 0) return { totalChecked: 0, gaps: [] };
+
+    const billedStudentIds = new Set(
+      (await this.invoiceModel.find(
+        { schoolSlug, studentId: { $in: students.map((s: any) => s._id) }, isDeleted: { $ne: true } },
+        { studentId: 1 },
+      ).lean()).map((inv: any) => String(inv.studentId)),
+    );
+    const neverBilled = students.filter((s: any) => !billedStudentIds.has(String(s._id)));
+    if (neverBilled.length === 0) return { totalChecked: students.length, gaps: [] };
+
+    const gaps = await Promise.all(neverBilled.map(async (s: any) => {
+      const diagnosis = await this.diagnoseNoInvoices(schoolSlug, String(s._id));
+      return {
+        studentId: String(s._id),
+        name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Unnamed student',
+        rollNumber: s.rollNumber,
+        grade: s.currentGrade, section: s.currentSection,
+        ...diagnosis,
+      };
+    }));
+    return { totalChecked: students.length, gaps };
+  }
+
+  /**
    * One-time repair for invoices generated BEFORE rolledForwardInto
    * existed - generateInvoices only sets it going forward, at the moment
    * an arrears line is created, so every already-existing invoice pair

@@ -77,7 +77,10 @@ function makeController(result: any) {
   }
   // getFeeStatement now reads real invoices via FinanceService instead of
   // the dead StudentFee collection - see students.controller.ts.
-  const finance: any = { getInvoices: jest.fn(async () => ({ data: [] })) };
+  const finance: any = {
+    getInvoices: jest.fn(async () => ({ data: [] })),
+    diagnoseNoInvoices: jest.fn(async () => ({ reason: 'no_fee_structure_assigned', detail: 'No active Fee Structure matches this student.' })),
+  };
   return { ctrl: new StudentsController(svc as StudentsService, finance, { assertMayMark: async () => undefined } as any), svc, finance };
 }
 const reqOf = (user: any) => ({ user, headers: {} });
@@ -170,6 +173,7 @@ describe('B5 StudentsController: teacher projection per endpoint', () => {
       await expect(ctrl.getFees(reqOf({ role, schoolSlug: 's' }), {} as any)).resolves.toEqual({ fees: [] });
       await expect(ctrl.getFeeStatement(sid.toString(), reqOf({ role, schoolSlug: 's' }))).resolves.toEqual({
         invoices: [], summary: { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
+        diagnosis: { reason: 'no_fee_structure_assigned', detail: 'No active Fee Structure matches this student.' },
       });
     }
   });
