@@ -716,6 +716,18 @@ export class FinanceController {
     return this.service.deleteStudentFeeAssignment(id, schoolSlug);
   }
 
+  // Every active student (optionally narrowed to one campus/grade/section)
+  // who has never had a single invoice generated, with why - see
+  // FinanceService.getBillingGaps/diagnoseNoInvoices. The "check every
+  // student at once" counterpart to the per-student diagnosis already
+  // surfaced on Student 360's Fee Ledger when it's empty.
+  @RequireModuleAccess('finance', 'fee', 'view')
+  @Get('billing-gaps')
+  async getBillingGaps(@Request() req: any, @Query() query: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getBillingGaps(schoolSlug, { campusId: query.campusId, grade: query.grade, section: query.section });
+  }
+
   // ── Challan / Invoice Generation ─────────────────────────────
   @RequireModuleAccess('finance', 'fee', 'manage')
   @Post('invoices/generate') @HttpCode(HttpStatus.CREATED)
