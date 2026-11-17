@@ -4732,9 +4732,18 @@ export class FinanceService {
       };
     }
 
+    // Student.campusId is a free-form string (not an ObjectId-typed field -
+    // see student.schema.ts), so it can legitimately hold a value that
+    // isn't a valid Mongo ObjectId (blank, a stale/legacy value, or data
+    // imported before campuses existed here). findById() on an invalid id
+    // rejects rather than resolving to null, which - unguarded - took down
+    // this ENTIRE diagnosis (and therefore the whole Fee Ledger response,
+    // since nothing here was wrapped in try/catch) for every such student
+    // instead of just leaving the campus name blank for them.
+    const campusId = student.campusId && Types.ObjectId.isValid(student.campusId) ? student.campusId : null;
     const [feeStructures, campus, explicitAssignments] = await Promise.all([
       this.feeStructModel.find({ schoolSlug, isActive: true }).lean(),
-      student.campusId ? this.campusModel.findById(student.campusId).lean() : null,
+      campusId ? this.campusModel.findById(campusId).lean() : null,
       this.studentFeeAssignmentModel.find({ schoolSlug, studentId, isActive: true }).sort({ effectiveFrom: -1 }).lean(),
     ]);
     const studentCampusName = (campus as any)?.name || '';
@@ -4804,7 +4813,14 @@ export class FinanceService {
     if (neverBilled.length === 0) return { totalChecked: students.length, gaps: [] };
 
     const gaps = await Promise.all(neverBilled.map(async (s: any) => {
-      const diagnosis = await this.diagnoseNoInvoices(schoolSlug, String(s._id));
+      // One student's bad data must never take down the whole report - see
+      // the matching guard in students.controller.ts's getFeeStatement.
+      let diagnosis: any;
+      try {
+        diagnosis = await this.diagnoseNoInvoices(schoolSlug, String(s._id));
+      } catch (e: any) {
+        diagnosis = { reason: 'error', detail: `Could not determine why: ${e?.message || 'unknown error'}` };
+      }
       return {
         studentId: String(s._id),
         name: `${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Unnamed student',

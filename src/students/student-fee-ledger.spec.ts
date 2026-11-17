@@ -63,6 +63,21 @@ describe('getFeeStatement', () => {
     expect(finance.diagnoseNoInvoices).not.toHaveBeenCalled();
   });
 
+  // Regression: diagnosis is a helpful add-on, never the main point of this
+  // endpoint. A bug while computing it (e.g. a malformed campusId on some
+  // legacy student record - see diagnoseNoInvoices's own regression test)
+  // must never take down the real invoices/summary this endpoint exists to
+  // serve - which is exactly what an unguarded await here did, turning
+  // "No invoices found" (an honest empty ledger) into a 500 for every
+  // student who genuinely had zero invoices.
+  it('still returns the real (empty) ledger even if computing the diagnosis itself throws', async () => {
+    const { ctrl } = makeController({ diagnoseNoInvoices: jest.fn(async () => { throw new Error('Cast to ObjectId failed'); }) });
+    const result = await ctrl.getFeeStatement('student-1', reqOf({ role: 'admin' }));
+    expect(result).toEqual({
+      invoices: [], summary: { totalBilled: 0, totalPaid: 0, totalBalance: 0 }, diagnosis: null,
+    });
+  });
+
   it('still blocks a teacher caller from seeing financial data', async () => {
     const { ctrl, finance } = makeController();
     await expect(ctrl.getFeeStatement('student-1', reqOf({ role: 'teacher' }))).rejects.toBeInstanceOf(ForbiddenException);

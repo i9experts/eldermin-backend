@@ -84,6 +84,23 @@ describe('FinanceService.diagnoseNoInvoices', () => {
     const result = await svc.diagnoseNoInvoices('demo-school', 'missing');
     expect(result.reason).toBe('student_not_found');
   });
+
+  // Regression: Student.campusId is a free-form string (see
+  // student.schema.ts), not an ObjectId-typed field, so it can legitimately
+  // hold a value that isn't a valid Mongo ObjectId - blank, a stale/legacy
+  // value, or data imported before campuses existed here. Model.findById()
+  // on such a value rejects rather than resolving to null; unguarded, that
+  // took down this whole diagnosis - and with it the entire Fee Ledger
+  // response, since nothing called this in a try/catch either - for every
+  // such student, which is exactly the "No invoices found, nothing else"
+  // the Fee Ledger showed for literally every student once this shipped.
+  it('never throws when the student\'s campusId is not a valid ObjectId, and still produces a diagnosis', async () => {
+    const campusModel: any = { findById: () => { throw new Error('Cast to ObjectId failed'); } };
+    const { studentModel, feeStructModel, studentFeeAssignmentModel } = makeModels({ student: { ...STUDENT, campusId: 'not-an-object-id' }, feeStructures: [] });
+    const svc = makeService({ [STUDENT_IDX]: studentModel, [FEE_STRUCT_IDX]: feeStructModel, [CAMPUS_IDX]: campusModel, [STUDENT_FEE_ASSIGNMENT_IDX]: studentFeeAssignmentModel });
+    const result = await svc.diagnoseNoInvoices('demo-school', 's1');
+    expect(result.reason).toBe('no_fee_structure_assigned');
+  });
 });
 
 describe('FinanceService.getBillingGaps', () => {
