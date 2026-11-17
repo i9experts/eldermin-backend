@@ -35,9 +35,9 @@ function makeService(attendanceSummaryResult: any[], recentAttendance: any[] = [
   const feeModel: any = { aggregate: jest.fn(async () => []), find: jest.fn(() => chain([])) };
   const behaviourModel: any = { aggregate: jest.fn(async () => []), find: jest.fn(() => chain([])) };
   const resultModel: any = { find: jest.fn(() => chain([])) };
-  const n: any = {};
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
   const svc = new StudentsService(studentModel, attendanceModel, feeModel, behaviourModel, resultModel, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n);
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n);
   return { svc, attendanceModel };
 }
 

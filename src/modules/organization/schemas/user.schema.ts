@@ -109,6 +109,15 @@ export class User {
   @Prop() staffAccessRevokedAt?: Date;
   @Prop() previousPrimaryRole?: string;
   @Prop({ type: Types.ObjectId, ref: 'Role', default: null }) previousCustomRoleId?: Types.ObjectId | null;
+
+  // ── "Show Me Around" product tour ── absent/false == never seen it yet,
+  // so the frontend auto-starts the global tour on this user's first
+  // login. moduleToursSeen tracks each per-module mini-tour independently
+  // (keyed by the module's sidebar id, e.g. 'finance') so dismissing one
+  // module's tour never affects another's.
+  @Prop({ default: false }) globalTourCompleted?: boolean;
+  @Prop() globalTourCompletedAt?: Date;
+  @Prop({ type: [String], default: [] }) moduleToursSeen?: string[];
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

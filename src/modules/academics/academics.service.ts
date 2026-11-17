@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { idForms } from '../../common/utils/id-forms.util';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -8,6 +9,8 @@ import { SubjectGroup, SubjectGroupDocument } from './schemas/subject-group.sche
 import { Curriculum, CurriculumDocument } from './schemas/curriculum.schema';
 import { Syllabus, SyllabusDocument } from '../../syllabus/schemas/syllabus.schema';
 import { Book, BookDocument } from './schemas/book.schema';
+import { BookCategory, BookCategoryDocument } from './schemas/book-category.schema';
+import { DEWEY_DECIMAL_CATEGORIES } from './dewey-decimal-categories';
 import { BookIssue, BookIssueDocument } from './schemas/book-issue.schema';
 import { LibrarySettings, LibrarySettingsDocument } from './schemas/library-settings.schema';
 import { Reservation, ReservationDocument } from './schemas/reservation.schema';
@@ -46,6 +49,11 @@ export class AcademicsService {
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    // Appended last so every existing positional `new AcademicsService(...)`
+    // test construction (see curriculum-teacher.spec.ts) keeps compiling
+    // unchanged - same trailing-param convention used elsewhere (e.g.
+    // PdfService's nazraModel).
+    @InjectModel(BookCategory.name) private bookCategoryModel: Model<BookCategoryDocument>,
   ) {}
 
   private tid(t: string) { return t; }
@@ -338,16 +346,102 @@ export class AcademicsService {
       { name: 'Other',          code: 'other',          order: 9 },
     ];
     const tid = this.tid(tenantId);
-    const names: string[] = [];
-    for (const cat of defaults) {
-      const result = await this.subjectCategoryModel.findOneAndUpdate(
-        { tenantId: tid, code: cat.code },
-        { $set: { ...cat, tenantId: tid, institutionId: institutionId ? this.oid(institutionId) : undefined, isActive: true } },
-        { upsert: true, new: true },
+    const iid = institutionId ? this.oid(institutionId) : undefined;
+    // Single bulkWrite rather than N sequential findOneAndUpdate calls -
+    // same fix as seedDefaultBookCategories above, applied here too so
+    // this doesn't regress into the same timeout risk if this list grows.
+    try {
+      await this.subjectCategoryModel.bulkWrite(
+        defaults.map((cat) => ({
+          updateOne: {
+            filter: { tenantId: tid, code: cat.code },
+            update: { $set: { ...cat, tenantId: tid, institutionId: iid, isActive: true } },
+            upsert: true,
+          },
+        })) as any[],
       );
-      names.push(result!.name);
-    }
+    } catch (e: any) { throw new BadRequestException(e.message); }
+    const names = defaults.map((cat) => cat.name);
     return { message: `${defaults.length} default subject categories seeded`, count: defaults.length, names };
+  }
+
+  // ─── LIBRARY BOOK CATEGORIES ───────────────────────────────────────────────────
+  // Same shape/convention as Subject Categories above - a school-editable
+  // catalog, normally started from the standard Dewey Decimal Classification
+  // (seedDefaultBookCategories) rather than typed in from scratch. Kept as
+  // its own collection, independent of Book.category's existing hardcoded
+  // enum, so adopting it is opt-in and doesn't disturb existing catalogue data.
+
+  async getBookCategories(tenantId: string, query: any = {}) {
+    const filter: any = { tenantId: this.tid(tenantId) };
+    if (query.isActive !== undefined) {
+      filter.isActive = query.isActive !== 'false';
+    } else if (query.includeInactive !== 'true') {
+      filter.isActive = true;
+    }
+    return this.bookCategoryModel.find(filter).sort({ order: 1, code: 1 }).lean();
+  }
+
+  async createBookCategory(tenantId: string, institutionId: string, data: any) {
+    try {
+      return await this.bookCategoryModel.create({
+        ...data,
+        tenantId: this.tid(tenantId),
+        institutionId: institutionId ? this.oid(institutionId) : undefined,
+      });
+    } catch (e: any) { throw new BadRequestException(e.message); }
+  }
+
+  async updateBookCategory(tenantId: string, id: string, data: any) {
+    const doc = await this.bookCategoryModel
+      .findOneAndUpdate({ _id: id, tenantId: this.tid(tenantId) }, { $set: data }, { new: true })
+      .lean();
+    if (!doc) throw new NotFoundException('Library category not found');
+    return doc;
+  }
+
+  async deleteBookCategory(tenantId: string, id: string) {
+    const deleted = await this.bookCategoryModel.findOneAndDelete({ _id: id, tenantId: this.tid(tenantId) }).lean();
+    if (!deleted) throw new NotFoundException('Library category not found');
+    return { deleted: true };
+  }
+
+  /**
+   * POST /academics/library/categories/seed-defaults - seeds the 100
+   * standard Dewey Decimal Classification entries (10 main classes + their
+   * 10 subdivisions each) as this school's starting, editable/extensible
+   * library category catalog. Idempotent upsert-by-code, same pattern as
+   * seedDefaultSubjectCategories - safe to call more than once; running it
+   * again just refreshes the seeded copies rather than duplicating them.
+   *
+   * A single bulkWrite (one round trip) rather than 100 sequential
+   * findOneAndUpdate calls - the original loop awaited each of the 100
+   * upserts one at a time, which on anything but a near-zero-latency DB
+   * connection comfortably exceeded the frontend's 15s request timeout
+   * (see src/lib/api.ts), surfacing as an opaque "Internal server
+   * error"/timeout toast with no indication the seed had actually been
+   * running fine, just slowly. seedDefaultSubjectCategories's identical
+   * loop never hit this in practice only because it seeds 9 entries, not
+   * 100. Wrapped in try/catch, matching createBookCategory's convention,
+   * so a genuine write failure (e.g. a non-ObjectId tenantId/
+   * institutionId) surfaces as a clear 400 instead of an unhandled 500.
+   */
+  async seedDefaultBookCategories(tenantId: string, institutionId: string) {
+    const tid = this.tid(tenantId);
+    const iid = institutionId ? this.oid(institutionId) : undefined;
+    try {
+      await this.bookCategoryModel.bulkWrite(
+        DEWEY_DECIMAL_CATEGORIES.map((cat, i) => ({
+          updateOne: {
+            filter: { tenantId: tid, code: cat.code },
+            update: { $set: { name: cat.name, code: cat.code, order: i, tenantId: tid, institutionId: iid, isActive: true } },
+            upsert: true,
+          },
+        })) as any[],
+      );
+    } catch (e: any) { throw new BadRequestException(e.message); }
+    const names = DEWEY_DECIMAL_CATEGORIES.map((cat) => cat.name);
+    return { message: `${DEWEY_DECIMAL_CATEGORIES.length} default library categories seeded`, count: DEWEY_DECIMAL_CATEGORIES.length, names };
   }
 
   // ─── SUBJECT GROUPS ───────────────────────────────────────────────────────────
@@ -833,9 +927,13 @@ export class AcademicsService {
    * frontend, this looks up by _id alone (mirrors ConsentRecord.subjectRef
    * in compliance.service.ts: `Types.ObjectId, refPath` + trust the id).
    */
-  private async resolveBorrower(borrowerType: string, borrowerId: string) {
+  private async resolveBorrower(borrowerType: string, borrowerId: string, tenantId: string, schoolSlug?: string) {
+    // The borrower must belong to the caller's own school (it used to be looked up by _id alone, so a staff member of school A could
+    // issue a book to, or reserve one for, a student or staff member of school B). Student is keyed by schoolSlug, Staff by tenantId.
+    if (!Types.ObjectId.isValid(String(borrowerId ?? ''))) throw new BadRequestException('borrowerId is not a valid id');
     if (borrowerType === 'student') {
-      const student = await this.studentModel.findById(borrowerId).lean();
+      if (!schoolSlug) throw new ForbiddenException('No school in your session: cannot verify the borrower.');
+      const student = await this.studentModel.findOne({ _id: borrowerId, schoolSlug }).lean();
       if (!student) throw new NotFoundException('Student not found');
       return {
         borrowerName: `${student.firstName} ${student.lastName}`.trim(),
@@ -844,7 +942,7 @@ export class AcademicsService {
       };
     }
     if (borrowerType === 'staff') {
-      const staff = await this.staffModel.findById(borrowerId).lean();
+      const staff = await this.staffModel.findOne({ _id: borrowerId, tenantId: idForms(tenantId) }).lean();
       if (!staff) throw new NotFoundException('Staff member not found');
       return {
         borrowerName: `${staff.firstName} ${staff.lastName}`.trim(),
@@ -883,7 +981,7 @@ export class AcademicsService {
     if (!data.borrowerType || !data.borrowerId) {
       throw new BadRequestException('borrowerType and borrowerId are required');
     }
-    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId);
+    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId, tenantId, (requestingUser as any)?.schoolSlug);
 
     const settings = await this.getLibrarySettings(tenantId);
     const activeIssueCount = await this.issueModel.countDocuments({
@@ -1161,7 +1259,7 @@ export class AcademicsService {
     if (!data.borrowerType || !data.borrowerId) {
       throw new BadRequestException('borrowerType and borrowerId are required');
     }
-    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId);
+    const borrower = await this.resolveBorrower(data.borrowerType, data.borrowerId, tenantId, (requestingUser as any)?.schoolSlug);
 
     const duplicate = await this.reservationModel.findOne({
       tenantId: this.tid(tenantId),

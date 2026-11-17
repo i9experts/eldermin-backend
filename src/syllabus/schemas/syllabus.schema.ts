@@ -61,6 +61,15 @@ export class SyllabusLesson {
   @Prop({ default: 0 }) order: number;
   @Prop() addedBy: string;
   @Prop({ default: Date.now }) addedAt: Date;
+
+  // ── LMS Phase 1: pacing ─────────────────────────────────────
+  // When set and in the future, this lesson is locked regardless of
+  // publishedToStudents - lets a teacher publish a whole course up front
+  // and have it release week by week instead of dumping every lesson on
+  // students at once. Unset (the default, and every lesson that existed
+  // before this field) means no date gate at all - identical to today's
+  // behaviour.
+  @Prop() releaseDate?: Date;
 }
 export const SyllabusLessonSchema = SchemaFactory.createForClass(SyllabusLesson);
 
@@ -77,6 +86,12 @@ export class SyllabusTopic {
   @Prop({ default: 1 }) estimatedLessons: number;
   @Prop({ type: [SyllabusSubTopicSchema], default: [] }) subTopics: SyllabusSubTopic[];
   @Prop({ type: [SyllabusLessonSchema], default: [] }) lessons: SyllabusLesson[];
+  // LMS Phase 1: when true, a lesson in this topic is locked until every
+  // lesson before it (by `order`) is completed - an instructor-paced
+  // option on top of releaseDate's calendar-based gating. Defaults to
+  // false, so every topic that existed before this field keeps every
+  // lesson immediately available exactly as today.
+  @Prop({ default: false }) sequentialLessons: boolean;
 
   // ── Tracking (merged in from the old SyllabusCoverage collection) ──
   // When subTopics exist, isCovered/coveredDate/coveredBy are DERIVED
@@ -173,6 +188,16 @@ export class Syllabus {
   @Prop({ default: false }) publishedToStudents: boolean;
   @Prop() publishedAt: Date;
   @Prop() publishedBy: string;
+
+  // ── LMS Phase 1: explicit enrollment ────────────────────────────
+  // 'auto_by_class' (the default, and every syllabus that existed before
+  // this field) means access is implicit - exactly today's behaviour,
+  // computed from a student's own gradeLevel/sectionName/campusId match
+  // against this syllabus. 'manual' turns this into an elective/opt-in
+  // course: a student only sees it with an active CourseEnrollment
+  // document (see course-enrollment.schema.ts) regardless of their grade/
+  // section, so a course no longer has to be grade-locked to exist.
+  @Prop({ enum: ['auto_by_class', 'manual'], default: 'auto_by_class' }) enrollmentMode: string;
 }
 
 export const SyllabusSchema = SchemaFactory.createForClass(Syllabus);

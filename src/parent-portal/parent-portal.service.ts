@@ -5,12 +5,19 @@ import * as bcrypt from 'bcryptjs';
 import { assertStudentAccess, getGuardianStudentIds, ScopedUser } from '../auth/scope.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
 import { sameGrade, sameSection, gradeMatcher, sectionMatcher } from '../common/utils/class-match.util';
+import { idForms } from '../common/utils/id-forms.util';
+import { UserRole } from '../auth/roles.enum';
 import { UploadService } from '../upload/upload.service';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceDocument } from '../students/schemas/student-supporting.schema';
 import { Invoice, InvoiceDocument } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntryDocument, ReportCard, ReportCardDocument } from '../assessments/schemas/assessment.schema';
+import { TermReportCard, TermReportCardDocument } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordDocument, TarbiyahAssessment, TarbiyahAssessmentDocument } from '../behaviour/schemas/behaviour.schema';
+import {
+  PARENT_BEHAVIOUR_RECORD_FIELDS, PARENT_TARBIYAH_FIELDS, projectParentBehaviourRecord, projectParentTarbiyahAssessment, selectOf,
+} from './parent-behaviour.projection';
+import { projectParentReportCard, projectParentTermReportCard } from './parent-results.projection';
 import { Timetable, TimetableDocument } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { AssignmentSubmission, AssignmentSubmissionDocument } from '../modules/teaching/schemas/assignment-submission.schema';
@@ -34,11 +41,26 @@ import {
 } from './schemas/notification-and-message.schema';
 import { Syllabus, SyllabusDocument } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressDocument } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentDocument } from '../syllabus/schemas/course-enrollment.schema';
+import { computeLessonLock } from '../syllabus/lesson-lock.util';
+import { buildCourseVisibilityFilter } from '../syllabus/course-visibility.util';
+import { ForumService } from '../syllabus/forum.service';
+import { ParentDevice, ParentDeviceDocument } from './schemas/parent-device.schema';
 import { AssessmentService } from '../assessments/assessment.service';
 import { CertificatesService } from '../modules/certificates/certificates.service';
 import { PdfService } from '../pdf/pdf.service';
 import { ParentAccessControlService } from '../parent-access-control/parent-access-control.service';
 import { ParentFeatureKey } from '../parent-access-control/parent-feature.constants';
+import { GamificationService } from '../gamification/gamification.service';
+import { QaidaNazraExtrasService } from '../behaviour/qaida-nazra-extras.service';
+import { QaidaService } from '../behaviour/qaida.service';
+import { NazraService } from '../behaviour/nazra.service';
+import { projectParentQaidaReport } from './parent-qaida.projection';
+import { projectParentNazraReport } from './parent-nazra.projection';
+import { GuidedReadingService, READER_COMPLETION_POINTS } from '../guided-reading/guided-reading.service';
+
+/** Distinct app installs we keep per parent account (a household has a few phones/tablets). */
+export const MAX_DEVICES_PER_PARENT = 10;
 
 @Injectable()
 export class ParentPortalService {
@@ -69,12 +91,63 @@ export class ParentPortalService {
     @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
     @InjectModel(Syllabus.name) private syllabusModel: Model<SyllabusDocument>,
     @InjectModel(LessonProgress.name) private lessonProgressModel: Model<LessonProgressDocument>,
+    @InjectModel(CourseEnrollment.name) private enrollmentModel: Model<CourseEnrollmentDocument>,
+    @InjectModel(ParentDevice.name) private deviceModel: Model<ParentDeviceDocument>,
     private assessmentService: AssessmentService,
     private certificatesService: CertificatesService,
     private uploadService: UploadService,
     private pdfService: PdfService,
     private parentAccess: ParentAccessControlService,
+    private forumService: ForumService,
+    private gamificationService: GamificationService,
+    private qaidaNazraExtras: QaidaNazraExtrasService,
+    // Assessment Master Settings' parent-facing Term Report Card view -
+    // appended at the END, not inserted alongside reportCardModel above, so
+    // every existing positional `new ParentPortalService(...)` test
+    // construction (several spec files hardcode exact argument indices/
+    // counts - see consent-request-results.spec.ts's own comment on this
+    // fragility) keeps compiling and passing unchanged.
+    @InjectModel(TermReportCard.name) private termReportCardModel: Model<TermReportCardDocument>,
+    // Qaida & Nazra progress report - appended last for the same positional-construction reason as above.
+    private qaidaService: QaidaService,
+    private nazraService: NazraService,
+    // Guided Reading student player (Phase 3) - appended last for the same positional-construction reason as above.
+    private guidedReadingService: GuidedReadingService,
   ) {}
+
+  // ── Device ping: a real "this parent has the app open" signal ──────
+  // Called on every login and every app cold-start. Upserts by
+  // (userId, deviceId) so re-pinging the same device just advances
+  // lastSeenAt instead of creating duplicates - the count of distinct
+  // documents per user is the honest "how many devices this parent
+  // actually uses the app on" number.
+  async recordDevicePing(userId: string, tenantId: string, dto: { deviceId: string; platform: string; appVersion?: string }) {
+    // Input is client-controlled: bounded and shaped here (the body is not DTO-validated), so a parent cannot store arbitrary blobs.
+    const deviceId = typeof dto?.deviceId === 'string' ? dto.deviceId.trim() : '';
+    if (!deviceId) throw new BadRequestException('deviceId is required');
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(deviceId)) throw new BadRequestException('deviceId is not valid');
+    if (!['android', 'ios'].includes(dto.platform)) throw new BadRequestException('platform must be android or ios');
+    const appVersion = typeof dto.appVersion === 'string' ? dto.appVersion.trim().slice(0, 32) : undefined;
+    if (!Types.ObjectId.isValid(String(userId)) || !Types.ObjectId.isValid(String(tenantId))) throw new BadRequestException('Invalid account context');
+    const uid = new Types.ObjectId(String(userId));
+
+    // One row per device of THIS parent in THIS school (both come from the signed token, never from the body). A parent can hold a handful
+    // of devices; beyond the cap a new device id is acknowledged but not stored, so the collection cannot be grown without bound.
+    const existing = await this.deviceModel.exists({ userId: uid, deviceId });
+    if (!existing) {
+      const count = await this.deviceModel.countDocuments({ userId: uid });
+      if (count >= MAX_DEVICES_PER_PARENT) return { ok: true };
+    }
+    await this.deviceModel.findOneAndUpdate(
+      { userId: uid, deviceId },
+      {
+        $set: { tenantId: new Types.ObjectId(String(tenantId)), platform: dto.platform, appVersion, lastSeenAt: new Date() },
+        $setOnInsert: { firstSeenAt: new Date() },
+      },
+      { upsert: true, new: true },
+    );
+    return { ok: true };
+  }
 
   // ── Admin: link a guardian's login to their child/children ─────
   // This is the foundational step - without it, a parent account has
@@ -325,18 +398,12 @@ export class ParentPortalService {
     const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
     if (!student) throw new NotFoundException('Student not found');
 
-    const filter: any = {
-      tenantId, gradeLevel: gradeMatcher((student as any).currentGrade), publishedToStudents: true,
-      $and: [
-        { $or: [{ sectionName: sectionMatcher((student as any).currentSection) }, { sectionName: { $exists: false } }, { sectionName: null }] },
-      ],
-    };
-    // Same campus-scoping rule as getHomework - a student's own campusId
-    // decides this, not the syllabus's, so a matching grade/section name
-    // at a different campus never leaks in.
-    if ((student as any).campusId) filter.$and.push({ $or: [{ campusId: new Types.ObjectId((student as any).campusId) }, { campusId: null }] });
+    const enrolledSyllabusIds = await this.enrollmentModel
+      .find({ tenantId, studentId: new Types.ObjectId(studentId), status: 'active' })
+      .distinct('syllabusId');
+    const visibilityFilter = buildCourseVisibilityFilter(tenantId, student as any, enrolledSyllabusIds);
 
-    const syllabi = await this.syllabusModel.find(filter).sort({ subjectName: 1 }).lean();
+    const syllabi = await this.syllabusModel.find(visibilityFilter).sort({ subjectName: 1 }).lean();
     if (syllabi.length === 0) return [];
 
     const progressRows = await this.lessonProgressModel.find({
@@ -350,21 +417,27 @@ export class ParentPortalService {
       const units = (s.units || []).map((u: any) => ({
         unitNo: u.unitNo,
         unitName: u.unitName,
-        topics: (u.topics || []).map((t: any) => ({
-          topicNo: t.topicNo,
-          topicName: t.topicName,
-          lessons: (t.lessons || []).slice().sort((a: any, b: any) => a.order - b.order).map((l: any) => {
-            const progress = progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`);
-            const status = progress?.status || 'not_started';
-            totalLessons += 1;
-            if (status === 'completed') completedLessons += 1;
-            return {
-              lessonNo: l.lessonNo, title: l.title, description: l.description,
-              type: l.type, url: l.url, fileUrl: l.fileUrl, fileName: l.fileName,
-              status,
-            };
-          }),
-        })).filter((t: any) => t.lessons.length > 0),
+        topics: (u.topics || []).map((t: any) => {
+          const sortedLessons = (t.lessons || []).slice().sort((a: any, b: any) => a.order - b.order);
+          const isCompleted = (lessonNo: number) =>
+            progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${lessonNo}`)?.status === 'completed';
+          return {
+            topicNo: t.topicNo,
+            topicName: t.topicName,
+            lessons: sortedLessons.map((l: any, idx: number) => {
+              const progress = progressByKey.get(`${s._id}-${u.unitNo}-${t.topicNo}-${l.lessonNo}`);
+              const status = progress?.status || 'not_started';
+              totalLessons += 1;
+              if (status === 'completed') completedLessons += 1;
+              const lock = computeLessonLock(l, sortedLessons.slice(0, idx), t.sequentialLessons, isCompleted);
+              return {
+                lessonNo: l.lessonNo, title: l.title, description: l.description,
+                type: l.type, url: l.url, fileUrl: l.fileUrl, fileName: l.fileName,
+                status, locked: lock.locked, lockReason: lock.reason,
+              };
+            }),
+          };
+        }).filter((t: any) => t.lessons.length > 0),
       })).filter((u: any) => u.topics.length > 0);
 
       return {
@@ -377,6 +450,121 @@ export class ParentPortalService {
     }).filter((c: any) => c.totalLessons > 0); // a published syllabus with no lessons yet has nothing to show
   }
 
+  // ── LMS Phase 0: "My Learning" hub ──────────────────────────────
+  // One combined payload for courses + assignments + quizzes +
+  // certificates, instead of a parent/student view having to hit four
+  // separate endpoints and stitch them together client-side. Each piece
+  // is exactly the existing getMyCourses/getHomework/listMyQuizzes/
+  // getIssuedForStudent result, unchanged - this adds no new data or
+  // business logic, just one call site for all four.
+  async getMyLearning(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const [courses, assignments, quizzes, certificates, reading] = await Promise.all([
+      this.getMyCourses(studentId, requestingUser, tenantId, schoolSlug),
+      this.getHomework(studentId, requestingUser, tenantId, schoolSlug),
+      this.listMyQuizzes(studentId, requestingUser, schoolSlug),
+      this.certificatesService.getIssuedForStudent(schoolSlug, studentId),
+      this.guidedReadingService.getReadingHome(studentId, schoolSlug),
+    ]);
+    return { courses, assignments, quizzes, certificates, reading };
+  }
+
+  // ── LMS Phase 4: course discussion forum (student/parent side) ──────
+  // Gated by the same course-visibility rule as getMyCourses (grade/
+  // section match, or an active CourseEnrollment for a 'manual'/elective
+  // course) - a student can't read or post into a course's forum they
+  // couldn't even see as a course. ForumService itself stays agnostic of
+  // this check, same reasoning as its own file header explains.
+  private async assertStudentCanAccessCourse(studentId: string, tenantId: string, schoolSlug: string, syllabusId: string) {
+    const student = await this.studentModel.findOne({ _id: studentId, schoolSlug }).select('currentGrade currentSection campusId').lean();
+    if (!student) throw new NotFoundException('Student not found');
+    const enrolledSyllabusIds = await this.enrollmentModel
+      .find({ tenantId, studentId: new Types.ObjectId(studentId), status: 'active' })
+      .distinct('syllabusId');
+    const visibilityFilter = buildCourseVisibilityFilter(tenantId, student as any, enrolledSyllabusIds);
+    const syllabus = await this.syllabusModel.findOne({ _id: syllabusId, ...visibilityFilter }).select('_id').lean();
+    if (!syllabus) throw new NotFoundException('Course not found');
+  }
+
+  private async studentDisplayName(studentId: string): Promise<string> {
+    const student = await this.studentModel.findOne({ _id: studentId }).select('firstName lastName').lean();
+    return `${(student as any)?.firstName || ''} ${(student as any)?.lastName || ''}`.trim() || 'Student';
+  }
+
+  async listCourseForumThreads(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    return this.forumService.listThreads(tenantId, syllabusId);
+  }
+
+  async getCourseForumThread(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string, threadId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    return this.forumService.getThread(tenantId, threadId);
+  }
+
+  async createCourseForumThread(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string, dto: { title: string; body: string }) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    const name = await this.studentDisplayName(studentId);
+    return this.forumService.createThread(tenantId, schoolSlug, syllabusId, { type: 'student', id: studentId, name }, dto.title, dto.body);
+  }
+
+  async createCourseForumReply(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, syllabusId: string, threadId: string, dto: { body: string }) {
+    assertStudentAccess(requestingUser, studentId);
+    await this.assertStudentCanAccessCourse(studentId, tenantId, schoolSlug, syllabusId);
+    const name = await this.studentDisplayName(studentId);
+    return this.forumService.createReply(tenantId, schoolSlug, threadId, { type: 'student', id: studentId, name }, dto.body);
+  }
+
+  async deleteCourseForumThread(studentId: string, requestingUser: ScopedUser, tenantId: string, threadId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.forumService.deleteThread(tenantId, threadId, { author: { type: 'student', id: studentId, name: '' } });
+  }
+
+  async deleteCourseForumReply(studentId: string, requestingUser: ScopedUser, tenantId: string, replyId: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.forumService.deleteReply(tenantId, replyId, { author: { type: 'student', id: studentId, name: '' } });
+  }
+
+  // ── LMS Phase 5: gamification (parent/student's own view) ────
+  async getMyGamificationSummary(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.gamificationService.getStudentSummary(schoolSlug, studentId);
+  }
+
+  async getMyClassLeaderboard(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const student = await this.studentModel.findOne({ _id: studentId }).select('currentGrade currentSection').lean();
+    return this.gamificationService.getLeaderboard(schoolSlug, {
+      grade: (student as any)?.currentGrade, section: (student as any)?.currentSection,
+    });
+  }
+
+  // ── Qaida/Nazra home recitation log (parent-reported, reference only) ──
+  // This is purely a reference log for the school's Qaida/Nazra teacher -
+  // a parent logging a home-taught lesson here never touches the official
+  // takhtis/paras progress a teacher records (see QaidaNazraExtrasService).
+  async getMyHomeRecitationLog(studentId: string, requestingUser: ScopedUser, schoolSlug: string, program?: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_home_log');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_home_log', reason: access.reason || null };
+    return this.qaidaNazraExtras.getHomeLog(studentId, schoolSlug, program);
+  }
+
+  async logMyHomeRecitationEntry(studentId: string, requestingUser: ScopedUser, schoolSlug: string, guardianName: string, dto: any) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_home_log');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_home_log', reason: access.reason || null };
+    if (!requestingUser.userId) throw new BadRequestException('No guardian account on this request');
+    return this.qaidaNazraExtras.logHomeEntry(studentId, schoolSlug, dto, requestingUser.userId, guardianName);
+  }
+
+  async deleteMyHomeRecitationEntry(entryId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    if (!requestingUser.userId) throw new BadRequestException('No guardian account on this request');
+    return this.qaidaNazraExtras.deleteHomeEntry(entryId, schoolSlug, requestingUser.userId);
+  }
+
   async markLessonProgress(studentId: string, requestingUser: ScopedUser, tenantId: string, schoolSlug: string, dto: { syllabusId: string; unitNo: number; topicNo: number; lessonNo: number; status: string }) {
     assertStudentAccess(requestingUser, studentId);
     if (!['not_started', 'in_progress', 'completed'].includes(dto.status)) {
@@ -384,10 +572,33 @@ export class ParentPortalService {
     }
     const syllabus = await this.syllabusModel.findOne({ _id: dto.syllabusId, tenantId, publishedToStudents: true }).lean();
     if (!syllabus) throw new NotFoundException('Course not found');
+    // LMS Phase 1: a 'manual' (elective) course can't be progressed by a
+    // student who isn't actually enrolled in it, even if they somehow know
+    // its syllabusId - this is the same gate getMyCourses applies to what
+    // it lists, enforced again here against direct API calls.
+    if ((syllabus as any).enrollmentMode === 'manual') {
+      const enrolled = await this.enrollmentModel.exists({
+        syllabusId: new Types.ObjectId(dto.syllabusId), studentId: new Types.ObjectId(studentId), status: 'active',
+      });
+      if (!enrolled) throw new NotFoundException('Course not found');
+    }
     const unit = (syllabus.units || []).find((u: any) => u.unitNo === dto.unitNo);
     const topic = unit?.topics?.find((t: any) => t.topicNo === dto.topicNo);
     const lesson = topic?.lessons?.find((l: any) => l.lessonNo === dto.lessonNo);
     if (!lesson) throw new NotFoundException('Lesson not found');
+
+    // LMS Phase 1: a locked lesson (future releaseDate, or an earlier
+    // lesson in a sequentialLessons topic not yet completed) can't be
+    // progressed - this is what actually enforces pacing; getMyCourses
+    // merely reflects it for display.
+    const sortedLessons = ((topic as any).lessons || []).slice().sort((a: any, b: any) => a.order - b.order);
+    const lessonIdx = sortedLessons.findIndex((l: any) => l.lessonNo === dto.lessonNo);
+    const priorProgress = await this.lessonProgressModel.find({
+      studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), unitNo: dto.unitNo, topicNo: dto.topicNo,
+    }).lean();
+    const isCompleted = (lessonNo: number) => priorProgress.some((p: any) => p.lessonNo === lessonNo && p.status === 'completed');
+    const lock = computeLessonLock(lesson, sortedLessons.slice(0, lessonIdx), (topic as any).sequentialLessons, isCompleted);
+    if (lock.locked) throw new BadRequestException(lock.reason || 'This lesson is locked.');
 
     const updated = await this.lessonProgressModel.findOneAndUpdate(
       { studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), unitNo: dto.unitNo, topicNo: dto.topicNo, lessonNo: dto.lessonNo },
@@ -408,11 +619,13 @@ export class ParentPortalService {
       const totalLessons = (syllabus.units || []).reduce(
         (sum: number, u: any) => sum + (u.topics || []).reduce((s2: number, t: any) => s2 + (t.lessons || []).length, 0), 0,
       );
+      let courseJustCompleted = false;
       if (totalLessons > 0) {
         const completedCount = await this.lessonProgressModel.countDocuments({
           studentId: new Types.ObjectId(studentId), syllabusId: new Types.ObjectId(dto.syllabusId), status: 'completed',
         });
-        if (completedCount >= totalLessons) {
+        courseJustCompleted = completedCount >= totalLessons;
+        if (courseJustCompleted) {
           try {
             await this.certificatesService.autoIssueCourseCompletion(
               schoolSlug, studentId, syllabus.subjectName, syllabus._id, 'System (course completion)',
@@ -425,8 +638,74 @@ export class ParentPortalService {
           }
         }
       }
+
+      // LMS Phase 5 (gamification) - same non-blocking convention as the
+      // certificate call just above. "First Step" is awarded the first
+      // time this student has EVER completed a lesson, across every
+      // course, not per-course - checked by a global count rather than a
+      // per-syllabus one.
+      try {
+        await this.gamificationService.awardPoints(
+          schoolSlug, studentId, 10, `Completed: ${lesson.title}`,
+          'lesson_completion', `${dto.syllabusId}:${dto.unitNo}:${dto.topicNo}:${dto.lessonNo}`, { tenantId },
+        );
+        const everCompletedCount = await this.lessonProgressModel.countDocuments({ studentId: new Types.ObjectId(studentId), status: 'completed' });
+        if (everCompletedCount === 1) {
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'first_lesson', { tenantId });
+        }
+        if (courseJustCompleted) {
+          await this.gamificationService.awardPoints(
+            schoolSlug, studentId, 50, `Completed course: ${syllabus.subjectName}`,
+            'course_completion', String(syllabus._id), { tenantId },
+          );
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'course_complete', {
+            tenantId, sourceType: 'course_completion', sourceId: String(syllabus._id),
+          });
+        }
+      } catch {
+        // never let a gamification hiccup block the student's own progress from saving
+      }
     }
     return updated;
+  }
+
+  // ── Guided Reading: student player (Phase 3) ────────────────────
+  async getMyReadingHome(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.guidedReadingService.getReadingHome(studentId, schoolSlug);
+  }
+
+  async getMyReader(studentId: string, readerId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    return this.guidedReadingService.getReaderForStudent(readerId, studentId, schoolSlug);
+  }
+
+  async completeMyReading(
+    studentId: string, readerId: string, requestingUser: ScopedUser, schoolSlug: string,
+    tenantId: string, keywordsLookedUp: string[] = [],
+  ) {
+    assertStudentAccess(requestingUser, studentId);
+    const result = await this.guidedReadingService.completeReaderForStudent(readerId, studentId, schoolSlug, keywordsLookedUp);
+
+    // Same non-blocking convention as markLessonProgress's gamification
+    // hook above - a points/badge hiccup never blocks the student's own
+    // completion from saving.
+    if (result.justCompleted) {
+      try {
+        await this.gamificationService.awardPoints(
+          schoolSlug, studentId, READER_COMPLETION_POINTS, `Finished reading: ${result.reader.title}`,
+          'reader_completion', String(result.reader._id), { tenantId },
+        );
+        if (result.completedCount === 1) {
+          await this.gamificationService.awardBadge(schoolSlug, studentId, 'first_reader', {
+            tenantId, sourceType: 'reader_completion', sourceId: String(result.reader._id),
+          });
+        }
+      } catch {
+        // never let a gamification hiccup block the student's own progress from saving
+      }
+    }
+    return result;
   }
 
   // ── LMS Phase 2: self-paced online quizzes ─────────────────────
@@ -463,7 +742,76 @@ export class ParentPortalService {
     assertStudentAccess(requestingUser, studentId);
     const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
     if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
-    return this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean();
+    const [cards, settings] = await Promise.all([
+      this.reportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean(),
+      this.assessmentService.getVisibilitySettings(schoolSlug),
+    ]);
+    // Assessment Master Settings' parent-visibility allowlist (see
+    // parent-results.projection.ts) - previously the full ReportCard
+    // document went straight to the parent app with zero filtering,
+    // including classPosition/totalStudents regardless of any setting.
+    return cards.map((c) => projectParentReportCard(c, settings as any));
+  }
+
+  // ── Term Report Cards (whole-term, comprehensive) ───────────────
+  // Previously no parent-facing path existed for TermReportCard at all -
+  // generateTermReportCards/publishTermReportCards only ever fed the
+  // staff-facing Results tab.
+  async getTermReportCards(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) return { suspended: true, feature: 'academic_progress_report', reason: access.reason || null };
+    const [cards, settings] = await Promise.all([
+      this.termReportCardModel.find({ studentId: new Types.ObjectId(studentId), schoolSlug, published: true }).sort({ createdAt: -1 }).lean(),
+      this.assessmentService.getVisibilitySettings(schoolSlug),
+    ]);
+    return cards.map((c) => projectParentTermReportCard(c, settings as any));
+  }
+
+  /** Same PDF the web's Assessments > Results screen downloads (PdfService.generateExamReportCardPdf), gated to this parent's own child and published results. */
+  async downloadResultPdf(studentId: string, reportCardId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!Types.ObjectId.isValid(reportCardId)) throw new NotFoundException('Result not found');
+    const card: any = await this.reportCardModel.findOne({
+      _id: new Types.ObjectId(reportCardId), studentId: new Types.ObjectId(studentId), schoolSlug, published: true,
+    }).select('assessmentId').lean();
+    if (!card) throw new NotFoundException('Result not found');
+    return this.pdfService.generateExamReportCardPdf(
+      schoolSlug, { assessmentId: String(card.assessmentId), studentId }, requestingUser.userId || 'parent');
+  }
+
+  // ── Qaida & Tajweed progress report ───────────────────────────
+  // Same data as the web's Qaida tracker report (QaidaService.getReportData), projected to a parent-safe shape. A child with no Qaida
+  // record yet, or one the teacher hasn't shared via the Share-with-Parent toggle, is a normal state, not an error: `{ recorded: false }`.
+  async getQaidaReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null };
+    // Tenant check: the guardian link is by id only; the child must also belong to this school.
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    const shared = await this.qaidaService.getParentVisibleProgress(studentId, schoolSlug);
+    if (!shared) return { recorded: false };
+    return { recorded: true, ...projectParentQaidaReport(await this.qaidaService.getReportData(studentId, schoolSlug)) };
+  }
+
+  /** The same PDF the web's Qaida tracker downloads (PdfService.generateQaidaReport). */
+  async downloadQaidaPdf(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    if (!(await this.qaidaService.getParentVisibleProgress(studentId, schoolSlug))) throw new NotFoundException('Report not shared yet');
+    return this.pdfService.generateQaidaReport(schoolSlug, { studentId } as any, requestingUser.userId || 'parent');
+  }
+
+  // ── Nazra Qur'an progress report ─────────────────────────────
+  // Mirrors getQaidaReport above: same feature key, same parentShared gate, same "unshared looks identical to absent" convention.
+  async getNazraReport(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) return { suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null };
+    if (!(await this.studentModel.exists({ _id: new Types.ObjectId(studentId), schoolSlug }))) throw new NotFoundException('Student not found');
+    const shared = await this.nazraService.getParentVisibleProgress(studentId, schoolSlug);
+    if (!shared) return { recorded: false };
+    return { recorded: true, ...projectParentNazraReport(await this.nazraService.getReportData(studentId, schoolSlug)) };
   }
 
   // ── Dues ─────────────────────────────────────────────────────
@@ -478,16 +826,20 @@ export class ParentPortalService {
     const access = await this.parentAccess.checkFeature(schoolSlug, requestingUser, studentId, 'tarbiyah_report');
     if (access.suspended) return { suspended: true, feature: 'tarbiyah_report', reason: access.reason || null };
     const sid = new Types.ObjectId(studentId);
+    // Tenant check: the guardian link above is by id only; the child must also belong to this school.
+    if (!(await this.studentModel.exists({ _id: sid, schoolSlug }))) throw new NotFoundException('Student not found');
     const db = this.reportCardModel.db;
     const [records, notes, tarbiyah, settings]: any[] = await Promise.all([
-      this.behaviourModel.find({ studentId: sid, schoolSlug }).sort({ date: -1 }).limit(50).lean(),
+      // Explicit allowlist (parent-behaviour.projection.ts): staff-only fields (witnesses, follow-up/resolution
+      // notes, reporter ids, attachments, severity, consequence...) are never selected, never sent.
+      this.behaviourModel.find({ studentId: sid, schoolSlug }).select(selectOf(PARENT_BEHAVIOUR_RECORD_FIELDS)).sort({ date: -1 }).limit(50).lean(),
       // Teacher notes from the web's Teaching > Behaviour tab (a separate
       // collection from behaviour_records) - only ones the teacher flagged
       // as notified to the parent.
       db.collection('behaviourNotes').find({ studentId: sid, parentNotified: true }).sort({ incidentDate: -1 }).limit(50).toArray(),
       // Only assessments the school explicitly shared with parents.
       this.tarbiyahModel.find({ studentId: sid, schoolSlug, parentShared: true })
-        .select('-assessedById -schoolSlug -campusId').sort({ assessmentDate: -1 }).limit(20).lean(),
+        .select(selectOf(PARENT_TARBIYAH_FIELDS)).sort({ assessmentDate: -1 }).limit(20).lean(),
       db.collection('character_program_settings').findOne({ schoolSlug }),
     ]);
 
@@ -495,7 +847,7 @@ export class ParentPortalService {
     const max = settings?.ratingScale?.max ?? 5;
     const names = new Map<string, string>((settings?.characteristics || []).map((c: any) => [c.key, c.nameEn]));
     const pct = (score: number) => Math.round(Math.max(0, Math.min(100, ((score - min) / ((max - min) || 1)) * 100)));
-    const assessments = tarbiyah.map((a: any) => ({
+    const assessments = tarbiyah.map(projectParentTarbiyahAssessment).map((a: any) => ({
       ...a,
       ratingScale: { min, max },
       programName: settings?.moduleDisplayName || 'Tarbiyah',
@@ -508,7 +860,7 @@ export class ParentPortalService {
       type: n.type === 'positive' ? 'positive' : n.type === 'resolved' ? 'neutral' : 'negative',
       points: n.type === 'positive' ? 1 : n.type === 'resolved' ? 0 : -1,
     }));
-    const behaviourRecords = [...records, ...noteRecords]
+    const behaviourRecords = [...records.map(projectParentBehaviourRecord), ...noteRecords]
       .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
     return { behaviourRecords, tarbiyahAssessments: assessments };
   }
@@ -925,36 +1277,72 @@ export class ParentPortalService {
       campusId: (student as any).campusId ? (() => { try { return new Types.ObjectId((student as any).campusId); } catch { return null; } })() : null,
     });
 
-    // Tell the child's class teacher (the same person who reviews it in the staff app).
+    // Tell the child's class teacher (the same person who reviews it in the staff app) - of THIS school only; with no class teacher the
+    // school's own admins hear about it instead. Never another school.
     try {
-      const profiles: any[] = await this.reportCardModel.db.collection('teacherProfiles')
-        .find({ isClassTeacher: true }).toArray();
-      // A teacher can legitimately be class teacher of more than one
-      // section (common in Early Years) - classTeacherAssignments holds
-      // all of them; falls back to the legacy singular fields for a
-      // profile that predates that array and hasn't been touched since.
-      const match = profiles.find((p) => {
-        const assignments = p.classTeacherAssignments?.length
-          ? p.classTeacherAssignments
-          : (p.classTeacherOfGradeName ? [{ gradeName: p.classTeacherOfGradeName, sectionName: p.classTeacherOfSectionName }] : []);
-        return assignments.some((a: any) => sameGrade(a.gradeName, (student as any).currentGrade)
-          && (!a.sectionName || sameSection(a.sectionName, (student as any).currentSection)));
-      });
-      const staff: any = match ? await this.staffModel.findById(match.staffId).select('userId').lean() : null;
-      if (staff?.userId) {
-        await this.notificationModel.create({
-          recipientUserId: staff.userId, type: 'leave_status', title: 'New leave request',
-          body: `${leave.studentName}: ${new Date(data.fromDate).toDateString()} - ${new Date(data.toDate).toDateString()}. ${data.reason || ''}`.trim(),
-          relatedEntityId: String(leave._id), schoolSlug,
-        });
-      }
+      await this.notifyLeaveRecipients(student, leave, schoolSlug, data, requestingUser);
     } catch { /* never fail the request over a notification */ }
     return leave;
+  }
+
+  /**
+   * Who is told about a new student leave (R1). The class-teacher lookup is scoped to the student's own school (tenant) and, when both
+   * sides carry a campus, to the student's campus; only an ACTIVE staff member of that school can be chosen. If the class has no class
+   * teacher there, the school's principal / vice principal / admin / owner users are notified instead. If the school cannot be
+   * determined nobody is notified (never guess across schools).
+   */
+  async notifyLeaveRecipients(student: any, leave: any, schoolSlug: string, data: any, requestingUser?: ScopedUser) {
+    const tenantId = student?.tenantId ?? (requestingUser as any)?.tenantId;
+    if (!tenantId || !Types.ObjectId.isValid(String(tenantId))) return;
+    const profiles: any[] = await this.reportCardModel.db.collection('teacherProfiles')
+      .find({ isClassTeacher: true, tenantId: idForms(tenantId) }).toArray();
+    const studentCampus = student?.campusId ? String(student.campusId) : '';
+    // A teacher can legitimately be class teacher of more than one section (common in Early Years) - classTeacherAssignments holds
+    // all of them; falls back to the legacy singular fields for a profile that predates that array.
+    const candidates = profiles.filter((p) => {
+      if (studentCampus && p.campusId && String(p.campusId) !== studentCampus) return false;
+      const assignments = p.classTeacherAssignments?.length
+        ? p.classTeacherAssignments
+        : (p.classTeacherOfGradeName ? [{ gradeName: p.classTeacherOfGradeName, sectionName: p.classTeacherOfSectionName }] : []);
+      return assignments.some((a: any) => sameGrade(a.gradeName, student.currentGrade)
+        && (!a.sectionName || sameSection(a.sectionName, student.currentSection)));
+    });
+    const when = `${new Date(data.fromDate).toDateString()} - ${new Date(data.toDate).toDateString()}`;
+    for (const p of candidates) {
+      const staff: any = await this.staffModel.findOne({ _id: p.staffId, tenantId: idForms(tenantId), isActive: { $ne: false } }).select('userId').lean();
+      if (!staff?.userId) continue;
+      await this.notificationModel.create({
+        recipientUserId: staff.userId, type: 'leave_status', title: 'New leave request',
+        body: `${leave.studentName}: ${when}. ${data.reason || ''}`.trim(),
+        relatedEntityId: String(leave._id), schoolSlug,
+      });
+      return;
+    }
+    // no class teacher in this school for this class: this school's leadership only
+    const admins: any[] = await this.userModel.find({
+      tenantId: idForms(tenantId), isActive: { $ne: false },
+      primaryRole: { $in: [UserRole.PRINCIPAL, UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.INSTITUTION_OWNER] },
+    }).select('_id').limit(20).lean();
+    for (const u of admins) {
+      await this.notificationModel.create({
+        recipientUserId: u._id, type: 'leave_status', title: 'New leave request (no class teacher assigned)',
+        body: `${leave.studentName} (${student.currentGrade || ''} ${student.currentSection || ''}): ${when}. ${data.reason || ''}`.trim(),
+        relatedEntityId: String(leave._id), schoolSlug,
+      });
+    }
   }
 
   async getStudentLeaves(studentId: string, requestingUser: ScopedUser, schoolSlug: string) {
     assertStudentAccess(requestingUser, studentId);
     return this.studentLeaveModel.find({ studentId, schoolSlug }).sort({ createdAt: -1 }).lean();
+  }
+
+  // School-wide pending count for the Institution Overview dashboard's
+  // Academics widget - everything else touching StudentLeave is scoped to
+  // one student's own leave history.
+  async getPendingStudentLeaveCount(schoolSlug: string) {
+    const pending = await this.studentLeaveModel.countDocuments({ schoolSlug, status: 'pending' });
+    return { pending };
   }
 
   // ── Notifications / Inbox (same data, two views) ──────────────

@@ -1,21 +1,32 @@
 import {
-  Controller, Get, Post, Param, Body, Query, Request, Res, HttpCode, HttpStatus, UseInterceptors,
+  Controller, Get, Post, Delete, Param, Body, Query, Request, Res, HttpCode, HttpStatus, UseInterceptors,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { Roles } from '../auth/decorators';
+import { Roles, AllowNonStaff } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
-import { STUDENTS_WRITE_ROLES } from '../auth/admin-role-sets';
+import { STUDENTS_WRITE_ROLES, NON_STAFF_ROLES } from '../auth/admin-role-sets';
+import { assertStudentAccess } from '../auth/scope.util';
 
 const CONSENT_ADMIN_ROLES = [
   UserRole.SUPER_ADMIN, UserRole.INSTITUTION_OWNER, UserRole.PRINCIPAL,
   UserRole.VICE_PRINCIPAL, UserRole.ADMIN, UserRole.ACADEMIC_COORDINATOR,
 ];
+// Every role except parent/student/reseller. Only used as the method-level @Roles on the two link/unlink routes so they override the
+// class-level PARENT default (RolesGuard reads the handler's roles first); the real decision there stays with RolesOrModuleManage.
+export const PARENT_PORTAL_STAFF_ROLES: UserRole[] = Object.values(UserRole).filter((r) => !NON_STAFF_ROLES.includes(r));
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
 import { ParentPortalService } from './parent-portal.service';
 import { HomeTasksService } from '../home-tasks/home-tasks.service';
 import { CompleteHomeTaskDto } from '../home-tasks/dto/home-task.dto';
 
+// The Parent app's API. Opens NonStaffGuard only; the staff-only handlers below keep their own
+// @Roles / @RolesOrModuleManage, and student routes rely on assertStudentAccess in the service.
+@AllowNonStaff()
+// Parent-only by default: every route below needs the parent role, and (for student routes) a guardian link to that student, checked in the
+// service with assertStudentAccess. The five school-side routes (consent-requests x3, link-guardian, unlink-guardian) carry their own method-level
+// @Roles, which replaces this class-level default. Student, reseller and every staff token are refused on the parent routes.
+@Roles(UserRole.PARENT)
 @Controller('parent-portal')
 @UseInterceptors(GuardianRefreshInterceptor)
 export class ParentPortalController {
@@ -68,6 +79,7 @@ export class ParentPortalController {
 
   // Staff with students:write only (no web / parent-app / teacher-app caller
   // exists). Parent and student tokens can never pass, even with a custom role.
+  @Roles(...PARENT_PORTAL_STAFF_ROLES)
   @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
   @Post('link-guardian')
   @HttpCode(HttpStatus.CREATED)
@@ -76,6 +88,7 @@ export class ParentPortalController {
     return this.service.linkGuardianToStudents(schoolSlug, tenantId, institutionId, dto.email, dto.studentIds);
   }
 
+  @Roles(...PARENT_PORTAL_STAFF_ROLES)
   @RolesOrModuleManage('students', STUDENTS_WRITE_ROLES, { level: 'manage', allowModuleWide: true })
   @Post('unlink-guardian')
   async unlinkGuardian(@Body() dto: { email: string; studentId: string }, @Request() req: any) {
@@ -87,6 +100,13 @@ export class ParentPortalController {
   async getMyStudents(@Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
     return this.service.getMyStudents(requestingUser, schoolSlug);
+  }
+
+  @Post('device-ping')
+  @HttpCode(HttpStatus.OK)
+  async pingDevice(@Body() dto: { deviceId: string; platform: string; appVersion?: string }, @Request() req: any) {
+    const { userId, tenantId } = this.ctx(req);
+    return this.service.recordDevicePing(userId, tenantId, dto);
   }
 
   @Get('circulars')
@@ -160,6 +180,8 @@ export class ParentPortalController {
     @Request() req: any, @Res() res: Response,
   ) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    // Ownership first: the feature-suspended answer below must not be readable for a child that is not this parent's.
+    assertStudentAccess(requestingUser, studentId);
     const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'school_diary');
     if (access.suspended) {
       res.status(HttpStatus.OK).json({ suspended: true, feature: 'school_diary', reason: access.reason || null });
@@ -176,11 +198,100 @@ export class ParentPortalController {
     return this.service.getLearningResources(studentId, requestingUser, tenantId, schoolSlug);
   }
 
+  // ── LMS Phase 0: "My Learning" hub (courses + assignments + quizzes +
+  // certificates, combined) ────────────────────────────────────
+  @Get('students/:studentId/my-learning')
+  async getMyLearning(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getMyLearning(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
   // ── LMS: My Courses ─────────────────────────────────────────
   @Get('students/:studentId/courses')
   async getMyCourses(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
     return this.service.getMyCourses(studentId, requestingUser, tenantId, schoolSlug);
+  }
+
+  // ── LMS Phase 4: course discussion forum ─────────────────────
+  @Get('students/:studentId/courses/:syllabusId/forum/threads')
+  async listCourseForumThreads(@Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Request() req: any) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.listCourseForumThreads(studentId, requestingUser, tenantId, schoolSlug, syllabusId);
+  }
+
+  @Get('students/:studentId/courses/:syllabusId/forum/threads/:threadId')
+  async getCourseForumThread(
+    @Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Param('threadId') threadId: string, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.getCourseForumThread(studentId, requestingUser, tenantId, schoolSlug, syllabusId, threadId);
+  }
+
+  @Post('students/:studentId/courses/:syllabusId/forum/threads')
+  @HttpCode(HttpStatus.CREATED)
+  async createCourseForumThread(
+    @Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Body() dto: { title: string; body: string }, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.createCourseForumThread(studentId, requestingUser, tenantId, schoolSlug, syllabusId, dto);
+  }
+
+  @Post('students/:studentId/courses/:syllabusId/forum/threads/:threadId/replies')
+  @HttpCode(HttpStatus.CREATED)
+  async createCourseForumReply(
+    @Param('studentId') studentId: string, @Param('syllabusId') syllabusId: string, @Param('threadId') threadId: string,
+    @Body() dto: { body: string }, @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.createCourseForumReply(studentId, requestingUser, tenantId, schoolSlug, syllabusId, threadId, dto);
+  }
+
+  @Delete('students/:studentId/forum/threads/:threadId')
+  async deleteCourseForumThread(@Param('studentId') studentId: string, @Param('threadId') threadId: string, @Request() req: any) {
+    const { requestingUser, tenantId } = this.ctx(req);
+    return this.service.deleteCourseForumThread(studentId, requestingUser, tenantId, threadId);
+  }
+
+  @Delete('students/:studentId/forum/replies/:replyId')
+  async deleteCourseForumReply(@Param('studentId') studentId: string, @Param('replyId') replyId: string, @Request() req: any) {
+    const { requestingUser, tenantId } = this.ctx(req);
+    return this.service.deleteCourseForumReply(studentId, requestingUser, tenantId, replyId);
+  }
+
+  // ── LMS Phase 5: gamification ─────────────────────────────────
+  @Get('students/:studentId/gamification/summary')
+  async getMyGamificationSummary(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyGamificationSummary(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/gamification/leaderboard')
+  async getMyClassLeaderboard(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyClassLeaderboard(studentId, requestingUser, schoolSlug);
+  }
+
+  // ── Qaida/Nazra home recitation log (reference only) ──────────
+  @Get('students/:studentId/qaida-nazra/home-log')
+  async getMyHomeRecitationLog(
+    @Param('studentId') studentId: string, @Query('program') program: string | undefined, @Request() req: any,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyHomeRecitationLog(studentId, requestingUser, schoolSlug, program);
+  }
+
+  @Post('students/:studentId/qaida-nazra/home-log')
+  @HttpCode(HttpStatus.CREATED)
+  async logMyHomeRecitationEntry(@Param('studentId') studentId: string, @Body() dto: any, @Request() req: any) {
+    const { requestingUser, schoolSlug, name } = this.ctx(req);
+    return this.service.logMyHomeRecitationEntry(studentId, requestingUser, schoolSlug, name, dto);
+  }
+
+  @Delete('students/:studentId/qaida-nazra/home-log/:entryId')
+  async deleteMyHomeRecitationEntry(@Param('entryId') entryId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.deleteMyHomeRecitationEntry(entryId, requestingUser, schoolSlug);
   }
 
   @Post('students/:studentId/lessons/progress')
@@ -192,6 +303,31 @@ export class ParentPortalController {
   ) {
     const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
     return this.service.markLessonProgress(studentId, requestingUser, tenantId, schoolSlug, dto);
+  }
+
+  // ── Guided Reading: student player (Phase 3) ────────────────────
+  @Get('students/:studentId/reading')
+  async getMyReadingHome(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyReadingHome(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/reading/:readerId')
+  async getMyReader(@Param('studentId') studentId: string, @Param('readerId') readerId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getMyReader(studentId, readerId, requestingUser, schoolSlug);
+  }
+
+  @Post('students/:studentId/reading/:readerId/complete')
+  @HttpCode(HttpStatus.OK)
+  async completeMyReading(
+    @Param('studentId') studentId: string,
+    @Param('readerId') readerId: string,
+    @Body() dto: { keywordsLookedUp?: string[] },
+    @Request() req: any,
+  ) {
+    const { requestingUser, tenantId, schoolSlug } = this.ctx(req);
+    return this.service.completeMyReading(studentId, readerId, requestingUser, schoolSlug, tenantId, dto?.keywordsLookedUp || []);
   }
 
   // ── LMS Phase 2: self-paced online quizzes ─────────────────────
@@ -223,6 +359,59 @@ export class ParentPortalController {
   async getResults(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
     return this.service.getResults(studentId, requestingUser, schoolSlug);
+  }
+
+  // Whole-term, comprehensive report (academics + Tarbiyah/Qaida/Nazra/
+  // attendance where the school included them) - distinct from the
+  // per-exam list above.
+  @Get('students/:studentId/term-report-cards')
+  async getTermReportCards(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getTermReportCards(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/results/:reportCardId/pdf')
+  async downloadResultPdf(
+    @Param('studentId') studentId: string, @Param('reportCardId') reportCardId: string,
+    @Request() req: any, @Res() res: Response,
+  ) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    // Ownership first, so the suspended answer is never readable for someone else's child.
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'academic_progress_report');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'academic_progress_report', reason: access.reason || null });
+      return;
+    }
+    const pdf = await this.service.downloadResultPdf(studentId, reportCardId, requestingUser, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="result-${reportCardId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
+  @Get('students/:studentId/qaida')
+  async getQaidaReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getQaidaReport(studentId, requestingUser, schoolSlug);
+  }
+
+  @Get('students/:studentId/qaida/pdf')
+  async downloadQaidaPdf(@Param('studentId') studentId: string, @Request() req: any, @Res() res: Response) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    assertStudentAccess(requestingUser, studentId);
+    const access = await this.service.checkFeatureSuspended(schoolSlug, requestingUser, studentId, 'qaida_nazra_report');
+    if (access.suspended) {
+      res.status(HttpStatus.OK).json({ suspended: true, feature: 'qaida_nazra_report', reason: access.reason || null });
+      return;
+    }
+    const pdf = await this.service.downloadQaidaPdf(studentId, requestingUser, schoolSlug);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="qaida-report-${studentId}.pdf"`, 'Content-Length': pdf.length });
+    res.end(pdf);
+  }
+
+  @Get('students/:studentId/nazra')
+  async getNazraReport(@Param('studentId') studentId: string, @Request() req: any) {
+    const { requestingUser, schoolSlug } = this.ctx(req);
+    return this.service.getNazraReport(studentId, requestingUser, schoolSlug);
   }
 
   @Get('students/:studentId/dues')
@@ -304,6 +493,17 @@ export class ParentPortalController {
   async getLeaves(@Param('studentId') studentId: string, @Request() req: any) {
     const { requestingUser, schoolSlug } = this.ctx(req);
     return this.service.getStudentLeaves(studentId, requestingUser, schoolSlug);
+  }
+
+  // Staff-facing override of this controller's parent-only default, same
+  // pattern as the consent-admin routes above - the Institution Overview
+  // dashboard's Academics widget needs a school-wide pending count, not
+  // one child's own leave history.
+  @Roles(...CONSENT_ADMIN_ROLES)
+  @Get('student-leave-requests/pending-count')
+  async getPendingStudentLeaveCount(@Request() req: any) {
+    const { schoolSlug } = this.ctx(req);
+    return this.service.getPendingStudentLeaveCount(schoolSlug);
   }
 
   @Post('students/:studentId/leaves')

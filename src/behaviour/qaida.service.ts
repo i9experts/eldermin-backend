@@ -48,22 +48,40 @@ export class QaidaService {
     assertValidObjectId(studentId, 'student');
     const studentObjectId = new Types.ObjectId(studentId);
 
+    const setOnInsert: any = {
+      studentId: studentObjectId,
+      schoolSlug,
+      academicYear,
+      studentName: init.studentName,
+      grade: init.grade,
+      section: init.section,
+      campusId: requestingUser?.campusId
+        ? new Types.ObjectId(requestingUser.campusId)
+        : (init.campusId ? new Types.ObjectId(init.campusId) : null),
+      startDate: new Date(),
+    };
+
+    // A student who joined without a full Qaida history at this school:
+    // place them at their real starting board instead of the default
+    // "Takhti 1 in_progress" seed - everything before that board is marked
+    // 'not_tracked' (see QaidaTakhtiStatus), not 'not_started', so reports
+    // don't read as "behind" on boards the school was never responsible for.
+    if (init.recordType === 'joined_later' && init.startAtTakhti) {
+      setOnInsert.recordType = 'joined_later';
+      setOnInsert.priorRecordNote = init.priorRecordNote;
+      setOnInsert.takhtis = QAIDA_TAKHTIS.map((t) => ({
+        takhtiNumber: t.number,
+        status: t.number < init.startAtTakhti! ? 'not_tracked' : t.number === init.startAtTakhti ? 'in_progress' : 'not_started',
+        startedDate: t.number === init.startAtTakhti ? new Date() : undefined,
+        revisionCount: 0,
+        attempts: [],
+      }));
+      setOnInsert.currentTakhti = init.startAtTakhti;
+    }
+
     await this.progressModel.updateOne(
       { studentId: studentObjectId, schoolSlug },
-      {
-        $setOnInsert: {
-          studentId: studentObjectId,
-          schoolSlug,
-          academicYear,
-          studentName: init.studentName,
-          grade: init.grade,
-          section: init.section,
-          campusId: requestingUser?.campusId
-            ? new Types.ObjectId(requestingUser.campusId)
-            : (init.campusId ? new Types.ObjectId(init.campusId) : null),
-          startDate: new Date(),
-        },
-      },
+      { $setOnInsert: setOnInsert },
       { upsert: true },
     );
 
@@ -84,8 +102,11 @@ export class QaidaService {
   // the student detail view and the PDF report can never disagree about
   // "where is this student right now".
   private recomputePointer(progress: QaidaProgressDocument) {
+    // 'not_tracked' boards (joined-later students - see QaidaTakhtiStatus)
+    // are skipped entirely: they're neither "done" nor "where the student
+    // currently is", just not this school's record to carry.
     const firstUnfinished = progress.takhtis.find(
-      (t) => t.status !== 'mastered',
+      (t) => t.status !== 'mastered' && t.status !== 'not_tracked',
     );
     if (!firstUnfinished) {
       progress.currentTakhti = QAIDA_TAKHTI_COUNT;
@@ -110,18 +131,14 @@ export class QaidaService {
     const record = progress.takhtis.find((t) => t.takhtiNumber === dto.takhtiNumber);
     if (!record) throw new BadRequestException(`Invalid takhti number: ${dto.takhtiNumber}`);
 
-    // A board can't be attempted before the one before it has at least been
-    // started - keeps the sequence honest even if a teacher's UI somehow
-    // sent an attempt for a board out of turn.
-    if (dto.takhtiNumber > 1) {
-      const previous = progress.takhtis.find((t) => t.takhtiNumber === dto.takhtiNumber - 1);
-      if (previous && previous.status === 'not_started') {
-        throw new BadRequestException(
-          `Takhti ${dto.takhtiNumber - 1} (${QAIDA_TAKHTIS[dto.takhtiNumber - 2].titleEn}) hasn't been started yet`,
-        );
-      }
-    }
-
+    // Deliberately no forward-only sequence check here (unlike Nazra's Para
+    // progression) - many Qaida classrooms run multiple teachers/groups off
+    // the same 16 boards at different paces, a child moves between a Qaida
+    // and Hifz/Nazra track mid-board, or a teacher wants to spot-check an
+    // earlier board without that counting as "regressing" the sequence. A
+    // teacher can record an attempt against any Takhti at any time; the
+    // mastery tracker (recomputePointer) still correctly reports "where is
+    // this student furthest along" regardless of recording order.
     const wasMastered = record.status === 'mastered';
     const attemptDate = dto.date ? new Date(dto.date) : new Date();
     record.attempts.push({
@@ -181,6 +198,32 @@ export class QaidaService {
     return progress;
   }
 
+  // Parent Portal read path - returns null rather than throwing for "no
+  // progress yet" AND for "progress exists but hasn't been shared", so a
+  // parent never learns from the response shape alone whether a record is
+  // merely unshared vs genuinely absent. Projection (which fields a parent
+  // may actually see) lives in parent-behaviour.projection.ts, same as
+  // Tarbiyah - this just gates on the one flag.
+  async getParentVisibleProgress(studentId: string, schoolSlug: string) {
+    assertValidObjectId(studentId, 'student');
+    const progress = await this.progressModel.findOne({
+      studentId: new Types.ObjectId(studentId), schoolSlug, parentShared: { $ne: false },
+    }).lean();
+    return progress || null;
+  }
+
+  // Same convention as TarbiyahService's share toggle: sharing stamps
+  // parentSharedDate (the moment the parent could first have seen this
+  // snapshot); un-sharing leaves that date alone so a prior share is never
+  // silently forgotten.
+  async updateParentShared(studentId: string, schoolSlug: string, parentShared: boolean) {
+    const progress = await this.getProgress(studentId, schoolSlug);
+    progress.parentShared = parentShared;
+    if (parentShared && !progress.parentSharedDate) progress.parentSharedDate = new Date();
+    await progress.save();
+    return progress;
+  }
+
   // Class roster view - every student in the grade/section, left-joined
   // with their Qaida progress (a student with no record yet simply shows
   // as "not started" rather than being left off the roster, the same
@@ -215,6 +258,13 @@ export class QaidaService {
       const masteredCount = progress
         ? progress.takhtis.filter((t: any) => t.status === 'mastered').length
         : 0;
+      // Mastery % is computed against the boards this school is actually
+      // responsible for - a joined-later student's 'not_tracked' boards
+      // (see QaidaTakhtiStatus) are excluded from the denominator rather
+      // than silently counting against them.
+      const trackedTakhtis = progress
+        ? progress.takhtis.filter((t: any) => t.status !== 'not_tracked').length
+        : QAIDA_TAKHTI_COUNT;
       return {
         studentId: s._id,
         studentName: [s.firstName, s.middleName, s.lastName].filter(Boolean).join(' '),
@@ -224,9 +274,11 @@ export class QaidaService {
         hasProgress: !!progress,
         currentTakhti: progress?.currentTakhti ?? 1,
         overallStatus: progress?.overallStatus ?? 'not_started',
+        recordType: progress?.recordType ?? 'full_history',
         masteredCount,
         totalTakhtis: QAIDA_TAKHTI_COUNT,
-        masteryPct: Math.round((masteredCount / QAIDA_TAKHTI_COUNT) * 100),
+        trackedTakhtis,
+        masteryPct: trackedTakhtis ? Math.round((masteredCount / trackedTakhtis) * 100) : 0,
         needsRevisionCount: progress
           ? progress.takhtis.filter((t: any) => t.status === 'needs_revision').length
           : 0,
@@ -302,6 +354,7 @@ export class QaidaService {
     });
 
     const masteredCount = takhtis.filter((t) => t.status === 'mastered').length;
+    const trackedTakhtis = takhtis.filter((t) => t.status !== 'not_tracked').length;
 
     // Aggregate every error tag ever noted, most frequent first - the
     // clearest "what does this student actually need to work on" signal
@@ -325,9 +378,12 @@ export class QaidaService {
       section: progress.section,
       currentTakhti: progress.currentTakhti,
       overallStatus: progress.overallStatus,
+      recordType: progress.recordType,
+      priorRecordNote: progress.priorRecordNote,
       masteredCount,
       totalTakhtis: QAIDA_TAKHTI_COUNT,
-      masteryPct: Math.round((masteredCount / QAIDA_TAKHTI_COUNT) * 100),
+      trackedTakhtis,
+      masteryPct: trackedTakhtis ? Math.round((masteredCount / trackedTakhtis) * 100) : 0,
       startDate: progress.startDate,
       completionDate: progress.completionDate,
       currentTeacher: progress.currentTeacher,

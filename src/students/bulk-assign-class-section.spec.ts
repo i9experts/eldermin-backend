@@ -7,10 +7,8 @@ import { StudentsService } from './students.service';
 // drift getDistinctGradesSections had to be fixed for.
 
 function makeService(gradeModel: any, studentModel: any) {
-  const n: any = {};
-  return new StudentsService(
-    studentModel, n, n, n, n, n, n, n, gradeModel, n, n, n, n, n, n, n, n, n, n, n, n,
-  );
+  const n: any = { findOne: () => ({ lean: () => Promise.resolve(null) }) };
+  return new StudentsService(studentModel, n, n, n, n, n, n, n, gradeModel, n, n, n, n, n, n, n, n, n, n, n, n, n, n);
 }
 
 describe('StudentsService.bulkAssignClassSection', () => {

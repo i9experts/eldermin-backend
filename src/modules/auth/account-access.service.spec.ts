@@ -114,6 +114,44 @@ describe('AccountAccessService.reactivateStaffLogin', () => {
   });
 });
 
+describe('AccountAccessService.changeBaseRole (D4)', () => {
+  it('changes the role, bumps tokenVersion in the same update, invalidates the cache and writes a fail-closed audit row', async () => {
+    const { svc, updates, rows } = build(staffUser({ primaryRole: 'teacher' }));
+    await expect(svc.changeBaseRole(UID, 'academic_coordinator', 'promoted', 'hr1', { name: 'HR' })).resolves.toEqual({ outcome: 'changed' });
+    expect(updates[0].f).toMatchObject({ primaryRole: 'teacher' });
+    expect(updates[0].u).toEqual({ $set: { primaryRole: 'academic_coordinator' }, $inc: { tokenVersion: 1 } });
+    expect(rows[0]).toMatchObject({ module: 'Account Access', action: 'Change base role', performedById: 'hr1', outcome: 'pending' });
+    expect(rows[0].newValue).toContain('promoted');
+  });
+  it('same role -> noop, no write, no audit', async () => {
+    const { svc, userModel, rows } = build(staffUser({ primaryRole: 'teacher' }));
+    await expect(svc.changeBaseRole(UID, 'teacher', 'x', 'hr1')).resolves.toEqual({ outcome: 'noop' });
+    expect(userModel.updateOne).not.toHaveBeenCalled(); expect(rows).toHaveLength(0);
+  });
+  it.each(['super_admin', 'institution_owner', 'parent', 'student', 'reseller_admin'])('never changes TO %s', async (role) => {
+    const { svc, userModel } = build(staffUser());
+    await expect(svc.changeBaseRole(UID, role, 'x', 'hr1')).resolves.toEqual({ outcome: 'protected' });
+    expect(userModel.updateOne).not.toHaveBeenCalled();
+  });
+  it.each([['institution_owner', 'protected'], ['super_admin', 'protected'], ['parent', 'not_staff'], ['student', 'not_staff']])('never changes FROM %s', async (from, expected) => {
+    const { svc, userModel } = build(staffUser({ primaryRole: from }));
+    await expect(svc.changeBaseRole(UID, 'teacher', 'x', 'hr1')).resolves.toEqual({ outcome: expected });
+    expect(userModel.updateOne).not.toHaveBeenCalled();
+  });
+  it('unknown role string and missing user are rejected without a write', async () => {
+    const a = build(staffUser());
+    await expect(a.svc.changeBaseRole(UID, 'god_mode', 'x', 'hr1')).resolves.toEqual({ outcome: 'invalid_role' });
+    const b = build(null);
+    await expect(b.svc.changeBaseRole(UID, 'teacher', 'x', 'hr1')).resolves.toEqual({ outcome: 'no_user' });
+    expect(a.userModel.updateOne).not.toHaveBeenCalled(); expect(b.userModel.updateOne).not.toHaveBeenCalled();
+  });
+  it('FAIL-CLOSED: audit store down -> 503 and the role is NOT changed', async () => {
+    const { svc, userModel } = build(staffUser(), { auditFails: true });
+    await expect(svc.changeBaseRole(UID, 'academic_coordinator', 'x', 'hr1')).rejects.toThrow(ServiceUnavailableException);
+    expect(userModel.updateOne).not.toHaveBeenCalled();
+  });
+});
+
 describe('helpers', () => {
   it('staffRevokesAccess: resigned/terminated/suspended or isActive=false; on_leave/probation/active do not', () => {
     for (const s of ['resigned', 'terminated', 'suspended']) expect(staffRevokesAccess(s, true)).toBe(true);

@@ -20,6 +20,7 @@ import {
 } from './dto/admissions.dto';
 import { CreateLeadCaptureLinkDto } from './dto/lead-capture-link.dto';
 import { ScopedUser } from '../auth/scope.util';
+import { resolveAcademicYearFallback } from '../common/utils/academic-year.util';
 // import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 // import { SchoolGuard } from '../auth/guards/school.guard';
 // import { Roles } from '../auth/decorators/roles.decorator';
@@ -39,7 +40,7 @@ export class AdmissionsController {
     // schoolSlug comes from JWT payload via SchoolGuard
     return {
       schoolSlug: req?.user?.schoolSlug || req?.headers['x-school-slug'] || 'demo-school',
-      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || '2025-26',
+      academicYear: req?.user?.academicYear || req?.headers['x-academic-year'] || resolveAcademicYearFallback(),
       requestingUser: req?.user as ScopedUser | undefined,
     };
   }

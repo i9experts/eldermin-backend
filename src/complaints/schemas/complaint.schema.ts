@@ -86,6 +86,8 @@ export class ComplaintCase {
   @Prop({ required: true }) raisedByName: string;
   @Prop() raisedByPhone: string;
   @Prop() raisedByEmail: string;
+  // who filed it (the signed-in account): a parent reads back only the cases where this is their own user id
+  @Prop({ type: Types.ObjectId, ref: 'User', index: true, default: null }) raisedByUserId: Types.ObjectId | null;
 
   @Prop({ type: Types.ObjectId, ref: 'Student', default: null }) studentId: Types.ObjectId | null;
   @Prop() studentName: string;

@@ -48,7 +48,7 @@ export class CampusService {
       totalBeds, occupiedBeds, hostelBlocks,
       hostelStudents,
       openMaintenance, urgentMaintenance,
-      completedThisMonth, maintenanceCostThisMonth,
+      completedThisMonth, maintenanceCostThisMonth, maintenanceByStatus,
       totalAssets, assetsByCondition,
       assetsNeedingInspection,
       upcomingEvents, ongoingEvents,
@@ -82,6 +82,13 @@ export class CampusService {
       this.maintenanceModel.aggregate([
         { $match: { schoolSlug, status: 'completed', completedAt: { $gte: monthStart } } },
         { $group: { _id: null, total: { $sum: '$actualCost' } } },
+      ]),
+      // Powers the dashboard's real "Maintenance Ticket Status" chart -
+      // this used to be a hardcoded fake array (4/5/2/8) on the frontend,
+      // unrelated to any real ticket in the school.
+      this.maintenanceModel.aggregate([
+        { $match: { schoolSlug } },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       this.assetModel.countDocuments({ schoolSlug, status: 'active' }),
       this.assetModel.aggregate([
@@ -124,6 +131,7 @@ export class CampusService {
         open: openMaintenance, urgent: urgentMaintenance,
         completedThisMonth,
         costThisMonth: maintenanceCostThisMonth[0]?.total || 0,
+        byStatus: maintenanceByStatus,
       },
       assets: {
         total: totalAssets,
@@ -190,21 +198,38 @@ export class CampusService {
   }
 
   async allocateStudentTransport(data: any) {
-    await this.studentTransportModel.findOneAndUpdate(
+    if (!data.studentId) throw new BadRequestException('studentId is required');
+    if (!data.routeId) throw new BadRequestException('routeId is required');
+    // Scoped by schoolSlug like allocateHostel's room/block lookups - an
+    // unscoped findByIdAndUpdate let a caller increment (and corrupt) another
+    // tenant's route totalStudents counter by id guessing, and never
+    // confirmed the route actually exists for this tenant at all.
+    const route = await this.routeModel.findOne({ _id: data.routeId, schoolSlug: data.schoolSlug });
+    if (!route) throw new NotFoundException('Route not found');
+    const previous = await this.studentTransportModel.findOneAndUpdate(
       { studentId: new Types.ObjectId(data.studentId), schoolSlug: data.schoolSlug, isActive: true },
       { $set: { isActive: false, endDate: new Date() } },
     );
     const allocation = new this.studentTransportModel({ ...data, startDate: new Date() });
     const saved = await allocation.save();
-    await this.routeModel.findByIdAndUpdate(data.routeId, { $inc: { totalStudents: 1 } });
+    await this.routeModel.updateOne({ _id: data.routeId, schoolSlug: data.schoolSlug }, { $inc: { totalStudents: 1 } });
+    // Reassigning a student to a new route must also release their seat on
+    // whichever route they were previously on - without this, moving a
+    // student from Route A to Route B incremented B's totalStudents but
+    // left A's permanently inflated by one, drifting further every time a
+    // student switches routes.
+    if (previous && String(previous.routeId) !== String(data.routeId)) {
+      await this.routeModel.updateOne({ _id: previous.routeId, schoolSlug: data.schoolSlug }, { $inc: { totalStudents: -1 } });
+    }
     return saved;
   }
 
   async removeStudentTransport(id: string, schoolSlug: string) {
     const alloc = await this.studentTransportModel.findOneAndUpdate(
-      { _id: id, schoolSlug }, { $set: { isActive: false, endDate: new Date() } }, { new: true },
+      { _id: id, schoolSlug, isActive: true }, { $set: { isActive: false, endDate: new Date() } }, { new: true },
     );
-    if (alloc) await this.routeModel.findByIdAndUpdate(alloc.routeId, { $inc: { totalStudents: -1 } });
+    if (!alloc) throw new NotFoundException('Transport allocation not found, or already removed');
+    await this.routeModel.updateOne({ _id: alloc.routeId, schoolSlug }, { $inc: { totalStudents: -1 } });
     return alloc;
   }
 
@@ -219,6 +244,15 @@ export class CampusService {
   }
 
   async createRoom(data: any) {
+    // Same reasoning as createCampusRoom's buildingId check below - never
+    // let a room be created pointing at a blockId that doesn't actually
+    // belong to this tenant (a dangling/cross-tenant reference that would
+    // otherwise only surface later, confusingly, when allocateHostel's own
+    // block lookup fails).
+    if (data.blockId) {
+      const block = await this.blockModel.findOne({ _id: data.blockId, schoolSlug: data.schoolSlug });
+      if (!block) throw new NotFoundException('Block not found');
+    }
     return new this.roomModel(data).save();
   }
 
@@ -233,35 +267,82 @@ export class CampusService {
   }
 
   async allocateHostel(data: any) {
-    const room = await this.roomModel.findById(data.roomId);
+    if (!data.studentId) throw new BadRequestException('studentId is required');
+    if (!data.roomId || !data.blockId) throw new BadRequestException('roomId and blockId are required');
+    // Scoped by schoolSlug like every other lookup in this service - an
+    // unscoped findById let a caller allocate against (and corrupt the
+    // occupancy counters of) another tenant's room/block by id guessing.
+    const room = await this.roomModel.findOne({ _id: data.roomId, schoolSlug: data.schoolSlug });
     if (!room) throw new NotFoundException('Room not found');
-    if (room.occupancy >= room.capacity) throw new Error('Room is full');
+    const block = await this.blockModel.findOne({ _id: data.blockId, schoolSlug: data.schoolSlug });
+    if (!block) throw new NotFoundException('Block not found');
+    if (room.occupancy >= room.capacity) throw new BadRequestException('Room is full');
+    // Room-level occupancy vs capacity only stops over-filling the room as a
+    // whole - it never stopped two different students both being handed the
+    // same bedNumber (e.g. both "Bed 1") as long as the room still had a
+    // free slot. Bed numbers are optional, so only enforced when supplied.
+    if (data.bedNumber) {
+      const bedTaken = await this.allocationModel.findOne({
+        roomId: data.roomId, schoolSlug: data.schoolSlug, bedNumber: data.bedNumber, status: 'active',
+      });
+      if (bedTaken) throw new BadRequestException(`Bed ${data.bedNumber} in this room is already occupied`);
+    }
     const alloc = new this.allocationModel({
       ...data,
       checkInDate: new Date(data.checkInDate || Date.now()),
     });
     await alloc.save();
     const newOccupancy = room.occupancy + 1;
-    await this.roomModel.findByIdAndUpdate(data.roomId, {
+    await this.roomModel.updateOne({ _id: data.roomId, schoolSlug: data.schoolSlug }, {
       $set: {
         occupancy: newOccupancy,
         status: newOccupancy >= room.capacity ? 'full' : 'available',
       },
     });
-    await this.blockModel.findByIdAndUpdate(data.blockId, { $inc: { occupiedBeds: 1 } });
+    await this.blockModel.updateOne({ _id: data.blockId, schoolSlug: data.schoolSlug }, { $inc: { occupiedBeds: 1 } });
+    return alloc;
+  }
+
+  async updateHostelAllocation(id: string, schoolSlug: string, dto: any) {
+    // Deliberately excludes studentId/roomId/blockId/schoolSlug - moving an
+    // allocation to a different room/block is a transfer (would need to
+    // reverse the old room/block counters and apply new ones), not a plain
+    // edit, and isn't supported by this endpoint.
+    const { status, bedNumber, notes, guardianName, guardianPhone, emergencyContact, dietaryRequirements } = dto;
+    const $set: any = {};
+    if (status !== undefined) $set.status = status;
+    if (bedNumber !== undefined) $set.bedNumber = bedNumber;
+    if (notes !== undefined) $set.notes = notes;
+    if (guardianName !== undefined) $set.guardianName = guardianName;
+    if (guardianPhone !== undefined) $set.guardianPhone = guardianPhone;
+    if (emergencyContact !== undefined) $set.emergencyContact = emergencyContact;
+    if (dietaryRequirements !== undefined) $set.dietaryRequirements = dietaryRequirements;
+    const alloc = await this.allocationModel.findOneAndUpdate(
+      { _id: id, schoolSlug }, { $set }, { new: true },
+    );
+    if (!alloc) throw new NotFoundException('Allocation not found');
     return alloc;
   }
 
   async checkOutHostel(id: string, schoolSlug: string) {
+    // The filter used to have no status precondition at all, so calling
+    // this twice on the same allocation (or on one already 'checked_out')
+    // matched and "succeeded" both times - decrementing room.occupancy and
+    // block.occupiedBeds a second time for a bed that was never actually
+    // reoccupied, eventually driving the counts negative and making a room
+    // appear to have more free space than it really does.
     const alloc = await this.allocationModel.findOneAndUpdate(
-      { _id: id, schoolSlug },
+      { _id: id, schoolSlug, status: { $ne: 'checked_out' } },
       { $set: { status: 'checked_out', checkOutDate: new Date() } },
       { new: true },
     );
-    if (alloc) {
-      await this.roomModel.findByIdAndUpdate(alloc.roomId, { $inc: { occupancy: -1 }, $set: { status: 'available' } });
-      await this.blockModel.findByIdAndUpdate(alloc.blockId, { $inc: { occupiedBeds: -1 } });
+    if (!alloc) {
+      const existing = await this.allocationModel.findOne({ _id: id, schoolSlug });
+      if (existing) throw new BadRequestException('This allocation is already checked out');
+      throw new NotFoundException('Allocation not found');
     }
+    await this.roomModel.updateOne({ _id: alloc.roomId, schoolSlug }, { $inc: { occupancy: -1 }, $set: { status: 'available' } });
+    await this.blockModel.updateOne({ _id: alloc.blockId, schoolSlug }, { $inc: { occupiedBeds: -1 } });
     return alloc;
   }
 
@@ -315,6 +396,26 @@ export class CampusService {
     }
     if (data.status === 'rejected') update.rejectionReason = data.rejectionReason;
     return this.maintenanceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set: update }, { new: true });
+  }
+
+  // General edit (title/location/priority/assignedTo/status) - distinct from
+  // updateMaintenanceStatus above, which only handles a status transition's
+  // own side-effect fields (assignedAt, completedAt, etc). Editing a
+  // ticket's own details previously had no backing endpoint at all: the
+  // frontend's edit modal called nothing and just showed a fake success
+  // toast, silently discarding every change.
+  async updateMaintenance(id: string, schoolSlug: string, data: any) {
+    const { title, description, location, priority, assignedTo, status } = data;
+    const $set: any = {};
+    if (title !== undefined) $set.title = title;
+    if (description !== undefined) $set.description = description;
+    if (location !== undefined) $set.location = location;
+    if (priority !== undefined) $set.priority = priority;
+    if (assignedTo !== undefined) $set.assignedTo = assignedTo;
+    if (status !== undefined) $set.status = status;
+    const ticket = await this.maintenanceModel.findOneAndUpdate({ _id: id, schoolSlug }, { $set }, { new: true });
+    if (!ticket) throw new NotFoundException('Maintenance ticket not found');
+    return ticket;
   }
 
   async getMaintenanceStats(schoolSlug: string) {
@@ -467,6 +568,10 @@ export class CampusService {
   }
 
   async deleteBuilding(id: string, schoolSlug: string) {
+    const roomCount = await this.campusRoomModel.countDocuments({ buildingId: id, schoolSlug });
+    if (roomCount > 0) {
+      throw new BadRequestException(`Cannot delete this building - ${roomCount} room(s) still reference it. Delete or reassign those rooms first.`);
+    }
     const building = await this.buildingModel.findOneAndDelete({ _id: id, schoolSlug });
     if (!building) throw new NotFoundException('Building not found');
     return building;

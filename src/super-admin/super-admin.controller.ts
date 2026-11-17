@@ -8,6 +8,7 @@ import {
   Param, Query, Request, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { SuperAdminService } from './super-admin.service';
+import { GoogleAnalyticsService } from './google-analytics.service';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
 
@@ -16,7 +17,10 @@ import { UserRole } from '../auth/roles.enum';
 @Roles(UserRole.SUPER_ADMIN)
 @Controller('super-admin')
 export class SuperAdminController {
-  constructor(private readonly service: SuperAdminService) {}
+  constructor(
+    private readonly service: SuperAdminService,
+    private readonly googleAnalytics: GoogleAnalyticsService,
+  ) {}
 
   private adminUser(req: any) {
     return req?.user?.name || req?.headers['x-admin-user'] || 'Super Admin';
@@ -122,6 +126,14 @@ export class SuperAdminController {
   @Get('analytics')
   async getAnalytics() {
     return this.service.getPlatformAnalytics();
+  }
+
+  // Website visitor traffic (GA4) - distinct from the in-platform usage
+  // data above. See GoogleAnalyticsService for the configured:false
+  // behaviour when GA4_PROPERTY_ID/GA4_SERVICE_ACCOUNT_KEY aren't set.
+  @Get('website-analytics')
+  async getWebsiteAnalytics() {
+    return this.googleAnalytics.getWebsiteAnalytics();
   }
 
   @Post('health-scores/recalculate')

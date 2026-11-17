@@ -57,7 +57,7 @@ function setup(opts: {
 
   const service = new OrganizationService(
     noop, noop, noop, gradeModel, noop, noop, groupInstitutionModel, studentModel, noop, noop, noop,
-    staffModel, teacherProfileModel, noop, noop, noop,
+    staffModel, teacherProfileModel, noop, noop, noop, noop,
   );
   return { service, gradeModel, staffModel, teacherProfileModel, studentModel, groupInstitutionModel };
 }

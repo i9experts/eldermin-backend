@@ -6,6 +6,7 @@ import { Student, StudentSchema } from '../students/schemas/student.schema';
 import { StudentAttendance, StudentAttendanceSchema } from '../students/schemas/student-supporting.schema';
 import { Invoice, InvoiceSchema } from '../finance/schemas/finance.schema';
 import { MarkEntry, MarkEntrySchema, ReportCard, ReportCardSchema } from '../assessments/schemas/assessment.schema';
+import { TermReportCard, TermReportCardSchema } from '../assessments/schemas/term-report-card.schema';
 import { BehaviourRecord, BehaviourRecordSchema, TarbiyahAssessment, TarbiyahAssessmentSchema } from '../behaviour/schemas/behaviour.schema';
 import { Timetable, TimetableSchema } from '../modules/teaching/schemas/timetable.schema';
 import { Assignment, AssignmentSchema } from '../modules/teaching/schemas/assignment.schema';
@@ -29,6 +30,7 @@ import {
   Message, MessageSchema,
 } from './schemas/notification-and-message.schema';
 import { PhoneOtp, PhoneOtpSchema } from './schemas/phone-otp.schema';
+import { ParentDevice, ParentDeviceSchema } from './schemas/parent-device.schema';
 import { Tenant, TenantSchema } from '../modules/organization/schemas/tenant.schema';
 import { InstitutionSchema } from '../modules/organization/schemas/institution.schema';
 import { ParentLead, ParentLeadSchema } from '../leads/schemas/parent-lead.schema';
@@ -36,10 +38,12 @@ import { UsageLog, UsageLogSchema } from '../super-admin/schemas/super-admin.sch
 import { GeocodingService } from '../leads/geocoding.service';
 import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
+import { CourseEnrollment, CourseEnrollmentSchema } from '../syllabus/schemas/course-enrollment.schema';
 import { EmailModule } from '../email/email.module';
 import { AuthModule } from '../modules/auth/auth.module';
 import { AssessmentModule } from '../assessments/assessment.module';
 import { CertificatesModule } from '../modules/certificates/certificates.module';
+import { SyllabusModule } from '../syllabus/syllabus.module';
 import { UploadModule } from '../upload/upload.module';
 import { PdfModule } from '../pdf/pdf.module';
 import { GuardianRefreshInterceptor } from './guardian-refresh.interceptor';
@@ -47,6 +51,15 @@ import { ParentAuthService } from './parent-auth.service';
 import { ParentAuthController } from './parent-auth.controller';
 import { HomeTasksModule } from '../home-tasks/home-tasks.module';
 import { ParentAccessControlModule } from '../parent-access-control/parent-access-control.module';
+import { ParentEarlyYearsController } from './parent-early-years.controller';
+import { ParentEarlyYearsService } from './parent-early-years.service';
+import { ECEObservation, ECEObservationSchema } from '../ece/schemas/observation.schema';
+import { ECEPortfolioEntry, ECEPortfolioEntrySchema } from '../ece/schemas/portfolio-entry.schema';
+import { ECESkill, ECESkillSchema } from '../ece/schemas/ontology.schema';
+import { AcademicYear, AcademicYearSchema } from '../organization/schemas/organization.schema';
+import { GamificationModule } from '../gamification/gamification.module';
+import { BehaviourModule } from '../behaviour/behaviour.module';
+import { GuidedReadingModule } from '../guided-reading/guided-reading.module';
 
 @Module({
   imports: [
@@ -56,6 +69,7 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
       { name: Invoice.name, schema: InvoiceSchema },
       { name: MarkEntry.name, schema: MarkEntrySchema },
       { name: ReportCard.name, schema: ReportCardSchema },
+      { name: TermReportCard.name, schema: TermReportCardSchema },
       { name: BehaviourRecord.name, schema: BehaviourRecordSchema },
       { name: TarbiyahAssessment.name, schema: TarbiyahAssessmentSchema },
       { name: Timetable.name, schema: TimetableSchema },
@@ -76,6 +90,7 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
       { name: MessageThread.name, schema: MessageThreadSchema },
       { name: Message.name, schema: MessageSchema },
       { name: PhoneOtp.name, schema: PhoneOtpSchema },
+      { name: ParentDevice.name, schema: ParentDeviceSchema },
       { name: Tenant.name, schema: TenantSchema },
       // Registered as 'OrgInstitution', not Institution.name - the literal
       // class name "Institution" is already taken by the (unrelated)
@@ -86,18 +101,28 @@ import { ParentAccessControlModule } from '../parent-access-control/parent-acces
       { name: UsageLog.name, schema: UsageLogSchema },
       { name: Syllabus.name, schema: SyllabusSchema },
       { name: LessonProgress.name, schema: LessonProgressSchema },
+      { name: CourseEnrollment.name, schema: CourseEnrollmentSchema },
+      // Read-only, for the parent Early Years view (ParentEarlyYearsService)
+      { name: ECEObservation.name, schema: ECEObservationSchema },
+      { name: ECEPortfolioEntry.name, schema: ECEPortfolioEntrySchema },
+      { name: ECESkill.name, schema: ECESkillSchema },
+      { name: AcademicYear.name, schema: AcademicYearSchema },
     ]),
     EmailModule,
     AuthModule,
     AssessmentModule,
     CertificatesModule,
+    SyllabusModule,
     UploadModule,
     PdfModule,
+    GamificationModule,
+    BehaviourModule,
     HomeTasksModule,
     ParentAccessControlModule,
+    GuidedReadingModule,
   ],
-  controllers: [ParentPortalController, ParentAuthController],
-  providers: [ParentPortalService, ParentAuthService, GuardianRefreshInterceptor, GeocodingService],
+  controllers: [ParentPortalController, ParentAuthController, ParentEarlyYearsController],
+  providers: [ParentPortalService, ParentAuthService, ParentEarlyYearsService, GuardianRefreshInterceptor, GeocodingService],
   exports: [ParentPortalService, ParentAuthService],
 })
 export class ParentPortalModule {}

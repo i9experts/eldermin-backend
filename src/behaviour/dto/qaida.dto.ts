@@ -13,6 +13,14 @@ export class InitQaidaProgressDto {
   @IsString() grade: string;
   @IsOptional() @IsString() section?: string;
   @IsOptional() @IsMongoId() campusId?: string;
+
+  // A student who joined without a full Qaida history at this school: place
+  // them at their real starting board (per an entry assessment) instead of
+  // forcing them through boards already covered elsewhere. Boards before
+  // startAtTakhti are seeded 'not_tracked', not 'not_started'.
+  @IsOptional() @IsIn(['full_history', 'joined_later']) recordType?: string;
+  @IsOptional() @IsString() @MaxLength(500) priorRecordNote?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(16) startAtTakhti?: number;
 }
 
 export class RecordTakhtiAttemptDto {
@@ -43,6 +51,6 @@ export class RecordTakhtiAttemptDto {
 }
 
 export class UpdateTakhtiStatusDto {
-  @IsIn(['not_started', 'in_progress', 'mastered', 'needs_revision'])
+  @IsIn(['not_started', 'in_progress', 'mastered', 'needs_revision', 'not_tracked'])
   status: string;
 }

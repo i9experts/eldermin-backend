@@ -1,10 +1,13 @@
-import { Injectable, NotFoundException, BadRequestException, BadGatewayException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, BadGatewayException, ForbiddenException } from '@nestjs/common';
+import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { Syllabus, SyllabusDocument } from './schemas/syllabus.schema';
 import { SloTemplate, SloTemplateDocument } from './schemas/slo-template.schema';
+import { CourseEnrollment, CourseEnrollmentDocument } from './schemas/course-enrollment.schema';
+import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { AcademicYear, AcademicYearDocument } from '../organization/schemas/organization.schema';
 import { Assignment, AssignmentDocument } from '../modules/teaching/schemas/assignment.schema';
 import { Staff, StaffDocument } from '../modules/hr/schemas/staff.schema';
@@ -15,7 +18,7 @@ import {
 } from './dto/syllabus.dto';
 import { resolveCampusScope, ScopedUser } from '../auth/scope.util';
 import {
-  isTeacherCaller, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
+  isTeacherCaller, teacherIdsMatch, resolveTeacherIdentity, normaliseTeacherIdForWrite, assertOwnsTeacherDoc, TeacherIdentity,
 } from '../staff-portal/teacher-identity.util';
 
 @Injectable()
@@ -27,12 +30,29 @@ export class SyllabusService {
     @InjectModel(Assignment.name) private assignmentModel: Model<AssignmentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    @InjectModel(CourseEnrollment.name) private enrollmentModel: Model<CourseEnrollmentDocument>,
+    @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     private configService: ConfigService,
   ) {}
 
   /** TEACHER callers only: who am I, from the DB (Staff.userId), never from the JWT claims. 403 when no Staff record. */
   private teacherIdentity(user: ScopedUser): Promise<TeacherIdentity> {
     return resolveTeacherIdentity(this.staffModel, this.teacherProfileModel, user as any);
+  }
+
+  /**
+   * D12 (same pattern as lesson plans): approval belongs to PATCH :id/approve (admin set). Create and the raw-$set PUT
+   * must not let a non-admin caller (a teacher, or a custom-role user whose base role is not an admin role) set
+   * status 'approved' or write the approver-owned fields. Other statuses (draft/active/archived) stay writable.
+   */
+  private sanitizeApprovalFields(data: any, requestingUser?: ScopedUser): void {
+    if (!requestingUser) return;
+    const role = (requestingUser as any).role || (requestingUser as any).primaryRole;
+    if (TEACHING_ADMIN_ROLES.includes(role)) return;
+    if (data.status === 'approved') {
+      throw new ForbiddenException('Only an administrator can approve a syllabus.');
+    }
+    delete data.approvedBy; delete data.approvedAt;
   }
 
   /** For a TEACHER caller, 403s unless the given syllabus is their own; a no-op for every other role. */
@@ -98,6 +118,7 @@ export class SyllabusService {
   }
 
   async create(tenantId: string, institutionId: string, createdBy: string, createdByName: string, dto: CreateSyllabusDto, requestingUser?: ScopedUser) {
+    this.sanitizeApprovalFields(dto as any, requestingUser);
     const rollup = this.computeRollup(dto.units || []);
     const payload: any = {
       ...dto,
@@ -143,7 +164,7 @@ export class SyllabusService {
     // the teacher's behalf, which shouldn't hide it from that teacher).
     if (isTeacherCaller(requestingUser)) {
       const me = await this.teacherIdentity(requestingUser!);
-      filter.teacherId = new Types.ObjectId(me.staffId);
+      filter.teacherId = teacherIdsMatch(me);
     }
     return this.syllabusModel.find(filter).sort({ gradeLevel: 1, subjectName: 1 }).lean();
   }
@@ -169,6 +190,7 @@ export class SyllabusService {
       }
     }
 
+    this.sanitizeApprovalFields(dto as any, requestingUser);
     const update: any = { ...dto };
     if (dto.units) {
       // Preserve existing tracking state per topic when the design is
@@ -227,6 +249,7 @@ export class SyllabusService {
       type: dto.type, url: dto.url, fileUrl: dto.fileUrl, fileName: dto.fileName,
       order: dto.order ?? topic.lessons.length, addedBy, addedAt: new Date(),
       dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+      releaseDate: dto.releaseDate ? new Date(dto.releaseDate) : undefined,
     };
     topic.lessons.push(lesson);
     syllabus.markModified('units');
@@ -250,6 +273,7 @@ export class SyllabusService {
     if (dto.fileName != null) lesson.fileName = dto.fileName;
     if (dto.order != null) lesson.order = dto.order;
     if (dto.dueDate !== undefined) lesson.dueDate = dto.dueDate ? new Date(dto.dueDate) : undefined;
+    if (dto.releaseDate !== undefined) lesson.releaseDate = dto.releaseDate ? new Date(dto.releaseDate) : undefined;
     syllabus.markModified('units');
     await syllabus.save();
     await this.syncLessonAssignment(syllabus, dto.unitNo, dto.topicNo, lesson);
@@ -288,6 +312,78 @@ export class SyllabusService {
     );
     if (!syllabus) throw new NotFoundException('Syllabus not found');
     return syllabus;
+  }
+
+  // ── LMS Phase 1: explicit enrollment ────────────────────────────
+  // Switching a syllabus to 'manual' doesn't touch any existing
+  // CourseEnrollment rows or drop any student currently seeing it via
+  // grade/section match - a teacher flips it, then uses enrollStudents
+  // below to actually build the roster. Switching back to
+  // 'auto_by_class' makes any CourseEnrollment rows irrelevant again
+  // (not deleted - a later switch back to 'manual' would see the same
+  // roster) since visibility reverts to grade/section match.
+  async setEnrollmentMode(tenantId: string, id: string, enrollmentMode: string, requestingUser?: ScopedUser) {
+    if (isTeacherCaller(requestingUser)) {
+      const existing = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+      if (!existing) throw new NotFoundException('Syllabus not found');
+      await this.assertSyllabusOwnership(existing as any, requestingUser);
+    }
+    const syllabus = await this.syllabusModel.findOneAndUpdate(
+      { _id: id, tenantId },
+      { $set: { enrollmentMode } },
+      { new: true },
+    );
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    return syllabus;
+  }
+
+  async enrollStudents(tenantId: string, schoolSlug: string, id: string, studentIds: string[], enrolledBy: string, requestingUser?: ScopedUser) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId enrollmentMode').lean();
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus as any, requestingUser);
+    if ((syllabus as any).enrollmentMode !== 'manual') {
+      throw new BadRequestException('This course auto-enrolls by class - switch it to manual enrollment first.');
+    }
+    const students = await this.studentModel.find({ _id: { $in: studentIds }, schoolSlug }).select('firstName lastName').lean();
+    if (students.length !== studentIds.length) {
+      throw new BadRequestException('One or more students could not be found at this school.');
+    }
+    const tenantObjectId = new Types.ObjectId(tenantId);
+    const ops = students.map((s: any) => ({
+      updateOne: {
+        filter: { syllabusId: new Types.ObjectId(id), studentId: s._id },
+        update: {
+          $set: {
+            tenantId: tenantObjectId, schoolSlug, studentName: `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+            status: 'active', enrolledBy, enrolledAt: new Date(),
+          },
+          $unset: { droppedAt: '' },
+        },
+        upsert: true,
+      },
+    }));
+    await this.enrollmentModel.bulkWrite(ops as any);
+    return this.listEnrollments(tenantId, id, requestingUser);
+  }
+
+  async unenrollStudent(tenantId: string, id: string, studentId: string, requestingUser?: ScopedUser) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus as any, requestingUser);
+    const result = await this.enrollmentModel.findOneAndUpdate(
+      { syllabusId: id, studentId, tenantId },
+      { $set: { status: 'dropped', droppedAt: new Date() } },
+      { new: true },
+    );
+    if (!result) throw new NotFoundException('Enrollment not found');
+    return { message: 'Student unenrolled' };
+  }
+
+  async listEnrollments(tenantId: string, id: string, requestingUser?: ScopedUser) {
+    const syllabus = await this.syllabusModel.findOne({ _id: id, tenantId }).select('teacherId').lean();
+    if (!syllabus) throw new NotFoundException('Syllabus not found');
+    await this.assertSyllabusOwnership(syllabus as any, requestingUser);
+    return this.enrollmentModel.find({ syllabusId: id, tenantId, status: 'active' }).sort({ studentName: 1 }).lean();
   }
 
   async approve(tenantId: string, id: string, approverName: string) {
@@ -357,8 +453,18 @@ export class SyllabusService {
   // can be on different academic years/terms), grouped by subject/class
   // so a teacher sees their whole week in one place rather than
   // checking each class's syllabus separately.
-  async getTeacherWeeklyPlanner(tenantId: string, schoolSlug: string, teacherId: string) {
-    const syllabi = await this.syllabusModel.find({ tenantId, teacherId: new Types.ObjectId(teacherId), status: { $in: ['active', 'approved'] } }).lean();
+  async getTeacherWeeklyPlanner(tenantId: string, schoolSlug: string, teacherId: string, requestingUser?: ScopedUser) {
+    // A TEACHER caller always gets their OWN planner (both ids); the query param is ignored for them (it used to read any teacher's, and a
+    // malformed id was a 500). Other roles keep the param.
+    let teacherFilter: any;
+    if (isTeacherCaller(requestingUser)) teacherFilter = teacherIdsMatch(await this.teacherIdentity(requestingUser!));
+    else {
+      // no teacher chosen (the web only sends one once a teacher is picked): nothing to plan, as before (an absent id used to match nobody)
+      if (teacherId === undefined || teacherId === null || teacherId === '') return [];
+      if (!Types.ObjectId.isValid(String(teacherId))) throw new BadRequestException('teacherId must be a valid id');
+      teacherFilter = new Types.ObjectId(teacherId);
+    }
+    const syllabi = await this.syllabusModel.find({ tenantId, teacherId: teacherFilter, status: { $in: ['active', 'approved'] } }).lean();
 
     const results: any[] = [];
     for (const s of syllabi) {

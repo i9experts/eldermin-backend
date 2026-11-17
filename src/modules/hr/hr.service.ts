@@ -1836,6 +1836,39 @@ export class HrService {
     return { pending, approved, total };
   }
 
+  // Institution Overview dashboard's "Staff by Designation Strength"
+  // widget - nothing previously aggregated staff by designation at all
+  // (designation is free text, grouped as typed; staff with none fall
+  // under "Unspecified" rather than being silently dropped), same
+  // male/female/other $cond-sum pattern StudentsService uses for its own
+  // gender-split-by-class aggregation.
+  async getStaffDesignationStrength(tenantId: string) {
+    const tid = this.newTid(tenantId);
+    const rows = await this.staffModel.aggregate([
+      { $match: { tenantId: tid, isActive: true } },
+      {
+        $group: {
+          _id: { $ifNull: ['$designation', 'Unspecified'] },
+          total: { $sum: 1 },
+          male: { $sum: { $cond: [{ $eq: ['$gender', 'male'] }, 1, 0] } },
+          female: { $sum: { $cond: [{ $eq: ['$gender', 'female'] }, 1, 0] } },
+          other: { $sum: { $cond: [{ $eq: ['$gender', 'other'] }, 1, 0] } },
+        },
+      },
+      { $sort: { total: -1 } },
+    ]);
+
+    const designations = rows.map((r: any) => ({
+      designation: r._id, total: r.total, male: r.male, female: r.female, other: r.other,
+    }));
+    const totals = designations.reduce((acc, d) => {
+      acc.total += d.total; acc.male += d.male; acc.female += d.female; acc.other += d.other;
+      return acc;
+    }, { total: 0, male: 0, female: 0, other: 0 });
+
+    return { totals, designations };
+  }
+
   // ── PAYROLL ───────────────────────────────────────────────────────────
 
   async getPayrollRuns(tenantId: string) {
@@ -1844,12 +1877,18 @@ export class HrService {
 
   async createPayrollRun(tenantId: string, institutionId: string, data: any, userId: string) {
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
-    return this.payrollRunModel.create({
-      ...data, periodLabel,
-      tenantId: this.newTid(tenantId),
-      institutionId: this.newTid(institutionId),
-      processedBy: this.newTid(userId),
-    });
+    try {
+      return await this.payrollRunModel.create({
+        ...data, periodLabel,
+        tenantId: this.newTid(tenantId),
+        institutionId: this.newTid(institutionId),
+        processedBy: this.newTid(userId),
+      });
+    } catch (err: any) {
+      // D15: one run per school per month (unique index tenantId+month+year) - a duplicate is a conflict, not a 500.
+      if (err?.code === 11000) throw new ConflictException(`A payroll run for ${periodLabel} already exists.`);
+      throw err;
+    }
   }
 
   /** The actual fix for the real bug found in QA: the previous flow had
@@ -2236,6 +2275,10 @@ export class HrService {
   }
 
   async createPayslip(tenantId: string, institutionId: string, schoolSlug: string, data: any) {
+    // D15: payrollRunId is required by the schema; a missing or malformed one is a 400, not a Mongoose ValidationError 500.
+    if (!data?.payrollRunId || !Types.ObjectId.isValid(String(data.payrollRunId))) {
+      throw new BadRequestException('payrollRunId is required and must be a valid payroll run id.');
+    }
     const periodLabel = `${new Date(data.year, data.month - 1).toLocaleString('default', { month: 'long' })} ${data.year}`;
 
     // Fold in any approved-but-unsettled expense claims for this staff member
@@ -2263,8 +2306,6 @@ export class HrService {
       reimbursement = nonAdvanceClaims.reduce((sum, c: any) => sum + (c.amount || 0), 0);
     }
 
-    const otherAllowances = (data.otherAllowances || 0) + reimbursement;
-
     // Itemized component detail (see PAY-01/PAY-03) - the payroll grid
     // sends one line per configured SalaryComponent actually used on this
     // payslip (Basic, HRA, ... plus whichever dynamic components were
@@ -2280,6 +2321,20 @@ export class HrService {
       componentLines.push({ code: 'REIMBURSEMENT', name: 'Expense Reimbursement', type: 'earning', amount: reimbursement });
     }
 
+    // PAY-04, found in QA (screenshot: "Gross" didn't match the sum of its
+    // own component columns): a dynamic earning component (e.g. a custom
+    // "GEC Allowance") that also has its own componentLines entry must be
+    // counted exactly once. data.otherAllowances is not trusted to already
+    // be clean of that overlap - the payroll grid that computes it has had
+    // this exact bug before, and a direct API caller could reintroduce it -
+    // so any componentLines earning amount beyond the canonical 4 is
+    // stripped back out of otherAllowances here, the same way the
+    // recomputePayslipTotals repair tool cleans up an already-stored one.
+    const extraEarnings = componentLines
+      .filter((l) => l.type === 'earning' && !HrService.CANONICAL_EARNING_CODES.includes(l.code) && l.code !== 'REIMBURSEMENT')
+      .reduce((s, l) => s + (l.amount || 0), 0);
+    const otherAllowances = Math.max(0, (data.otherAllowances || 0) - extraEarnings) + reimbursement;
+
     // BLUNDER FIXED: this used to sum only the 5 canonical deduction
     // fields, silently dropping any custom deduction component (e.g. a
     // "Security Deposit" or loan-recovery line beyond Tax/PF) that only
@@ -2293,14 +2348,28 @@ export class HrService {
       .filter((l) => l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code))
       .reduce((s, l) => s + (l.amount || 0), 0);
     const totalDeductions = (data.incomeTax || 0) + (data.providentFund || 0) + (data.loanDeduction || 0) + (data.leaveDeduction || 0) + (data.otherDeductions || 0) + extraDeductions;
-    const grossSalary = (data.grossSalary || 0) + reimbursement;
+    // Recomputed here rather than trusted from data.grossSalary: a
+    // client-computed grossSalary (even one that itself double-counted,
+    // per PAY-04 above) is never trusted directly - canonical fields plus
+    // the now-deduplicated otherAllowances, plus whatever componentLines
+    // itemizes beyond the 4 canonical earning fields. Same formula
+    // updatePayslip already uses below, so a payslip's stored total is
+    // never more trusted from one code path than the other.
+    const grossSalary = (data.basicSalary || 0) + (data.hra || 0) + (data.transportAllowance || 0) + (data.medicalAllowance || 0) + otherAllowances + extraEarnings;
     const netSalary = grossSalary - totalDeductions;
 
-    const payslip = await this.payslipModel.create({
-      ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary, componentLines,
-      tenantId: this.newTid(tenantId),
-      institutionId: this.newTid(institutionId),
-    });
+    let payslip: any;
+    try {
+      payslip = await this.payslipModel.create({
+        ...data, periodLabel, totalDeductions, netSalary, otherAllowances, grossSalary, componentLines,
+        tenantId: this.newTid(tenantId),
+        institutionId: this.newTid(institutionId),
+      });
+    } catch (err: any) {
+      // D15: unique (tenant, staff, month, year) - a second payslip for the same person and month is a conflict.
+      if (err?.code === 11000) throw new ConflictException(`A payslip for this staff member for ${periodLabel} already exists.`);
+      throw err;
+    }
 
     if (pendingClaims.length > 0) {
       await this.expenseClaimModel.updateMany(
@@ -2339,6 +2408,15 @@ export class HrService {
    * componentLines directly, not the broken stored totals). Dry-run by
    * default, same convention as Finance's arrears backfill.
    *
+   * Also repairs PAY-04 (found in QA): the payroll grid used to fold a
+   * dynamic earning component's amount into otherAllowances AND send it
+   * again as its own componentLines entry, inflating grossSalary (and
+   * otherAllowances itself) by the sum of every such component - visible
+   * on the payslip breakup/PDF as the same amount listed twice (once
+   * anonymously under "Other Allowances", once again by its real name).
+   * The exact overlap is derivable from componentLines and stripped back
+   * out of otherAllowances/grossSalary the same way as the deductions fix.
+   *
    * Originally this also excluded any payslip already posted to Finance -
    * but in the real approve-then-pay workflow, by the time a school
    * notices a payslip's bottom-line totals are wrong, that run has almost
@@ -2356,18 +2434,35 @@ export class HrService {
       tenantId: this.newTid(tenantId), status: { $ne: 'paid' },
     }).lean();
 
-    const fixes: { payslipId: string; payrollRunId: string; staffName: string; oldTotalDeductions: number; newTotalDeductions: number; oldNetSalary: number; newNetSalary: number; postedToFinance: boolean }[] = [];
+    const fixes: { payslipId: string; payrollRunId: string; staffName: string; oldTotalDeductions: number; newTotalDeductions: number; oldGrossSalary: number; newGrossSalary: number; oldOtherAllowances: number; newOtherAllowances: number; oldNetSalary: number; newNetSalary: number; postedToFinance: boolean }[] = [];
     for (const p of payslips as any[]) {
       const lines = p.componentLines || [];
       const extraDeductions = lines
         .filter((l: any) => l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code))
         .reduce((s: number, l: any) => s + (l.amount || 0), 0);
+      // PAY-04, found in QA: the payroll grid used to fold a dynamic
+      // earning component's amount into otherAllowances AND send it again
+      // as its own componentLines entry - every payslip created that way
+      // has otherAllowances (and therefore grossSalary, computed by
+      // createPayslip as a straight sum before this fix) inflated by the
+      // sum of every such component. Since componentLines already lists
+      // each one by its real amount, the exact overlap is derivable: strip
+      // those same amounts back out of the stored otherAllowances so each
+      // dynamic earning is counted exactly once (as its own componentLines
+      // item), the same invariant createPayslip now enforces going forward.
+      const extraEarnings = lines
+        .filter((l: any) => l.type === 'earning' && !HrService.CANONICAL_EARNING_CODES.includes(l.code) && l.code !== 'REIMBURSEMENT')
+        .reduce((s: number, l: any) => s + (l.amount || 0), 0);
+      const correctOtherAllowances = Math.max(0, (p.otherAllowances || 0) - extraEarnings);
+      const correctGrossSalary = (p.basicSalary || 0) + (p.hra || 0) + (p.transportAllowance || 0) + (p.medicalAllowance || 0) + correctOtherAllowances + extraEarnings;
       const correctTotalDeductions = (p.incomeTax || 0) + (p.providentFund || 0) + (p.loanDeduction || 0) + (p.leaveDeduction || 0) + (p.otherDeductions || 0) + extraDeductions;
-      const correctNetSalary = (p.grossSalary || 0) - correctTotalDeductions;
-      if (correctTotalDeductions !== (p.totalDeductions || 0) || correctNetSalary !== (p.netSalary || 0)) {
+      const correctNetSalary = correctGrossSalary - correctTotalDeductions;
+      if (correctTotalDeductions !== (p.totalDeductions || 0) || correctGrossSalary !== (p.grossSalary || 0) || correctNetSalary !== (p.netSalary || 0)) {
         fixes.push({
           payslipId: String(p._id), payrollRunId: String(p.payrollRunId), staffName: p.staffName,
           oldTotalDeductions: p.totalDeductions || 0, newTotalDeductions: correctTotalDeductions,
+          oldGrossSalary: p.grossSalary || 0, newGrossSalary: correctGrossSalary,
+          oldOtherAllowances: p.otherAllowances || 0, newOtherAllowances: correctOtherAllowances,
           oldNetSalary: p.netSalary || 0, newNetSalary: correctNetSalary,
           postedToFinance: !!p.postedToFinance,
         });
@@ -2386,13 +2481,13 @@ export class HrService {
           await this.reversePayslipLedgerEntry(schoolSlug, posted);
           await this.payslipModel.updateOne(
             { _id: f.payslipId },
-            { $set: { totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary } },
+            { $set: { totalDeductions: f.newTotalDeductions, grossSalary: f.newGrossSalary, otherAllowances: f.newOtherAllowances, netSalary: f.newNetSalary } },
           );
-          await this.postPayslipToLedger(schoolSlug, { ...posted, totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary, postedToFinance: false });
+          await this.postPayslipToLedger(schoolSlug, { ...posted, totalDeductions: f.newTotalDeductions, grossSalary: f.newGrossSalary, otherAllowances: f.newOtherAllowances, netSalary: f.newNetSalary, postedToFinance: false });
         } else {
           await this.payslipModel.updateOne(
             { _id: f.payslipId },
-            { $set: { totalDeductions: f.newTotalDeductions, netSalary: f.newNetSalary } },
+            { $set: { totalDeductions: f.newTotalDeductions, grossSalary: f.newGrossSalary, otherAllowances: f.newOtherAllowances, netSalary: f.newNetSalary } },
           );
         }
       }
@@ -2452,7 +2547,15 @@ export class HrService {
     const extraEarnings = lines.filter((l) => l.type === 'earning' && !HrService.CANONICAL_EARNING_CODES.includes(l.code)).reduce((s, l) => s + (l.amount || 0), 0);
     const extraDeductions = lines.filter((l) => l.type === 'deduction' && !HrService.CANONICAL_DEDUCTION_CODES.includes(l.code)).reduce((s, l) => s + (l.amount || 0), 0);
 
-    const grossSalary = (merged.basicSalary || 0) + (merged.hra || 0) + (merged.transportAllowance || 0) + (merged.medicalAllowance || 0) + (merged.otherAllowances || 0) + extraEarnings;
+    // PAY-04: merged.otherAllowances may still carry the exact overlap this
+    // bug used to fold in (a payslip created before the fix, or edited here
+    // before it was ever run through recomputePayslipTotals) - stripped
+    // back out so extraEarnings is never added on top of an amount it's
+    // already part of. Same invariant createPayslip/recomputePayslipTotals
+    // enforce.
+    const cleanOtherAllowances = Math.max(0, (merged.otherAllowances || 0) - extraEarnings);
+    patch.otherAllowances = cleanOtherAllowances;
+    const grossSalary = (merged.basicSalary || 0) + (merged.hra || 0) + (merged.transportAllowance || 0) + (merged.medicalAllowance || 0) + cleanOtherAllowances + extraEarnings;
     const totalDeductions = (merged.incomeTax || 0) + (merged.providentFund || 0) + (merged.loanDeduction || 0) + (merged.leaveDeduction || 0) + (merged.otherDeductions || 0) + extraDeductions;
     patch.grossSalary = grossSalary;
     patch.totalDeductions = totalDeductions;
