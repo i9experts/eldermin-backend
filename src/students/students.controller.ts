@@ -671,9 +671,16 @@ export class StudentsController {
       },
       { totalBilled: 0, totalPaid: 0, totalBalance: 0 },
     );
-    const diagnosis = (invoices as any[]).length === 0
-      ? await this.financeService.diagnoseNoInvoices(schoolSlug, id)
-      : null;
+    // diagnosis is a helpful add-on, never the main point of this endpoint -
+    // a bug or bad data hit while computing it (e.g. a malformed campusId
+    // on some legacy student record) must never take down the real
+    // invoices/summary this endpoint exists to serve.
+    let diagnosis: { reason: string; detail: string } | null = null;
+    if ((invoices as any[]).length === 0) {
+      try {
+        diagnosis = await this.financeService.diagnoseNoInvoices(schoolSlug, id);
+      } catch { /* leave diagnosis null - the ledger itself still renders */ }
+    }
     return { invoices, summary, diagnosis };
   }
 
