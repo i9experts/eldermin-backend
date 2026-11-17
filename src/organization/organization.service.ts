@@ -46,11 +46,8 @@ export class OrganizationService {
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
-<<<<<<< HEAD
     @InjectModel(CostCenter.name) private costCenterModel: Model<CostCenterDocument>,
-=======
     @InjectModel(ParentDevice.name) private parentDeviceModel: Model<ParentDeviceDocument>,
->>>>>>> origin/main
     private uploadService: UploadService,
     private appStoreConnectService: AppStoreConnectService,
   ) {}
