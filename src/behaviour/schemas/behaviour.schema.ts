@@ -324,7 +324,22 @@ export class Intervention {
   tier: string; // PBIS framework
 
   @Prop({ required: true }) concern: string;     // What is the concern
-  @Prop() rootCause: string;                      // Root cause analysis
+  @Prop() rootCause: string;                      // Root cause analysis (free text)
+  // Tagged root-cause categories, set from a structured diagnostic interview
+  // (see the office-interview question bank) - lets Reports break down WHY
+  // students are being referred, not just how many, across Home, Academic,
+  // Peer, Emotional, Digital, Physical and Spiritual causes.
+  @Prop({
+    type: [String],
+    enum: ['home', 'academic', 'peer_influence', 'emotional', 'digital_media', 'physical_health', 'spiritual', 'unclear'],
+    default: [],
+  })
+  rootCauseTags: string[];
+  // Narrative notes from the actual office interview with the student -
+  // kept separate from `concern` (the referral reason written up-front,
+  // usually by a teacher) since this is the staff member's own record of
+  // what the student said when asked.
+  @Prop() interviewSummary: string;
   @Prop({ type: [String], default: [] }) goals: string[];
   @Prop({ type: [String], default: [] }) strategies: string[];
 
@@ -353,6 +368,15 @@ export class Intervention {
   @Prop({ type: [String], default: [] }) team: string[]; // counsellor, teacher, HOD etc.
   @Prop() parentConsented: boolean;
   @Prop() parentConsentDate: Date;
+
+  // Escalation - a plan still 'active' past its own reviewDate with no
+  // resolution is exactly the case that used to just sit quietly until
+  // someone happened to reopen it; this makes "nobody followed up" a
+  // visible, named state instead of a silent gap.
+  @Prop({ default: false }) escalated: boolean;
+  @Prop() escalatedDate: Date;
+  @Prop() escalatedTo: string; // e.g. "Campus Head"
+  @Prop() escalationNote: string;
 
   // Progress notes
   @Prop({ type: [{ date: Date, note: String, addedBy: String }], default: [] })
