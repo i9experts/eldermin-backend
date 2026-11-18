@@ -335,11 +335,28 @@ export class Intervention {
     default: [],
   })
   rootCauseTags: string[];
+  // The guided office-interview category the admin picked (drives which
+  // question bank was shown - General School, Child/Personal, Classroom,
+  // Academic, Peer/Social, Home/Family, Digital/Media, Health) and the
+  // actual question/answer pairs recorded against it. Kept as structured
+  // data (not just prose) so it can be fed to the AI suggestion and so a
+  // later reviewer sees exactly what was asked, not just a summary.
+  @Prop() interviewCategory: string;
+  @Prop({ type: [{ question: String, answer: String }], default: [] })
+  interviewQA: { question: string; answer: string }[];
   // Narrative notes from the actual office interview with the student -
   // kept separate from `concern` (the referral reason written up-front,
-  // usually by a teacher) since this is the staff member's own record of
-  // what the student said when asked.
+  // usually by a teacher). May start as the AI's suggested summary (see
+  // AiSuggestion below) and then be accepted as-is or edited by the admin.
   @Prop() interviewSummary: string;
+  // The AI's suggestion exactly as returned, before any admin edits -
+  // kept for audit (so a reviewer can see what the AI proposed vs. what
+  // the admin actually kept/changed). Never read back into the form.
+  @Prop({ type: Object, default: null }) aiSuggestion: {
+    rootCauseTags: string[];
+    summary: string;
+    actions: { action: string; responsible?: string; dueDate?: string }[];
+  } | null;
   @Prop({ type: [String], default: [] }) goals: string[];
   @Prop({ type: [String], default: [] }) strategies: string[];
 

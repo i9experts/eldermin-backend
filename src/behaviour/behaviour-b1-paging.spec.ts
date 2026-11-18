@@ -10,7 +10,7 @@ function build() {
   const recordModel: any = { find: jest.fn(() => q([])), countDocuments: jest.fn(async () => 0) };
   const tarbiyahModel: any = { find: jest.fn(() => q([])), countDocuments: jest.fn(async () => 0) };
   const n: any = {};
-  return { svc: new BehaviourService(recordModel, tarbiyahModel, n, n, n, n, n, n, n), recordModel, tarbiyahModel };
+  return { svc: new BehaviourService(recordModel, tarbiyahModel, n, n, n, n, n, n, n, n), recordModel, tarbiyahModel };
 }
 const ADMIN: any = { userId: new Types.ObjectId().toString(), name: 'Principal', role: 'super_admin' };
 

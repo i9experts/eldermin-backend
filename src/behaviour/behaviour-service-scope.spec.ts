@@ -51,7 +51,7 @@ function build(f: Fixture = {}) {
   const profile = f.profile === undefined ? { currentAssignments: [], isClassTeacher: true, classTeacherAssignments: [{ gradeName: 'Grade 5', sectionName: 'A' }] } : f.profile;
   const teacherProfileModel: any = { findOne: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve(profile) }), lean: () => Promise.resolve(profile) })) };
   const n: any = {};
-  const svc = new BehaviourService(recordModel, tarbiyahModel, n, n, n, settingsModel, studentModel, staffModel, teacherProfileModel);
+  const svc = new BehaviourService(recordModel, tarbiyahModel, n, n, n, settingsModel, studentModel, staffModel, teacherProfileModel, n);
   return { svc, recordModel, tarbiyahModel, settingsModel, studentModel, staffModel, teacherProfileModel };
 }
 

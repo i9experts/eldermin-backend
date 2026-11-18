@@ -269,6 +269,13 @@ export class BehaviourController {
 
   @BehaviourAccess('confidential_write', 'interventions')
   @INTERVENTIONS_WRITE()
+  @Post('interventions/ai-suggest')
+  async getInterventionAiSuggestion(@Body() dto: { category: string; concern?: string; studentGrade?: string; qa: { question: string; answer: string }[] }) {
+    return this.service.getInterventionAiSuggestion(dto);
+  }
+
+  @BehaviourAccess('confidential_write', 'interventions')
+  @INTERVENTIONS_WRITE()
   @Put('interventions/:id')
   async updateIntervention(@Param('id') id: string, @Body() dto: any, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);

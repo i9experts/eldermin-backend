@@ -5,7 +5,8 @@
 
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { notifyGuardiansOfStudents } from '../common/utils/notify-guardians.util';
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, InternalServerErrorException, BadGatewayException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { TEACHING_ADMIN_ROLES } from '../auth/role-sets';
 import { UserRole } from '../auth/roles.enum';
 import { InjectModel } from '@nestjs/mongoose';
@@ -80,6 +81,7 @@ export class BehaviourService {
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     @InjectModel(TeacherProfile.name) private teacherProfileModel: Model<TeacherProfileDocument>,
+    private readonly configService: ConfigService,
   ) {}
 
   // ============================================================
@@ -912,6 +914,90 @@ export class BehaviourService {
   // ============================================================
   // INTERVENTIONS
   // ============================================================
+  private async callClaudeForInterventionSuggestion(systemPrompt: string, userMessage: string): Promise<string> {
+    const apiKey = this.configService.get<string>('ANTHROPIC_API_KEY');
+    if (!apiKey) throw new InternalServerErrorException('AI assistance is not configured on this server.');
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: 1200,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }],
+        }),
+      });
+    } catch {
+      throw new BadGatewayException('Could not reach the AI assistance service.');
+    }
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      throw new BadGatewayException(`AI request failed (${response.status}): ${errBody.slice(0, 200)}`);
+    }
+    const result = await response.json();
+    const textBlock = (result?.content || []).find((b: any) => b.type === 'text');
+    return textBlock?.text || '';
+  }
+
+  /**
+   * Reads the office-interview category + recorded question/answer pairs
+   * (plus the up-front concern) and suggests root-cause tags, a draft
+   * interview summary, and concrete remedial action steps - exactly the
+   * three things the admin fills in next on the Create Intervention Plan
+   * form, so "Use suggestion" can prefill them wholesale, but every one
+   * stays editable since this is a suggestion, never an auto-applied
+   * decision.
+   */
+  async getInterventionAiSuggestion(data: {
+    category: string;
+    concern?: string;
+    studentGrade?: string;
+    qa: { question: string; answer: string }[];
+  }) {
+    if (!data.qa?.length) throw new BadRequestException('Record at least one question/answer before requesting an AI suggestion.');
+
+    const transcript = data.qa.map((q, i) => `${i + 1}. Q: ${q.question}\n   A: ${q.answer || '(no answer recorded)'}`).join('\n');
+
+    const systemPrompt = `You are assisting a school administrator at an Islamic school who just finished an office interview with a disruptive/inattentive student, using a guided question bank for the category "${data.category}".
+Based ONLY on the interview transcript given, return ONLY a JSON object, no markdown, no preamble:
+{
+  "rootCauseTags": string[] (choose only from: "home", "academic", "peer_influence", "emotional", "digital_media", "physical_health", "spiritual", "unclear" - pick every tag genuinely supported by the answers, "unclear" only if nothing points anywhere specific),
+  "summary": string (a 2-4 sentence professional interview summary a Vice Principal would write in the student's file - calm, factual, no judgemental language, grounded in what was actually said),
+  "actions": [{ "action": string (one concrete, specific remedial step), "responsible": string | null (a role, e.g. "Class Teacher", "Counsellor", "Vice Principal", "Parent" - never a person's name), "dueDate": null }] (2-4 action steps, ordered by priority)
+}
+Never invent facts not supported by the transcript. If the answers are too thin to support a confident root cause, say so plainly in the summary and tag "unclear".`;
+
+    const userMessage = `Category: ${data.category}
+Student grade: ${data.studentGrade || 'unknown'}
+Referral concern: ${data.concern || '(none given)'}
+
+Interview transcript:
+${transcript}`;
+
+    const raw = await this.callClaudeForInterventionSuggestion(systemPrompt, userMessage);
+    let parsed: any;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+    } catch {
+      throw new BadGatewayException('The AI response could not be understood - please try again.');
+    }
+
+    const validTags = ['home', 'academic', 'peer_influence', 'emotional', 'digital_media', 'physical_health', 'spiritual', 'unclear'];
+    return {
+      rootCauseTags: Array.isArray(parsed.rootCauseTags) ? parsed.rootCauseTags.filter((t: string) => validTags.includes(t)) : [],
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      actions: Array.isArray(parsed.actions)
+        ? parsed.actions
+            .filter((a: any) => a?.action)
+            .map((a: any) => ({ action: String(a.action), responsible: a.responsible || undefined, dueDate: undefined }))
+        : [],
+    };
+  }
+
   async createIntervention(data: any, requestingUser?: ScopedUser) {
     const intervention = new this.interventionModel({
       ...data,

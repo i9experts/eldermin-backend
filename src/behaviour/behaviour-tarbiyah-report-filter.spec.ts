@@ -14,7 +14,7 @@ function build() {
   const tarbiyahModel: any = aggModel([]);
   const settingsModel: any = { findOne: jest.fn(() => ({ lean: () => Promise.resolve(null) })) };
   const n: any = {};
-  return { svc: new BehaviourService(n, tarbiyahModel, n, n, n, settingsModel, n, n, n), tarbiyahModel };
+  return { svc: new BehaviourService(n, tarbiyahModel, n, n, n, settingsModel, n, n, n, n), tarbiyahModel };
 }
 
 describe('BehaviourService.getTarbiyahReportData grade/section filter tolerance', () => {
