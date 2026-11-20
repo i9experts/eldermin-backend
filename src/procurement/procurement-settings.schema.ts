@@ -75,6 +75,12 @@ export class AssetCategory {
   @Prop({ required: true }) code: string;
   @Prop({ default: true }) isActive: boolean;
   @Prop({ default: 0 }) order: number;
+  // Plain string matched against DepreciationMethod.name, same "match by
+  // the value currently stored" convention as Asset.category itself - pre-
+  // fills the Register Asset form's Depreciation Method field once a
+  // category is picked (IT Equipment ages faster than furniture; nobody
+  // filling the form should have to remember that every time).
+  @Prop() defaultDepreciationMethod: string;
 }
 export const AssetCategorySchema = SchemaFactory.createForClass(AssetCategory);
 applyCommonIndex(AssetCategorySchema);
