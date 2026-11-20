@@ -428,8 +428,16 @@ export class AcademicsService {
    */
   async seedDefaultBookCategories(tenantId: string, institutionId: string) {
     const tid = this.tid(tenantId);
-    const iid = institutionId ? this.oid(institutionId) : undefined;
     try {
+      // this.oid() throws synchronously on a malformed id - had to move
+      // inside the try (createBookCategory already does this correctly;
+      // this method didn't) so a non-ObjectId institutionId (e.g. a
+      // legacy account whose tenant lookup fell back to a slug string -
+      // see AuthService.login) surfaces as the same clear 400 that a bad
+      // tenantId/institutionId already gets on write failure, instead of
+      // an unhandled 500 that made the whole "Seed Dewey Categories"
+      // button appear completely broken for those schools.
+      const iid = institutionId ? this.oid(institutionId) : undefined;
       await this.bookCategoryModel.bulkWrite(
         DEWEY_DECIMAL_CATEGORIES.map((cat, i) => ({
           updateOne: {

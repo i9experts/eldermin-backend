@@ -1,5 +1,5 @@
 import { AcademicsService } from './academics.service';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { DEWEY_DECIMAL_CATEGORIES } from './dewey-decimal-categories';
 
 // Library categories (Dewey Decimal seed) - no real Mongo, each test wires
@@ -42,6 +42,24 @@ describe('AcademicsService — Library book categories', () => {
     const svc = makeService({ bookCategoryModel });
     await expect(svc.seedDefaultBookCategories('tenant-1', '507f1f77bcf86cd799439011'))
       .rejects.toThrow('Cast to ObjectId failed');
+  });
+
+  // A legacy account whose tenant lookup falls back to a slug string (see
+  // AuthService.login's tenantId fallback chain) can carry a non-ObjectId
+  // institutionId. this.oid() throws synchronously on those, not via a
+  // rejected promise - calling it outside the try (as this method
+  // originally did, unlike createBookCategory) meant this exact failure
+  // mode bypassed the catch entirely and reached the caller as an
+  // unhandled 500 instead of the same clear 400 every other write failure
+  // here gets. This is the "Seed Dewey Categories" button appearing to do
+  // nothing bug.
+  it('seedDefaultBookCategories surfaces a 400, not an unhandled throw, for a malformed institutionId', async () => {
+    const bulkWrite = jest.fn();
+    const bookCategoryModel: any = { bulkWrite };
+    const svc = makeService({ bookCategoryModel });
+    await expect(svc.seedDefaultBookCategories('tenant-1', 'not-a-valid-object-id'))
+      .rejects.toThrow(BadRequestException);
+    expect(bulkWrite).not.toHaveBeenCalled();
   });
 
   it('seedDefaultBookCategories is idempotent - calling it twice still only ever has 100 distinct Dewey codes', () => {
