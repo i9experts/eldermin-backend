@@ -66,18 +66,12 @@ describe('FinanceService — payment/invoice integrity fixes', () => {
 
   describe('getCollectionReport — excludes reversed payments', () => {
     it('includes isRefunded: { $ne: true } in the payment match for every groupBy', async () => {
-      const paymentModel: any = {
-        find: jest.fn().mockReturnValue({
-          sort: jest.fn().mockReturnThis(),
-          select: jest.fn().mockReturnThis(),
-          lean: jest.fn().mockResolvedValue([]),
-        }),
-      };
+      const paymentModel: any = { aggregate: jest.fn().mockResolvedValue([]) };
       const svc = makeService({ [PAYMENT_IDX]: paymentModel });
       await svc.getCollectionReport('s', { groupBy: 'slip' });
-      expect(paymentModel.find).toHaveBeenCalledWith(expect.objectContaining({
-        schoolSlug: 's', isRefunded: { $ne: true },
-      }));
+      expect(paymentModel.aggregate).toHaveBeenCalledWith(expect.arrayContaining([
+        { $match: expect.objectContaining({ schoolSlug: 's', isRefunded: { $ne: true } }) },
+      ]));
     });
   });
 

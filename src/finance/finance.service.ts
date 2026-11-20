@@ -2814,12 +2814,39 @@ export class FinanceService {
     if (grade) invoiceMatch.grade = grade;
     if (academicYear) invoiceMatch.academicYear = academicYear;
 
+    // Receipt-level projection shared by 'slip' and 'slipRange' - the
+    // "all receipts" / Fee Receiving view. fatherName looks up the
+    // specific father-relation guardian (falling back to whichever
+    // guardian is on file first, same convention as the family/AR-aging
+    // groupings' guardianName), and referenceNumber surfaces whichever of
+    // chequeNumber/transactionId actually applies to this payment's
+    // method (null for cash, where neither exists).
+    const receiptProjection = {
+      receiptNumber: 1, studentName: 1, invoiceNumber: 1, amount: 1,
+      paymentMethod: 1, paymentDate: 1, collectedBy: 1,
+      referenceNumber: { $ifNull: ['$chequeNumber', '$transactionId'] },
+      fatherName: {
+        $ifNull: [
+          { $first: { $filter: { input: { $ifNull: ['$student.guardians', []] }, as: 'g', cond: { $eq: ['$$g.relation', 'father'] } } } },
+          null,
+        ],
+      },
+    };
+    const resolveFatherName = (rows: any[]) => rows.map(r => ({
+      ...r,
+      fatherName: r.fatherName?.name || null,
+    }));
+
     switch (groupBy) {
       case 'slip': {
-        return this.paymentModel.find(paymentMatch)
-          .sort({ paymentDate: -1 })
-          .select('receiptNumber studentName invoiceNumber amount paymentMethod paymentDate collectedBy')
-          .lean();
+        const rows = await this.paymentModel.aggregate([
+          { $match: paymentMatch },
+          { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+          { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+          { $project: receiptProjection },
+          { $sort: { paymentDate: -1 } },
+        ]);
+        return resolveFatherName(rows);
       }
 
       case 'slipRange': {
@@ -2828,7 +2855,14 @@ export class FinanceService {
         if (fromSlip && toSlip) {
           rangeMatch.receiptNumber = { $gte: fromSlip, $lte: toSlip };
         }
-        return this.paymentModel.find(rangeMatch).sort({ receiptNumber: 1 }).lean();
+        const rows = await this.paymentModel.aggregate([
+          { $match: rangeMatch },
+          { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
+          { $unwind: { path: '$student', preserveNullAndEmptyArrays: true } },
+          { $project: receiptProjection },
+          { $sort: { receiptNumber: 1 } },
+        ]);
+        return resolveFatherName(rows);
       }
 
       case 'class': {
