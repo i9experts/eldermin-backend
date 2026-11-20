@@ -201,7 +201,7 @@ export class ProcurementSettingsService {
    * rather than duplicating them.
    */
   async seedDefaults(schoolSlug: string) {
-    const upsertAll = async (model: Model<any>, defaults: { name: string; code: string; order: number }[], extra: Record<string, any> = {}) => {
+    const upsertAll = async (model: Model<any>, defaults: ({ name: string; code: string; order: number } & Record<string, any>)[], extra: Record<string, any> = {}) => {
       const names: string[] = [];
       for (const d of defaults) {
         const result = await model.findOneAndUpdate(
@@ -219,7 +219,18 @@ export class ProcurementSettingsService {
 
     const vendorCategories = await upsertAll(this.vendorCategoryModel, toDefaults(VENDOR_CATS_DEFAULTS));
     const itemCategories = await upsertAll(this.itemCategoryModel, toDefaults(ITEM_CATS_DEFAULTS));
-    const assetCategories = await upsertAll(this.assetCategoryModel, toDefaults(ASSET_CATS_DEFAULTS));
+    // Per-category default depreciation method (see ASSET_CATS_DEPRECIATION_DEFAULTS)
+    // - IT Equipment ages/obsoletes faster than the rest, so it alone
+    // defaults to Declining Balance; every other category defaults to
+    // Straight Line, the simplest and most audit-friendly method for
+    // long-lived school assets.
+    const assetCategories = await upsertAll(
+      this.assetCategoryModel,
+      ASSET_CATS_DEFAULTS.map((name, i) => ({
+        name, code: slugifyCode(name), order: i + 1,
+        defaultDepreciationMethod: ASSET_CATS_DEPRECIATION_DEFAULTS[name] || 'Straight Line',
+      })),
+    );
     const unitsOfMeasure = await upsertAll(
       this.uomModel,
       UOM_OPTIONS_DEFAULTS.map((name, i) => ({ name, code: slugifyCode(name), order: i + 1, shortCode: UOM_SHORT_CODES[name] })),
@@ -247,6 +258,13 @@ export class ProcurementSettingsService {
 const VENDOR_CATS_DEFAULTS = ['IT Equipment', 'Stationery', 'Lab Equipment', 'Books & Curriculum', 'Furniture', 'Electrical', 'Maintenance', 'Catering'];
 const ITEM_CATS_DEFAULTS = ['Stationery', 'IT Consumables', 'IT Equipment', 'Lab Supplies', 'Furniture', 'Cleaning Supplies', 'Office Supplies'];
 const ASSET_CATS_DEFAULTS = ['IT Equipment', 'AV Equipment', 'Printing', 'Electrical', 'Security', 'Furniture', 'Lab Equipment', 'Transportation'];
+// Transportation (buses/vans) defaults to mileage-based Units of
+// Production where a school actually tracks odometer readings; everything
+// else not listed here falls back to Straight Line (see seedDefaults).
+const ASSET_CATS_DEPRECIATION_DEFAULTS: Record<string, string> = {
+  'IT Equipment': 'Declining Balance',
+  'Transportation': 'Units of Production',
+};
 const UOM_OPTIONS_DEFAULTS = ['Piece', 'Box', 'Ream', 'Set', 'Kit', 'Liter', 'Meter', 'Pack', 'Bundle'];
 const UOM_SHORT_CODES: Record<string, string> = {
   Piece: 'Pcs', Box: 'Box', Ream: 'Rm', Set: 'Set', Kit: 'Kit',
