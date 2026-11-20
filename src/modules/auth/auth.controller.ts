@@ -21,6 +21,11 @@ class ResetPasswordDto {
   @IsString() @MinLength(6) newPassword: string;
 }
 
+class ChangePasswordDto {
+  @IsString() currentPassword: string;
+  @IsString() @MinLength(6) newPassword: string;
+}
+
 class UpdateTourStateDto {
   // 'global' = the one-time sidebar/topbar orientation tour; anything else
   // is a module key (e.g. 'finance') for that module's own mini-tour.
@@ -56,6 +61,14 @@ export class AuthController {
   @Get('me')
   getMe(@Request() req) {
     return this.authService.getMe(req.user.userId, req.user.tenantId);
+  }
+
+  /** Self-service: change your own password while logged in (requires the current one). */
+  @AllowNonStaff()
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  changePassword(@Request() req, @Body() dto: ChangePasswordDto) {
+    return this.authService.changePassword(req.user.userId, dto.currentPassword, dto.newPassword);
   }
 
   @Post('me/avatar')
