@@ -410,6 +410,30 @@ export class AuthService {
     return { message: 'Signed out of all sessions.' };
   }
 
+  /**
+   * Self-service password change for a logged-in user - distinct from
+   * forgotPassword/resetPassword (the no-session, email-link flow). Until
+   * now there was no authenticated way for anyone to change their own
+   * password short of asking Eldermin support, including school admins
+   * who may not even have inbox access set up for the reset-link flow.
+   * Does not bump tokenVersion: unlike a forgot-password reset, the caller
+   * is already proving who they are with a live session, so there's no
+   * need to end it (or every other device's) just for changing it here.
+   */
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user: any = await this.userModel.findById(userId);
+    if (!user || user.isActive === false) throw new UnauthorizedException('User not found');
+
+    const hash = user.passwordHash || user.password;
+    if (!hash) throw new UnauthorizedException('Invalid credentials');
+    const valid = await bcrypt.compare(currentPassword, hash);
+    if (!valid) throw new UnauthorizedException('Current password is incorrect');
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.userModel.findByIdAndUpdate(user._id, { $set: { passwordHash } });
+    return { message: 'Password updated.' };
+  }
+
   async getMe(userId: string, tenantId: string) {
     const user: any = await this.userModel
       .findOne({ _id: userId, tenantId, isActive: true })
