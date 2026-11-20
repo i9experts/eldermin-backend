@@ -640,7 +640,21 @@ export class ProcurementService {
   // it from the client.
   async createAsset(data: any) {
     const asset = new this.assetModel(data);
-    return asset.save();
+    try {
+      return await asset.save();
+    } catch (e: any) {
+      // Uncaught, these fall through to the app's global exception filter
+      // as a bare 500 "Internal server error" - no mention of which field
+      // was missing/invalid, which looked exactly like "asset registration
+      // is broken" to a school admin whose real problem was just an empty
+      // Category field (e.g. no Asset Category created yet).
+      if (e?.code === 11000) throw new BadRequestException('An asset with this tag already exists.');
+      if (e?.name === 'ValidationError') {
+        const first = Object.values(e.errors || {})[0] as any;
+        throw new BadRequestException(first?.message || 'Could not register this asset - check the required fields.');
+      }
+      throw e;
+    }
   }
 
   async getAssets(schoolSlug: string, query: any) {
@@ -673,9 +687,18 @@ export class ProcurementService {
     // tag is auto-generated on create and never regenerated after — strip
     // it out of updates so an edit can't accidentally overwrite/blank it.
     const { tag, ...rest } = data;
-    const asset = await this.assetModel.findOneAndUpdate(
-      { _id: id, schoolSlug }, { $set: rest }, { new: true },
-    );
+    let asset;
+    try {
+      asset = await this.assetModel.findOneAndUpdate(
+        { _id: id, schoolSlug }, { $set: rest }, { new: true, runValidators: true },
+      );
+    } catch (e: any) {
+      if (e?.code === 11000) throw new BadRequestException('An asset with this tag already exists.');
+      if (e?.name === 'ValidationError' || e?.name === 'CastError') {
+        throw new BadRequestException(e.message || 'Could not update this asset - check the fields.');
+      }
+      throw e;
+    }
     if (!asset) throw new NotFoundException('Asset not found');
     return asset;
   }

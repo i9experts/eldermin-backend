@@ -63,7 +63,13 @@ export class ProcurementSettingsService {
   }
 
   private async update(model: Model<any>, schoolSlug: string, id: string, data: any, notFoundMsg: string) {
-    const doc = await model.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true }).lean();
+    let doc;
+    try {
+      doc = await model.findOneAndUpdate({ _id: id, schoolSlug }, { $set: data }, { new: true, runValidators: true }).lean();
+    } catch (e: any) {
+      if (e?.code === 11000) throw new BadRequestException('A record with this code already exists');
+      throw new BadRequestException(e.message);
+    }
     if (!doc) throw new NotFoundException(notFoundMsg);
     return doc;
   }
