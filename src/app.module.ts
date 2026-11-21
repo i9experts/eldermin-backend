@@ -33,6 +33,7 @@ import { ModulesModule } from './modules/modules.module';
 import { FamiliesModule } from './families/families.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { LeadsModule } from './leads/leads.module';
+import { VisitRecordsModule } from './visit-records/visit-records.module';
 import { SupportModule } from './support/support.module';
 import { RolesModule } from './roles/roles.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -117,6 +118,7 @@ import { idMatchConnectionFactory, IdMatchSelfTest } from './common/utils/id-mat
     FamiliesModule,
     AnalyticsModule,
     LeadsModule,
+    VisitRecordsModule,
     SupportModule,
     RolesModule,
     AuditLogModule,
