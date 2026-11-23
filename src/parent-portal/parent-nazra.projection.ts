@@ -23,11 +23,15 @@ export const PARENT_NAZRA_PARA_FIELDS = [
 ] as const;
 
 export const PARENT_NAZRA_ATTEMPT_FIELDS = [
-  'date', 'rating', 'pageFrom', 'pageTo', 'makhrajAccuracy', 'tajweedAccuracy', 'fluency', 'errorsNoted', 'remarks',
+  'date', 'rating', 'pageFrom', 'pageTo', 'surahNumber', 'surahName', 'ayahFrom', 'ayahTo',
+  'makhrajAccuracy', 'tajweedAccuracy', 'fluency', 'errorsNoted', 'remarks',
 ] as const;
 
-const SABAQ_FIELDS = ['paraNumber', 'pageFrom', 'pageTo', 'makhrajAccuracy', 'tajweedAccuracy', 'fluency', 'rating', 'errorsNoted', 'remarks'] as const;
-const REVISION_FIELDS = ['paraNumber', 'pageFrom', 'pageTo', 'rating', 'errorsNoted', 'remarks'] as const;
+const SABAQ_FIELDS = [
+  'paraNumber', 'pageFrom', 'pageTo', 'surahNumber', 'surahName', 'ayahFrom', 'ayahTo',
+  'makhrajAccuracy', 'tajweedAccuracy', 'fluency', 'rating', 'errorsNoted', 'remarks',
+] as const;
+const REVISION_FIELDS = ['paraNumber', 'pageFrom', 'pageTo', 'surahNumber', 'surahName', 'ayahFrom', 'ayahTo', 'rating', 'errorsNoted', 'remarks'] as const;
 
 export function projectParentNazraReport(report: any): Record<string, any> {
   const out = pick(report, PARENT_NAZRA_REPORT_FIELDS);

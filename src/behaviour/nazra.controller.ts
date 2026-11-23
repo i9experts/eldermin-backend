@@ -34,6 +34,11 @@ export class NazraController {
     return this.service.getParas();
   }
 
+  @Get('surahs')
+  getSurahs() {
+    return this.service.getSurahs();
+  }
+
   @Get('summary')
   async getSummary(@Request() req: any) {
     const { schoolSlug } = this.ctx(req);

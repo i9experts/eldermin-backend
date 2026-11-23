@@ -517,7 +517,7 @@ const REPORT_CARD_TEMPLATE = (data: any) => {
     ${nazraRecentLessons.length ? `
     <p class="note" style="margin-top:10px;margin-bottom:4px"><strong>Nazra — Recent Diary</strong></p>
     ${nazraRecentLessons.map((l: any) => `
-      <div class="list-item"><span>Para ${l.sabaq?.paraNumber ?? '—'}${l.sabaq?.pageFrom ? ` · ${esc(l.sabaq.pageFrom)}${l.sabaq.pageTo ? `–${esc(l.sabaq.pageTo)}` : ''}` : ''}</span><span style="text-transform:capitalize">${esc((l.sabaq?.rating || '').replace(/_/g, ' '))} · ${fmtDate(l.date)}</span></div>`).join('')}
+      <div class="list-item"><span>Para ${l.sabaq?.paraNumber ?? '—'}${l.sabaq?.surahNumber ? ` · ${esc(l.sabaq.surahName || `Surah ${l.sabaq.surahNumber}`)}${l.sabaq.ayahFrom ? ` ${l.sabaq.ayahFrom}${l.sabaq.ayahTo && l.sabaq.ayahTo !== l.sabaq.ayahFrom ? `–${l.sabaq.ayahTo}` : ''}` : ''}` : l.sabaq?.pageFrom ? ` · ${esc(l.sabaq.pageFrom)}${l.sabaq.pageTo ? `–${esc(l.sabaq.pageTo)}` : ''}` : ''}</span><span style="text-transform:capitalize">${esc((l.sabaq?.rating || '').replace(/_/g, ' '))} · ${fmtDate(l.date)}</span></div>`).join('')}
     ` : ''}
     ${(data.nazra?.commonErrors || []).length ? `<p class="note" style="margin-top:8px;margin-bottom:4px"><strong>Nazra — Common Errors</strong></p>${tagList(data.nazra.commonErrors.slice(0, 6).map((e: any) => `${e.error} (${e.count})`), 'tag-weak')}` : ''}
     ${invigilatorEntries.length ? `
@@ -1254,7 +1254,9 @@ const NAZRA_REPORT_TEMPLATE = (data: any) => {
     <tbody>
       ${data.paras.map((p: any) => {
         const style = NAZRA_STATUS_STYLE[p.status] || NAZRA_STATUS_STYLE.not_started;
-        const sabaq = p.latestAttempt?.pageFrom
+        const sabaq = p.latestAttempt?.surahNumber
+          ? `<strong>${esc(p.latestAttempt.surahName || `Surah ${p.latestAttempt.surahNumber}`)}${p.latestAttempt.ayahFrom ? ` ${p.latestAttempt.ayahFrom}${p.latestAttempt.ayahTo && p.latestAttempt.ayahTo !== p.latestAttempt.ayahFrom ? `–${p.latestAttempt.ayahTo}` : ''}` : ''}</strong>`
+          : p.latestAttempt?.pageFrom
           ? `<strong>p.${esc(p.latestAttempt.pageFrom)}${p.latestAttempt.pageTo && p.latestAttempt.pageTo !== p.latestAttempt.pageFrom ? ` → p.${esc(p.latestAttempt.pageTo)}` : ''}</strong>`
           : '';
         const remarks = p.latestAttempt?.remarks ? rtl(p.latestAttempt.remarks) : '';
@@ -1274,7 +1276,7 @@ const NAZRA_REPORT_TEMPLATE = (data: any) => {
   ${data.diaryLog && data.diaryLog.length > 0 ? `
   <div class="section-title">Recent Diary — Sabaq / Sabqi / Manzil</div>
   ${data.diaryLog.map((e: any) => {
-    const sabaqText = `Para ${e.sabaq.paraNumber}${e.sabaq.pageFrom ? ` · p.${esc(e.sabaq.pageFrom)}${e.sabaq.pageTo ? `–${esc(e.sabaq.pageTo)}` : ''}` : ''}`;
+    const sabaqText = `Para ${e.sabaq.paraNumber}${e.sabaq.surahNumber ? ` · ${esc(e.sabaq.surahName || `Surah ${e.sabaq.surahNumber}`)}${e.sabaq.ayahFrom ? ` ${e.sabaq.ayahFrom}${e.sabaq.ayahTo && e.sabaq.ayahTo !== e.sabaq.ayahFrom ? `–${e.sabaq.ayahTo}` : ''}` : ''}` : e.sabaq.pageFrom ? ` · p.${esc(e.sabaq.pageFrom)}${e.sabaq.pageTo ? `–${esc(e.sabaq.pageTo)}` : ''}` : ''}`;
     const tags = [
       `<span class="diary-tag" style="background:#DBEAFE;color:#2563EB">Sabaq</span>${sabaqText} (${esc((e.sabaq.rating || '').replace(/_/g, ' '))})`,
       e.sabqi ? `<span class="diary-tag" style="background:#FEF3DC;color:#C8811A">Sabqi</span>Para ${e.sabqi.paraNumber} (${esc((e.sabqi.rating || '').replace(/_/g, ' '))})` : '',
@@ -2734,6 +2736,10 @@ export class PdfService implements OnModuleDestroy {
         latestAttempt: latestAttempt ? {
           pageFrom: latestAttempt.pageFrom,
           pageTo: latestAttempt.pageTo,
+          surahNumber: latestAttempt.surahNumber,
+          surahName: latestAttempt.surahName,
+          ayahFrom: latestAttempt.ayahFrom,
+          ayahTo: latestAttempt.ayahTo,
           remarks: latestAttempt.remarks,
         } : null,
       };

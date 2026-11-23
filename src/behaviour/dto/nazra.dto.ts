@@ -4,6 +4,7 @@ import {
   Max, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { NAZRA_COMMON_ERRORS, NAZRA_PARA_COUNT } from '../schemas/nazra-progress.schema';
+import { QURAN_SURAH_COUNT } from '../schemas/quran-surahs';
 
 const RATINGS = ['needs_practice', 'developing', 'proficient', 'mastered'];
 
@@ -25,6 +26,10 @@ export class DiarySabaqDto {
   @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) paraNumber: number;
   @IsOptional() @IsString() @MaxLength(50) pageFrom?: string;
   @IsOptional() @IsString() @MaxLength(50) pageTo?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(QURAN_SURAH_COUNT) surahNumber?: number;
+  @IsOptional() @IsString() @MaxLength(60) surahName?: string;
+  @IsOptional() @IsInt() @Min(1) ayahFrom?: number;
+  @IsOptional() @IsInt() @Min(1) ayahTo?: number;
   @IsOptional() @IsNumber() @Min(1) @Max(5) makhrajAccuracy?: number;
   @IsOptional() @IsNumber() @Min(1) @Max(5) tajweedAccuracy?: number;
   @IsOptional() @IsNumber() @Min(1) @Max(5) fluency?: number;
@@ -38,6 +43,10 @@ export class DiaryRevisionDto {
   @IsInt() @Min(1) @Max(NAZRA_PARA_COUNT) paraNumber: number;
   @IsOptional() @IsString() @MaxLength(50) pageFrom?: string;
   @IsOptional() @IsString() @MaxLength(50) pageTo?: string;
+  @IsOptional() @IsInt() @Min(1) @Max(QURAN_SURAH_COUNT) surahNumber?: number;
+  @IsOptional() @IsString() @MaxLength(60) surahName?: string;
+  @IsOptional() @IsInt() @Min(1) ayahFrom?: number;
+  @IsOptional() @IsInt() @Min(1) ayahTo?: number;
   @IsIn(RATINGS) rating: string;
   @IsOptional() @IsArray() @IsIn(NAZRA_COMMON_ERRORS as unknown as string[], { each: true })
   errorsNoted?: string[];
