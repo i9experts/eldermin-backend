@@ -211,7 +211,7 @@ describe('PTMService notify hooks', () => {
     };
     const emailService: any = { sendEmail: jest.fn().mockResolvedValue({ sent: true }) };
     const notify = opts.notify === undefined ? jest.fn().mockResolvedValue(undefined) : opts.notify;
-    const service = new (PTMService as any)(ptmModel, studentModel, staffModel, emailService, notify ? { notify } : undefined) as PTMService;
+    const service = new (PTMService as any)(ptmModel, studentModel, staffModel, emailService, {} as any, notify ? { notify } : undefined) as PTMService;
     return { service, notify, resched };
   }
   const data = () => ({ studentId, teacherId, scheduledDate: '2026-11-01', startTime: '10:00', endTime: '10:20' });

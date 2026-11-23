@@ -13,7 +13,7 @@ function make() {
   const studentModel: any = {};
   const staffModel: any = { db: { collection: () => ({ findOne: async () => null }) } };
   const emailService: any = {};
-  const service = new PTMService(PtmModel, studentModel, staffModel, emailService, undefined, undefined);
+  const service = new PTMService(PtmModel, studentModel, staffModel, emailService, {} as any, undefined, undefined);
   return { service, PtmModel };
 }
 

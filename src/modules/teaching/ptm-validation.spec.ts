@@ -15,7 +15,7 @@ function make() {
   const studentModel: any = { findById: jest.fn(() => chain({ _id: 's', firstName: 'A', lastName: 'B', guardians: [] })) };
   const staffModel: any = { findById: jest.fn(() => chain({ firstName: 'T', lastName: 'T' })), db: { collection: () => ({ findOne: async () => null }) } };
   const emailService: any = { sendEmail: jest.fn(async () => ({ sent: false })) };
-  const service = new PTMService(PtmModel as any, studentModel, staffModel, emailService, undefined, undefined);
+  const service = new PTMService(PtmModel as any, studentModel, staffModel, emailService, {} as any, undefined, undefined);
   jest.spyOn(service as any, 'notifyGuardians').mockResolvedValue(undefined);
   jest.spyOn(service as any, 'notifyTeacher').mockResolvedValue(undefined);
   return { service, PtmModel, saved, studentModel };

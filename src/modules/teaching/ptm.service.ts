@@ -14,6 +14,7 @@ import { StaffNotifier } from '../../staff-portal/staff-notifier.service';
 import { resolveSchoolSlug } from '../../staff-portal/staff-notify.util';
 import { EmailService } from '../../email/email.service';
 import { resolveCampusScope, ScopedUser } from '../../auth/scope.util';
+import { PdfService } from '../../pdf/pdf.service';
 
 @Injectable()
 export class PTMService {
@@ -22,6 +23,7 @@ export class PTMService {
     @InjectModel(Student.name) private studentModel: Model<StudentDocument>,
     @InjectModel(Staff.name) private staffModel: Model<StaffDocument>,
     private emailService: EmailService,
+    private pdfService: PdfService,
     @Optional() private readonly staffNotifier?: StaffNotifier,
     @Optional() @InjectModel(TeacherProfile.name) private teacherProfileModel?: Model<TeacherProfileDocument>,
   ) {}
@@ -166,6 +168,12 @@ export class PTMService {
       assertOwnsTeacherDoc(me, meeting.teacherId, 'You can only view your own meetings');
     }
     return meeting;
+  }
+
+  /** Downloadable record of one meeting - agenda, outcome, action items - for admins/teachers to keep or print. */
+  async generateMeetingPdf(id: string, tenantId: string, schoolSlug: string, userId: string, requestingUser?: ScopedUser) {
+    const meeting = await this.getMeetingById(id, tenantId, requestingUser);
+    return this.pdfService.generatePTMMeetingPdf(schoolSlug, meeting, userId);
   }
 
   /** "Historical Data" - every past PTM for a student, oldest problems and progress visible together. */

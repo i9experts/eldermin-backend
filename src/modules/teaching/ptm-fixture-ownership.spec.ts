@@ -27,7 +27,7 @@ function makePtm(meetingTeacher: any) {
   };
   const staffModel: any = { findOne: jest.fn(() => chain({ _id: MY_STAFF, firstName: 'Ms', lastName: 'Me' })), db: { collection: () => ({ findOne: async () => null }) } };
   const profileModel: any = { findOne: jest.fn(() => chain(null)) };
-  const service = new PTMService(ptmModel, {} as any, staffModel, {} as any, undefined, profileModel);
+  const service = new PTMService(ptmModel, {} as any, staffModel, {} as any, {} as any, undefined, profileModel);
   jest.spyOn(service as any, 'notifyGuardians').mockResolvedValue(undefined);
   return { service, ptmModel, doc, id: String(meetingId) };
 }
