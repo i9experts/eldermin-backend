@@ -134,6 +134,57 @@ describe('NazraService.getProgress', () => {
   });
 });
 
+describe('NazraService.recordDiaryEntry - Surah/Ayah range validation', () => {
+  it('accepts a valid Surah + Ayah range on the Sabaq', async () => {
+    const progress = makeProgress();
+    const service = makeService(progress);
+    await service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', {
+      sabaq: { paraNumber: 1, rating: 'proficient', surahNumber: 2, surahName: 'Al-Baqarah', ayahFrom: 1, ayahTo: 5 },
+    } as any, 'Teacher');
+    expect(progress.diaryEntries[0].sabaq.surahNumber).toBe(2);
+    expect(progress.diaryEntries[0].sabaq.ayahFrom).toBe(1);
+    expect(progress.diaryEntries[0].sabaq.ayahTo).toBe(5);
+  });
+
+  it('rejects an invalid surah number', async () => {
+    const progress = makeProgress();
+    const service = makeService(progress);
+    await expect(service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', {
+      sabaq: { paraNumber: 1, rating: 'proficient', surahNumber: 200 },
+    } as any, 'Teacher')).rejects.toThrow(BadRequestException);
+  });
+
+  it("rejects an ayah range past the surah's own ayah count", async () => {
+    const progress = makeProgress();
+    const service = makeService(progress);
+    // Al-Fatihah (surah 1) has only 7 ayahs.
+    await expect(service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', {
+      sabaq: { paraNumber: 1, rating: 'proficient', surahNumber: 1, ayahFrom: 1, ayahTo: 10 },
+    } as any, 'Teacher')).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects Ayah From after Ayah To', async () => {
+    const progress = makeProgress();
+    const service = makeService(progress);
+    await expect(service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', {
+      sabaq: { paraNumber: 1, rating: 'proficient', surahNumber: 2, ayahFrom: 10, ayahTo: 5 },
+    } as any, 'Teacher')).rejects.toThrow(BadRequestException);
+  });
+
+  it('also validates a Sabqi/Manzil revision block that supplies a surahNumber', async () => {
+    const progress = makeProgress();
+    const service = makeService(progress);
+    await expect(service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', {
+      sabaq: { paraNumber: 1, rating: 'proficient' },
+      sabqi: { paraNumber: 1, rating: 'proficient', surahNumber: 1, ayahFrom: 1, ayahTo: 7 },
+    } as any, 'Teacher')).resolves.toBeDefined();
+    await expect(service.recordDiaryEntry('507f1f77bcf86cd799439011', 'demo-school', {
+      sabaq: { paraNumber: 1, rating: 'proficient' },
+      sabqi: { paraNumber: 1, rating: 'proficient', surahNumber: 1, ayahFrom: 1, ayahTo: 8 },
+    } as any, 'Teacher')).rejects.toThrow(BadRequestException);
+  });
+});
+
 describe('NAZRA_PARAS', () => {
   it('has exactly 30 paras, numbered 1-30', () => {
     expect(NAZRA_PARA_COUNT).toBe(30);

@@ -9,6 +9,7 @@ import { Model, Types } from 'mongoose';
 import {
   NazraProgress, NazraProgressDocument, NAZRA_PARAS, NAZRA_PARA_COUNT,
 } from './schemas/nazra-progress.schema';
+import { getSurahByNumber, QURAN_SURAHS, QURAN_SURAH_COUNT } from './schemas/quran-surahs';
 import { QaidaNazraSettings, QaidaNazraSettingsDocument } from './schemas/qaida-nazra-extras.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
 import { InitNazraProgressDto, RecordNazraDiaryDto } from './dto/nazra.dto';
@@ -31,6 +32,10 @@ export class NazraService {
 
   getParas() {
     return { paras: NAZRA_PARAS, total: NAZRA_PARA_COUNT };
+  }
+
+  getSurahs() {
+    return { surahs: QURAN_SURAHS, total: QURAN_SURAH_COUNT };
   }
 
   // Whether this school teaches Nazra starting from Para 30 backward to
@@ -144,6 +149,27 @@ export class NazraService {
   // of Sabqi/Manzil the teacher covered today. This is the real feature:
   // a single call that captures the whole globally-standard daily
   // structure, not three separate round trips.
+  // Surah+Ayah is a free pair of fields on the DTO (no FK to the Surah
+  // list), so a typo'd combination - a surah number that doesn't exist,
+  // or an ayah range the Surah doesn't actually have that many of -
+  // would otherwise save silently. Checked once per Sabaq/Sabqi/Manzil
+  // block that actually supplies a surahNumber; blocks that only use the
+  // legacy free-text page range are left alone entirely.
+  private assertValidSurahAyahRange(block: { surahNumber?: number; ayahFrom?: number; ayahTo?: number }, label: string) {
+    if (block.surahNumber == null) return;
+    const surah = getSurahByNumber(block.surahNumber);
+    if (!surah) throw new BadRequestException(`${label}: invalid surah number ${block.surahNumber}`);
+    if (block.ayahFrom != null && block.ayahFrom > surah.ayahCount) {
+      throw new BadRequestException(`${label}: Surah ${surah.nameEn} only has ${surah.ayahCount} ayahs`);
+    }
+    if (block.ayahTo != null && block.ayahTo > surah.ayahCount) {
+      throw new BadRequestException(`${label}: Surah ${surah.nameEn} only has ${surah.ayahCount} ayahs`);
+    }
+    if (block.ayahFrom != null && block.ayahTo != null && block.ayahFrom > block.ayahTo) {
+      throw new BadRequestException(`${label}: Ayah From can't be after Ayah To`);
+    }
+  }
+
   async recordDiaryEntry(
     studentId: string,
     schoolSlug: string,
@@ -154,6 +180,10 @@ export class NazraService {
     const progress = await this.getProgress(studentId, schoolSlug);
     const reverse = await this.isReverseOrder(schoolSlug);
     const { sabaq, sabqi, manzil } = dto;
+
+    this.assertValidSurahAyahRange(sabaq, 'Sabaq');
+    if (sabqi) this.assertValidSurahAyahRange(sabqi, 'Sabqi');
+    if (manzil) this.assertValidSurahAyahRange(manzil, 'Manzil');
 
     const sabaqRecord = progress.paras.find((p) => p.paraNumber === sabaq.paraNumber);
     if (!sabaqRecord) throw new BadRequestException(`Invalid para number: ${sabaq.paraNumber}`);
@@ -183,6 +213,10 @@ export class NazraService {
       assessedById: assessedById ? (new Types.ObjectId(assessedById) as any) : undefined,
       pageFrom: sabaq.pageFrom,
       pageTo: sabaq.pageTo,
+      surahNumber: sabaq.surahNumber,
+      surahName: sabaq.surahName,
+      ayahFrom: sabaq.ayahFrom,
+      ayahTo: sabaq.ayahTo,
       makhrajAccuracy: sabaq.makhrajAccuracy,
       tajweedAccuracy: sabaq.tajweedAccuracy,
       fluency: sabaq.fluency,
@@ -222,6 +256,10 @@ export class NazraService {
         paraNumber: sabaq.paraNumber,
         pageFrom: sabaq.pageFrom,
         pageTo: sabaq.pageTo,
+        surahNumber: sabaq.surahNumber,
+        surahName: sabaq.surahName,
+        ayahFrom: sabaq.ayahFrom,
+        ayahTo: sabaq.ayahTo,
         makhrajAccuracy: sabaq.makhrajAccuracy,
         tajweedAccuracy: sabaq.tajweedAccuracy,
         fluency: sabaq.fluency,

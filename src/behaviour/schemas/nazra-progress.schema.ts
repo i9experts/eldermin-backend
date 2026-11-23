@@ -105,6 +105,10 @@ class SabaqAttempt {
 
   @Prop() pageFrom?: string;
   @Prop() pageTo?: string;
+  @Prop() surahNumber?: number;
+  @Prop() surahName?: string;
+  @Prop() ayahFrom?: number;
+  @Prop() ayahTo?: number;
 
   @Prop({ min: 1, max: 5 }) makhrajAccuracy?: number;
   @Prop({ min: 1, max: 5 }) tajweedAccuracy?: number;
@@ -139,11 +143,21 @@ const ParaRecordSchema = SchemaFactory.createForClass(ParaRecord);
 // A revision reference (used for both Sabqi and Manzil) - lighter than a
 // full Sabaq attempt since it's judging retention of an already-read
 // portion, not first-time correctness.
+//
+// surahNumber/surahName/ayahFrom/ayahTo replace the old pageFrom/pageTo
+// free-text page range with a precise, independently-checkable location
+// (a page number varies between Mushaf print editions; a Surah+Ayah
+// range doesn't). pageFrom/pageTo stay on the schema, unused by new
+// entries, purely so existing diary history keeps rendering correctly.
 @Schema({ _id: false })
 class RevisionEntry {
   @Prop({ required: true }) paraNumber: number;
   @Prop() pageFrom?: string;
   @Prop() pageTo?: string;
+  @Prop() surahNumber?: number;
+  @Prop() surahName?: string;
+  @Prop() ayahFrom?: number;
+  @Prop() ayahTo?: number;
   @Prop({ enum: RATINGS, required: true }) rating: string;
   @Prop({ type: [String], default: [] }) errorsNoted: string[];
   @Prop() remarks?: string;
@@ -158,6 +172,10 @@ class DiarySabaq {
   @Prop({ required: true }) paraNumber: number;
   @Prop() pageFrom?: string;
   @Prop() pageTo?: string;
+  @Prop() surahNumber?: number;
+  @Prop() surahName?: string;
+  @Prop() ayahFrom?: number;
+  @Prop() ayahTo?: number;
   @Prop({ min: 1, max: 5 }) makhrajAccuracy?: number;
   @Prop({ min: 1, max: 5 }) tajweedAccuracy?: number;
   @Prop({ min: 1, max: 5 }) fluency?: number;

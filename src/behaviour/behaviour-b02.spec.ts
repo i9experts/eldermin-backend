@@ -26,10 +26,12 @@ let warn: jest.SpyInstance;
 beforeEach(() => { warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined); });
 afterEach(() => { warn.mockRestore(); if (ORIGINAL === undefined) delete process.env.BEHAVIOUR_GUARD_MODE; else process.env.BEHAVIOUR_GUARD_MODE = ORIGINAL; });
 
-describe.each([['Qaida', QaidaController], ['Nazra', NazraController]] as const)('%sController', (_name, C) => {
-  it('is protected by BehaviourStaffOnlyGuard at class level and has all 10 routes', () => {
+// Nazra has one more route than Qaida: GET surahs (the Quran surah
+// reference list backing the Sabaq/Sabqi/Manzil Surah+Ayah picker).
+describe.each([['Qaida', QaidaController, 10], ['Nazra', NazraController, 11]] as const)('%sController', (_name, C, routeCount) => {
+  it(`is protected by BehaviourStaffOnlyGuard at class level and has all ${routeCount} routes`, () => {
     expect(Reflect.getMetadata('__guards__', C)).toContain(BehaviourStaffOnlyGuard);
-    expect(handlersOf(C)).toHaveLength(10);
+    expect(handlersOf(C)).toHaveLength(routeCount);
   });
 
   it.each(['log', 'enforce'])('mode=%s: every route is 403 for parent / student / reseller tokens', (mode) => {
@@ -39,7 +41,7 @@ describe.each([['Qaida', QaidaController], ['Nazra', NazraController]] as const)
       expect(() => guard.canActivate(ctx(C, h, { role, userId: 'u1' }))).toThrow(ForbiddenException);
     }
     const events = warn.mock.calls.map(c => JSON.parse(String(c[0]))).filter(e => e.event === 'behaviour_guard');
-    expect(events.length).toBe(10 * NON_STAFF.length);
+    expect(events.length).toBe(routeCount * NON_STAFF.length);
     expect(events.every(e => e.decision === 'denied' && e.reason === 'non_staff_token' && e.mode === mode)).toBe(true);
   });
 
