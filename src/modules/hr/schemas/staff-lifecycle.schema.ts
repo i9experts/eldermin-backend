@@ -72,7 +72,18 @@ export class StaffLifecycle {
       scheduledAt: Date,
       venue: String,
       interviewers: [String],
-      type: String,
+      // A field literally named `type` inside a nested object Mongoose is
+      // asked to compile as a subdocument schema is a well-known trap: a
+      // bare `type: String` here was indistinguishable from the SchemaType
+      // option of the SAME name on the surrounding `{...}` itself, so
+      // Mongoose read the whole subdocument definition as "this field's
+      // type is String" instead of a subdocument shape - silently
+      // compiling `interviews` as a plain string array with no schema
+      // paths at all. Every POST /hr/lifecycle/:id/interview then failed
+      // at save time with "Cast to [string] failed for value [the whole
+      // interview object]" - the "Failed to schedule interview" toast.
+      // `{ type: String }` disambiguates it as an ordinary field.
+      type: { type: String },
       status: String,
       feedback: String,
       rating: Number,
