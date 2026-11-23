@@ -1,7 +1,8 @@
 import {
   Controller, Get, Post, Patch, Delete,
-  Body, Param, Query, Request,
+  Body, Param, Query, Request, Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { PTMService } from './ptm.service';
 import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../../auth/role-sets';
 import { projectForTeacher } from '../../students/teacher-student-projection.util';
@@ -43,6 +44,14 @@ export class PTMController {
   @Get(':id')
   async getById(@Param('id') id: string, @Request() req: any) {
     return projectForTeacher(req.user, await this.service.getMeetingById(id, req.user.tenantId, req.user));
+  }
+
+  @RequireModuleAccess('teaching', 'ptm', 'view')
+  @Get(':id/pdf')
+  async downloadPdf(@Param('id') id: string, @Request() req: any, @Res() res: Response) {
+    const pdf = await this.service.generateMeetingPdf(id, req.user.tenantId, req.user.schoolSlug, req.user.userId, req.user);
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="ptm-meeting-${id}.pdf"`, 'Content-Length': pdf.length });
+    res.send(pdf);
   }
 
   @RequireModuleAccess('teaching', 'ptm', 'manage')

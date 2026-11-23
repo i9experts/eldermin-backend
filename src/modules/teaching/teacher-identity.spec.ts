@@ -224,7 +224,7 @@ describe('PTMService: teacher identity', () => {
     const ptmModel: any = jest.fn(function (this: any, doc: any) { Object.assign(this, doc); this.save = async () => { saved.push(doc); return this; }; });
     ptmModel.findOne = jest.fn(() => ({ ...chain(meeting), then: undefined }));
     const studentModel: any = { findById: jest.fn(() => chain({ firstName: 'S', guardians: [] })) };
-    const service = new PTMService(ptmModel, studentModel, staffModel, { } as any, undefined, teacherProfileModel);
+    const service = new PTMService(ptmModel, studentModel, staffModel, { } as any, {} as any, undefined, teacherProfileModel);
     return { service, saved, ptmModel };
   }
   const dto = { studentId: oid().toString(), scheduledDate: '2026-01-01' };

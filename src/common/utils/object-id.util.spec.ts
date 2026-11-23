@@ -61,7 +61,7 @@ describe('malformed id -> 400 on teacher-app routes', () => {
   });
 
   it('PTM routes', async () => {
-    const ptm = new PTMService({} as any, {} as any, {} as any, {} as any, undefined, {} as any);
+    const ptm = new PTMService({} as any, {} as any, {} as any, {} as any, {} as any, undefined, {} as any);
     await expect(ptm.getMeetingById('bad', 't')).rejects.toThrow('Invalid meeting id');
     await expect(ptm.getStudentHistory('bad', 't')).rejects.toThrow('Invalid student id');
     await expect(ptm.confirmMeeting('bad', 't')).rejects.toThrow('Invalid meeting id');

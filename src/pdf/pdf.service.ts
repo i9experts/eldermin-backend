@@ -4698,6 +4698,131 @@ ${css}
   }
 
   /**
+   * Parent-Teacher Meeting record PDF - the full E-Plan -> E-Management
+   * history for one meeting (agenda, outcome, action items), so a school
+   * admin or teacher can download/print a completed meeting's record
+   * instead of only ever seeing it inside the app.
+   */
+  async generatePTMMeetingPdf(
+    schoolSlug: string,
+    meeting: any,
+    userId: string,
+    templateId?: string,
+  ): Promise<Buffer> {
+    const school = await this.getSchool(schoolSlug);
+    const template = await this.getTemplateForType(schoolSlug, 'ptm_meeting', templateId);
+    const letterheadHtml = this.buildLetterheadHtml(template, school as any);
+    const primaryColor = template.letterhead?.primaryColor || '#0C447C';
+    const accentColor = template.letterhead?.accentColor || '#EF9F27';
+
+    const scheduledDate = meeting.scheduledDate ? new Date(meeting.scheduledDate) : new Date();
+    const dateStr = scheduledDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const timeStr = [meeting.startTime, meeting.endTime].filter(Boolean).join(' – ');
+
+    const STATUS_LABEL: Record<string, string> = {
+      requested: 'Requested', confirmed: 'Confirmed', completed: 'Completed',
+      no_show: 'No-show', cancelled: 'Cancelled',
+    };
+
+    const discussionPointsHtml = (meeting.discussionPoints || []).length
+      ? `<ul>${(meeting.discussionPoints || []).map((p: string) => `<li>${escapeHtml(p)}</li>`).join('')}</ul>`
+      : '<p class="muted">None recorded.</p>';
+
+    const actionItemsHtml = (meeting.actionItems || []).length
+      ? `<table class="fields"><tr><td class="label">Action</td><td class="label">Assigned To</td><td class="label">Due</td><td class="label">Status</td></tr>
+          ${(meeting.actionItems || []).map((a: any) => `<tr>
+            <td>${escapeHtml(a.description || '')}</td>
+            <td>${escapeHtml(a.assignedTo || '—')}</td>
+            <td>${a.dueDate ? formatDateShort(a.dueDate) : '—'}</td>
+            <td>${a.status === 'done' ? 'Done' : 'Pending'}</td>
+          </tr>`).join('')}</table>`
+      : '<p class="muted">None recorded.</p>';
+
+    const outcomeSection = (meeting.status === 'completed' || meeting.status === 'no_show') ? `
+      <div class="section">
+        <div class="section-head">Outcome</div>
+        <table class="fields">
+          <tr><td class="label">Parent Attended</td><td>${meeting.parentAttended ? 'Yes' : 'No'}</td></tr>
+          ${meeting.meetingNotes ? `<tr><td class="label">Meeting Notes</td><td>${escapeHtml(meeting.meetingNotes)}</td></tr>` : ''}
+        </table>
+      </div>
+      <div class="section">
+        <div class="section-head">Action Items</div>
+        ${actionItemsHtml}
+      </div>` : meeting.status === 'cancelled' ? `
+      <div class="section">
+        <div class="section-head">Cancellation</div>
+        <table class="fields">
+          <tr><td class="label">Reason</td><td>${escapeHtml(meeting.cancelledReason || '—')}</td></tr>
+          ${meeting.cancelledBy ? `<tr><td class="label">Cancelled By</td><td>${escapeHtml(meeting.cancelledBy)}</td></tr>` : ''}
+        </table>
+      </div>` : '';
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  ${urduFontFaceCss()}
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', 'Noto Nastaliq Urdu', Arial, sans-serif; color: #0D1F35; margin: 0; padding: 18mm 14mm; }
+  h1 { font-size: 18px; margin: 18px 0 2px; color: ${primaryColor}; }
+  .sub { font-size: 12px; color: #6B7A90; margin-bottom: 16px; }
+  .section { border: 1px solid #E2E8F0; border-radius: 6px; margin-bottom: 10px; overflow: hidden; page-break-inside: avoid; }
+  .section-head { background: ${primaryColor}; color: #fff; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 7px 10px; }
+  table.fields { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.fields td { padding: 7px 10px; vertical-align: top; border-top: 1px solid #F1F5F9; white-space: pre-wrap; }
+  table.fields td.label { width: 130px; font-weight: 600; color: ${accentColor}; white-space: normal; }
+  .muted { padding: 7px 10px; color: #94A3B8; font-size: 11.5px; margin: 0; }
+  ul { margin: 2px 0; padding-inline-start: 18px; font-size: 11.5px; }
+  .foot { margin-top: 16px; font-size: 9.5px; color: #94A3B8; }
+  .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10.5px; font-weight: 600; background: ${primaryColor}1a; color: ${primaryColor}; }
+</style>
+</head>
+<body>
+  ${letterheadHtml}
+  <h1>Parent-Teacher Meeting — ${escapeHtml(meeting.studentName || '')}</h1>
+  <p class="sub">${escapeHtml(meeting.gradeLevel || '')}${meeting.sectionName ? ` ${escapeHtml(meeting.sectionName)}` : ''} &nbsp;|&nbsp; ${dateStr}${timeStr ? ` · ${timeStr}` : ''} &nbsp;|&nbsp; <span class="status-badge">${STATUS_LABEL[meeting.status] || meeting.status}</span></p>
+
+  <div class="section">
+    <div class="section-head">Meeting Details</div>
+    <table class="fields">
+      <tr><td class="label">Teacher</td><td>${escapeHtml(meeting.teacherName || '—')}</td></tr>
+      <tr><td class="label">Guardian</td><td>${escapeHtml(meeting.guardianName || '—')}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-head">Discussion Points</div>
+    ${discussionPointsHtml}
+  </div>
+
+  ${outcomeSection}
+
+  <p class="foot">Generated ${new Date().toLocaleDateString('en-GB')}</p>
+</body>
+</html>`;
+
+    const pdf = await this.htmlToPdfWithOptions(html, {
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
+    });
+
+    await this.logPdf({
+      schoolSlug,
+      type: 'ptm_meeting',
+      referenceId: String(meeting._id || ''),
+      referenceName: `${meeting.studentName || ''} — ${dateStr}`,
+      generatedBy: userId,
+      status: 'success',
+      fileSizeKb: Math.round(pdf.length / 1024),
+    });
+
+    return pdf;
+  }
+
+  /**
    * Formal board/committee Meeting Minutes PDF — the kind of document that
    * gets filed, referenced in an audit, and sometimes physically signed.
    * `meeting` is a plain (lean) Meeting document, already resolved by
