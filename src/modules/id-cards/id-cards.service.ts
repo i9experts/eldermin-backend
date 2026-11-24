@@ -119,6 +119,44 @@ export class IdCardsService {
     };
   }
 
+  // Resolves a photo/logo/watermark URL to an embedded `data:` URI
+  // instead of leaving it as a live `<img src="https://...">` for
+  // Puppeteer to fetch while rendering the page. Puppeteer's
+  // `page.setContent({ waitUntil: 'load' })` blocks on every image on the
+  // page finishing (or failing) within its own navigation timeout - fine
+  // for a single card, but a full-class batch (a dozen-plus photos,
+  // sometimes multi-MB phone-camera uploads, all fetched by the
+  // container at render time) routinely exceeded that timeout and failed
+  // the ENTIRE PDF with no useful error. Resolving every image here
+  // first, in parallel and each bounded by its own short timeout, means
+  // one slow/unreachable photo degrades to that one card's initials
+  // fallback instead of taking the whole batch down.
+  private async imageUrlToDataUri(url: string, timeoutMs = 8000): Promise<string | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) return null;
+        const buf = Buffer.from(await res.arrayBuffer());
+        const contentType = res.headers.get('content-type') || this.guessImageMimeType(url);
+        return `data:${contentType};base64,${buf.toString('base64')}`;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      return null; // non-fatal - the card renders with its fallback instead
+    }
+  }
+
+  private guessImageMimeType(url: string): string {
+    const u = url.toLowerCase();
+    if (u.includes('.png')) return 'image/png';
+    if (u.includes('.webp')) return 'image/webp';
+    if (u.includes('.gif')) return 'image/gif';
+    return 'image/jpeg';
+  }
+
   private escapeHtml(text: any): string {
     if (text === undefined || text === null) return '';
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -155,9 +193,14 @@ export class IdCardsService {
         verifyCode: `STAFF:${doc.employeeId || doc._id}`,
       };
     }
-    const father = (doc.guardians || []).find((g: any) => g.relation === 'father');
-    const primaryGuardian = (doc.guardians || []).find((g: any) => g.isPrimary) || father || (doc.guardians || [])[0];
-    const guardianPhone = (doc.guardians || []).map((g: any) => g.phone).filter(Boolean)[0] || '';
+    // Array.isArray guard: a handful of legacy/imported student records
+    // have a malformed (non-array) guardians value, which used to throw
+    // here (`.find is not a function`) and take the whole batch down with
+    // it - one bad record in a class-wide selection failed every card.
+    const guardians: any[] = Array.isArray(doc.guardians) ? doc.guardians : [];
+    const father = guardians.find((g: any) => g.relation === 'father');
+    const primaryGuardian = guardians.find((g: any) => g.isPrimary) || father || guardians[0];
+    const guardianPhone = guardians.map((g: any) => g.phone).filter(Boolean)[0] || '';
     const emergencyContact = [doc.emergencyContactName, doc.emergencyContactPhone].filter(Boolean).join(' - ');
     return {
       id: String(doc._id),
@@ -301,8 +344,13 @@ export class IdCardsService {
 
     let qrHtml = '';
     if (template.showQrCode && side === 'front') {
-      const qrDataUrl = await QRCode.toDataURL(person.verifyCode, { width: 80, margin: 0 });
-      qrHtml = `<img class="qr" src="${qrDataUrl}" style="width:12mm;height:12mm;position:absolute;bottom:2mm;right:2.5mm;" />`;
+      // Same "never take the whole batch down over one card" rule as the
+      // barcode branch right below - a QR encoding failure shouldn't be
+      // fatal either.
+      try {
+        const qrDataUrl = await QRCode.toDataURL(person.verifyCode, { width: 80, margin: 0 });
+        qrHtml = `<img class="qr" src="${qrDataUrl}" style="width:12mm;height:12mm;position:absolute;bottom:2mm;right:2.5mm;" />`;
+      } catch { /* non-fatal - card still identifies via name/ID */ }
     }
     let barcodeHtml = '';
     if (template.showBarcode && side === 'front') {
@@ -423,6 +471,31 @@ export class IdCardsService {
       if (photoWithdrawn) photosOmittedForConsent++;
       return { entity: d, person: this.mapEntity(entityType, d, b.campusName, photoWithdrawn), branding: b };
     }));
+
+    // Embed every photo/logo/watermark as a data: URI before Puppeteer
+    // ever sees the HTML - see imageUrlToDataUri for why. Deduped by URL
+    // (brandingCache already dedupes logos per campus; this also catches
+    // any students who happen to share one, e.g. a shared placeholder).
+    const imageCache = new Map<string, Promise<string | null>>();
+    const resolveImage = (url: string | undefined | null): Promise<string | null> => {
+      if (!url) return Promise.resolve(null);
+      if (!imageCache.has(url)) imageCache.set(url, this.imageUrlToDataUri(url));
+      return imageCache.get(url)!;
+    };
+    await Promise.all([
+      ...people.map(async (entry) => {
+        if (entry.person.photo) entry.person.photo = (await resolveImage(entry.person.photo)) || '';
+      }),
+      ...Array.from(brandingCache.values()).map(async (b) => {
+        if (b.logo) b.logo = (await resolveImage(b.logo)) || '';
+      }),
+      (async () => {
+        if ((template as any).backgroundImageUrl) {
+          (template as any).backgroundImageUrl = (await resolveImage((template as any).backgroundImageUrl)) || '';
+        }
+      })(),
+    ]);
+
     const fieldLabels: Record<string, string> = {
       dob: 'DOB', bloodGroup: 'Blood Group', address: 'Address', guardianContact: 'Guardian Contact',
       phone: 'Phone', joiningDate: 'Joined', guardianName: 'Guardian', campus: 'Campus',
