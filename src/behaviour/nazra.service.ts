@@ -12,7 +12,7 @@ import {
 import { getSurahByNumber, QURAN_SURAHS, QURAN_SURAH_COUNT } from './schemas/quran-surahs';
 import { QaidaNazraSettings, QaidaNazraSettingsDocument } from './schemas/qaida-nazra-extras.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
-import { InitNazraProgressDto, RecordNazraDiaryDto } from './dto/nazra.dto';
+import { BulkNazraDiaryDto, InitNazraProgressDto, RecordNazraDiaryDto } from './dto/nazra.dto';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { ScopedUser, resolveCampusScope } from '../auth/scope.util';
 
@@ -226,7 +226,10 @@ export class NazraService {
     } as any);
     if (!sabaqRecord.startedDate) sabaqRecord.startedDate = entryDate;
 
-    if (PASSING_RATINGS.includes(sabaq.rating)) {
+    if (PASSING_RATINGS.includes(sabaq.rating) && sabaq.completesPara === false) {
+      // A good lesson partway through the Para: keep the Para open.
+      if (sabaqRecord.status !== 'completed') sabaqRecord.status = 'in_progress';
+    } else if (PASSING_RATINGS.includes(sabaq.rating)) {
       sabaqRecord.status = 'completed';
       sabaqRecord.completedDate = new Date();
     } else {
@@ -274,6 +277,51 @@ export class NazraService {
     this.recomputePointer(progress, reverse);
     await progress.save();
     return progress;
+  }
+
+  async recordClassDiary(
+    schoolSlug: string,
+    academicYear: string,
+    dto: BulkNazraDiaryDto,
+    assessedBy: string,
+    assessedById?: string,
+    requestingUser?: ScopedUser,
+  ) {
+    // Only students who really are active in this school (and in the
+    // caller's campus scope) can be recorded - a stray id must never
+    // create a progress record for someone outside it.
+    const ids = dto.entries.map((e) => e.studentId);
+    const studentFilter: any = { schoolSlug, _id: { $in: ids.map((id) => new Types.ObjectId(id)) } };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, dto.campusId) : dto.campusId;
+    if (effectiveCampusId) studentFilter.campusId = effectiveCampusId;
+    const known = new Set(
+      (await this.studentModel.find(studentFilter).select('_id').lean()).map((s: any) => String(s._id)),
+    );
+
+    const results: { studentId: string; ok: boolean; error?: string }[] = [];
+    for (const item of dto.entries) {
+      if (!known.has(item.studentId)) {
+        results.push({ studentId: item.studentId, ok: false, error: 'Student not found in this school' });
+        continue;
+      }
+      try {
+        await this.getOrInitProgress(
+          item.studentId, schoolSlug, academicYear,
+          { studentName: item.studentName, grade: dto.grade, section: dto.section, campusId: dto.campusId },
+          requestingUser,
+        );
+        await this.recordDiaryEntry(
+          item.studentId, schoolSlug,
+          { date: item.date ?? dto.date, sabaq: item.sabaq, sabqi: item.sabqi, manzil: item.manzil },
+          assessedBy, assessedById,
+        );
+        results.push({ studentId: item.studentId, ok: true });
+      } catch (err: any) {
+        results.push({ studentId: item.studentId, ok: false, error: err?.message || 'Could not save' });
+      }
+    }
+    const saved = results.filter((r) => r.ok).length;
+    return { saved, failed: results.length - saved, results };
   }
 
   async updateParaStatus(studentId: string, schoolSlug: string, paraNumber: number, status: string) {
@@ -375,6 +423,17 @@ export class NazraService {
           ? progress.paras.filter((p: any) => p.status === 'needs_revision').length
           : 0,
         lastDiaryDate: lastEntry?.date ?? null,
+        // Where the student stopped, so the next lesson can be pre-filled.
+        lastSabaq: lastEntry?.sabaq
+          ? {
+            paraNumber: lastEntry.sabaq.paraNumber,
+            surahNumber: lastEntry.sabaq.surahNumber,
+            surahName: lastEntry.sabaq.surahName,
+            ayahFrom: lastEntry.sabaq.ayahFrom,
+            ayahTo: lastEntry.sabaq.ayahTo,
+            rating: lastEntry.sabaq.rating,
+          }
+          : null,
         currentTeacher: progress?.currentTeacher,
       };
     });

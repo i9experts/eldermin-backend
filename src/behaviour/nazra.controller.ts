@@ -7,7 +7,7 @@ import {
   Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards,
 } from '@nestjs/common';
 import { NazraService } from './nazra.service';
-import { InitNazraProgressDto, RecordNazraDiaryDto, UpdateParaStatusDto } from './dto/nazra.dto';
+import { BulkNazraDiaryDto, InitNazraProgressDto, RecordNazraDiaryDto, UpdateParaStatusDto } from './dto/nazra.dto';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
@@ -54,6 +54,13 @@ export class NazraController {
   ) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getClassProgress(schoolSlug, grade, section, requestingUser, campusId);
+  }
+
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Post('class/diary')
+  async recordClassDiary(@Body() dto: BulkNazraDiaryDto, @Request() req: any) {
+    const { schoolSlug, academicYear, userName, userId, requestingUser } = this.ctx(req);
+    return this.service.recordClassDiary(schoolSlug, academicYear, dto, userName, userId, requestingUser);
   }
 
   @Get('students/:studentId')
