@@ -26,9 +26,9 @@ let warn: jest.SpyInstance;
 beforeEach(() => { warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined); });
 afterEach(() => { warn.mockRestore(); if (ORIGINAL === undefined) delete process.env.BEHAVIOUR_GUARD_MODE; else process.env.BEHAVIOUR_GUARD_MODE = ORIGINAL; });
 
-// Nazra has one more route than Qaida: GET surahs (the Quran surah
-// reference list backing the Sabaq/Sabqi/Manzil Surah+Ayah picker).
-describe.each([['Qaida', QaidaController, 10], ['Nazra', NazraController, 11]] as const)('%sController', (_name, C, routeCount) => {
+// Nazra has two more routes than Qaida: GET surahs (the Quran surah
+// reference list) and POST class/diary (whole-class quick recording).
+describe.each([['Qaida', QaidaController, 10], ['Nazra', NazraController, 12]] as const)('%sController', (_name, C, routeCount) => {
   it(`is protected by BehaviourStaffOnlyGuard at class level and has all ${routeCount} routes`, () => {
     expect(Reflect.getMetadata('__guards__', C)).toContain(BehaviourStaffOnlyGuard);
     expect(handlersOf(C)).toHaveLength(routeCount);
