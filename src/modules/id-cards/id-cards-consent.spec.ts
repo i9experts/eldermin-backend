@@ -116,3 +116,21 @@ describe('ID card generation - resilience (one bad record must never fail the wh
     expect(result.photosOmittedForConsent).toBe(1);
   });
 });
+
+describe('ID card generation - photos are shrunk to card size before rendering', () => {
+  it('a multi-MB phone photo is embedded as a small JPEG, not the original', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const sharp = require('sharp');
+    const big: Buffer = await sharp({ create: { width: 3000, height: 4000, channels: 3, noise: { type: 'gaussian', mean: 128, sigma: 40 } } })
+      .jpeg({ quality: 85 }).toBuffer();
+    global.fetch = jest.fn(async () => ({ ok: true, headers: { get: () => 'image/jpeg' }, arrayBuffer: async () => big })) as any;
+    const id = new Types.ObjectId().toHexString();
+    const { svc, getHtml } = build();
+    await svc.generateIdCardsPdf(SCHOOL, undefined, 'student', [id], undefined, false, 'pvc_card');
+    const embedded = getHtml().match(/data:image\/jpeg;base64,([A-Za-z0-9+/=]+)/)![1];
+    const bytes = Buffer.from(embedded, 'base64');
+    const meta = await sharp(bytes).metadata();
+    expect(Math.max(meta.width, meta.height)).toBeLessThanOrEqual(600);
+    expect(bytes.length).toBeLessThan(big.length / 10);
+  });
+});
