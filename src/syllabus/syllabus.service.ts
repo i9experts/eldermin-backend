@@ -62,6 +62,33 @@ export class SyllabusService {
     assertOwnsTeacherDoc(me, syllabus.teacherId, 'You can only modify your own syllabus');
   }
 
+  /**
+   * Saves an existing syllabus after a small, targeted change (mark a
+   * topic/sub-topic covered, add/edit/delete a lesson, generate a
+   * pacing guide...). `validateModifiedOnly` matters here: a plain
+   * `.save()` re-validates the ENTIRE document, including every other
+   * unit/topic/lesson the caller never touched - so one legacy/imported
+   * record elsewhere in the same syllabus (e.g. a lesson saved before
+   * `type` became required) silently turned every unrelated checkbox
+   * click on that whole syllabus into an unexplained "Internal server
+   * error", with the real Mongoose ValidationError only visible in
+   * Sentry, never to the admin who hit it. Only what actually changed
+   * needs to be valid; the rest keeps whatever state it already had.
+   * Anything that still fails after that (e.g. the field that actually
+   * WAS just edited is invalid) is reported back as a real, readable
+   * message instead of the generic 500.
+   */
+  private async saveSyllabus(syllabus: SyllabusDocument): Promise<void> {
+    try {
+      await syllabus.save({ validateModifiedOnly: true });
+    } catch (err: any) {
+      if (err?.name === 'ValidationError' || err?.name === 'CastError') {
+        throw new BadRequestException(`Could not save: ${err.message}`);
+      }
+      throw err;
+    }
+  }
+
   // LMS Phase 3 - keeps a lesson's auto-spawned Assignment row in sync
   // with its own dueDate. Upserted on autoSpawnKey so editing the same
   // lesson's due date repeatedly updates one row instead of piling up
@@ -253,7 +280,7 @@ export class SyllabusService {
     };
     topic.lessons.push(lesson);
     syllabus.markModified('units');
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     if (lesson.dueDate) await this.syncLessonAssignment(syllabus, dto.unitNo, dto.topicNo, lesson, addedBy);
     return syllabus;
   }
@@ -275,7 +302,7 @@ export class SyllabusService {
     if (dto.dueDate !== undefined) lesson.dueDate = dto.dueDate ? new Date(dto.dueDate) : undefined;
     if (dto.releaseDate !== undefined) lesson.releaseDate = dto.releaseDate ? new Date(dto.releaseDate) : undefined;
     syllabus.markModified('units');
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     await this.syncLessonAssignment(syllabus, dto.unitNo, dto.topicNo, lesson);
     return syllabus;
   }
@@ -289,7 +316,7 @@ export class SyllabusService {
     topic.lessons = (topic.lessons as any[]).filter((l: any) => l.lessonNo !== dto.lessonNo);
     if (topic.lessons.length === before) throw new NotFoundException(`Lesson ${dto.lessonNo} not found in topic ${dto.topicNo}`);
     syllabus.markModified('units');
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     await this.assignmentModel.deleteOne({
       tenantId: syllabus.tenantId, autoSpawnKey: `lesson:${syllabus._id}:${dto.unitNo}:${dto.topicNo}:${dto.lessonNo}`,
     });
@@ -443,7 +470,7 @@ export class SyllabusService {
     const rollup = this.computeRollup(syllabus.units as any[]);
     Object.assign(syllabus, rollup, { lastTrackedAt: new Date() });
     syllabus.markModified('units');
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     return syllabus;
   }
 
@@ -636,7 +663,7 @@ export class SyllabusService {
     }
 
     syllabus.markModified('units');
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     return syllabus;
   }
 
@@ -705,7 +732,7 @@ The four percentages must sum to exactly 100. Base the reasoning on real, sensib
     const rollup = this.computeRollup(syllabus.units as any[]);
     Object.assign(syllabus, rollup, { lastTrackedAt: new Date() });
     syllabus.markModified('units');
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     return syllabus;
   }
 
@@ -724,7 +751,7 @@ The four percentages must sum to exactly 100. Base the reasoning on real, sensib
       const rollup = this.computeRollup(syllabus.units as any[]);
       syllabus.trackStatus = rollup.trackStatus;
     }
-    await syllabus.save();
+    await this.saveSyllabus(syllabus);
     return syllabus;
   }
 
