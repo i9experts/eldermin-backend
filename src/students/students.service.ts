@@ -20,6 +20,8 @@ import { Campus, Grade, GradeDocument, AcademicYear, AcademicYearDocument } from
 import { GroupInstitution } from '../organization/schemas/group-institution.schema';
 import { CalendarEvent, CalendarEventDocument } from '../school-calendar/schemas/calendar-event.schema';
 import { FeeStructure, FeeStructureDocument, StudentFeeAssignment, StudentFeeAssignmentDocument } from '../finance/schemas/finance.schema';
+import { StudentLeave, StudentLeaveDocument } from '../parent-portal/schemas/consent-and-leave.schema';
+import { Notification, NotificationDocument } from '../parent-portal/schemas/notification-and-message.schema';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as fontkit from '@pdf-lib/fontkit';
 import * as fs from 'fs';
@@ -158,6 +160,11 @@ export class StudentsService {
     // Without it, getStudentLearning falls back to grade/section match
     // only (no 'manual'/elective course support in that one admin view).
     @Optional() @InjectModel(CourseEnrollment.name) private enrollmentModel?: Model<CourseEnrollmentDocument>,
+    // Admin Leave Requests tab: school admins reviewing parent-submitted StudentLeave
+    // requests regardless of class-teacher assignment (distinct from the class-teacher-only
+    // review in staff-portal.service.ts). Optional, appended last, same reasoning as above.
+    @Optional() @InjectModel(StudentLeave.name) private studentLeaveModel?: Model<StudentLeaveDocument>,
+    @Optional() @InjectModel(Notification.name) private notificationModel?: Model<NotificationDocument>,
   ) {}
 
   // ============================================================
@@ -3712,5 +3719,57 @@ export class StudentsService {
       defaultFields.map(f => ({ ...f, schoolSlug })),
     );
     return { message: 'Default enrollment fields seeded', count: defaultFields.length };
+  }
+
+  // ============================================================
+  // ADMIN LEAVE REQUESTS — parent-submitted StudentLeave, reviewed by a
+  // school admin (any TEACHING_ADMIN_ROLES caller), regardless of whether
+  // they are the student's class teacher. See staff-portal.service.ts for
+  // the separate class-teacher-only review path used by the Teacher app.
+  // ============================================================
+
+  async listLeaveRequests(schoolSlug: string, query: { status?: string; limit?: string }) {
+    if (!this.studentLeaveModel) return { items: [] };
+    const limit = Math.min(Math.max(parseInt(query.limit || '50', 10) || 50, 1), 200);
+    const filter: any = { schoolSlug };
+    if (['pending', 'approved', 'rejected'].includes(query.status || '')) filter.status = query.status;
+    const items = await this.studentLeaveModel.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
+    return { items };
+  }
+
+  async reviewLeaveRequest(
+    schoolSlug: string,
+    id: string,
+    dto: { status: 'approved' | 'rejected'; remarks?: string },
+    adminUser: any,
+  ) {
+    if (!this.studentLeaveModel) throw new NotFoundException('Leave request not found');
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Leave request not found');
+    const leave: any = await this.studentLeaveModel.findOne({ _id: id, schoolSlug });
+    if (!leave) throw new NotFoundException('Leave request not found');
+    if (leave.status !== 'pending') throw new ConflictException(`This request was already ${leave.status}.`);
+
+    leave.status = dto.status;
+    leave.approverName = adminUser?.name || 'School Admin';
+    leave.approverNote = dto.remarks?.trim() || undefined;
+    leave.approvedAt = new Date();
+    await leave.save();
+
+    if (this.notificationModel) {
+      try {
+        await this.notificationModel.create({
+          recipientUserId: leave.requestedByUserId,
+          schoolSlug,
+          type: 'leave_decision',
+          title: `Leave request ${dto.status}`,
+          body: `${leave.studentName}'s leave request was ${dto.status}${dto.remarks ? `: ${dto.remarks.slice(0, 120)}` : '.'}`,
+          relatedEntityId: String(leave._id),
+        });
+      } catch (err: any) {
+        this.logger.warn(`leave_decision notify failed: ${err?.message}`);
+      }
+    }
+
+    return leave.toObject();
   }
 }

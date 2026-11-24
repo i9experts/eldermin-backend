@@ -36,6 +36,8 @@ import { Syllabus, SyllabusSchema } from '../syllabus/schemas/syllabus.schema';
 import { LessonProgress, LessonProgressSchema } from '../syllabus/schemas/lesson-progress.schema';
 import { CourseEnrollment, CourseEnrollmentSchema } from '../syllabus/schemas/course-enrollment.schema';
 import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-attempt.schema';
+import { StudentLeave, StudentLeaveSchema } from '../parent-portal/schemas/consent-and-leave.schema';
+import { Notification, NotificationSchema } from '../parent-portal/schemas/notification-and-message.schema';
 
 @Module({
   imports: [
@@ -81,6 +83,11 @@ import { QuizAttempt, QuizAttemptSchema } from '../assessments/schemas/quiz-atte
       { name: LessonProgress.name, schema: LessonProgressSchema },
       { name: CourseEnrollment.name, schema: CourseEnrollmentSchema },
       { name: QuizAttempt.name, schema: QuizAttemptSchema },
+      // Admin Leave Requests tab (listLeaveRequests/reviewLeaveRequest) -
+      // the same student_leaves/notifications collections the parent app
+      // and staff-portal's class-teacher review already use.
+      { name: StudentLeave.name, schema: StudentLeaveSchema },
+      { name: Notification.name, schema: NotificationSchema },
     ]),
   ],
   controllers: [StudentsController],
