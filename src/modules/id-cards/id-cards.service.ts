@@ -10,6 +10,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as QRCode from 'qrcode';
 import * as bwipjs from 'bwip-js';
+import sharp from 'sharp';
 import { PdfService } from '../../pdf/pdf.service';
 import {
   IdCardTemplate, IdCardTemplateDocument, STUDENT_ID_CARD_FIELDS, STAFF_ID_CARD_FIELDS,
@@ -131,7 +132,7 @@ export class IdCardsService {
   // first, in parallel and each bounded by its own short timeout, means
   // one slow/unreachable photo degrades to that one card's initials
   // fallback instead of taking the whole batch down.
-  private async imageUrlToDataUri(url: string, timeoutMs = 8000): Promise<string | null> {
+  private async imageUrlToDataUri(url: string, kind: 'photo' | 'logo' = 'photo', timeoutMs = 8000): Promise<string | null> {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -139,6 +140,8 @@ export class IdCardsService {
         const res = await fetch(url, { signal: controller.signal });
         if (!res.ok) return null;
         const buf = Buffer.from(await res.arrayBuffer());
+        const shrunk = await this.shrinkForCard(buf, kind);
+        if (shrunk) return shrunk;
         const contentType = res.headers.get('content-type') || this.guessImageMimeType(url);
         return `data:${contentType};base64,${buf.toString('base64')}`;
       } finally {
@@ -146,6 +149,23 @@ export class IdCardsService {
       }
     } catch {
       return null; // non-fatal - the card renders with its fallback instead
+    }
+  }
+
+  // Phone-camera photos are often several MB, but a card photo prints at
+  // about 18mm wide. Embedding the originals made a 19-student batch take
+  // ~25s to render (vs ~3s with card-sized images) and ran past the
+  // browser's request timeout. 600px is comfortably over 300dpi at card
+  // size. Photos become JPEG; logos/watermarks stay PNG to keep any
+  // transparency. Returns null (use the original) if the image can't be
+  // decoded.
+  private async shrinkForCard(buf: Buffer, kind: 'photo' | 'logo'): Promise<string | null> {
+    try {
+      const img = sharp(buf, { failOn: 'none' }).rotate().resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true });
+      const out = kind === 'photo' ? await img.jpeg({ quality: 82 }).toBuffer() : await img.png().toBuffer();
+      return `data:image/${kind === 'photo' ? 'jpeg' : 'png'};base64,${out.toString('base64')}`;
+    } catch {
+      return null;
     }
   }
 
@@ -477,21 +497,22 @@ export class IdCardsService {
     // (brandingCache already dedupes logos per campus; this also catches
     // any students who happen to share one, e.g. a shared placeholder).
     const imageCache = new Map<string, Promise<string | null>>();
-    const resolveImage = (url: string | undefined | null): Promise<string | null> => {
+    const resolveImage = (url: string | undefined | null, kind: 'photo' | 'logo'): Promise<string | null> => {
       if (!url) return Promise.resolve(null);
-      if (!imageCache.has(url)) imageCache.set(url, this.imageUrlToDataUri(url));
-      return imageCache.get(url)!;
+      const key = `${kind}:${url}`;
+      if (!imageCache.has(key)) imageCache.set(key, this.imageUrlToDataUri(url, kind));
+      return imageCache.get(key)!;
     };
     await Promise.all([
       ...people.map(async (entry) => {
-        if (entry.person.photo) entry.person.photo = (await resolveImage(entry.person.photo)) || '';
+        if (entry.person.photo) entry.person.photo = (await resolveImage(entry.person.photo, 'photo')) || '';
       }),
       ...Array.from(brandingCache.values()).map(async (b) => {
-        if (b.logo) b.logo = (await resolveImage(b.logo)) || '';
+        if (b.logo) b.logo = (await resolveImage(b.logo, 'logo')) || '';
       }),
       (async () => {
         if ((template as any).backgroundImageUrl) {
-          (template as any).backgroundImageUrl = (await resolveImage((template as any).backgroundImageUrl)) || '';
+          (template as any).backgroundImageUrl = (await resolveImage((template as any).backgroundImageUrl, 'logo')) || '';
         }
       })(),
     ]);
