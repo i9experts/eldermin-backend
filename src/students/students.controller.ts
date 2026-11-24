@@ -23,7 +23,8 @@ import { assertStaffAccount } from '../behaviour/behaviour-access';
 import { BehaviourStaffOnlyGuard } from '../behaviour/guards/behaviour-staff-only.guard';
 import { Roles } from '../auth/decorators';
 import { UserRole } from '../auth/roles.enum';
-import { STAFF_WRITE_ROLES } from '../auth/role-sets';
+import { STAFF_WRITE_ROLES, TEACHING_ADMIN_ROLES } from '../auth/role-sets';
+import { ReviewStudentLeaveDto } from '../staff-portal/dto/staff-portal.dto';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { projectForTeacher, TEACHER_NO_FINANCE_MESSAGE } from './teacher-student-projection.util';
 import { isTeacherCaller } from '../staff-portal/teacher-identity.util';
@@ -185,6 +186,28 @@ export class StudentsController {
   async deleteEnrollmentField(@Param('id') id: string, @Request() req: any) {
     const { schoolSlug } = this.ctx(req);
     return this.studentsService.deleteEnrollmentField(schoolSlug, id);
+  }
+
+  // ============================================================
+  // ADMIN LEAVE REQUESTS — parent-submitted StudentLeave, reviewable by
+  // any school admin regardless of class-teacher assignment. Distinct
+  // from the class-teacher-only review in staff-portal (Teacher app).
+  // ============================================================
+
+  /** GET /api/v1/students/leave-requests */
+  @Roles(...TEACHING_ADMIN_ROLES)
+  @Get('leave-requests')
+  async listLeaveRequests(@Request() req: any, @Query('status') status?: string, @Query('limit') limit?: string) {
+    const { schoolSlug } = this.ctx(req);
+    return this.studentsService.listLeaveRequests(schoolSlug, { status, limit });
+  }
+
+  /** PATCH /api/v1/students/leave-requests/:id */
+  @Roles(...TEACHING_ADMIN_ROLES)
+  @Patch('leave-requests/:id')
+  async reviewLeaveRequest(@Param('id') id: string, @Body() dto: ReviewStudentLeaveDto, @Request() req: any) {
+    const { schoolSlug, requestingUser } = this.ctx(req);
+    return this.studentsService.reviewLeaveRequest(schoolSlug, id, dto, requestingUser);
   }
 
   /** GET /api/v1/students/:id */
