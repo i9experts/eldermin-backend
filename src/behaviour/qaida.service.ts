@@ -10,7 +10,7 @@ import {
   QaidaProgress, QaidaProgressDocument, QAIDA_TAKHTIS, QAIDA_TAKHTI_COUNT,
 } from './schemas/qaida-progress.schema';
 import { Student, StudentDocument } from '../students/schemas/student.schema';
-import { InitQaidaProgressDto, RecordTakhtiAttemptDto } from './dto/qaida.dto';
+import { BulkQaidaAttemptsDto, InitQaidaProgressDto, RecordTakhtiAttemptDto } from './dto/qaida.dto';
 import { assertValidObjectId } from '../common/utils/object-id.util';
 import { ScopedUser, resolveCampusScope } from '../auth/scope.util';
 
@@ -157,7 +157,10 @@ export class QaidaService {
 
     if (!record.startedDate) record.startedDate = attemptDate;
 
-    if (PASSING_RATINGS.includes(dto.rating)) {
+    if (PASSING_RATINGS.includes(dto.rating) && dto.completesTakhti === false) {
+      // A good sabaq partway through the board: keep the board open.
+      if (record.status !== 'mastered') record.status = 'in_progress';
+    } else if (PASSING_RATINGS.includes(dto.rating)) {
       record.status = 'mastered';
       record.masteredDate = new Date();
     } else {
@@ -173,6 +176,48 @@ export class QaidaService {
     this.recomputePointer(progress);
     await progress.save();
     return progress;
+  }
+
+  async recordClassAttempts(
+    schoolSlug: string,
+    academicYear: string,
+    dto: BulkQaidaAttemptsDto,
+    assessedBy: string,
+    assessedById?: string,
+    requestingUser?: ScopedUser,
+  ) {
+    // Only students who really are active in this school (and in the
+    // caller's campus scope) can be recorded - a stray id must never
+    // create a progress record for someone outside it.
+    const ids = dto.entries.map((e) => e.studentId);
+    const studentFilter: any = { schoolSlug, _id: { $in: ids.map((id) => new Types.ObjectId(id)) } };
+    const effectiveCampusId = requestingUser ? resolveCampusScope(requestingUser, dto.campusId) : dto.campusId;
+    if (effectiveCampusId) studentFilter.campusId = effectiveCampusId;
+    const known = new Set(
+      (await this.studentModel.find(studentFilter).select('_id').lean()).map((s: any) => String(s._id)),
+    );
+
+    const results: { studentId: string; ok: boolean; error?: string }[] = [];
+    for (const item of dto.entries) {
+      if (!known.has(item.studentId)) {
+        results.push({ studentId: item.studentId, ok: false, error: 'Student not found in this school' });
+        continue;
+      }
+      try {
+        await this.getOrInitProgress(
+          item.studentId, schoolSlug, academicYear,
+          { studentName: item.studentName, grade: dto.grade, section: dto.section, campusId: dto.campusId },
+          requestingUser,
+        );
+        const { studentId: _id, studentName: _name, ...attempt } = item;
+        await this.recordAttempt(item.studentId, schoolSlug, { ...attempt, date: item.date ?? dto.date }, assessedBy, assessedById);
+        results.push({ studentId: item.studentId, ok: true });
+      } catch (err: any) {
+        results.push({ studentId: item.studentId, ok: false, error: err?.message || 'Could not save' });
+      }
+    }
+    const saved = results.filter((r) => r.ok).length;
+    return { saved, failed: results.length - saved, results };
   }
 
   async updateTakhtiStatus(studentId: string, schoolSlug: string, takhtiNumber: number, status: string) {
@@ -265,6 +310,16 @@ export class QaidaService {
       const trackedTakhtis = progress
         ? progress.takhtis.filter((t: any) => t.status !== 'not_tracked').length
         : QAIDA_TAKHTI_COUNT;
+      // Most recent sabaq across every board, so the next one can be
+      // pre-filled. Attempts can be recorded on any board in any order.
+      let lastAttempt: any = null;
+      for (const t of progress?.takhtis || []) {
+        for (const a of t.attempts || []) {
+          if (!lastAttempt || new Date(a.date) > new Date(lastAttempt.date)) {
+            lastAttempt = { takhtiNumber: t.takhtiNumber, sabaqFrom: a.sabaqFrom, sabaqTo: a.sabaqTo, rating: a.rating, date: a.date };
+          }
+        }
+      }
       return {
         studentId: s._id,
         studentName: [s.firstName, s.middleName, s.lastName].filter(Boolean).join(' '),
@@ -282,6 +337,8 @@ export class QaidaService {
         needsRevisionCount: progress
           ? progress.takhtis.filter((t: any) => t.status === 'needs_revision').length
           : 0,
+        lastAttempt,
+        lastAttemptDate: lastAttempt?.date ?? null,
         currentTeacher: progress?.currentTeacher,
       };
     });

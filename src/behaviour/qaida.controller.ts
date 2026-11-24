@@ -7,7 +7,7 @@ import {
   Controller, Get, Post, Patch, Body, Param, Query, Request, UseGuards,
 } from '@nestjs/common';
 import { QaidaService } from './qaida.service';
-import { InitQaidaProgressDto, RecordTakhtiAttemptDto, UpdateTakhtiStatusDto } from './dto/qaida.dto';
+import { BulkQaidaAttemptsDto, InitQaidaProgressDto, RecordTakhtiAttemptDto, UpdateTakhtiStatusDto } from './dto/qaida.dto';
 import { STAFF_WRITE_ROLES } from '../auth/role-sets';
 import { RolesOrModuleManage } from '../roles/decorators/roles-or-module-manage.decorator';
 import { BehaviourStaffOnlyGuard } from './guards/behaviour-staff-only.guard';
@@ -49,6 +49,13 @@ export class QaidaController {
   ) {
     const { schoolSlug, requestingUser } = this.ctx(req);
     return this.service.getClassProgress(schoolSlug, grade, section, requestingUser, campusId);
+  }
+
+  @RolesOrModuleManage('behaviour', STAFF_WRITE_ROLES, { allowModuleWide: true })
+  @Post('class/attempts')
+  async recordClassAttempts(@Body() dto: BulkQaidaAttemptsDto, @Request() req: any) {
+    const { schoolSlug, academicYear, userName, userId, requestingUser } = this.ctx(req);
+    return this.service.recordClassAttempts(schoolSlug, academicYear, dto, userName, userId, requestingUser);
   }
 
   @Get('students/:studentId')

@@ -1,6 +1,7 @@
+import { Type } from 'class-transformer';
 import {
-  IsArray, IsDateString, IsIn, IsInt, IsMongoId, IsNumber, IsOptional, IsString,
-  Max, MaxLength, Min,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsMongoId, IsNumber, IsOptional, IsString,
+  Max, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { QAIDA_COMMON_ERRORS } from '../schemas/qaida-progress.schema';
 
@@ -48,6 +49,30 @@ export class RecordTakhtiAttemptDto {
   // When this sabaq actually happened, if not right now (logging it after
   // the fact, or at end of day for the whole class).
   @IsOptional() @IsDateString() date?: string;
+
+  // Whether this sabaq finished the whole board. A day's sabaq is a few
+  // letters, not a board, so a good rating alone must not master it.
+  // Omitted = the old behaviour (a passing rating masters the board).
+  @IsOptional() @IsBoolean() completesTakhti?: boolean;
+}
+
+export class BulkQaidaAttemptItemDto extends RecordTakhtiAttemptDto {
+  @IsMongoId() studentId: string;
+  @IsString() @MaxLength(200) studentName: string;
+}
+
+// Whole-class recording in one request: students without a Qaida record
+// yet are started automatically, and one student's failure never blocks
+// the rest of the class.
+export class BulkQaidaAttemptsDto {
+  @IsOptional() @IsDateString() date?: string;
+  @IsString() @MaxLength(100) grade: string;
+  @IsOptional() @IsString() @MaxLength(100) section?: string;
+  @IsOptional() @IsMongoId() campusId?: string;
+
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(200)
+  @ValidateNested({ each: true }) @Type(() => BulkQaidaAttemptItemDto)
+  entries: BulkQaidaAttemptItemDto[];
 }
 
 export class UpdateTakhtiStatusDto {
